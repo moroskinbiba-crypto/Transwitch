@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <string>
 #include <vector>
@@ -244,7 +245,7 @@ size_t fileWrite(void* data, size_t size, size_t count, void* userData) {
 int progressCallback(void* userData, curl_off_t downloadTotal, curl_off_t downloadNow,
                      curl_off_t, curl_off_t) {
     TransferProgress* progress = static_cast<TransferProgress*>(userData);
-    if (downloadTotal > kMaxDownloadBytes) return 1;
+    if (downloadTotal > kMaxDownloadBytes || downloadNow > kMaxDownloadBytes) return 1;
     int percent = -1;
     if (downloadTotal > 0) {
         percent = static_cast<int>((downloadNow * 100) / downloadTotal);
@@ -277,6 +278,7 @@ bool curlBase(CURL* curl, char* errorBuffer, size_t errorSize) {
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_CAINFO, "romfs:/cacert.pem");
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     return true;
 }
