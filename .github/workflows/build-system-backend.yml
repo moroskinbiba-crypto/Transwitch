@@ -6,7 +6,13 @@ on:
     paths:
       - "projects/sSystem/**"
       - "projects/DeskNXMenu/**"
+      - "projects/hbloader/**"
       - "projects/common/**"
+      - "scripts/**"
+      - "tests/**"
+      - "docs/**"
+      - "THIRD_PARTY.md"
+      - "README.md"
       - "source/main.cpp"
       - "Makefile"
       - ".github/workflows/build-system-backend.yml"
