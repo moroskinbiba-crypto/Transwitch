@@ -1,5 +1,6 @@
 #include <switch.h>
 #include <SDL2/SDL.h>
+#include <desknx/Protocol.hpp>
 
 #include <algorithm>
 #include <array>
@@ -416,11 +417,19 @@ void deleteDesk() {
 void launch(const Tile& t) {
     lastLaunched=t.title;
     if(t.kind==Kind::Game) {
-        u64 id=std::strtoull(t.data.c_str(),nullptr,16);if(!id){setStatus("INVALID TITLE ID");return;}
-        if(R_FAILED(nsInitialize())){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
-        Result rc=appletRequestLaunchApplication(id,nullptr);nsExit();
-        if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"GAME LAUNCH FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
-        else setStatus("LAUNCH REQUEST SENT");return;
+        const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
+        if(id==0){setStatus("INVALID TITLE ID");return;}
+        const Result rc=desknx::ipc::SendLaunchTitle(id);
+        if(R_FAILED(rc)) {
+            char b[72]{};
+            std::snprintf(b,sizeof(b),"SYSTEM BACKEND REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));
+            setStatus(b,4000);
+            return;
+        }
+        saveLayout();
+        appletRequestExitToSelf();
+        running=false;
+        return;
     }
     if(t.kind==Kind::Nro) {
         if(!envHasNextLoad()){setStatus("NRO CHAIN-LOAD UNAVAILABLE; USE HBMENU TAKEOVER",4500);return;}
@@ -446,7 +455,7 @@ void keyInput(u64 keys) {
     }
     if(keys&HidNpadButton_B) {
         if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");return;}
-        appletRequestExitToSelf();running=false;return;
+        setStatus("DESKNX IS THE HOME MENU; SELECT AN APP TO RETURN TO IT",3000);return;
     }
     if(keys&HidNpadButton_Plus)newDesk();
     if(keys&HidNpadButton_StickL)renameDesk();
@@ -512,12 +521,19 @@ int main(int,char**) {
     PadState pad{};
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&pad);
-    setStatus("Y ADD  X EDIT  ZL/ZR RESIZE  - REMOVE  + NEW DESK",5000);
+    // Tell the system backend the menu is alive. It uses this handshake to
+    // distinguish a visible menu from an applet that crashed during startup.
+    const Result readyRc=desknx::ipc::SendMenuReady();
+    if(R_FAILED(readyRc)) setStatus("SYSTEM BACKEND NOT CONNECTED",5000);
+    else setStatus("DESKNX READY  -  Y ADD  X EDIT  + NEW DESK",4000);
     while(running&&appletMainLoop()) {
         padUpdate(&pad);
         u64 keys=padGetButtonsDown(&pad);
         if(keys)keyInput(keys);
-        SDL_Event e;while(SDL_PollEvent(&e)){if(e.type==SDL_QUIT)running=false;else touchInput(e);}
+        SDL_Event e;while(SDL_PollEvent(&e)){
+            if(e.type==SDL_QUIT){appletRequestExitToSelf();running=false;}
+            else touchInput(e);
+        }
         drawScreen();svcSleepThread(16'000'000);
     }
     if(psmReady)psmExit();if(renderer)SDL_DestroyRenderer(renderer);if(window)SDL_DestroyWindow(window);
