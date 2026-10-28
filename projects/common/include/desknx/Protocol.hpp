@@ -16,6 +16,7 @@ enum class Command : u32 {
     LaunchTitle = 2,
     ReturnToGame = 3,
     Heartbeat = 4,
+    LaunchHomebrew = 5,
 };
 
 struct Header {
@@ -31,6 +32,14 @@ struct LaunchTitlePayload {
     u64 title_id;
 };
 static_assert(sizeof(LaunchTitlePayload) == 8);
+
+constexpr size_t MaxHomebrewPath = 512;
+constexpr size_t MaxHomebrewArgv = 512;
+struct LaunchHomebrewPayload {
+    char nro_path[MaxHomebrewPath];
+    char argv[MaxHomebrewArgv];
+};
+static_assert(sizeof(LaunchHomebrewPayload) == 1024);
 
 inline Result Send(Command command, const void* payload = nullptr, size_t payload_size = 0) {
     if (payload_size > 0x3F00 || (payload_size != 0 && payload == nullptr))
@@ -70,6 +79,19 @@ inline Result SendHeartbeat() {
 inline Result SendLaunchTitle(u64 title_id) {
     const LaunchTitlePayload payload{title_id};
     return Send(Command::LaunchTitle, &payload, sizeof(payload));
+}
+
+inline Result SendLaunchHomebrew(const char* nro_path, const char* argv = nullptr) {
+    if (!nro_path || !nro_path[0] || std::strlen(nro_path) >= MaxHomebrewPath)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    if (argv && std::strlen(argv) >= MaxHomebrewArgv)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+
+    LaunchHomebrewPayload payload{};
+    std::strncpy(payload.nro_path, nro_path, sizeof(payload.nro_path) - 1);
+    if (argv)
+        std::strncpy(payload.argv, argv, sizeof(payload.argv) - 1);
+    return Send(Command::LaunchHomebrew, &payload, sizeof(payload));
 }
 
 } // namespace desknx::ipc
