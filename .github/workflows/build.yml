@@ -12,34 +12,48 @@ permissions:
 
 jobs:
   build:
-    name: Build Nintendo Switch homebrew
+    name: Build DeskNX NRO and HOME applet
     runs-on: ubuntu-latest
     container: devkitpro/devkita64:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build DeskNX
+      - name: Build standalone Homebrew app
         env:
           DEVKITPRO: /opt/devkitpro
         run: make -j2
 
-      - name: Prepare SD-card package
+      - name: Build HOME library applet
+        env:
+          DEVKITPRO: /opt/devkitpro
+        run: make -C projects/DeskNXMenu -j2
+
+      - name: Prepare standalone SD-card package
         run: |
           mkdir -p dist/switch/DeskNX
           cp DeskNX.nro dist/switch/DeskNX/DeskNX.nro
           cp README.md dist/README-DeskNX.md
 
-      - name: Upload NRO
+      - name: Upload standalone NRO
         uses: actions/upload-artifact@v4
         with:
           name: DeskNX-nro
           path: DeskNX.nro
           if-no-files-found: error
 
-      - name: Upload SD-card package
+      - name: Upload standalone SD-card package
         uses: actions/upload-artifact@v4
         with:
           name: DeskNX-sdcard
           path: dist/
+          if-no-files-found: error
+
+      - name: Upload HOME library applet build (not install-ready)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeskNX-menu-applet
+          path: |
+            SdOut/switch/DeskNX/bin/Menu/main
+            SdOut/switch/DeskNX/bin/Menu/main.npdm
           if-no-files-found: error
