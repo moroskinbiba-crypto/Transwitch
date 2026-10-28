@@ -16,7 +16,8 @@ ATMOSPHERE_DIR ?= /opt/atmosphere
 export ATMOSPHERE_LIBRARIES_DIR := $(ATMOSPHERE_DIR)/libraries
 STRAT_SPECS := $(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/stratosphere.specs
 
-OUTDIR := ../../SdOut/atmosphere/contents/0100000000001000/exefs
+OUTDIR ?= ../../SdOut/atmosphere/contents/0100000000001000/exefs
+SYSTEM_JSON ?= $(CURDIR)/DeskNXSystem.json
 
 include $(DEVKITPRO)/libnx/switch_rules
 
@@ -64,6 +65,8 @@ LIBDIRS := $(PORTLIBS) $(LIBNX) $(DEVKITPRO)/AtmosphereLibs
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT := $(CURDIR)/$(TARGET)
 export TOPDIR := $(CURDIR)
+export OUTDIR := $(CURDIR)/../../SdOut/atmosphere/contents/0100000000001000/exefs
+export SYSTEM_JSON := $(CURDIR)/DeskNXSystem.json
 export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
@@ -88,8 +91,8 @@ $(OUTDIR)/main: $(OUTPUT).nso | $(OUTDIR)
 	@cp -f $< $@
 	@echo "DeskNX qlaunch NSO staged: $@"
 
-$(OUTDIR)/main.npdm: DeskNXSystem.json | $(OUTDIR)
-	@npdmtool $< $@
+$(OUTDIR)/main.npdm: $(SYSTEM_JSON) | $(OUTDIR)
+	@npdmtool $(SYSTEM_JSON) $@
 	@echo "DeskNX qlaunch NPDM staged: $@"
 
 $(OUTDIR):
