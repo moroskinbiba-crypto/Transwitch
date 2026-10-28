@@ -48,11 +48,11 @@ jobs:
       - name: Build standalone NRO and library applet
         run: |
           make -j2
-          make -C projects/DeskNXMenu -j2
+          make -C projects/DeskNXMenu -j2 LIBNX="$SL_LIBNX"
 
       - name: Build target-aware hbloader
         run: |
-          make -C projects/hbloader -j2
+          make -C projects/hbloader -j2 LIBNX="$SL_LIBNX"
           mkdir -p SdOut/switch/DeskNX/bin/hbloader
           cp -f projects/hbloader/hbl.nso SdOut/switch/DeskNX/bin/hbloader/main
           cp -f projects/hbloader/hbl.npdm SdOut/switch/DeskNX/bin/hbloader/main.npdm
