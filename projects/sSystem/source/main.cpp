@@ -163,6 +163,14 @@ bool LaunchMenu() {
     g_NextMenuRetryTick = armGetSystemTick() + armGetSystemTickFreq() * kMenuRetryDelaySeconds;
     DaemonLog("menu: all supported HOME applet slots failed; retry scheduled in %llu seconds",
               static_cast<unsigned long long>(kMenuRetryDelaySeconds));
+    // If a title was suspended when HOME was pressed, restore its focus when
+    // no known applet slot can provide the menu. A failed menu must not strand
+    // the player on a black screen.
+    if (app::g_AppRunning) {
+        const Result focusRc = app::FocusApplication();
+        DaemonLog("menu: restored title focus after startup failure rc=0x%08X",
+                  static_cast<unsigned int>(focusRc));
+    }
     return false;
 }
 
