@@ -1,19 +1,18 @@
-# Transwitch Nintendo Switch homebrew
+# DeskNX Nintendo Switch homebrew
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "DEVKITPRO is not set. Install devkitPro and switch-dev.")
 endif
 
 include $(DEVKITPRO)/libnx/switch_rules
 
-TARGET      := Transwitch
+TARGET      := DeskNX
 BUILD       := build
 SOURCES     := source
-DATA        :=
 INCLUDES    := include
 ROMFS       := romfs
 
-APP_TITLE   := Transwitch
-APP_AUTHOR  := moroskinbiba
+APP_TITLE   := DeskNX
+APP_AUTHOR  := DeskNX contributors
 APP_VERSION := 0.1.0
 
 ARCH        := -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE
@@ -22,7 +21,7 @@ CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,--gc-sections
 
-LIBS        := -larchive -lcurl -lz -lbz2 -llz4 -llzma -lzstd -lnx
+LIBS        := -lSDL2 -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
