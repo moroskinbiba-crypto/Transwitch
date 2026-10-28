@@ -464,7 +464,13 @@ void keyInput(u64 keys) {
     if(keys&HidNpadButton_B) {
         if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");return;}
 #ifdef DESKNX_SYSTEM_APPLET
-        setStatus("DESKNX IS THE HOME MENU; SELECT AN APP TO RETURN TO IT",3000);return;
+        {
+            const Result rc=desknx::ipc::Send(desknx::ipc::Command::ReturnToGame);
+            if(R_FAILED(rc)){setStatus("SYSTEM BACKEND REQUEST FAILED",3000);return;}
+            appletRequestExitToSelf();
+            running=false;
+            return;
+        }
 #else
         appletRequestExitToSelf();running=false;return;
 #endif
