@@ -50,6 +50,13 @@ jobs:
           make -j2
           make -C projects/DeskNXMenu -j2
 
+      - name: Build target-aware hbloader
+        run: |
+          make -C projects/hbloader -j2
+          mkdir -p SdOut/switch/DeskNX/bin/hbloader
+          cp -f projects/hbloader/hbl.nso SdOut/switch/DeskNX/bin/hbloader/main
+          cp -f projects/hbloader/hbl.npdm SdOut/switch/DeskNX/bin/hbloader/main.npdm
+
       - name: Build qlaunch backend
         run: |
           make -C projects/sSystem -j2 LIBNX="$SL_LIBNX" ATMOSPHERE_DIR="$ATMOSPHERE_DIR"
@@ -59,6 +66,8 @@ jobs:
           mkdir -p dist/SdOut dist/scripts dist/docs
           cp -a SdOut/atmosphere dist/SdOut/
           cp -a SdOut/switch dist/SdOut/
+          test -s dist/SdOut/switch/DeskNX/bin/hbloader/main
+          test -s dist/SdOut/switch/DeskNX/bin/hbloader/main.npdm
           cp -f scripts/install-system.sh scripts/uninstall-system.sh dist/scripts/
           cp -f README.md THIRD_PARTY.md dist/
           cp -f docs/HOME_INTEGRATION.md dist/docs/
