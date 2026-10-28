@@ -1,0 +1,9 @@
+build/
+*.nro
+*.nso
+*.elf
+*.nacp
+*.pfs0
+*.zip
+.DS_Store
+.vscode/
