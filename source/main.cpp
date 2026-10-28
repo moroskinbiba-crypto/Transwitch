@@ -419,6 +419,7 @@ void launch(const Tile& t) {
     if(t.kind==Kind::Game) {
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
         if(id==0){setStatus("INVALID TITLE ID");return;}
+#ifdef DESKNX_SYSTEM_APPLET
         const Result rc=desknx::ipc::SendLaunchTitle(id);
         if(R_FAILED(rc)) {
             char b[72]{};
@@ -429,6 +430,13 @@ void launch(const Tile& t) {
         saveLayout();
         appletRequestExitToSelf();
         running=false;
+#else
+        if(R_FAILED(nsInitialize())){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
+        const Result rc=appletRequestLaunchApplication(id,nullptr);
+        nsExit();
+        if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"GAME LAUNCH FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
+        else setStatus("LAUNCH REQUEST SENT");
+#endif
         return;
     }
     if(t.kind==Kind::Nro) {
@@ -455,7 +463,11 @@ void keyInput(u64 keys) {
     }
     if(keys&HidNpadButton_B) {
         if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");return;}
+#ifdef DESKNX_SYSTEM_APPLET
         setStatus("DESKNX IS THE HOME MENU; SELECT AN APP TO RETURN TO IT",3000);return;
+#else
+        appletRequestExitToSelf();running=false;return;
+#endif
     }
     if(keys&HidNpadButton_Plus)newDesk();
     if(keys&HidNpadButton_StickL)renameDesk();
@@ -523,9 +535,13 @@ int main(int,char**) {
     padInitializeDefault(&pad);
     // Tell the system backend the menu is alive. It uses this handshake to
     // distinguish a visible menu from an applet that crashed during startup.
+#ifdef DESKNX_SYSTEM_APPLET
     const Result readyRc=desknx::ipc::SendMenuReady();
     if(R_FAILED(readyRc)) setStatus("SYSTEM BACKEND NOT CONNECTED",5000);
     else setStatus("DESKNX READY  -  Y ADD  X EDIT  + NEW DESK",4000);
+#else
+    setStatus("Y ADD  X EDIT  ZL/ZR RESIZE  - REMOVE  + NEW DESK",5000);
+#endif
     while(running&&appletMainLoop()) {
         padUpdate(&pad);
         u64 keys=padGetButtonsDown(&pad);
