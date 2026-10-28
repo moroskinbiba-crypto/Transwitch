@@ -440,8 +440,8 @@ void keyInput(u64 keys) {
     }
     if(listOpen) {
         if(keys&HidNpadButton_B){listOpen=false;return;}
-        if((keys&HidNpadButton_DUp)&&!catalogue.empty())listIndex=(listIndex-1+static_cast<int>(catalogue.size()))%static_cast<int>(catalogue.size());
-        if((keys&HidNpadButton_DDown)&&!catalogue.empty())listIndex=(listIndex+1)%static_cast<int>(catalogue.size());
+        if((keys&HidNpadButton_Up)&&!catalogue.empty())listIndex=(listIndex-1+static_cast<int>(catalogue.size()))%static_cast<int>(catalogue.size());
+        if((keys&HidNpadButton_Down)&&!catalogue.empty())listIndex=(listIndex+1)%static_cast<int>(catalogue.size());
         if((keys&HidNpadButton_A)&&!catalogue.empty())addSelected();return;
     }
     if(keys&HidNpadButton_B) {
@@ -455,10 +455,10 @@ void keyInput(u64 keys) {
     if(keys&HidNpadButton_Y){editing=true;openList();}
     if(keys&HidNpadButton_L) {if(dragging)moveAcrossDesk(-1);else deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());}
     else if(keys&HidNpadButton_R) {if(dragging)moveAcrossDesk(1);else deskIndex=(deskIndex+1)%static_cast<int>(desks.size());}
-    if(keys&HidNpadButton_DLeft){if(dragging)moveTile(-1,0);else updateCursor(-1,0);}
-    if(keys&HidNpadButton_DRight){if(dragging)moveTile(1,0);else updateCursor(1,0);}
-    if(keys&HidNpadButton_DUp){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
-    if(keys&HidNpadButton_DDown){if(dragging)moveTile(0,1);else updateCursor(0,1);}
+    if(keys&HidNpadButton_Left){if(dragging)moveTile(-1,0);else updateCursor(-1,0);}
+    if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
+    if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
+    if(keys&HidNpadButton_Down){if(dragging)moveTile(0,1);else updateCursor(0,1);}
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
     if(editing&&(keys&HidNpadButton_ZR))resizeTile(true);
     if(editing&&(keys&HidNpadButton_Minus))removeTile();
@@ -509,9 +509,14 @@ int main(int,char**) {
     if(!renderer)renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
     if(!renderer){SDL_DestroyWindow(window);SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 3;}
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+    PadState pad{};
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padInitializeDefault(&pad);
     setStatus("Y ADD  X EDIT  ZL/ZR RESIZE  - REMOVE  + NEW DESK",5000);
     while(running&&appletMainLoop()) {
-        hidScanInput();u64 keys=hidKeysDown(CONTROLLER_P1_AUTO);if(keys)keyInput(keys);
+        padUpdate(&pad);
+        u64 keys=padGetButtonsDown(&pad);
+        if(keys)keyInput(keys);
         SDL_Event e;while(SDL_PollEvent(&e)){if(e.type==SDL_QUIT)running=false;else touchInput(e);}
         drawScreen();svcSleepThread(16'000'000);
     }
