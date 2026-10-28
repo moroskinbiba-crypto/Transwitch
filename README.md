@@ -38,11 +38,11 @@ Standalone-сборка не нуждается в Atmosphère. Чтобы по�
 
 Только после успешной сборки системного пакета и проверки на восстанавливаемой консоли:
 
-    scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk
+    bash scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk
 
 Если на SD-карте уже есть override qlaunch, добавьте --backup-existing. Скрипт сохраняет старые файлы и пишет install manifest. Для восстановления на ПК:
 
-    scripts/uninstall-system.sh --sd-root /path/to/sd-card --acknowledge-risk
+    bash scripts/uninstall-system.sh --sd-root /path/to/sd-card --acknowledge-risk
 
 Не запускайте установщик без рабочего способа получить доступ к SD-карте и восстановить предыдущую конфигурацию Atmosphère. Подробности — в docs/HOME_INTEGRATION.md.
 
