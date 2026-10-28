@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
@@ -29,6 +30,11 @@ constexpr u64 kMenuFastExitMs = 3000;
 constexpr u64 kMenuReadyTimeoutSeconds = 8;
 constexpr u64 kMenuHeartbeatTimeoutSeconds = 15;
 constexpr u64 kMenuRetryDelaySeconds = 5;
+constexpr u64 kRecoveryChordHoldSeconds = 3;
+constexpr const char* kQlaunchOverride = "sdmc:/atmosphere/contents/0100000000001000";
+constexpr const char* kQlaunchDisabled = "sdmc:/atmosphere/contents/0100000000001000.disabled-DeskNX";
+constexpr const char* kInstallMarker = "sdmc:/atmosphere/contents/0100000000001000/exefs/DeskNX.install-marker";
+constexpr const char* kInstallMarkerText = "DeskNX qlaunch override v0.2.0";
 constexpr u64 kMenuStartRetryDelayNs = 500'000'000ULL;
 constexpr int kMenuStartAttempts = 4;
 
@@ -42,6 +48,9 @@ u64 g_NextMenuRetryTick = 0;
 size_t g_MenuSlotIndex = 0;
 bool g_MenuSlotExhausted = false;
 bool g_ReopenMenuAfterSleep = false;
+PadState g_RecoveryPad{};
+u64 g_RecoveryChordStartTick = 0;
+bool g_RecoveryChordAttempted = false;
 
 void MakeDirectories() {
     mkdir("sdmc:/switch", 0777);
@@ -247,6 +256,85 @@ void DrainMenuCommands() {
     }
 }
 
+// Emergency recovery for the one situation where replacing qlaunch can
+// otherwise strand the user without a HOME UI: every known menu slot has failed.
+// This deliberately difficult chord is disabled while a title or menu is alive
+// and only moves a qlaunch directory that carries our own install marker.
+void CheckEmergencyRollback() {
+    if (!g_MenuSlotExhausted || la::g_MenuRunning || la::IsMenuAlive() || app::g_AppRunning) {
+        g_RecoveryChordStartTick = 0;
+        g_RecoveryChordAttempted = false;
+        return;
+    }
+
+    padUpdate(&g_RecoveryPad);
+    constexpr u64 chord = HidNpadButton_L | HidNpadButton_R |
+                          HidNpadButton_ZL | HidNpadButton_ZR |
+                          HidNpadButton_Plus | HidNpadButton_Minus |
+                          HidNpadButton_Down;
+    const u64 buttons = padGetButtons(&g_RecoveryPad);
+    if ((buttons & chord) != chord) {
+        g_RecoveryChordStartTick = 0;
+        g_RecoveryChordAttempted = false;
+        return;
+    }
+    if (g_RecoveryChordAttempted) return;
+
+    const u64 now = armGetSystemTick();
+    if (g_RecoveryChordStartTick == 0) {
+        g_RecoveryChordStartTick = now;
+        return;
+    }
+    if (now - g_RecoveryChordStartTick < armGetSystemTickFreq() * kRecoveryChordHoldSeconds)
+        return;
+
+    g_RecoveryChordAttempted = true;
+    FILE* markerFile = std::fopen(kInstallMarker, "r");
+    if (!markerFile) {
+        DaemonLog("recovery: chord refused; DeskNX install marker not found");
+        return;
+    }
+    char marker[128]{};
+    const bool readOk = std::fgets(marker, sizeof(marker), markerFile) != nullptr;
+    std::fclose(markerFile);
+    marker[std::strcspn(marker, "\r\n")] = '\0';
+    if (!readOk || std::strcmp(marker, kInstallMarkerText) != 0) {
+        DaemonLog("recovery: chord refused; install marker did not match");
+        return;
+    }
+
+    struct stat current{};
+    struct stat disabled{};
+    if (stat(kQlaunchOverride, &current) != 0 || !S_ISDIR(current.st_mode)) {
+        DaemonLog("recovery: chord refused; qlaunch override path is not a directory");
+        return;
+    }
+    if (stat(kQlaunchDisabled, &disabled) == 0) {
+        DaemonLog("recovery: chord refused; destination already exists: %s", kQlaunchDisabled);
+        return;
+    }
+    if (std::rename(kQlaunchOverride, kQlaunchDisabled) != 0) {
+        DaemonLog("recovery: failed to disable qlaunch override (errno=%d)", errno);
+        return;
+    }
+
+    DaemonLog("recovery: disabled the marked DeskNX qlaunch override; requesting reboot to stock HOME");
+    const Result rebootRc = appletRequestToReboot();
+    if (R_FAILED(rebootRc)) {
+        if (std::rename(kQlaunchDisabled, kQlaunchOverride) == 0)
+            DaemonLog("recovery: reboot request failed (0x%08X); qlaunch override restored",
+                      static_cast<unsigned int>(rebootRc));
+        else
+            DaemonLog("recovery: reboot request failed (0x%08X) and automatic restoration failed; SD-card path remains %s",
+                      static_cast<unsigned int>(rebootRc), kQlaunchDisabled);
+        return;
+    }
+
+    // libnx enters its reboot wait loop on success. If the firmware unexpectedly
+    // returns, leave the override disabled rather than restoring a potential boot loop.
+    DaemonLog("recovery: reboot API returned success unexpectedly; override remains disabled");
+}
+
 void OpenMenuForHomePress() {
     if (la::IsMenuAlive()) {
         // HOME while the launcher is already visible dismisses it back to the
@@ -377,6 +465,8 @@ void RunMainLoop() {
 
     PickSelectedUser();
     DaemonLog("account: selected user valid=%d", accountUidIsValid(&g_SelectedUser) ? 1 : 0);
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padInitializeDefault(&g_RecoveryPad);
 
     // DeskNX starts only after the operator has installed the qlaunch override.
     // Keeping the original title override untouched is handled by the installer.
@@ -465,6 +555,7 @@ void RunMainLoop() {
             LaunchMenu();
         }
 
+        CheckEmergencyRollback();
         svcSleepThread(16'666'666ULL);
     }
 }
