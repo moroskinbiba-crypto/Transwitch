@@ -1,0 +1,60 @@
+# Transwitch Nintendo Switch homebrew
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "DEVKITPRO is not set. Install devkitPro and switch-dev.")
+endif
+
+include $(DEVKITPRO)/libnx/switch_rules
+
+TARGET      := Transwitch
+BUILD       := build
+SOURCES     := source
+DATA        :=
+INCLUDES    := include
+ROMFS       := romfs
+
+APP_TITLE   := Transwitch
+APP_AUTHOR  := moroskinbiba
+APP_VERSION := 0.1.0
+
+ARCH        := -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE
+CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
+CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
+ASFLAGS     := -g $(ARCH)
+LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,--gc-sections
+
+LIBS        := -larchive -lcurl -lz -lnx
+LIBDIRS     := $(PORTLIBS) $(LIBNX)
+
+ifneq ($(BUILD),$(notdir $(CURDIR)))
+export OUTPUT := $(CURDIR)/$(TARGET)
+export TOPDIR := $(CURDIR)
+export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
+export DEPSDIR := $(CURDIR)/$(BUILD)
+CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+SFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+export OFILES_SRC := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+export OFILES := $(OFILES_SRC)
+export HFILES := $(foreach dir,$(INCLUDES),$(wildcard $(dir)/*.h))
+export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
+export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+export BUILD_EXEFS_SRC := $(TOPDIR)/exefs_src
+export APP_TITLE APP_AUTHOR APP_VERSION
+export ROMFS
+export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
+export APP_ICON := $(DEVKITPRO)/libnx/default_icon.jpg
+.PHONY: all clean
+all: $(BUILD)
+$(BUILD):
+	@mkdir -p $@
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+clean:
+	@rm -rf $(BUILD) $(TARGET).nro $(TARGET).nso $(TARGET).elf $(TARGET).nacp $(TARGET).pfs0
+else
+DEPENDS := $(OFILES:.o=.d)
+.PHONY: all
+all: $(OUTPUT).nro
+$(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp
+$(OUTPUT).elf: $(OFILES)
+-include $(DEPENDS)
+endif
