@@ -3,7 +3,12 @@ ifeq ($(strip $(DEVKITPRO)),)
 $(error "DEVKITPRO is not set. Install devkitPro and switch-dev.")
 endif
 
-include $(DEVKITPRO)/libnx/switch_rules
+# Explicit paths also work in the devkitPro Docker image where profile
+# environment scripts may not be sourced by the Actions runner.
+LIBNX    := $(DEVKITPRO)/libnx
+PORTLIBS := $(DEVKITPRO)/portlibs/switch
+
+include $(LIBNX)/switch_rules
 
 TARGET      := DeskNX
 BUILD       := build
@@ -19,7 +24,7 @@ ARCH        := -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
-LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,--gc-sections
+LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
 
 LIBS        := -lSDL2 -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
@@ -46,7 +51,7 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/exefs_src
 export APP_TITLE APP_AUTHOR APP_VERSION
 export ROMFS
 export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
-export APP_ICON := $(DEVKITPRO)/libnx/default_icon.jpg
+export APP_ICON := $(LIBNX)/default_icon.jpg
 .PHONY: all clean
 all: $(BUILD)
 $(BUILD):
