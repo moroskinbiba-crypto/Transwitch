@@ -82,15 +82,15 @@ inline Result SendLaunchTitle(u64 title_id) {
 }
 
 inline Result SendLaunchHomebrew(const char* nro_path, const char* argv = nullptr) {
-    if (!nro_path || !nro_path[0] || std::strlen(nro_path) >= MaxHomebrewPath)
+    if (!nro_path || !nro_path[0] || strlen(nro_path) >= MaxHomebrewPath)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    if (argv && std::strlen(argv) >= MaxHomebrewArgv)
+    if (argv && strlen(argv) >= MaxHomebrewArgv)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
 
     LaunchHomebrewPayload payload{};
-    std::strncpy(payload.nro_path, nro_path, sizeof(payload.nro_path) - 1);
+    strncpy(payload.nro_path, nro_path, sizeof(payload.nro_path) - 1);
     if (argv)
-        std::strncpy(payload.argv, argv, sizeof(payload.argv) - 1);
+        strncpy(payload.argv, argv, sizeof(payload.argv) - 1);
     return Send(Command::LaunchHomebrew, &payload, sizeof(payload));
 }
 
