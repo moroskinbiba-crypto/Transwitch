@@ -349,6 +349,13 @@ void HandleMenuClosed() {
 
 void RunMainLoop() {
     DaemonLog("backend: starting; current slot=%s", CurrentMenuSlot().name);
+
+    // This policy is part of system-applet startup, not a cosmetic preference.
+    // Without it, a library applet can render but fail to take the foreground.
+    const Result idleRc = appletLoadAndApplyIdlePolicySettings();
+    DaemonLog("backend: apply idle/power policy rc=0x%08X",
+              static_cast<unsigned int>(idleRc));
+
     PickSelectedUser();
     DaemonLog("account: selected user valid=%d", accountUidIsValid(&g_SelectedUser) ? 1 : 0);
 
