@@ -36,14 +36,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 PACKAGE="${DESKNX_PACKAGE_DIR:-$REPO_ROOT/SdOut}"
 SRC_QLAUNCH="$PACKAGE/atmosphere/contents/0100000000001000"
 SRC_MENU="$PACKAGE/switch/DeskNX/bin/Menu"
+SRC_HBLOADER="$PACKAGE/switch/DeskNX/bin/hbloader"
 SRC_NRO="$PACKAGE/switch/DeskNX/DeskNX.nro"
 TARGET_QLAUNCH="$SD_ROOT/atmosphere/contents/0100000000001000"
 TARGET_MENU="$SD_ROOT/switch/DeskNX/bin/Menu"
+TARGET_HBLOADER="$SD_ROOT/switch/DeskNX/bin/hbloader"
 TARGET_NRO="$SD_ROOT/switch/DeskNX/DeskNX.nro"
 MANIFEST="$SD_ROOT/switch/DeskNX/install-manifest.txt"
 MARKER="DeskNX qlaunch override v0.2.0"
 
-for required in "$SRC_QLAUNCH/exefs/main" "$SRC_QLAUNCH/exefs/main.npdm" "$SRC_MENU/main" "$SRC_MENU/main.npdm" "$SRC_NRO"; do
+for required in "$SRC_QLAUNCH/exefs/main" "$SRC_QLAUNCH/exefs/main.npdm" "$SRC_MENU/main" "$SRC_MENU/main.npdm" "$SRC_HBLOADER/main" "$SRC_HBLOADER/main.npdm" "$SRC_NRO"; do
   [[ -f "$required" && -s "$required" ]] || {
     echo "Required build output is missing or empty: $required" >&2
     echo "Build the standalone app, library applet and matching system backend first." >&2
@@ -70,6 +72,7 @@ mkdir -p "$BACKUP_ROOT" "$SD_ROOT/atmosphere/contents" "$SD_ROOT/switch/DeskNX/b
 
 BACKUP_REL="none"
 MENU_BACKUP_REL="none"
+HBLOADER_BACKUP_REL="none"
 NRO_BACKUP_REL="none"
 
 # Persist backups outside the transaction staging area. They remain available
@@ -82,6 +85,10 @@ if [[ -e "$TARGET_MENU" ]]; then
   MENU_BACKUP_REL="switch/DeskNX/backup/menu-$STAMP"
   cp -a "$TARGET_MENU" "$SD_ROOT/$MENU_BACKUP_REL"
 fi
+if [[ -e "$TARGET_HBLOADER" ]]; then
+  HBLOADER_BACKUP_REL="switch/DeskNX/backup/hbloader-$STAMP"
+  cp -a "$TARGET_HBLOADER" "$SD_ROOT/$HBLOADER_BACKUP_REL"
+fi
 if [[ -f "$TARGET_NRO" ]]; then
   NRO_BACKUP_REL="switch/DeskNX/backup/DeskNX-nro-$STAMP.bak"
   cp -p "$TARGET_NRO" "$SD_ROOT/$NRO_BACKUP_REL"
@@ -89,13 +96,16 @@ fi
 
 STAGE="$SD_ROOT/atmosphere/contents/.0100000000001000.desknx-stage-$$"
 ROLLBACK="$SD_ROOT/atmosphere/contents/.0100000000001000.desknx-rollback-$$"
-MENU_STAGE="$SD_ROOT/switch/DeskNX/bin/.Menu-stage-$$"
-MENU_ROLLBACK="$SD_ROOT/switch/DeskNX/bin/.Menu-rollback-$$"
+MENU_STAGE="$SD_ROOT/switch/DeskNX/bin/.Menu-stage-$"
+MENU_ROLLBACK="$SD_ROOT/switch/DeskNX/bin/.Menu-rollback-$"
+HBLOADER_STAGE="$SD_ROOT/switch/DeskNX/bin/.hbloader-stage-$"
+HBLOADER_ROLLBACK="$SD_ROOT/switch/DeskNX/bin/.hbloader-rollback-$"
 NRO_STAGE="$SD_ROOT/switch/DeskNX/.DeskNX-nro-stage-$$"
 NRO_ROLLBACK="$SD_ROOT/switch/DeskNX/.DeskNX-nro-rollback-$$"
 MANIFEST_STAGE="$SD_ROOT/switch/DeskNX/.install-manifest-stage-$$"
 QLAUNCH_INSTALLED=0
 MENU_INSTALLED=0
+HBLOADER_INSTALLED=0
 NRO_INSTALLED=0
 COMMITTED=0
 
@@ -135,26 +145,30 @@ cleanup() {
   if [[ "$COMMITTED" != 1 ]]; then
     rollback_dir "$TARGET_QLAUNCH" "$ROLLBACK" "$QLAUNCH_INSTALLED"
     rollback_dir "$TARGET_MENU" "$MENU_ROLLBACK" "$MENU_INSTALLED"
+    rollback_dir "$TARGET_HBLOADER" "$HBLOADER_ROLLBACK" "$HBLOADER_INSTALLED"
     rollback_file "$TARGET_NRO" "$NRO_ROLLBACK" "$NRO_INSTALLED"
     rm -f "$MANIFEST"
   fi
-  rm -rf "$STAGE" "$MENU_STAGE" "$NRO_STAGE" "$MANIFEST_STAGE"
+  rm -rf "$STAGE" "$MENU_STAGE" "$HBLOADER_STAGE" "$NRO_STAGE" "$MANIFEST_STAGE"
   # Rollback locations should be empty on success. Keep any unexpected
   # contents rather than deleting evidence of a partial failure.
   [[ ! -e "$ROLLBACK" ]] || { echo "Recovery copy remains at $ROLLBACK" >&2; rc=1; }
   [[ ! -e "$MENU_ROLLBACK" ]] || { echo "Recovery copy remains at $MENU_ROLLBACK" >&2; rc=1; }
+  [[ ! -e "$HBLOADER_ROLLBACK" ]] || { echo "Recovery copy remains at $HBLOADER_ROLLBACK" >&2; rc=1; }
   [[ ! -e "$NRO_ROLLBACK" ]] || { echo "Recovery copy remains at $NRO_ROLLBACK" >&2; rc=1; }
   exit "$rc"
 }
 trap cleanup EXIT
 
 # Prepare all new files before touching the installed paths.
-mkdir -p "$STAGE/exefs" "$MENU_STAGE"
+mkdir -p "$STAGE/exefs" "$MENU_STAGE" "$HBLOADER_STAGE"
 cp -p "$SRC_QLAUNCH/exefs/main" "$STAGE/exefs/main"
 cp -p "$SRC_QLAUNCH/exefs/main.npdm" "$STAGE/exefs/main.npdm"
 printf '%s\n' "$MARKER" > "$STAGE/exefs/DeskNX.install-marker"
 cp -p "$SRC_MENU/main" "$MENU_STAGE/main"
 cp -p "$SRC_MENU/main.npdm" "$MENU_STAGE/main.npdm"
+cp -p "$SRC_HBLOADER/main" "$HBLOADER_STAGE/main"
+cp -p "$SRC_HBLOADER/main.npdm" "$HBLOADER_STAGE/main.npdm"
 cp -p "$SRC_NRO" "$NRO_STAGE"
 
 cat > "$MANIFEST_STAGE" <<EOF
@@ -163,6 +177,7 @@ version=0.2.0
 qlaunch_backup=$BACKUP_REL
 menu_backup=$MENU_BACKUP_REL
 nro_backup=$NRO_BACKUP_REL
+hbloader_backup=$HBLOADER_BACKUP_REL
 main_sha256=$(hash_file "$STAGE/exefs/main")
 npdm_sha256=$(hash_file "$STAGE/exefs/main.npdm")
 EOF
@@ -172,6 +187,10 @@ EOF
 if [[ -e "$TARGET_MENU" ]]; then mv "$TARGET_MENU" "$MENU_ROLLBACK"; fi
 MENU_INSTALLED=1
 mv "$MENU_STAGE" "$TARGET_MENU"
+
+if [[ -e "$TARGET_HBLOADER" ]]; then mv "$TARGET_HBLOADER" "$HBLOADER_ROLLBACK"; fi
+HBLOADER_INSTALLED=1
+mv "$HBLOADER_STAGE" "$TARGET_HBLOADER"
 
 if [[ -e "$TARGET_NRO" ]]; then mv "$TARGET_NRO" "$NRO_ROLLBACK"; fi
 NRO_INSTALLED=1
@@ -185,9 +204,10 @@ mv "$MANIFEST_STAGE" "$MANIFEST"
 COMMITTED=1
 
 # Persistent backups now exist, so transient rollback paths may be deleted.
-rm -rf "$ROLLBACK" "$MENU_ROLLBACK" "$NRO_ROLLBACK"
+rm -rf "$ROLLBACK" "$MENU_ROLLBACK" "$HBLOADER_ROLLBACK" "$NRO_ROLLBACK"
 echo "DeskNX files staged on SD root: $SD_ROOT"
 echo "Previous qlaunch override backup: $BACKUP_REL"
 echo "Previous menu backup: $MENU_BACKUP_REL"
+echo "Previous hbloader backup: $HBLOADER_BACKUP_REL"
 echo "Previous DeskNX NRO backup: $NRO_BACKUP_REL"
 echo "Install files and manifest were written. This does not prove runtime compatibility; keep recovery access available."
