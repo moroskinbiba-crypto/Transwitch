@@ -423,6 +423,24 @@ constexpr size_t kLibnxHeapSize = 4 * 1024 * 1024;
 alignas(ams::os::MemoryPageSize) constinit u8 g_LibnxHeap[kLibnxHeapSize];
 }
 
+namespace {
+
+struct InitStep {
+    const char* name;
+    Result rc;
+    bool critical;
+};
+InitStep g_InitSteps[16]{};
+size_t g_InitStepCount = 0;
+
+Result RecordInit(const char* name, Result rc, bool critical) {
+    if (g_InitStepCount < std::size(g_InitSteps))
+        g_InitSteps[g_InitStepCount++] = {name, rc, critical};
+    return rc;
+}
+
+} // namespace
+
 namespace ams {
 
 namespace init {
@@ -437,31 +455,62 @@ void InitializeSystemModule() {
     __nx_applet_type = AppletType_SystemApplet;
     __nx_fs_num_sessions = 3;
 
+    // sm/fs are prerequisites for every other service and for SD-backed logs.
     R_ABORT_UNLESS(sm::Initialize());
     R_ABORT_UNLESS(fsInitialize());
 
-    // Query firmware before initializing services that select IPC layouts by HOS version.
+    // libnx chooses IPC command/layouts by HOS version. Discover the installed
+    // firmware before initializing account/ns/applet services.
+    RecordInit("setsys", setsysInitialize(), true);
     if (hosversionGet() == 0) {
-        if (R_SUCCEEDED(setsysInitialize())) {
-            SetSysFirmwareVersion fw{};
-            if (R_SUCCEEDED(setsysGetFirmwareVersion(&fw)))
-                hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro) | BIT(31));
-            setsysExit();
-        }
+        SetSysFirmwareVersion fw{};
+        if (R_SUCCEEDED(setsysGetFirmwareVersion(&fw)))
+            hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro) | BIT(31));
     }
 
-    R_ABORT_UNLESS(appletInitialize());
-    R_ABORT_UNLESS(hidInitialize());
-    R_ABORT_UNLESS(accountInitialize(AccountServiceType_System));
-    R_ABORT_UNLESS(nsInitialize());
-    R_ABORT_UNLESS(setsysInitialize());
-    R_ABORT_UNLESS(ldrShellInitialize());
-    R_ABORT_UNLESS(pmshellInitialize());
+    RecordInit("applet", appletInitialize(), true);
+    RecordInit("hid", hidInitialize(), true);
+    RecordInit("account", accountInitialize(AccountServiceType_System), true);
+    RecordInit("ns", nsInitialize(), true);
+    RecordInit("set", setInitialize(), true);
+    RecordInit("ldr:shel", ldrShellInitialize(), true);
+    // pmshell is needed for reliable tracking/termination but sLaunch treats it
+    // as optional so a service refusal cannot turn into a black-screen boot.
+    RecordInit("pmshell", pmshellInitialize(), false);
 
-    // A failure to mount SD means the menu's executable cannot be served.
+    // The SD card must be mounted before diagnostics can be persisted.
     R_ABORT_UNLESS(fsdevMountSdmc());
     MakeDirectories();
-    DaemonLog("backend: services initialized, firmware=0x%08X", hosversionGet());
+    remove(kPrevLogPath);
+    rename(kLogPath, kPrevLogPath);
+
+    DaemonLog("backend: firmware=%u.%u.%u",
+              HOSVER_MAJOR(hosversionGet()), HOSVER_MINOR(hosversionGet()),
+              HOSVER_MICRO(hosversionGet()));
+    for (size_t i = 0; i < g_InitStepCount; ++i) {
+        if (R_SUCCEEDED(g_InitSteps[i].rc)) continue;
+        DaemonLog("service init failed: %s rc=0x%08X%s",
+                  g_InitSteps[i].name, static_cast<unsigned int>(g_InitSteps[i].rc),
+                  g_InitSteps[i].critical ? " (critical)" : " (optional)");
+    }
+    for (size_t i = 0; i < g_InitStepCount; ++i)
+        if (g_InitSteps[i].critical)
+            R_ABORT_UNLESS(g_InitSteps[i].rc);
+
+    DaemonLog("backend: core services initialized");
+}
+
+void FinalizeSystemModule() {
+    pmshellExit();
+    ldrShellExit();
+    setExit();
+    setsysExit();
+    nsExit();
+    accountExit();
+    hidExit();
+    appletExit();
+    fsdevUnmountAll();
+    fsExit();
 }
 
 } // namespace init
