@@ -26,6 +26,8 @@ constexpr const char* kLogPath = "sdmc:/switch/DeskNX/logs/daemon.log";
 constexpr const char* kPrevLogPath = "sdmc:/switch/DeskNX/logs/daemon.prev.log";
 constexpr u64 kHomePressSettleMs = 1500;
 constexpr u64 kMenuFastExitMs = 3000;
+constexpr u64 kMenuReadyTimeoutSeconds = 8;
+constexpr u64 kMenuRetryDelaySeconds = 5;
 constexpr u64 kMenuStartRetryDelayNs = 500'000'000ULL;
 constexpr int kMenuStartAttempts = 4;
 
@@ -34,6 +36,7 @@ u64 g_PendingTitle = 0;
 bool g_PendingReturnToGame = false;
 bool g_MenuReady = false;
 u64 g_MenuLaunchTick = 0;
+u64 g_NextMenuRetryTick = 0;
 size_t g_MenuSlotIndex = 0;
 bool g_MenuSlotExhausted = false;
 bool g_ReopenMenuAfterSleep = false;
@@ -118,6 +121,8 @@ void RegisterCurrentSlot() {
 
 bool LaunchMenu() {
     if (la::IsMenuAlive()) return true;
+    g_MenuSlotExhausted = false;
+    g_NextMenuRetryTick = 0;
     const auto& slot = CurrentMenuSlot();
     RegisterCurrentSlot();
 
@@ -130,6 +135,7 @@ bool LaunchMenu() {
         if (R_SUCCEEDED(rc)) {
             g_MenuReady = false;
             g_MenuLaunchTick = armGetSystemTick();
+            g_MenuSlotExhausted = false;
             return true;
         }
     }
@@ -147,13 +153,16 @@ bool LaunchMenu() {
             if (R_SUCCEEDED(rc)) {
                 g_MenuReady = false;
                 g_MenuLaunchTick = armGetSystemTick();
+                g_MenuSlotExhausted = false;
                 return true;
             }
         }
     }
 
     g_MenuSlotExhausted = true;
-    DaemonLog("FATAL: none of the supported HOME applet slots could be started");
+    g_NextMenuRetryTick = armGetSystemTick() + armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+    DaemonLog("menu: all supported HOME applet slots failed; retry scheduled in %llu seconds",
+              static_cast<unsigned long long>(kMenuRetryDelaySeconds));
     return false;
 }
 
@@ -206,7 +215,9 @@ bool ParseMenuCommand(AppletStorage& storage) {
 }
 
 void DrainMenuCommands() {
-    if (!la::IsMenuAlive()) return;
+    // Drain once more after a menu applet has finished but before its holder
+    // is closed; its final launch request can be queued immediately before exit.
+    if (!la::g_MenuRunning) return;
 
     for (int n = 0; n < 16; ++n) {
         AppletStorage storage{};
@@ -288,6 +299,7 @@ void PumpAppletMessages() {
 }
 
 void HandleMenuClosed() {
+    DrainMenuCommands();
     const bool didHandshake = g_MenuReady;
     const u64 lifetimeTicks = armGetSystemTick() - g_MenuLaunchTick;
     const u64 lifetimeMs = lifetimeTicks * 1000 / armGetSystemTickFreq();
@@ -349,10 +361,40 @@ void RunMainLoop() {
             DrainMenuCommands();
         PumpAppletMessages();
 
+        // A slot that starts but never speaks is probably the firmware's own
+        // applet or a crashed menu. Stop it and test the next known slot instead
+        // of leaving the HOME button attached to a frozen screen forever.
+        if (la::IsMenuAlive() && !g_MenuReady && g_MenuLaunchTick != 0) {
+            const u64 liveTicks = armGetSystemTick() - g_MenuLaunchTick;
+            if (liveTicks >= armGetSystemTickFreq() * kMenuReadyTimeoutSeconds) {
+                DaemonLog("menu: no ready IPC after %llu seconds in slot=%s",
+                          static_cast<unsigned long long>(kMenuReadyTimeoutSeconds),
+                          CurrentMenuSlot().name);
+                la::StopMenu();
+                if (g_MenuSlotIndex + 1 < ecs::MenuSlotCount) {
+                    ++g_MenuSlotIndex;
+                    g_MenuSlotExhausted = false;
+                    DaemonLog("menu: testing fallback slot=%s", CurrentMenuSlot().name);
+                } else {
+                    g_MenuSlotIndex = 0;
+                    g_MenuSlotExhausted = true;
+                    g_NextMenuRetryTick = armGetSystemTick() +
+                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                }
+            }
+        }
+
         if (la::g_MenuRunning && !la::IsMenuAlive()) {
             HandleMenuClosed();
         } else if (!la::g_MenuRunning && app::g_AppRunning && app::Update()) {
             DaemonLog("app: title exited naturally");
+            LaunchMenu();
+        } else if (!la::g_MenuRunning && g_MenuSlotExhausted &&
+                   armGetSystemTick() >= g_NextMenuRetryTick) {
+            // Reset to the preferred slot on every retry so transient startup
+            // failures don't permanently pin a console to the fallback slot.
+            g_MenuSlotIndex = 0;
+            g_MenuSlotExhausted = false;
             LaunchMenu();
         } else if (!la::g_MenuRunning && !app::g_AppRunning && !g_MenuSlotExhausted) {
             LaunchMenu();
