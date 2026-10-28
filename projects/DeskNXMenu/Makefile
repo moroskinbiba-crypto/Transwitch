@@ -1,5 +1,4 @@
-# DeskNX library applet (runs in the HOME daemon's served applet slot).
-# This target produces main + main.npdm under SdOut/switch/DeskNX/bin/Menu.
+# DeskNX library applet (served by the optional HOME backend).
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "Set DEVKITPRO to your devkitPro installation")
 endif
@@ -13,7 +12,8 @@ INCLUDES    := ../../projects/common/include
 APP_TITLE   := DeskNX
 APP_AUTHOR  := DeskNX contributors
 APP_VERSION := 0.2.0
-APP_JSON    := DeskNXMenu.json
+APP_JSON    := $(CURDIR)/DeskNXMenu.json
+OUTDIR      := $(CURDIR)/../../SdOut/switch/DeskNX/bin/Menu
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__ -DDESKNX_SYSTEM_APPLET
@@ -22,7 +22,6 @@ ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,--gc-sections
 LIBS        := $(shell sdl2-config --libs) -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
-OUTDIR      := ../../SdOut/switch/DeskNX/bin/Menu
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT := $(CURDIR)/$(TARGET)
@@ -40,29 +39,33 @@ endif
 export OFILES_SRC := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export OFILES := $(OFILES_SRC)
 export HFILES := $(foreach dir,$(INCLUDES),$(wildcard $(dir)/*.h))
-export INCLUDE := $(foreach dir,$(INCLUDES),-I$(abspath $(CURDIR)/$(dir))) $(foreach dir,$(LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
+export INCLUDE := $(foreach dir,$(INCLUDES),-I$(abspath $(CURDIR)/$(dir))) \
+                  $(foreach dir,$(LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 export APP_TITLE APP_AUTHOR APP_VERSION APP_JSON
 .PHONY: all clean
+all: $(BUILD)
+$(BUILD):
+	@mkdir -p $@
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+clean:
+	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
+	@rm -rf $(CURDIR)/../../SdOut/switch/DeskNX/bin/Menu
+else
+DEPENDS := $(OFILES:.o=.d)
+.PHONY: all
 all: $(OUTDIR)/main $(OUTDIR)/main.npdm
 
 $(OUTDIR)/main: $(OUTPUT).nso | $(OUTDIR)
 	@cp -f $< $@
 	@echo "DeskNX applet NSO: $@"
 
-$(OUTDIR)/main.npdm: $(APP_JSON) | $(OUTDIR)
-	@npdmtool $(APP_JSON) $@
+$(OUTDIR)/main.npdm: $(OUTPUT).npdm | $(OUTDIR)
+	@cp -f $< $@
 	@echo "DeskNX applet NPDM: $@"
 
 $(OUTDIR):
 	@mkdir -p $@
 
-clean:
-	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
-else
-DEPENDS := $(OFILES:.o=.d)
-.PHONY: all
-all: $(OUTPUT).elf
-$(OUTPUT).elf: $(OFILES)
 -include $(DEPENDS)
 endif
