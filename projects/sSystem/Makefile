@@ -19,7 +19,7 @@ STRAT_SPECS := $(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/stratosphere.specs
 OUTDIR ?= ../../SdOut/atmosphere/contents/0100000000001000/exefs
 SYSTEM_JSON ?= $(CURDIR)/DeskNXSystem.json
 
-include $(DEVKITPRO)/libnx/switch_rules
+include $(LIBNX)/switch_rules
 
 APP_TITLE   := DeskNXSystem
 APP_AUTHOR  := DeskNX contributors
@@ -56,7 +56,7 @@ CXXREQUIRED := -Wl,--require-defined,__libnx_initheap \
                -Wl,--require-defined,__appExit \
                -Wl,--require-defined,argvSetup
 
-LDFLAGS := -specs=$(STRAT_SPECS) -specs=$(DEVKITPRO)/libnx/switch.specs \
+LDFLAGS := -specs=$(STRAT_SPECS) -specs=$(LIBNX)/switch.specs \
            -g $(ARCH) $(CXXWRAPS) $(CXXREQUIRED) \
            -Wl,-Map,$(TARGET).map -Wl,-z,relro,-z,now
 LIBS := -lstratosphere -lnx
