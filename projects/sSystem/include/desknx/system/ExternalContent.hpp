@@ -56,7 +56,7 @@ namespace desknx::system::ecs {
     AppletId AppletIdForProgramId(u64 program_id);
 
     // SD path (relative to the SD root) of DeskNX Menu's exefs folder.
-    constexpr const char *MenuExefsDir = "/switch/DeskNX/bin/DeskNX Menu";
+    constexpr const char *MenuExefsDir = "/switch/DeskNX/bin/Menu";
 
     // Homebrew menu: nx-hbloader served into the album (PhotoViewer) applet
     // slot -- the classic "hbmenu over album" mechanism. Launched with no
