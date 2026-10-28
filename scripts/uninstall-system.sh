@@ -139,9 +139,9 @@ if [[ "$backup_rel" != "none" ]]; then cp -a "$SD_ROOT/$backup_rel" "$STAGE/qlau
 if [[ "$menu_backup_rel" != "none" ]]; then cp -a "$SD_ROOT/$menu_backup_rel" "$STAGE/menu"; fi
 if [[ "$nro_backup_rel" != "none" ]]; then cp -p "$SD_ROOT/$nro_backup_rel" "$STAGE/nro"; fi
 
-if [[ -e "$TARGET_QLAUNCH" ]]; then mv "$TARGET_QLAUNCH" "$CURRENT_QLAUNCH"; HAD_QLAUNCH=1; fi
-if [[ -e "$TARGET_MENU" ]]; then mv "$TARGET_MENU" "$CURRENT_MENU"; HAD_MENU=1; fi
-if [[ -e "$TARGET_NRO" ]]; then mv "$TARGET_NRO" "$CURRENT_NRO"; HAD_NRO=1; fi
+if [[ -e "$TARGET_QLAUNCH" ]]; then HAD_QLAUNCH=1; mv "$TARGET_QLAUNCH" "$CURRENT_QLAUNCH"; fi
+if [[ -e "$TARGET_MENU" ]]; then HAD_MENU=1; mv "$TARGET_MENU" "$CURRENT_MENU"; fi
+if [[ -e "$TARGET_NRO" ]]; then HAD_NRO=1; mv "$TARGET_NRO" "$CURRENT_NRO"; fi
 
 if [[ -d "$STAGE/qlaunch" ]]; then
   mkdir -p "$(dirname "$TARGET_QLAUNCH")"
