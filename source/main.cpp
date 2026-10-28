@@ -441,9 +441,23 @@ void launch(const Tile& t) {
         return;
     }
     if(t.kind==Kind::Nro) {
+#ifdef DESKNX_SYSTEM_APPLET
+        const Result rc=desknx::ipc::SendLaunchHomebrew(t.data.c_str(),"");
+        if(R_FAILED(rc)) {
+            char b[72]{};
+            std::snprintf(b,sizeof(b),"HOMEBREW REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));
+            setStatus(b,4000);
+            return;
+        }
+        saveLayout();
+        appletRequestExitToSelf();
+        running=false;
+#else
         if(!envHasNextLoad()){setStatus("NRO CHAIN-LOAD UNAVAILABLE; USE HBMENU TAKEOVER",4500);return;}
         if(R_FAILED(envSetNextLoad(t.data.c_str(),""))){setStatus("CANNOT PREPARE NEXT NRO");return;}
-        appletRequestExitToSelf();return;
+        appletRequestExitToSelf();
+#endif
+        return;
     }
     if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
     else if(t.kind==Kind::System)setStatus("PROTOTYPE ONLY - SYSTEM HOME REPLACEMENT IS INACTIVE",3500);
