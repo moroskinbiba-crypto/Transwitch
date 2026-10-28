@@ -52,6 +52,18 @@ mkdir -p "$SD_ROOT/switch/DeskNX/backup" "$SD_ROOT/atmosphere/contents"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_REL="none"
+MENU_BACKUP_REL="none"
+NRO_BACKUP_REL="none"
+
+if [[ -e "$TARGET_MENU" ]]; then
+  MENU_BACKUP_REL="switch/DeskNX/backup/menu-$STAMP"
+  cp -a "$TARGET_MENU" "$SD_ROOT/$MENU_BACKUP_REL"
+fi
+if [[ -f "$SD_ROOT/switch/DeskNX/DeskNX.nro" ]]; then
+  NRO_BACKUP_REL="switch/DeskNX/backup/DeskNX-nro-$STAMP.bak"
+  cp -f "$SD_ROOT/switch/DeskNX/DeskNX.nro" "$SD_ROOT/$NRO_BACKUP_REL"
+fi
+
 if [[ -e "$TARGET_QLAUNCH" ]]; then
   if [[ "$BACKUP_EXISTING" != 1 ]]; then
     echo "A qlaunch override already exists at $TARGET_QLAUNCH." >&2
@@ -108,6 +120,8 @@ cat > "$MANIFEST" <<EOF
 DESKNX_MANIFEST_V1
 version=0.2.0
 qlaunch_backup=$BACKUP_REL
+menu_backup=$MENU_BACKUP_REL
+nro_backup=$NRO_BACKUP_REL
 main_sha256=$(hash_file "$TARGET_QLAUNCH/exefs/main")
 npdm_sha256=$(hash_file "$TARGET_QLAUNCH/exefs/main.npdm")
 EOF
