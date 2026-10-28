@@ -12,8 +12,7 @@ INCLUDES    := ../../projects/common/include
 APP_TITLE   := DeskNX
 APP_AUTHOR  := DeskNX contributors
 APP_VERSION := 0.2.0
-APP_JSON    := $(CURDIR)/DeskNXMenu.json
-OUTDIR      := $(CURDIR)/../../SdOut/switch/DeskNX/bin/Menu
+APP_JSON    = $(TOPDIR)/DeskNXMenu.json
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__ -DDESKNX_SYSTEM_APPLET
@@ -26,6 +25,8 @@ LIBDIRS     := $(PORTLIBS) $(LIBNX)
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT := $(CURDIR)/$(TARGET)
 export TOPDIR := $(CURDIR)
+export APP_JSON := $(CURDIR)/DeskNXMenu.json
+export OUTDIR := $(CURDIR)/../../SdOut/switch/DeskNX/bin/Menu
 export VPATH := $(foreach dir,$(SOURCES),$(abspath $(CURDIR)/$(dir)))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
@@ -60,8 +61,8 @@ $(OUTDIR)/main: $(OUTPUT).nso | $(OUTDIR)
 	@cp -f $< $@
 	@echo "DeskNX applet NSO: $@"
 
-$(OUTDIR)/main.npdm: $(OUTPUT).npdm | $(OUTDIR)
-	@cp -f $< $@
+$(OUTDIR)/main.npdm: $(APP_JSON) | $(OUTDIR)
+	@npdmtool $(APP_JSON) $@
 	@echo "DeskNX applet NPDM: $@"
 
 $(OUTDIR):
