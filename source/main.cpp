@@ -672,8 +672,8 @@ bool waitForA() {
     while (appletMainLoop()) {
         padUpdate(&gPad);
         const u64 keys = padGetButtonsDown(&gPad);
-        if (keys & KEY_A) return true;
-        if (keys & KEY_B) return false;
+        if (keys & HidNpadButton_A) return true;
+        if (keys & HidNpadButton_B) return false;
         svcSleepThread(16 * 1000 * 1000);
     }
     return false;
@@ -686,7 +686,7 @@ u64 waitForKey() {
         if (keys) return keys;
         svcSleepThread(16 * 1000 * 1000);
     }
-    return KEY_B;
+    return HidNpadButton_B;
 }
 
 std::vector<std::string> getLanguages(const std::vector<Translation>& entries) {
@@ -812,10 +812,10 @@ void detailsScreen(const Translation& translation) {
         consoleUpdate(NULL);
 
         const u64 keys = waitForKey();
-        if (keys & KEY_B) return;
-        if (keys & KEY_A) {
+        if (keys & HidNpadButton_B) return;
+        if (keys & HidNpadButton_A) {
             installTranslation(translation);
-        } else if (keys & KEY_X) {
+        } else if (keys & HidNpadButton_X) {
             if (!isInstalled(translation)) {
                 showMessage("Not installed", "Transwitch has no installation manifest for this patch.");
                 continue;
@@ -896,19 +896,19 @@ int main(int argc, char* argv[]) {
         drawList(entries, language, selected);
         const u64 keys = waitForKey();
 
-        if (keys & KEY_B) break;
-        if (keys & KEY_UP) {
+        if (keys & HidNpadButton_B) break;
+        if (keys & HidNpadButton_Up) {
             if (selected > 0) --selected;
-        } else if (keys & KEY_DOWN) {
+        } else if (keys & HidNpadButton_Down) {
             if (selected + 1 < visible.size()) ++selected;
-        } else if (keys & KEY_X) {
+        } else if (keys & HidNpadButton_X) {
             languageIndex = languages.empty() ? 0 : (languageIndex + 1) % languages.size();
             selected = 0;
-        } else if (keys & KEY_Y) {
+        } else if (keys & HidNpadButton_Y) {
             refreshCatalog(entries);
             selected = 0;
             languageIndex = 0;
-        } else if ((keys & KEY_A) && !visible.empty()) {
+        } else if ((keys & HidNpadButton_A) && !visible.empty()) {
             detailsScreen(entries[visible[selected]]);
         }
     }
