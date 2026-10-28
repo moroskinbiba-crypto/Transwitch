@@ -55,7 +55,7 @@ ifneq ($(strip $(ROMFS)),)
 export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 export APP_ICON := $(LIBNX)/default_icon.jpg
-.PHONY: all clean menu-applet system-backend system-package package-system
+.PHONY: all clean menu-applet hbloader system-backend system-package package-system
 all: $(BUILD)
 
 # Build the library applet served by the optional HOME backend.
@@ -64,10 +64,17 @@ menu-applet:
 
 # Requires a matching Atmosphere/libstratosphere build; never part of the
 # normal NRO build because a bad qlaunch override can prevent HOME from opening.
+hbloader:
+	@$(MAKE) --no-print-directory -C projects/hbloader
+	@mkdir -p SdOut/switch/DeskNX/bin/hbloader
+	@cp -f projects/hbloader/hbl.nso SdOut/switch/DeskNX/bin/hbloader/main
+	@cp -f projects/hbloader/hbl.npdm SdOut/switch/DeskNX/bin/hbloader/main.npdm
+	@echo "DeskNX hbloader staged under SdOut/switch/DeskNX/bin/hbloader"
+
 system-backend:
 	@$(MAKE) --no-print-directory -C projects/sSystem
 
-system-package: all menu-applet system-backend
+system-package: all menu-applet hbloader system-backend
 	@mkdir -p SdOut/switch/DeskNX
 	@cp -f DeskNX.nro SdOut/switch/DeskNX/DeskNX.nro
 	@cp -f README.md SdOut/README-DeskNX.md
@@ -91,6 +98,7 @@ clean:
 	@$(MAKE) --no-print-directory -C projects/DeskNXMenu clean 2>/dev/null || true
 	@$(MAKE) --no-print-directory -C projects/sSystem clean 2>/dev/null || true
 	@rm -rf SdOut DeskNX-system-sdcard.zip DeskNX-system-bundle
+	@$(MAKE) --no-print-directory -C projects/hbloader clean 2>/dev/null || true
 else
 DEPENDS := $(OFILES:.o=.d)
 .PHONY: all
