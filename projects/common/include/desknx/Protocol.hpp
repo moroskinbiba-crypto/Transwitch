@@ -15,6 +15,7 @@ enum class Command : u32 {
     MenuReady = 1,
     LaunchTitle = 2,
     ReturnToGame = 3,
+    Heartbeat = 4,
 };
 
 struct Header {
@@ -60,6 +61,10 @@ inline Result Send(Command command, const void* payload = nullptr, size_t payloa
 
 inline Result SendMenuReady() {
     return Send(Command::MenuReady);
+}
+
+inline Result SendHeartbeat() {
+    return Send(Command::Heartbeat);
 }
 
 inline Result SendLaunchTitle(u64 title_id) {
