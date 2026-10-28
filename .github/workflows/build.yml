@@ -19,6 +19,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate shell scripts
+        run: bash -n scripts/install-system.sh scripts/uninstall-system.sh
+
       - name: Build standalone Homebrew app
         env:
           DEVKITPRO: /opt/devkitpro
