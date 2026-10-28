@@ -13,6 +13,7 @@ The standard CI builds the standalone NRO and the library applet. A separate wor
 
 - **DeskNX menu applet** — draws the workspace and reads controller/touch input.
 - **qlaunch backend** — system applet process that owns HOME/sleep lifecycle and launches applications.
+- **Target-aware hbloader** — serves NRO launch requests through the album library-applet slot, with a one-shot target file and a return-to-menu path when the target exits.
 - **ECS** — Atmosphère External Content Storage serves the applet's ExeFS from SD to a selected library applet program ID.
 - **IPC protocol** — projects/common/include/desknx/Protocol.hpp; each message is versioned and includes a payload size. Unknown commands and malformed sizes are rejected.
 - **Workspace storage** — the UI persists its layout to sdmc:/switch/DeskNX/layout.tsv.
@@ -28,6 +29,8 @@ The upstream sLaunch repository contains significantly more functionality and ye
 The standard GitHub Actions job uses the devkitPro devkitA64 container and builds:
 - DeskNX.nro
 - The HOME library applet ExeFS SdOut/switch/DeskNX/bin/Menu/main and main.npdm
+
+The experimental workflow additionally builds `projects/hbloader/` and stages `SdOut/switch/DeskNX/bin/hbloader/{main,main.npdm}`. In system mode, the UI sends a validated NRO path through IPC; the backend verifies the SD-card file, writes a one-shot request, registers hbloader with ECS, then starts it. On completion, HOME returns to DeskNX. The current fork intentionally supports Homebrew NROs as an applet only; donor-slot application mode is disabled.
 
 These artifacts prove compilation only for the tested build paths.
 
@@ -59,6 +62,10 @@ Restore:
 
 The uninstall script checks the ownership marker in the installed qlaunch directory and verifies the SHA-256 checksums of the qlaunch executable and NPDM before replacing them. If those files changed after install, it refuses by default; --force-changed-files preserves the DeskNX build before restoring the backup.
 
+### Emergency recovery chord
+
+If all known HOME applet slots fail to start, no game/menu is running, and the system backend remains alive, hold **L + R + ZL + ZR + Plus + Minus + D-pad Down** for three seconds. The backend will only accept this chord if the exact DeskNX install marker exists in the qlaunch override. It renames that marked override to `0100000000001000.disabled-DeskNX` and requests a reboot so the system can fall back to the stock HOME. If the reboot request fails, the backend attempts to restore the original override path. This is a last-resort guard and cannot help if the daemon itself cannot run, SD access is broken, or the marker was removed.
+
 Before trying any system install:
 1. Keep a copy of the entire SD card and the exact original atmosphere/contents/0100000000001000 directory.
 2. Confirm the console/SD card can be recovered by mounting it on a PC.
@@ -72,7 +79,8 @@ Before trying any system install:
 - The backend has not been compiled against the target libstratosphere in the default CI.
 - No physical-console runtime test has been reported.
 - Firmware slot selection and ECS registration are firmware-sensitive.
-- The current IPC covers readiness, title launch and return-to-game only; it is not yet a full replacement for all normal HOME operations or sLaunch command breadth.
+- The IPC currently covers readiness, heartbeat, title launch, Homebrew launch and return-to-game; it is not a full replacement for all normal HOME operations or sLaunch command breadth.
+- Homebrew launches currently use the library-applet/album slot, so available memory and permissions are limited. Full-RAM donor-slot launches are intentionally disabled.
 - Controller setup, selected-user behavior, suspended-title lifecycle, service initialization, failure recovery and qlaunch NPDM need an expert code review before release.
 - The installer is conservative, but it cannot guarantee recovery if the SD contents are corrupted or the console has unrelated boot problems.
 
