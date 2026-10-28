@@ -7,7 +7,8 @@ $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/de
 endif
 
 TOPDIR ?= $(CURDIR)
-include $(DEVKITPRO)/libnx/switch_rules
+LIBNX ?= $(DEVKITPRO)/libnx
+include $(LIBNX)/switch_rules
 
 #---------------------------------------------------------------------------------
 # TARGET is the name of the output
@@ -58,7 +59,7 @@ CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DVERSION=\"v$(APP_VERSION)\"
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 
 ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-wrap,exit -Wl,-Map,$(notdir $*.map)
+LDFLAGS	=	-specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,-wrap,exit -Wl,-Map,$(notdir $*.map)
 
 LIBS	:= -lnx
 
