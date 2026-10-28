@@ -27,6 +27,7 @@ constexpr const char* kPrevLogPath = "sdmc:/switch/DeskNX/logs/daemon.prev.log";
 constexpr u64 kHomePressSettleMs = 1500;
 constexpr u64 kMenuFastExitMs = 3000;
 constexpr u64 kMenuReadyTimeoutSeconds = 8;
+constexpr u64 kMenuHeartbeatTimeoutSeconds = 15;
 constexpr u64 kMenuRetryDelaySeconds = 5;
 constexpr u64 kMenuStartRetryDelayNs = 500'000'000ULL;
 constexpr int kMenuStartAttempts = 4;
@@ -36,6 +37,7 @@ u64 g_PendingTitle = 0;
 bool g_PendingReturnToGame = false;
 bool g_MenuReady = false;
 u64 g_MenuLaunchTick = 0;
+u64 g_LastMenuHeartbeatTick = 0;
 u64 g_NextMenuRetryTick = 0;
 size_t g_MenuSlotIndex = 0;
 bool g_MenuSlotExhausted = false;
@@ -135,6 +137,7 @@ bool LaunchMenu() {
         if (R_SUCCEEDED(rc)) {
             g_MenuReady = false;
             g_MenuLaunchTick = armGetSystemTick();
+            g_LastMenuHeartbeatTick = 0;
             g_MenuSlotExhausted = false;
             return true;
         }
@@ -153,6 +156,7 @@ bool LaunchMenu() {
             if (R_SUCCEEDED(rc)) {
                 g_MenuReady = false;
                 g_MenuLaunchTick = armGetSystemTick();
+                g_LastMenuHeartbeatTick = 0;
                 g_MenuSlotExhausted = false;
                 return true;
             }
@@ -192,7 +196,14 @@ bool ParseMenuCommand(AppletStorage& storage) {
         case Command::MenuReady:
             if (hdr.payload_size != 0) return false;
             g_MenuReady = true;
+            g_LastMenuHeartbeatTick = armGetSystemTick();
             DaemonLog("ipc: DeskNX menu ready");
+            return true;
+
+        case Command::Heartbeat:
+            if (hdr.payload_size != 0) return false;
+            if (g_MenuReady)
+                g_LastMenuHeartbeatTick = armGetSystemTick();
             return true;
 
         case Command::LaunchTitle: {
@@ -386,10 +397,49 @@ void RunMainLoop() {
                           static_cast<unsigned long long>(kMenuReadyTimeoutSeconds),
                           CurrentMenuSlot().name);
                 la::StopMenu();
-                if (g_MenuSlotIndex + 1 < ecs::MenuSlotCount) {
+                g_MenuReady = false;
+                g_LastMenuHeartbeatTick = 0;
+                if (app::g_AppRunning) {
+                    // Failed HOME applet: restore the game and wait for another
+                    // HOME press rather than repeatedly stealing the foreground.
+                    app::FocusApplication();
+                    g_MenuSlotExhausted = true;
+                    g_NextMenuRetryTick = armGetSystemTick() +
+                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                } else if (g_MenuSlotIndex + 1 < ecs::MenuSlotCount) {
                     ++g_MenuSlotIndex;
                     g_MenuSlotExhausted = false;
                     DaemonLog("menu: testing fallback slot=%s", CurrentMenuSlot().name);
+                } else {
+                    g_MenuSlotIndex = 0;
+                    g_MenuSlotExhausted = true;
+                    g_NextMenuRetryTick = armGetSystemTick() +
+                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                }
+            }
+        }
+
+        // A menu can finish startup and then hang. The heartbeat distinguishes
+        // a responsive workspace from an applet that remains alive but stopped
+        // processing input. When a game is suspended, restore it and wait for
+        // the next HOME press; never retry in a loop that steals its foreground.
+        if (la::IsMenuAlive() && g_MenuReady && g_LastMenuHeartbeatTick != 0) {
+            const u64 silentTicks = armGetSystemTick() - g_LastMenuHeartbeatTick;
+            if (silentTicks >= armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds) {
+                DaemonLog("menu: heartbeat timed out after %llu seconds; restarting slot=%s",
+                          static_cast<unsigned long long>(kMenuHeartbeatTimeoutSeconds),
+                          CurrentMenuSlot().name);
+                la::StopMenu();
+                g_MenuReady = false;
+                g_LastMenuHeartbeatTick = 0;
+                if (app::g_AppRunning) {
+                    app::FocusApplication();
+                    g_MenuSlotExhausted = true;
+                    g_NextMenuRetryTick = armGetSystemTick() +
+                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                } else if (g_MenuSlotIndex + 1 < ecs::MenuSlotCount) {
+                    ++g_MenuSlotIndex;
+                    g_MenuSlotExhausted = false;
                 } else {
                     g_MenuSlotIndex = 0;
                     g_MenuSlotExhausted = true;
@@ -404,7 +454,7 @@ void RunMainLoop() {
         } else if (!la::g_MenuRunning && app::g_AppRunning && app::Update()) {
             DaemonLog("app: title exited naturally");
             LaunchMenu();
-        } else if (!la::g_MenuRunning && g_MenuSlotExhausted &&
+         } else if (!la::g_MenuRunning && !app::g_AppRunning && g_MenuSlotExhausted &&
                    armGetSystemTick() >= g_NextMenuRetryTick) {
             // Reset to the preferred slot on every retry so transient startup
             // failures don't permanently pin a console to the fallback slot.
