@@ -13,7 +13,7 @@ include $(LIBNX)/switch_rules
 TARGET      := DeskNX
 BUILD       := build
 SOURCES     := source
-INCLUDES    := include
+INCLUDES    := include projects/common/include
 # ROMFS intentionally disabled: do not package legacy translation assets.
 
 APP_TITLE   := DeskNX
