@@ -22,6 +22,7 @@ APP_VERSION := 0.1.0
 
 ARCH        := -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
+CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
