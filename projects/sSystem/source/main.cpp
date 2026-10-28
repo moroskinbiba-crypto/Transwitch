@@ -433,6 +433,19 @@ void CheckEmergencyRollback() {
 
 void OpenMenuForHomePress() {
     if (la::IsMenuAlive()) {
+        if (g_HomebrewLoaderRunning) {
+            // A Homebrew NRO shares the hbloader library-applet process. HOME
+            // returns to DeskNX by ending that session and restoring the real
+            // Album slot immediately.
+            la::StopMenu();
+            g_HomebrewLoaderRunning = false;
+            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+            remove(kHbTargetPath);
+            remove(kHbTargetTemp);
+            DaemonLog("home: stopped Homebrew loader and returned to DeskNX");
+            LaunchMenu();
+            return;
+        }
         // HOME while the launcher is already visible dismisses it back to the
         // suspended title, matching the stock HOME toggle where possible.
         if (app::g_AppRunning) {
@@ -458,8 +471,16 @@ void OpenMenuForHomePress() {
 
 void HandleSleepMessage() {
     g_ReopenMenuAfterSleep = la::IsMenuAlive();
-    if (g_ReopenMenuAfterSleep)
+    if (g_ReopenMenuAfterSleep) {
         la::StopMenu();
+        if (g_HomebrewLoaderRunning) {
+            g_HomebrewLoaderRunning = false;
+            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+            remove(kHbTargetPath);
+            remove(kHbTargetTemp);
+            DaemonLog("power: ended Homebrew session before sleep");
+        }
+    }
 
     const Result rc = appletStartSleepSequence(true);
     DaemonLog("power: sleep sequence rc=0x%08X", static_cast<unsigned int>(rc));
@@ -492,6 +513,12 @@ void PumpAppletMessages() {
             case Msg_SdCardRemoved:
                 DaemonLog("storage: SD card removed; closing SD-backed menu");
                 if (la::IsMenuAlive()) la::StopMenu();
+                if (g_HomebrewLoaderRunning) {
+                    g_HomebrewLoaderRunning = false;
+                    ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+                    remove(kHbTargetPath);
+                    remove(kHbTargetTemp);
+                }
                 break;
 
             default:
@@ -504,10 +531,64 @@ void PumpAppletMessages() {
 void HandleMenuClosed() {
     DrainMenuCommands();
     const bool didHandshake = g_MenuReady;
-    const u64 lifetimeTicks = armGetSystemTick() - g_MenuLaunchTick;
-    const u64 lifetimeMs = lifetimeTicks * 1000 / armGetSystemTickFreq();
+    const u64 launchTick = g_MenuLaunchTick;
     la::StopMenu();
     g_MenuReady = false;
+    g_LastMenuHeartbeatTick = 0;
+
+    // The shared AppletHolder also runs nx-hbloader. Its exit is not a failed
+    // menu startup: unregister its ECS override and restore DeskNX, even if the
+    // chosen NRO exits without chainloading or fails to start.
+    if (g_HomebrewLoaderRunning) {
+        g_HomebrewLoaderRunning = false;
+        ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+        remove(kHbTargetPath);
+        remove(kHbTargetTemp);
+        DaemonLog("hb: loader session ended; restoring DeskNX");
+        LaunchMenu();
+        return;
+    }
+
+    const u64 lifetimeTicks = launchTick != 0 ? armGetSystemTick() - launchTick : 0;
+    const u64 lifetimeMs = lifetimeTicks * 1000 / armGetSystemTickFreq();
+
+    if (g_PendingHomebrew) {
+        char path[desknx::ipc::MaxHomebrewPath]{};
+        char argv[desknx::ipc::MaxHomebrewArgv]{};
+        std::strncpy(path, g_PendingHomebrewPath, sizeof(path) - 1);
+        std::strncpy(argv, g_PendingHomebrewArgv, sizeof(argv) - 1);
+        g_PendingHomebrew = false;
+
+        if (!WriteHomebrewTarget(path, argv)) {
+            DaemonLog("hb: could not stage target NRO; returning to DeskNX");
+            LaunchMenu();
+            return;
+        }
+
+        Result rc = ecs::RegisterExternalContent(ecs::HbloaderProgramId, ecs::HbloaderExefsDir);
+        if (R_FAILED(rc)) {
+            DaemonLog("hb: ECS register failed rc=0x%08X", static_cast<unsigned int>(rc));
+            remove(kHbTargetPath);
+            LaunchMenu();
+            return;
+        }
+
+        g_HomebrewLoaderRunning = true;
+        g_MenuReady = false;
+        g_MenuLaunchTick = 0; // hbloader does not send MenuReady
+        g_LastMenuHeartbeatTick = 0;
+        rc = la::LaunchMenu(ecs::HbloaderAppletId, nullptr, 0);
+        if (R_FAILED(rc)) {
+            g_HomebrewLoaderRunning = false;
+            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+            remove(kHbTargetPath);
+            DaemonLog("hb: hbloader launch failed rc=0x%08X", static_cast<unsigned int>(rc));
+            LaunchMenu();
+            return;
+        }
+        DaemonLog("hb: launched %s through the album applet slot", path);
+        return;
+    }
 
     if (g_PendingTitle != 0) {
         const u64 titleId = g_PendingTitle;
@@ -576,7 +657,7 @@ void RunMainLoop() {
         // A slot that starts but never speaks is probably the firmware's own
         // applet or a crashed menu. Stop it and test the next known slot instead
         // of leaving the HOME button attached to a frozen screen forever.
-        if (la::IsMenuAlive() && !g_MenuReady && g_MenuLaunchTick != 0) {
+        if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && !g_MenuReady && g_MenuLaunchTick != 0) {
             const u64 liveTicks = armGetSystemTick() - g_MenuLaunchTick;
             if (liveTicks >= armGetSystemTickFreq() * kMenuReadyTimeoutSeconds) {
                 DaemonLog("menu: no ready IPC after %llu seconds in slot=%s",
@@ -609,7 +690,7 @@ void RunMainLoop() {
         // a responsive workspace from an applet that remains alive but stopped
         // processing input. When a game is suspended, restore it and wait for
         // the next HOME press; never retry in a loop that steals its foreground.
-        if (la::IsMenuAlive() && g_MenuReady && g_LastMenuHeartbeatTick != 0) {
+        if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && g_MenuReady && g_LastMenuHeartbeatTick != 0) {
             const u64 silentTicks = armGetSystemTick() - g_LastMenuHeartbeatTick;
             if (silentTicks >= armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds) {
                 DaemonLog("menu: heartbeat timed out after %llu seconds; restarting slot=%s",
