@@ -47,15 +47,15 @@ The scripts operate on a mounted SD-card root and **do not download, build, or v
 
 Install:
 
-    scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk
+    bash scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk
 
 If a qlaunch override already exists, preserve it with:
 
-    scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk --backup-existing
+    bash scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk --backup-existing
 
 Restore:
 
-    scripts/uninstall-system.sh --sd-root /path/to/sd-card --acknowledge-risk
+    bash scripts/uninstall-system.sh --sd-root /path/to/sd-card --acknowledge-risk
 
 The uninstall script checks the ownership marker in the installed qlaunch directory and verifies the SHA-256 checksums of the qlaunch executable and NPDM before replacing them. If those files changed after install, it refuses by default; --force-changed-files preserves the DeskNX build before restoring the backup.
 
