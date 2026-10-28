@@ -199,23 +199,43 @@ void scanNros(const std::string& path,int depth,std::vector<Candidate>& found) {
 void scanApps() {
     catalogue.clear();
     if(R_SUCCEEDED(nsInitialize())) {
-        std::array<NsApplicationRecord,256> records{};s32 count=0;
-        if(R_SUCCEEDED(nsListApplicationRecord(records.data(),static_cast<s32>(records.size()),0,&count))) {
-            const int n=std::max(0,std::min(count,static_cast<s32>(records.size())));
-            static NsApplicationControlData ctl{};
-            for(int i=0;i<n;++i) {
-                const u64 id=records[static_cast<size_t>(i)].application_id;u64 actual=0;
-                if(R_FAILED(nsGetApplicationControlData(NsApplicationControlSource_Storage,id,&ctl,sizeof(ctl),&actual)))continue;
-                NacpLanguageEntry* entry=nullptr;std::string title;
-                if(R_SUCCEEDED(nacpGetLanguageEntry(&ctl.nacp,&entry))&&entry&&entry->name[0]) title=entry->name;
-                else { char b[32]{};std::snprintf(b,sizeof(b),"Game %08X",static_cast<unsigned int>(id&0xffffffffu));title=b; }
-                char hex[32]{};std::snprintf(hex,sizeof(hex),"%016llX",static_cast<unsigned long long>(id));
-                addCandidate(Kind::Game,title,hex,1,1,i);
+        constexpr s32 PageSize=128;
+        constexpr size_t AppReserve=32;
+        std::array<NsApplicationRecord,PageSize> records{};
+        s32 offset=0;
+        size_t colorIndex=0;
+        static NsApplicationControlData ctl{};
+        while(catalogue.size()<MAX_ITEMS-AppReserve) {
+            s32 count=0;
+            const Result listRc=nsListApplicationRecord(records.data(),PageSize,offset,&count);
+            if(R_FAILED(listRc)||count<=0) break;
+            const s32 n=std::max<s32>(0,std::min<s32>(count,PageSize));
+            if(n==0) break;
+            for(s32 i=0;i<n && catalogue.size()<MAX_ITEMS-AppReserve;++i) {
+                const u64 id=records[static_cast<size_t>(i)].application_id;
+                u64 actual=0;
+                if(R_FAILED(nsGetApplicationControlData(NsApplicationControlSource_Storage,id,&ctl,sizeof(ctl),&actual)))
+                    continue;
+                NacpLanguageEntry* entry=nullptr;
+                std::string title;
+                if(R_SUCCEEDED(nacpGetLanguageEntry(&ctl.nacp,&entry))&&entry&&entry->name[0])
+                    title=entry->name;
+                else {
+                    char b[32]{};
+                    std::snprintf(b,sizeof(b),"Game %08X",static_cast<unsigned int>(id&0xffffffffu));
+                    title=b;
+                }
+                char hex[32]{};
+                std::snprintf(hex,sizeof(hex),"%016llX",static_cast<unsigned long long>(id));
+                addCandidate(Kind::Game,title,hex,1,1,static_cast<int>(colorIndex++));
             }
+            offset+=n;
+            if(n<PageSize) break;
         }
         nsExit();
     }
-    std::vector<Candidate> homebrew;scanNros("sdmc:/switch",0,homebrew);
+    std::vector<Candidate> homebrew;
+    scanNros("sdmc:/switch",0,homebrew);
     std::sort(homebrew.begin(),homebrew.end(),[](const Candidate&a,const Candidate&b){return ascii(a.title)<ascii(b.title);});
     for(const auto& c:homebrew)addCandidate(c.kind,c.title,c.data,c.w,c.h,c.color);
     addCandidate(Kind::Clock,"Clock widget","",2,1,1);
@@ -228,7 +248,8 @@ void saveLayout() {
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
     if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return;}
-    f<<"DESKNX1\n";
+    f<<"DESKNX2\n";
+    f<<"A\t"<<g_desktop<<"\n";
     for(const auto& d:desks)f<<"D\t"<<safeField(d.name)<<"\n";
     for(size_t di=0;di<desks.size();++di)for(const auto&t:desks[di].tiles)
         f<<"I\t"<<di<<'\t'<<typeCode(t.kind)<<'\t'<<safeField(t.title)<<'\t'<<safeField(t.data)<<'\t'
@@ -240,11 +261,16 @@ void saveLayout() {
 }
 bool loadLayout() {
     std::ifstream f(CFG_FILE,std::ios::binary);if(!f)return false;
-    std::string line;if(!std::getline(f,line)||line!="DESKNX1")return false;
+    std::string line;
+    if(!std::getline(f,line)||(line!="DESKNX1"&&line!="DESKNX2"))return false;
+    const bool hasActiveDesktop=line=="DESKNX2";
+    int activeDesktop=0;
     std::vector<Workspace> loaded;std::vector<std::vector<Tile>> items;
     while(std::getline(f,line)) {
         auto p=splitTabs(line);if(p.empty())continue;
-        if(p[0]=="D"&&p.size()>=2&&loaded.size()<MAX_DESKS) {loaded.push_back(Workspace{p[1],{}});items.emplace_back();}
+        if(p[0]=="A"&&p.size()>=2&&hasActiveDesktop) {
+            activeDesktop=std::max(0,std::atoi(p[1].c_str()));
+        } else if(p[0]=="D"&&p.size()>=2&&loaded.size()<MAX_DESKS) {loaded.push_back(Workspace{p[1],{}});items.emplace_back();}
         else if(p[0]=="I"&&p.size()>=10) {
             int d=std::atoi(p[1].c_str());if(d<0||static_cast<size_t>(d)>=items.size())continue;
             Tile t{};t.kind=parseKind(p[2]);t.title=p[3];t.data=p[4];t.x=std::atoi(p[5].c_str());t.y=std::atoi(p[6].c_str());
@@ -254,7 +280,10 @@ bool loadLayout() {
     }
     if(loaded.empty())return false;
     for(size_t d=0;d<loaded.size();++d)for(const Tile&t:items[d])if(placeable(loaded[d],t,t.x,t.y))loaded[d].tiles.push_back(t);
-    desks=std::move(loaded);deskIndex=0;selectedX=selectedY=0;return true;
+    desks=std::move(loaded);
+    deskIndex=std::max(0,std::min(activeDesktop,static_cast<int>(desks.size())-1));
+    selectedX=selectedY=0;
+    return true;
 }
 void defaultLayout() {
     desks={{"Games",{}},{"Homebrew",{}},{"Widgets",{}}};int gi=0,hi=0;
