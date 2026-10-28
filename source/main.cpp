@@ -237,7 +237,12 @@ void scanApps() {
     std::vector<Candidate> homebrew;
     scanNros("sdmc:/switch",0,homebrew);
     std::sort(homebrew.begin(),homebrew.end(),[](const Candidate&a,const Candidate&b){return ascii(a.title)<ascii(b.title);});
-    for(const auto& c:homebrew)addCandidate(c.kind,c.title,c.data,c.w,c.h,c.color);
+    // Always leave room for widgets even when the SD card contains hundreds
+    // of NROs; otherwise an overflowing Homebrew list could hide the widgets.
+    for(const auto& candidate:homebrew) {
+        if(catalogue.size()>=MAX_ITEMS-4) break;
+        addCandidate(candidate.kind,candidate.title,candidate.data,candidate.w,candidate.h,candidate.color);
+    }
     addCandidate(Kind::Clock,"Clock widget","",2,1,1);
     addCandidate(Kind::Battery,"Battery widget","",2,1,2);
     addCandidate(Kind::System,"System info widget","",2,1,5);
