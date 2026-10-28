@@ -1,0 +1,87 @@
+name: Build experimental DeskNX HOME backend
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "projects/sSystem/**"
+      - "projects/DeskNXMenu/**"
+      - "projects/common/**"
+      - "source/main.cpp"
+      - "Makefile"
+      - ".github/workflows/build-system-backend.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-system:
+    name: Build against Atmosphere 1.12.0 and libnx master
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    env:
+      DEVKITPRO: /opt/devkitpro
+      DEVKITA64: /opt/devkitpro/devkitA64
+      ATMOSPHERE_DIR: /opt/atmosphere
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build compatible libnx master
+        run: |
+          git clone --depth 50 https://github.com/switchbrew/libnx /tmp/libnx-master
+          make -C /tmp/libnx-master/nx -j2
+          make -C /tmp/libnx-master/nx install DESTDIR=/tmp/libnx-master-install
+          echo "SL_LIBNX=/tmp/libnx-master-install/opt/devkitpro/libnx" >> "$GITHUB_ENV"
+
+      - name: Build Atmosphere libstratosphere
+        run: |
+          git clone --depth=1 --branch 1.12.0 https://github.com/Atmosphere-NX/Atmosphere "$ATMOSPHERE_DIR"
+          SL_LIBNX=/tmp/libnx-master-install/opt/devkitpro/libnx
+          make -C "$ATMOSPHERE_DIR/libraries/libstratosphere" -j2 LIBNX="$SL_LIBNX"
+
+          mkdir -p "$DEVKITPRO/AtmosphereLibs/include" "$DEVKITPRO/AtmosphereLibs/lib"
+          cp -a "$ATMOSPHERE_DIR/libraries/libstratosphere/include/." "$DEVKITPRO/AtmosphereLibs/include/"
+          cp -a "$ATMOSPHERE_DIR/libraries/libvapours/include/." "$DEVKITPRO/AtmosphereLibs/include/"
+          find "$ATMOSPHERE_DIR/libraries/libstratosphere" -type f -name "*.a" -exec cp -f {} "$DEVKITPRO/AtmosphereLibs/lib/" \;
+
+      - name: Build standalone NRO and library applet
+        run: |
+          make -j2
+          make -C projects/DeskNXMenu -j2
+
+      - name: Build qlaunch backend
+        run: |
+          make -C projects/sSystem -j2 LIBNX="$SL_LIBNX" ATMOSPHERE_DIR="$ATMOSPHERE_DIR"
+
+      - name: Assemble experimental package
+        run: |
+          mkdir -p dist/switch/DeskNX
+          cp -a SdOut/atmosphere dist/
+          mkdir -p dist/switch/DeskNX/bin
+          cp -a SdOut/switch/DeskNX/bin/Menu dist/switch/DeskNX/bin/Menu
+          cp -f DeskNX.nro dist/switch/DeskNX/DeskNX.nro
+          cp README.md dist/README-DeskNX.md
+          cp docs/HOME_INTEGRATION.md dist/HOME_INTEGRATION.md
+          cd dist
+          python3 -c 'import pathlib, zipfile; root=pathlib.Path("."); z=zipfile.ZipFile("../DeskNX-system-experimental.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.as_posix()) for p in root.rglob("*") if p.is_file()]; z.close()'
+
+      - name: Upload experimental system package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeskNX-system-experimental
+          path: DeskNX-system-experimental.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build outputs separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeskNX-system-exefs
+          path: |
+            SdOut/atmosphere/contents/0100000000001000/exefs/main
+            SdOut/atmosphere/contents/0100000000001000/exefs/main.npdm
+            SdOut/switch/DeskNX/bin/Menu/main
+            SdOut/switch/DeskNX/bin/Menu/main.npdm
+          if-no-files-found: error
+          retention-days: 14
