@@ -170,16 +170,16 @@ EOF
 # Swap each target through a same-filesystem rename. The EXIT trap restores
 # every prior path if any later step fails before the manifest is committed.
 if [[ -e "$TARGET_MENU" ]]; then mv "$TARGET_MENU" "$MENU_ROLLBACK"; fi
-mv "$MENU_STAGE" "$TARGET_MENU"
 MENU_INSTALLED=1
+mv "$MENU_STAGE" "$TARGET_MENU"
 
 if [[ -e "$TARGET_NRO" ]]; then mv "$TARGET_NRO" "$NRO_ROLLBACK"; fi
-mv "$NRO_STAGE" "$TARGET_NRO"
 NRO_INSTALLED=1
+mv "$NRO_STAGE" "$TARGET_NRO"
 
 if [[ -e "$TARGET_QLAUNCH" ]]; then mv "$TARGET_QLAUNCH" "$ROLLBACK"; fi
-mv "$STAGE" "$TARGET_QLAUNCH"
 QLAUNCH_INSTALLED=1
+mv "$STAGE" "$TARGET_QLAUNCH"
 
 mv "$MANIFEST_STAGE" "$MANIFEST"
 COMMITTED=1
