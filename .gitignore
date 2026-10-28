@@ -7,3 +7,8 @@ build/
 *.zip
 .DS_Store
 .vscode/
+*.npdm
+*.nsp
+*.map
+*.lst
+*.d
