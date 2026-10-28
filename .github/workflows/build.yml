@@ -20,7 +20,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate shell scripts
-        run: bash -n scripts/install-system.sh scripts/uninstall-system.sh
+        run: bash -n scripts/install-system.sh scripts/uninstall-system.sh tests/test-recovery.sh
+
+      - name: Test install and recovery logic on a temporary fake SD card
+        run: bash tests/test-recovery.sh
 
       - name: Build standalone Homebrew app
         env:
