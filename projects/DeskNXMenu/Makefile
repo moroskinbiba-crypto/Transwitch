@@ -3,7 +3,11 @@ ifeq ($(strip $(DEVKITPRO)),)
 $(error "Set DEVKITPRO to your devkitPro installation")
 endif
 
-include $(DEVKITPRO)/libnx/switch_rules
+LIBNX    := $(DEVKITPRO)/libnx
+PORTLIBS := $(DEVKITPRO)/portlibs/switch
+export PATH := $(PORTLIBS)/bin:$(PATH)
+
+include $(LIBNX)/switch_rules
 
 TARGET      := DeskNXMenu
 BUILD       := build
@@ -56,6 +60,8 @@ else
 DEPENDS := $(OFILES:.o=.d)
 .PHONY: all
 all: $(OUTDIR)/main $(OUTDIR)/main.npdm
+
+$(OUTPUT).elf: $(OFILES)
 
 $(OUTDIR)/main: $(OUTPUT).nso | $(OUTDIR)
 	@cp -f $< $@
