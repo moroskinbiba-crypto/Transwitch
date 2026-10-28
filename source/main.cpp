@@ -212,7 +212,7 @@ std::vector<Translation> parseCatalog(const std::string& contents) {
             !isValidTitleId(t.titleId) || !isHttpsUrl(t.sourceUrl)) {
             continue;
         }
-        if (t.layout != "atmosphere_root" && t.layout != "romfs_root") continue;
+        if (t.layout != "atmosphere_root" && t.layout != "title_root" && t.layout != "romfs_root") continue;
         if (!t.packageUrl.empty() && !isHttpsUrl(t.packageUrl)) continue;
         result.push_back(t);
     }
@@ -405,21 +405,35 @@ bool getDestinationRelativePath(const Translation& translation, const char* arch
     std::string path;
     if (!normalizeArchivePath(archiveName, path)) return false;
 
-    const std::string expected =
-        "atmosphere/contents/" + translation.titleId + "/romfs/";
+    const std::string titlePrefix =
+        "atmosphere/contents/" + translation.titleId + "/";
     size_t markerPos = 0;
-    if (findMarker(path, expected, markerPos)) {
+
+    // Standard Atmosphere archive: atmosphere/contents/<TITLE_ID>/romfs|exefs/...
+    if (findMarker(path, titlePrefix, markerPos)) {
         destinationRelative = path.substr(markerPos);
         return true;
     }
 
+    if (translation.layout == "title_root") {
+        const std::string idFolder = translation.titleId + "/";
+        if (findMarker(path, idFolder, markerPos)) {
+            const std::string remainder = path.substr(markerPos + idFolder.size());
+            destinationRelative = titlePrefix + remainder;
+            return true;
+        }
+        if (startsWith(path, "romfs/") || startsWith(path, "exefs/")) {
+            destinationRelative = titlePrefix + path;
+            return true;
+        }
+        return false;
+    }
+
     if (translation.layout == "romfs_root") {
-        const size_t romfsPos = path.find("romfs/");
-        if (romfsPos != std::string::npos &&
-            (romfsPos == 0 || path[romfsPos - 1] == '/')) {
-            destinationRelative = expected + path.substr(romfsPos + 6);
+        if (startsWith(path, "romfs/")) {
+            destinationRelative = titlePrefix + path;
         } else {
-            destinationRelative = expected + path;
+            destinationRelative = titlePrefix + "romfs/" + path;
         }
         return true;
     }
@@ -428,10 +442,16 @@ bool getDestinationRelativePath(const Translation& translation, const char* arch
 
 bool isAllowedTarget(const Translation& translation, const std::string& relative) {
     const std::string prefix =
-        "atmosphere/contents/" + translation.titleId + "/romfs/";
+        "atmosphere/contents/" + translation.titleId + "/";
     if (!startsWith(relative, prefix) || relative.size() <= prefix.size()) return false;
-    if (relative.find("/../") != std::string::npos ||
-        startsWith(relative, "../") || endsWith(relative, "/..")) return false;
+
+    const std::string gameRelative = relative.substr(prefix.size());
+    if (!(startsWith(gameRelative, "romfs/") || startsWith(gameRelative, "exefs/"))) {
+        return false;
+    }
+    if (gameRelative.find("/../") != std::string::npos ||
+        startsWith(gameRelative, "../") || endsWith(gameRelative, "/..") ||
+        gameRelative.find("..") != std::string::npos) return false;
     return true;
 }
 
@@ -492,7 +512,7 @@ bool extractArchive(const Translation& translation, const std::string& archivePa
     }
 
     const std::string expectedPrefix =
-        "atmosphere/contents/" + translation.titleId + "/romfs/";
+        "atmosphere/contents/" + translation.titleId + "/";
     la_int64_t totalExpanded = 0;
     size_t installedFiles = 0;
     struct archive_entry* entry = nullptr;
@@ -631,7 +651,7 @@ bool uninstallTranslation(const Translation& translation, std::string& error) {
     }
 
     const std::string allowedPrefix =
-        "atmosphere/contents/" + translation.titleId + "/romfs/";
+        "atmosphere/contents/" + translation.titleId + "/";
     size_t restored = 0;
     size_t start = 0;
     while (start < contents.size()) {
@@ -641,7 +661,7 @@ bool uninstallTranslation(const Translation& translation, std::string& error) {
         start = end + 1;
         if (relative.empty()) continue;
         if (!startsWith(relative, allowedPrefix) ||
-            relative.find("..") != std::string::npos) {
+            !isAllowedTarget(translation, relative) || relative.find("..") != std::string::npos) {
             error = "The installation manifest contains an unsafe path.";
             return false;
         }
@@ -802,7 +822,7 @@ void detailsScreen(const Translation& translation) {
         std::printf("Patch version: %s\n", translation.version.c_str());
         std::printf("Game Title ID: %s\n", translation.titleId.c_str());
         std::printf("Installer: %s\n\n",
-                    translation.packageUrl.empty() ? "source link only" : "LayeredFS romfs");
+                    translation.packageUrl.empty() ? "source link only" : "LayeredFS romfs/exefs");
         std::printf("Notes: %s\n\n", translation.notes.c_str());
         std::printf("Author/source:\n%s\n\n", translation.sourceUrl.c_str());
         std::printf("A: install/update   X: remove/restore   B: back\n");
