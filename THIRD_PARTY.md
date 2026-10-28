@@ -14,3 +14,8 @@ Adapted areas currently include:
 These adaptations retain the architecture and notices needed to understand their origins. The ECS approach in sLaunch itself cites uLaunch (Xortroll and contributors, GPLv2) as an upstream source; see the comments inside `ExternalContent.cpp`. Consult both upstream projects' licensing before redistributing a combined build.
 
 The standalone DeskNX NRO build is separate from the system backend and does not install a qlaunch override. The optional system backend is experimental and has not been validated on a physical console. Do not treat the current source tree or generated build package as a production-ready HOME replacement.
+
+
+## nx-hbloader
+
+The target-aware Homebrew loader under `projects/hbloader/` is derived from the sLaunch fork of [switchbrew/nx-hbloader](https://github.com/switchbrew/nx-hbloader), which is distributed under the ISC License. The applicable upstream license text is preserved in `projects/hbloader/LICENSE.md`. DeskNX changes its one-shot target and log paths to `sdmc:/switch/DeskNX/` and intentionally disables donor-slot/application-mode chainloading until that lifecycle can be implemented and tested safely.
