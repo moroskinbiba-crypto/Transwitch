@@ -16,11 +16,8 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Install archive and network libraries
-        run: dkp-pacman -Sy --noconfirm switch-dev switch-curl switch-zlib switch-libarchive
-
       - name: Build NRO
-        run: make -j2
+        run: . /opt/devkitpro/switchvars.sh && make -j2
 
       - name: Upload NRO artifact
         uses: actions/upload-artifact@v4
