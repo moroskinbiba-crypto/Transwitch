@@ -74,8 +74,15 @@ system-package: all menu-applet system-backend
 	@echo "System SD layout staged in SdOut/ (not installed to the SD card)."
 
 package-system: system-package
-	@python3 -c 'import pathlib,zipfile; root=pathlib.Path("SdOut"); z=zipfile.ZipFile("DeskNX-system-sdcard.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.relative_to(root)) for p in root.rglob("*") if p.is_file()]; z.close()'
-	@echo "Created DeskNX-system-sdcard.zip"
+	@rm -rf DeskNX-system-bundle
+	@mkdir -p DeskNX-system-bundle/SdOut DeskNX-system-bundle/scripts DeskNX-system-bundle/docs
+	@cp -a SdOut/atmosphere DeskNX-system-bundle/SdOut/
+	@cp -a SdOut/switch DeskNX-system-bundle/SdOut/
+	@cp -f scripts/install-system.sh scripts/uninstall-system.sh DeskNX-system-bundle/scripts/
+	@cp -f README.md THIRD_PARTY.md DeskNX-system-bundle/
+	@cp -f docs/HOME_INTEGRATION.md DeskNX-system-bundle/docs/
+	@python3 -c 'import pathlib,zipfile; root=pathlib.Path("DeskNX-system-bundle"); z=zipfile.ZipFile("DeskNX-system-sdcard.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.relative_to(root)) for p in root.rglob("*") if p.is_file()]; z.close()'
+	@echo "Created DeskNX-system-sdcard.zip (extract on a PC and run the guarded installer; do not extract directly to the SD-card root)"
 $(BUILD):
 	@mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
@@ -83,7 +90,7 @@ clean:
 	@rm -rf $(BUILD) $(TARGET).nro $(TARGET).nso $(TARGET).elf $(TARGET).nacp $(TARGET).pfs0
 	@$(MAKE) --no-print-directory -C projects/DeskNXMenu clean 2>/dev/null || true
 	@$(MAKE) --no-print-directory -C projects/sSystem clean 2>/dev/null || true
-	@rm -rf SdOut DeskNX-system-sdcard.zip
+	@rm -rf SdOut DeskNX-system-sdcard.zip DeskNX-system-bundle
 else
 DEPENDS := $(OFILES:.o=.d)
 .PHONY: all
