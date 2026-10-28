@@ -50,29 +50,32 @@ done
 mkdir -p "$SD_ROOT/switch/DeskNX/backup" "$SD_ROOT/atmosphere/contents"
 [[ ! -e "$MANIFEST" ]] || { echo "A DeskNX install manifest already exists at $MANIFEST. Uninstall the current version first." >&2; exit 1; }
 
+# Validate the qlaunch conflict before copying or changing any existing files.
+if [[ -e "$TARGET_QLAUNCH" && "$BACKUP_EXISTING" != 1 ]]; then
+  echo "A qlaunch override already exists at $TARGET_QLAUNCH." >&2
+  echo "Use --backup-existing to preserve it before installing DeskNX." >&2
+  exit 1
+fi
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_REL="none"
 MENU_BACKUP_REL="none"
 NRO_BACKUP_REL="none"
 
+if [[ -e "$TARGET_QLAUNCH" ]]; then
+  BACKUP_REL="switch/DeskNX/backup/qlaunch-$STAMP"
+  [[ ! -e "$SD_ROOT/$BACKUP_REL" ]] || { echo "Backup path already exists: $BACKUP_REL" >&2; exit 1; }
+  cp -a "$TARGET_QLAUNCH" "$SD_ROOT/$BACKUP_REL"
+fi
 if [[ -e "$TARGET_MENU" ]]; then
   MENU_BACKUP_REL="switch/DeskNX/backup/menu-$STAMP"
+  [[ ! -e "$SD_ROOT/$MENU_BACKUP_REL" ]] || { echo "Backup path already exists: $MENU_BACKUP_REL" >&2; exit 1; }
   cp -a "$TARGET_MENU" "$SD_ROOT/$MENU_BACKUP_REL"
 fi
 if [[ -f "$SD_ROOT/switch/DeskNX/DeskNX.nro" ]]; then
   NRO_BACKUP_REL="switch/DeskNX/backup/DeskNX-nro-$STAMP.bak"
+  [[ ! -e "$SD_ROOT/$NRO_BACKUP_REL" ]] || { echo "Backup path already exists: $NRO_BACKUP_REL" >&2; exit 1; }
   cp -f "$SD_ROOT/switch/DeskNX/DeskNX.nro" "$SD_ROOT/$NRO_BACKUP_REL"
-fi
-
-if [[ -e "$TARGET_QLAUNCH" ]]; then
-  if [[ "$BACKUP_EXISTING" != 1 ]]; then
-    echo "A qlaunch override already exists at $TARGET_QLAUNCH." >&2
-    echo "Use --backup-existing to preserve it before installing DeskNX." >&2
-    exit 1
-  fi
-  BACKUP_REL="switch/DeskNX/backup/qlaunch-$STAMP"
-  [[ ! -e "$SD_ROOT/$BACKUP_REL" ]] || { echo "Backup path already exists: $BACKUP_REL" >&2; exit 1; }
-  cp -a "$TARGET_QLAUNCH" "$SD_ROOT/$BACKUP_REL"
 fi
 
 STAGE="$SD_ROOT/atmosphere/contents/.0100000000001000.desknx-stage-$$"
