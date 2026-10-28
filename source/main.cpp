@@ -389,13 +389,19 @@ bool normalizeArchivePath(const char* raw, std::string& normalized) {
 }
 
 bool findMarker(const std::string& path, const std::string& marker, size_t& pos) {
-    size_t found = path.find(marker);
+    std::string pathLower = path;
+    std::string markerLower = marker;
+    std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(markerLower.begin(), markerLower.end(), markerLower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    size_t found = pathLower.find(markerLower);
     while (found != std::string::npos) {
         if (found == 0 || path[found - 1] == '/') {
             pos = found;
             return true;
         }
-        found = path.find(marker, found + 1);
+        found = pathLower.find(markerLower, found + 1);
     }
     return false;
 }
@@ -411,7 +417,8 @@ bool getDestinationRelativePath(const Translation& translation, const char* arch
 
     // Standard Atmosphere archive: atmosphere/contents/<TITLE_ID>/romfs|exefs/...
     if (findMarker(path, titlePrefix, markerPos)) {
-        destinationRelative = path.substr(markerPos);
+        const std::string remainder = path.substr(markerPos + titlePrefix.size());
+        destinationRelative = titlePrefix + remainder;
         return true;
     }
 
@@ -422,7 +429,10 @@ bool getDestinationRelativePath(const Translation& translation, const char* arch
             destinationRelative = titlePrefix + remainder;
             return true;
         }
-        if (startsWith(path, "romfs/") || startsWith(path, "exefs/")) {
+        std::string lowerPath = path;
+        std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (startsWith(lowerPath, "romfs/") || startsWith(lowerPath, "exefs/")) {
             destinationRelative = titlePrefix + path;
             return true;
         }
@@ -430,8 +440,11 @@ bool getDestinationRelativePath(const Translation& translation, const char* arch
     }
 
     if (translation.layout == "romfs_root") {
-        if (startsWith(path, "romfs/")) {
-            destinationRelative = titlePrefix + path;
+        std::string lowerPath = path;
+        std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (startsWith(lowerPath, "romfs/")) {
+            destinationRelative = titlePrefix + "romfs/" + path.substr(6);
         } else {
             destinationRelative = titlePrefix + "romfs/" + path;
         }
