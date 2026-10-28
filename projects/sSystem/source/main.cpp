@@ -295,14 +295,39 @@ bool ParseMenuCommand(AppletStorage& storage) {
             if (payload.title_id == 0) return false;
             g_PendingTitle = payload.title_id;
             g_PendingReturnToGame = false;
+            g_PendingHomebrew = false;
             DaemonLog("ipc: launch title=0x%016llX",
                       static_cast<unsigned long long>(payload.title_id));
+            return true;
+        }
+
+        case Command::LaunchHomebrew: {
+            if (hdr.payload_size != sizeof(desknx::ipc::LaunchHomebrewPayload))
+                return false;
+            desknx::ipc::LaunchHomebrewPayload payload{};
+            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
+                return false;
+            // The message is untrusted input. Require NUL termination, a real
+            // SD-card NRO path, and an existing regular file before queueing it.
+            if (!std::memchr(payload.nro_path, '\0', sizeof(payload.nro_path)) ||
+                !std::memchr(payload.argv, '\0', sizeof(payload.argv)) ||
+                !IsSafeHomebrewPath(payload.nro_path))
+                return false;
+            g_PendingTitle = 0;
+            g_PendingReturnToGame = false;
+            g_PendingHomebrew = true;
+            std::strncpy(g_PendingHomebrewPath, payload.nro_path,
+                         sizeof(g_PendingHomebrewPath) - 1);
+            std::strncpy(g_PendingHomebrewArgv, payload.argv,
+                         sizeof(g_PendingHomebrewArgv) - 1);
+            DaemonLog("ipc: validated homebrew launch request: %s", g_PendingHomebrewPath);
             return true;
         }
 
         case Command::ReturnToGame:
             if (hdr.payload_size != 0) return false;
             g_PendingTitle = 0;
+            g_PendingHomebrew = false;
             g_PendingReturnToGame = true;
             DaemonLog("ipc: return-to-game requested");
             return true;
