@@ -22,7 +22,7 @@ CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,--gc-sections
 
-LIBS        := -larchive -lcurl -lz -lnx
+LIBS        := -larchive -lcurl -lz -lbz2 -llz4 -llzma -lzstd -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
