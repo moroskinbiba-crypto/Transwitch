@@ -31,6 +31,7 @@ DESKNX_ROOT="$SD_ROOT/switch/DeskNX"
 MANIFEST="$DESKNX_ROOT/install-manifest.txt"
 TARGET_QLAUNCH="$SD_ROOT/atmosphere/contents/0100000000001000"
 TARGET_MENU="$DESKNX_ROOT/bin/Menu"
+TARGET_HBLOADER="$DESKNX_ROOT/bin/hbloader"
 TARGET_NRO="$DESKNX_ROOT/DeskNX.nro"
 [[ -s "$MANIFEST" ]] || { echo "DeskNX install manifest not found: $MANIFEST" >&2; exit 1; }
 [[ -f "$TARGET_QLAUNCH/exefs/DeskNX.install-marker" ]] || { echo "DeskNX ownership marker not found; refusing to remove this qlaunch override." >&2; exit 1; }
@@ -44,6 +45,7 @@ manifest_get() {
 }
 backup_rel="$(manifest_get qlaunch_backup)"
 menu_backup_rel="$(manifest_get menu_backup)"
+hbloader_backup_rel="$(manifest_get hbloader_backup)"
 nro_backup_rel="$(manifest_get nro_backup)"
 expected_main="$(manifest_get main_sha256)"
 expected_npdm="$(manifest_get npdm_sha256)"
@@ -57,10 +59,14 @@ expected_npdm="$(manifest_get npdm_sha256)"
 [[ "$nro_backup_rel" == "none" || "$nro_backup_rel" =~ ^switch/DeskNX/backup/DeskNX-nro-[A-Za-z0-9T_-]+\.bak$ ]] || {
   echo "Invalid NRO backup path in manifest; refusing." >&2; exit 1;
 }
+[[ "$hbloader_backup_rel" == "none" || "$hbloader_backup_rel" =~ ^switch/DeskNX/backup/hbloader-[A-Za-z0-9T_-]+$ ]] || {
+  echo "Invalid hbloader backup path in manifest; refusing." >&2; exit 1;
+}
 
 [[ "$backup_rel" == "none" || -d "$SD_ROOT/$backup_rel" ]] || { echo "Recorded qlaunch backup is missing: $backup_rel" >&2; exit 1; }
 [[ "$menu_backup_rel" == "none" || -d "$SD_ROOT/$menu_backup_rel" ]] || { echo "Recorded menu backup is missing: $menu_backup_rel" >&2; exit 1; }
 [[ "$nro_backup_rel" == "none" || -f "$SD_ROOT/$nro_backup_rel" ]] || { echo "Recorded NRO backup is missing: $nro_backup_rel" >&2; exit 1; }
+[[ "$hbloader_backup_rel" == "none" || -d "$SD_ROOT/$hbloader_backup_rel" ]] || { echo "Recorded hbloader backup is missing: $hbloader_backup_rel" >&2; exit 1; }
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -84,15 +90,18 @@ BACKUP_ROOT="$DESKNX_ROOT/backup"
 mkdir -p "$BACKUP_ROOT"
 CURRENT_QLAUNCH="$BACKUP_ROOT/desknx-installed-$STAMP"
 CURRENT_MENU="$BACKUP_ROOT/desknx-menu-$STAMP"
+CURRENT_HBLOADER="$BACKUP_ROOT/desknx-hbloader-$STAMP"
 CURRENT_NRO="$BACKUP_ROOT/desknx-nro-$STAMP.bak"
 STAGE="$DESKNX_ROOT/.uninstall-stage-$$"
 MANIFEST_ARCHIVE="$DESKNX_ROOT/.install-manifest-uninstall-$$"
 
 HAD_QLAUNCH=0
 HAD_MENU=0
+HAD_HBLOADER=0
 HAD_NRO=0
 RESTORED_QLAUNCH=0
 RESTORED_MENU=0
+RESTORED_HBLOADER=0
 RESTORED_NRO=0
 COMMITTED=0
 
@@ -122,6 +131,7 @@ cleanup() {
   if [[ "$COMMITTED" != 1 ]]; then
     rollback_dir "$TARGET_QLAUNCH" "$CURRENT_QLAUNCH" "$HAD_QLAUNCH" "$RESTORED_QLAUNCH"
     rollback_dir "$TARGET_MENU" "$CURRENT_MENU" "$HAD_MENU" "$RESTORED_MENU"
+    rollback_dir "$TARGET_HBLOADER" "$CURRENT_HBLOADER" "$HAD_HBLOADER" "$RESTORED_HBLOADER"
     rollback_file "$TARGET_NRO" "$CURRENT_NRO" "$HAD_NRO" "$RESTORED_NRO"
     if [[ -e "$MANIFEST_ARCHIVE" && ! -e "$MANIFEST" ]]; then
       mv "$MANIFEST_ARCHIVE" "$MANIFEST"
@@ -138,9 +148,11 @@ mkdir -p "$STAGE"
 if [[ "$backup_rel" != "none" ]]; then cp -a "$SD_ROOT/$backup_rel" "$STAGE/qlaunch"; fi
 if [[ "$menu_backup_rel" != "none" ]]; then cp -a "$SD_ROOT/$menu_backup_rel" "$STAGE/menu"; fi
 if [[ "$nro_backup_rel" != "none" ]]; then cp -p "$SD_ROOT/$nro_backup_rel" "$STAGE/nro"; fi
+if [[ "$hbloader_backup_rel" != "none" ]]; then cp -a "$SD_ROOT/$hbloader_backup_rel" "$STAGE/hbloader"; fi
 
 if [[ -e "$TARGET_QLAUNCH" ]]; then HAD_QLAUNCH=1; mv "$TARGET_QLAUNCH" "$CURRENT_QLAUNCH"; fi
 if [[ -e "$TARGET_MENU" ]]; then HAD_MENU=1; mv "$TARGET_MENU" "$CURRENT_MENU"; fi
+if [[ -e "$TARGET_HBLOADER" ]]; then HAD_HBLOADER=1; mv "$TARGET_HBLOADER" "$CURRENT_HBLOADER"; fi
 if [[ -e "$TARGET_NRO" ]]; then HAD_NRO=1; mv "$TARGET_NRO" "$CURRENT_NRO"; fi
 
 if [[ -d "$STAGE/qlaunch" ]]; then
@@ -153,10 +165,15 @@ if [[ -d "$STAGE/menu" ]]; then
   mv "$STAGE/menu" "$TARGET_MENU"
   RESTORED_MENU=1
 fi
+if [[ -d "$STAGE/hbloader" ]]; then
+  mkdir -p "$(dirname "$TARGET_HBLOADER")"
+  RESTORED_HBLOADER=1
+  mv "$STAGE/hbloader" "$TARGET_HBLOADER"
+fi
 if [[ -f "$STAGE/nro" ]]; then
   mkdir -p "$(dirname "$TARGET_NRO")"
-  mv "$STAGE/nro" "$TARGET_NRO"
   RESTORED_NRO=1
+  mv "$STAGE/nro" "$TARGET_NRO"
 fi
 
 # Atomic manifest move is the commit point. If a prior command failed, the
@@ -171,4 +188,4 @@ if [[ "$backup_rel" == "none" ]]; then
 else
   echo "Previous qlaunch override restored from $backup_rel."
 fi
-echo "Removed DeskNX qlaunch, menu, and NRO files were preserved under $BACKUP_ROOT."
+echo "Removed DeskNX qlaunch, menu, hbloader, and NRO files were preserved under $BACKUP_ROOT."
