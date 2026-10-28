@@ -434,7 +434,7 @@ InitStep g_InitSteps[16]{};
 size_t g_InitStepCount = 0;
 
 Result RecordInit(const char* name, Result rc, bool critical) {
-    if (g_InitStepCount < std::size(g_InitSteps))
+    if (g_InitStepCount < sizeof(g_InitSteps) / sizeof(g_InitSteps[0]))
         g_InitSteps[g_InitStepCount++] = {name, rc, critical};
     return rc;
 }
