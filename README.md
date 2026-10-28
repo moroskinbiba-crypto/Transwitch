@@ -23,7 +23,7 @@ DeskNX — кастомный рабочий стол для Nintendo Switch. В
 
 ## Экспериментальная интеграция HOME
 
-Структура projects/sSystem содержит отдельный qlaunch-backend на основе Atmosphère/libstratosphere, а projects/DeskNXMenu собирает библиотечный applet. Backend должен получать команды меню через версионированный IPC, управлять запуском приложений и снова открывать меню после выхода из игры.
+Структура projects/sSystem содержит отдельный qlaunch-backend на основе Atmosphère/libstratosphere, projects/DeskNXMenu собирает библиотечный applet, а projects/hbloader — отдельный target-aware загрузчик Homebrew. В system-mode запуск игры или NRO передаётся backend через версионированный IPC. Backend освобождает меню-слот, обслуживает NRO через ECS, запускает его через hbloader и возвращает DeskNX после завершения.
 
 Standalone-сборка не нуждается в Atmosphère. Чтобы подготовить системные компоненты, нужны **совместимые** libnx, Atmosphère/libstratosphere и AtmosphereLibs:
 
@@ -32,7 +32,7 @@ Standalone-сборка не нуждается в Atmosphère. Чтобы по�
     make system-package
     make package-system
 
-Основной workflow компилирует standalone NRO и библиотечный applet. Отдельный workflow **Build experimental DeskNX HOME backend** пытается собрать qlaunch backend против upstream libnx master и Atmosphère 1.12.0. Даже успешная сборка этих зависимостей **не доказывает** совместимость с прошивкой вашей консоли и не заменяет runtime-тесты на физическом Switch. Системный слой остаётся экспериментальным. Не устанавливайте его как повседневную замену HOME на основной консоли.
+Основной workflow компилирует standalone NRO и библиотечный applet. Отдельный workflow **Build experimental DeskNX HOME backend** пытается собрать qlaunch backend против upstream libnx master и Atmosphère 1.12.0. Даже успешная сборка этих зависимостей **не доказывает** совместимость с прошивкой вашей консоли и не заменяет runtime-тесты на физическом Switch. Системный слой остаётся экспериментальным. В этой версии предусмотрен только applet-mode запуск Homebrew; запуск NRO как полноценного приложения с выделенной игрой-донором намеренно отключён. Не устанавливайте его как повседневную замену HOME на основной консоли.
 
 ### Установка системного backend
 
@@ -46,13 +46,14 @@ Standalone-сборка не нуждается в Atmosphère. Чтобы по�
 
     bash scripts/uninstall-system.sh --sd-root /path/to/sd-card --acknowledge-risk
 
-Пакет хранит системные файлы внутри SdOut; сам qlaunch override копируется в Atmosphere только после явного запуска установщика. Не запускайте установщик без рабочего способа получить доступ к SD-карте и восстановить предыдущую конфигурацию Atmosphère. Подробности — в docs/HOME_INTEGRATION.md.
+Пакет хранит системные файлы внутри SdOut, включая hbloader в switch/DeskNX/bin/hbloader; сам qlaunch override копируется в atmosphere только после явного запуска установщика. Если DeskNX не может запустить ни один из проверяемых HOME applet-слотов и нет запущенной игры, backend также предусматривает аварийное восстановление: удерживать L+R+ZL+ZR+Plus+Minus+D-pad Down три секунды. Оно действует только при наличии точного маркера DeskNX и переименовывает активный override перед запросом перезагрузки. Это дополнительная страховка, а не гарантия восстановления при любой поломке. Не запускайте установщик без рабочего способа получить доступ к SD-карте и восстановить предыдущую конфигурацию Atmosphère. Подробности — в docs/HOME_INTEGRATION.md.
 
 ## Структура
 
 - source/main.cpp — общий UI; standalone и system-applet launch paths переключаются compile-time define.
 - projects/common/include/desknx/Protocol.hpp — версионированный IPC между UI и системным процессом.
 - projects/DeskNXMenu/ — библиотечный applet и NPDM для запуска через backend.
+- projects/hbloader/ — target-aware загрузчик NRO, запускаемый backend через ECS.
 - projects/sSystem/ — экспериментальный Atmosphère qlaunch backend, lifecycle приложений и ECS.
 - scripts/install-system.sh и scripts/uninstall-system.sh — отдельные установочные скрипты с проверками и резервированием.
 - docs/HOME_INTEGRATION.md — схема интеграции, сборка, диагностика и recovery.
