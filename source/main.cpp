@@ -49,6 +49,7 @@ bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=
 bool sdMounted=false, psmReady=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   A OPEN", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
+Uint32 lastHeartbeatTick=0;
 
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
@@ -545,10 +546,19 @@ int main(int,char**) {
     const Result readyRc=desknx::ipc::SendMenuReady();
     if(R_FAILED(readyRc)) setStatus("SYSTEM BACKEND NOT CONNECTED",5000);
     else setStatus("DESKNX READY  -  Y ADD  X EDIT  + NEW DESK",4000);
+    lastHeartbeatTick=SDL_GetTicks();
 #else
     setStatus("Y ADD  X EDIT  ZL/ZR RESIZE  - REMOVE  + NEW DESK",5000);
 #endif
     while(running&&appletMainLoop()) {
+#ifdef DESKNX_SYSTEM_APPLET
+        const Uint32 now=SDL_GetTicks();
+        if(now-lastHeartbeatTick>=1000) {
+            const Result heartbeatRc=desknx::ipc::SendHeartbeat();
+            if(R_FAILED(heartbeatRc)) setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);
+            lastHeartbeatTick=now;
+        }
+#endif
         padUpdate(&pad);
         u64 keys=padGetButtonsDown(&pad);
         if(keys)keyInput(keys);
