@@ -7,7 +7,7 @@ DeskNX currently has two build paths:
 1. **Standalone NRO** — compiles in the standard devkitPro Switch container and can be launched from Homebrew Menu.
 2. **Experimental HOME backend + library applet** — source scaffolding is present under projects/sSystem/ and projects/DeskNXMenu/. The applet uses ECS to be served into a selected library-applet slot; the backend is designed to own HOME lifecycle and title launching.
 
-The current CI builds the standalone NRO and the library applet. It does **not** yet build the Stratosphere backend with the exact libnx/Atmosphère pair or test it on hardware. Do not interpret the presence of projects/sSystem/ or a generated applet as proof that qlaunch replacement is operational.
+The standard CI builds the standalone NRO and the library applet. A separate workflow, Build experimental DeskNX HOME backend, attempts a full compile with upstream libnx master and Atmosphère 1.12.0. Even if that job passes, it only verifies compilation against that toolchain; it does not validate the firmware on a real console or make the build production-ready. Do not interpret the source tree or a generated package as proof that qlaunch replacement is operational.
 
 ## Architecture (based on public sLaunch patterns)
 
@@ -43,7 +43,7 @@ The system makefile expects $(ATMOSPHERE_DIR)/libraries/libstratosphere/stratosp
 
 ## Installer and recovery
 
-The scripts operate on a mounted SD-card root and **do not download, build, or verify binary compatibility**.
+The scripts operate on a mounted SD-card root and **do not download, build, or verify binary compatibility**. The experimental Actions artifact is a PC-side bundle containing a SdOut directory and the scripts; it is deliberately not laid out as an immediately active SD-root override. Extract it on a PC, inspect it, then invoke the installer. Do not extract the bundle directly into the SD-card root.
 
 Install:
 
