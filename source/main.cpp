@@ -524,8 +524,21 @@ void keyInput(u64 keys) {
     if(keys&HidNpadButton_StickR&&editing)deleteDesk();
     if(keys&HidNpadButton_X){editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"EDIT MODE CLOSED");}
     if(keys&HidNpadButton_Y){editing=true;openList();}
-    if(keys&HidNpadButton_L) {if(dragging)moveAcrossDesk(-1);else deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());}
-    else if(keys&HidNpadButton_R) {if(dragging)moveAcrossDesk(1);else deskIndex=(deskIndex+1)%static_cast<int>(desks.size());}
+    if(keys&HidNpadButton_L) {
+        if(dragging) moveAcrossDesk(-1);
+        else {
+            deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
+            saveNow();
+            setStatus(desks[static_cast<size_t>(deskIndex)].name);
+        }
+    } else if(keys&HidNpadButton_R) {
+        if(dragging) moveAcrossDesk(1);
+        else {
+            deskIndex=(deskIndex+1)%static_cast<int>(desks.size());
+            saveNow();
+            setStatus(desks[static_cast<size_t>(deskIndex)].name);
+        }
+    }
     if(keys&HidNpadButton_Left){if(dragging)moveTile(-1,0);else updateCursor(-1,0);}
     if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
     if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
@@ -552,7 +565,15 @@ int tabStart(){return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.siz
 void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);if(listOpen||deletePrompt)return;
-        if(y>=92&&y<=140){int idx=tabStart()+(x-28)/166;if(x>=28&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7)deskIndex=idx;return;}
+        if(y>=92&&y<=140){
+            int idx=tabStart()+(x-28)/166;
+            if(x>=28&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7&&idx!=deskIndex){
+                deskIndex=idx;
+                saveNow();
+                setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            }
+            return;
+        }
         if(y>=TOP&&y<TOP+ROWS*(CH+GY)) {
             int oldX=selectedX,oldY=selectedY;touchSelect(x,y);Workspace&d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
             if(editing){if(i>=0&&oldX==selectedX&&oldY==selectedY){dragging=true;touchDragging=true;}else if(i<0)openList();}
