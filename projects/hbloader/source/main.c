@@ -16,24 +16,12 @@
 // forever" loop, which made closed homebrew reopen endlessly.
 #define TARGET_FILE "sdmc:/switch/DeskNX/hbtarget.txt"
 
-// DeskNX fork: handing a chainload back to the daemon.
-//
-// An .nro started in an applet slot gets a small heap, and nothing inside this
-// process can change that - promoting homebrew to a full-RAM application means
-// serving this loader into a donor game's slot, which only DeskNX system backend can do. So
-// when the user asks for it, a chainload from applet mode is not loaded here at
-// all: it is written to the daemon's drop box (format: sCommon's
-// HbLaunchRequest.hpp) and this process exits, and DeskNX system backend starts the .nro in
-// the donor slot instead.
-//
-// Opt-in, because it changes where every chainload runs: without OPT_IN_FILE
-// holding a 1, chainloading behaves exactly as it did - loaded here, in the
-// slot this loader already has.
-#define OPT_IN_FILE  "sdmc:/switch/DeskNX/config/hb_chain_app.txt"
-#define QUEUE_DIR    "sdmc:/switch/DeskNX/hb_queue"
-#define QUEUE_TMP    "sdmc:/switch/DeskNX/hb_queue/pending.tmp"
+// DeskNX intentionally launches homebrew in the album/library-applet slot.
+// This keeps the implementation independent from a donor game's process and
+// avoids pretending that applet-mode memory/permissions are equivalent to a
+// full application. A target .nro can chainload another NRO in this same slot;
+// once the chain finishes, the loader exits and the HOME backend reopens DeskNX.
 #define HB_LOG_FILE  "sdmc:/switch/DeskNX/logs/hbloader.log"
-#define QUEUE_REQ    "sdmc:/switch/DeskNX/hb_queue/request.req"
 
 const char g_noticeText[] =
     "nx-hbloader " VERSION "\0"
@@ -369,39 +357,6 @@ static void qualifyPath(char *path, size_t cap)
     snprintf(path, cap, "%s", tmp);
 }
 
-// Returns true when sdmc:/switch/DeskNX/config/hb_chain_app.txt holds a 1. Assumes
-// the SD card is already mounted.
-static bool chainToAppWanted(void)
-{
-    // DeskNX's first HOME release intentionally supports applet-mode NROs only.
-    // The donor-slot application mode needs a separate, tested launch/restore
-    // lifecycle; ignore any opt-in file until that feature is implemented.
-    return false;
-}
-
-// Hand the pending chainload to DeskNX system backend as an application-mode request. Written
-// to a temporary name and renamed, so the daemon never sees half a request.
-// Returns true only if the request is safely on the card.
-static bool queueChainForDaemon(void)
-{
-    mkdir("sdmc:/slaunch", 0777);
-    mkdir(QUEUE_DIR, 0777);
-
-    FILE *fp = fopen(QUEUE_TMP, "w");
-    if (!fp) return false;
-    fprintf(fp, "mode=app\n");
-    fprintf(fp, "nro=%s\n", g_nextNroPath);
-    if (g_nextArgv[0]) fprintf(fp, "argv=%s\n", g_nextArgv);
-    // No donor named: the daemon uses whichever one the menu has configured.
-    bool ok = (fflush(fp) == 0);
-    fclose(fp);
-    if (!ok) { remove(QUEUE_TMP); return false; }
-
-    remove(QUEUE_REQ);
-    if (rename(QUEUE_TMP, QUEUE_REQ) != 0) { remove(QUEUE_TMP); return false; }
-    return true;
-}
-
 void loadNro(void)
 {
     NroHeader* header = NULL;
@@ -513,21 +468,6 @@ void loadNro(void)
             svcExitProcess();
         }
 
-        // A chainload out of an applet slot, with the user having asked for
-        // those to run as applications: hand it to DeskNX system backend and get out of the
-        // way. Only from an applet - in a donor slot this process already has
-        // the RAM and the permissions, so loading it here is strictly better.
-        if (!g_isApplication && g_nextNroPath[0] != '\0')
-        {
-            if (R_SUCCEEDED(fsdevMountSdmc()))
-            {
-                bool queued = chainToAppWanted() && queueChainForDaemon();
-                fsdevUnmountAll();
-                // Only leave if the request is actually on the card; a failed
-                // write must not cost the user the launch they asked for.
-                if (queued) svcExitProcess();
-            }
-        }
     }
 
     if (g_nextNroPath[0] == '\0')
