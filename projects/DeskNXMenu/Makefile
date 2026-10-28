@@ -23,7 +23,7 @@ CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) 
 CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
-LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,--gc-sections
+LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
 LIBS        := `sdl2-config --libs` -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
