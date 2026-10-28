@@ -1,33 +1,50 @@
-name: Build Transwitch
+name: Build DeskNX
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: devkitpro/devkita64:latest
     steps:
-      - name: Check out source
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build NRO
-        run: . /opt/devkitpro/switchvars.sh && make -j2
+      - name: Install devkitPro packages
+        uses: devkitPro/pacman@v1
+        with:
+          packages: >-
+            switch-dev
+            switch-sdl2
 
-      - name: Upload NRO artifact
+      - name: Build DeskNX
+        run: make -j2
+
+      - name: Prepare SD-card package
+        run: |
+          mkdir -p dist/switch/DeskNX
+          cp DeskNX.nro dist/switch/DeskNX/DeskNX.nro
+          cp README.md dist/README-DeskNX.md
+          cd dist
+          zip -r ../DeskNX-sdcard.zip .
+
+      - name: Upload NRO
         uses: actions/upload-artifact@v4
         with:
-          name: Transwitch-nro
-          path: Transwitch.nro
+          name: DeskNX-nro
+          path: DeskNX.nro
           if-no-files-found: error
 
-      - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+      - name: Upload SD-card package
+        uses: actions/upload-artifact@v4
         with:
-          files: Transwitch.nro
+          name: DeskNX-sdcard
+          path: DeskNX-sdcard.zip
+          if-no-files-found: error
