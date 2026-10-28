@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cerrno>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
@@ -25,6 +26,8 @@ constexpr const char* kDataDir = "sdmc:/switch/DeskNX";
 constexpr const char* kLogDir = "sdmc:/switch/DeskNX/logs";
 constexpr const char* kLogPath = "sdmc:/switch/DeskNX/logs/daemon.log";
 constexpr const char* kPrevLogPath = "sdmc:/switch/DeskNX/logs/daemon.prev.log";
+constexpr const char* kHbTargetPath = "sdmc:/switch/DeskNX/hbtarget.txt";
+constexpr const char* kHbTargetTemp = "sdmc:/switch/DeskNX/hbtarget.tmp";
 constexpr u64 kHomePressSettleMs = 1500;
 constexpr u64 kMenuFastExitMs = 3000;
 constexpr u64 kMenuReadyTimeoutSeconds = 8;
@@ -41,6 +44,10 @@ constexpr int kMenuStartAttempts = 4;
 AccountUid g_SelectedUser{};
 u64 g_PendingTitle = 0;
 bool g_PendingReturnToGame = false;
+bool g_PendingHomebrew = false;
+bool g_HomebrewLoaderRunning = false;
+char g_PendingHomebrewPath[desknx::ipc::MaxHomebrewPath]{};
+char g_PendingHomebrewArgv[desknx::ipc::MaxHomebrewArgv]{};
 bool g_MenuReady = false;
 u64 g_MenuLaunchTick = 0;
 u64 g_LastMenuHeartbeatTick = 0;
@@ -89,6 +96,70 @@ void DaemonLog(const char* fmt, ...) {
 }
 
 namespace {
+
+bool IsSafeHomebrewPath(const char* path) {
+    if (!path || !path[0] || std::strlen(path) >= desknx::ipc::MaxHomebrewPath)
+        return false;
+    if (std::strncmp(path, "sdmc:/", 6) != 0 || std::strstr(path, "..") != nullptr)
+        return false;
+
+    const size_t length = std::strlen(path);
+    if (length < 4) return false;
+    const char* ext = path + length - 4;
+    if (ext[0] != '.' ||
+        std::tolower(static_cast<unsigned char>(ext[1])) != 'n' ||
+        std::tolower(static_cast<unsigned char>(ext[2])) != 'r' ||
+        std::tolower(static_cast<unsigned char>(ext[3])) != 'o')
+        return false;
+
+    struct stat st{};
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+bool WriteHomebrewTarget(const char* path, const char* argv) {
+    if (!IsSafeHomebrewPath(path)) {
+        DaemonLog("hb: refused invalid NRO path");
+        return false;
+    }
+    if (argv && std::strlen(argv) >= desknx::ipc::MaxHomebrewArgv) {
+        DaemonLog("hb: refused oversized argv");
+        return false;
+    }
+
+    char request[desknx::ipc::MaxHomebrewPath + desknx::ipc::MaxHomebrewArgv + 4]{};
+    const int length = std::snprintf(request, sizeof(request),
+                                     (argv && argv[0]) ? "%s\n%s\n" : "%s\n",
+                                     path, argv ? argv : "");
+    if (length <= 0 || static_cast<size_t>(length) >= sizeof(request))
+        return false;
+
+    MakeDirectories();
+    remove(kHbTargetTemp);
+    FILE* fp = std::fopen(kHbTargetTemp, "w");
+    if (!fp) {
+        DaemonLog("hb: cannot create target request (errno=%d)", errno);
+        return false;
+    }
+    const bool wrote = std::fwrite(request, 1, static_cast<size_t>(length), fp) ==
+                       static_cast<size_t>(length);
+    const bool flushed = std::fflush(fp) == 0;
+    const bool closed = std::fclose(fp) == 0;
+    if (!wrote || !flushed || !closed) {
+        remove(kHbTargetTemp);
+        DaemonLog("hb: failed writing complete target request");
+        return false;
+    }
+
+    // The loader only sees the request after the final rename. Replacing the
+    // previous target is safe because the menu slot is free at this point.
+    remove(kHbTargetPath);
+    if (std::rename(kHbTargetTemp, kHbTargetPath) != 0) {
+        remove(kHbTargetTemp);
+        DaemonLog("hb: cannot publish target request (errno=%d)", errno);
+        return false;
+    }
+    return true;
+}
 
 bool PickSelectedUser() {
     if (R_SUCCEEDED(accountGetPreselectedUser(&g_SelectedUser)) &&
