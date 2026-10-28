@@ -1,0 +1,70 @@
+#pragma once
+
+#include <switch.h>
+#include <cstddef>
+#include <cstdint>
+
+namespace desknx::ipc {
+
+// Versioned, size-checked messages between the DeskNX library applet and the
+// qlaunch replacement. Keep command values append-only once packages ship.
+constexpr u32 Magic = 0x584E4B44; // "DKNX"
+constexpr u16 Version = 1;
+
+enum class Command : u32 {
+    MenuReady = 1,
+    LaunchTitle = 2,
+    ReturnToGame = 3,
+};
+
+struct Header {
+    u32 magic;
+    u16 version;
+    u16 header_size;
+    u32 command;
+    u32 payload_size;
+};
+static_assert(sizeof(Header) == 16);
+
+struct LaunchTitlePayload {
+    u64 title_id;
+};
+static_assert(sizeof(LaunchTitlePayload) == 8);
+
+inline Result Send(Command command, const void* payload = nullptr, size_t payload_size = 0) {
+    if (payload_size > 0x3F00 || (payload_size != 0 && payload == nullptr))
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+
+    AppletStorage storage{};
+    const size_t total_size = sizeof(Header) + payload_size;
+    Result rc = appletCreateStorage(&storage, total_size);
+    if (R_FAILED(rc)) return rc;
+
+    const Header header{
+        Magic,
+        Version,
+        static_cast<u16>(sizeof(Header)),
+        static_cast<u32>(command),
+        static_cast<u32>(payload_size)
+    };
+    rc = appletStorageWrite(&storage, 0, &header, sizeof(header));
+    if (R_SUCCEEDED(rc) && payload_size != 0)
+        rc = appletStorageWrite(&storage, sizeof(header), payload, payload_size);
+
+    if (R_SUCCEEDED(rc))
+        rc = appletPushOutData(&storage);
+
+    appletStorageClose(&storage);
+    return rc;
+}
+
+inline Result SendMenuReady() {
+    return Send(Command::MenuReady);
+}
+
+inline Result SendLaunchTitle(u64 title_id) {
+    const LaunchTitlePayload payload{title_id};
+    return Send(Command::LaunchTitle, &payload, sizeof(payload));
+}
+
+} // namespace desknx::ipc
