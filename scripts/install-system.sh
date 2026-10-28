@@ -33,7 +33,7 @@ SD_ROOT="$(cd "$SD_ROOT" && pwd -P)"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-PACKAGE="$REPO_ROOT/SdOut"
+PACKAGE="${DESKNX_PACKAGE_DIR:-$REPO_ROOT/SdOut}"
 SRC_QLAUNCH="$PACKAGE/atmosphere/contents/0100000000001000"
 SRC_MENU="$PACKAGE/switch/DeskNX/bin/Menu"
 SRC_NRO="$PACKAGE/switch/DeskNX/DeskNX.nro"
