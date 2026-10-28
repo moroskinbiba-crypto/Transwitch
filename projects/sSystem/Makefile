@@ -28,14 +28,14 @@ APP_VERSION := 0.2.0
 ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 ATMOSPHERE_DEFINES := -DATMOSPHERE -DATMOSPHERE_ARCH_ARM64 -DATMOSPHERE_ARCH_ARM_V8A \
                       -DATMOSPHERE_BOARD_NINTENDO_NX -DATMOSPHERE_OS_HORIZON -D__SWITCH__ \
-                      -DATMOSPHERE_IS_STRATOSPHERE -D_GNU_SOURCE
+                      -DATMOSPHERE_IS_STRATOSPHERE -D_GNU_SOURCE -DSL_LIBNX_MASTER
 
-CFLAGS := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections -fno-strict-aliasing \
+CFLAGS = -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections -fno-strict-aliasing \
           -fwrapv -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector \
           $(ARCH) $(ATMOSPHERE_DEFINES) $(INCLUDE) \
           -I$(LIBNX)/include -I$(DEVKITPRO)/AtmosphereLibs/include \
           -DSL_VERSION=\\\"$(APP_VERSION)\\\"
-CXXFLAGS := $(CFLAGS) -std=gnu++23 -fno-rtti -fno-exceptions -Wno-invalid-offset
+CXXFLAGS = $(CFLAGS) -std=gnu++23 -fno-rtti -fno-exceptions -Wno-invalid-offset
 ASFLAGS := -g $(ARCH)
 
 CXXWRAPS := -Wl,--wrap,__cxa_pure_virtual -Wl,--wrap,__cxa_throw \
