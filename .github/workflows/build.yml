@@ -19,9 +19,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install SDL2 for Switch
-        run: dkp-pacman -Sy --noconfirm switch-sdl2
-
       - name: Build DeskNX
         env:
           DEVKITPRO: /opt/devkitpro
