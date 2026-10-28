@@ -14,7 +14,7 @@ TARGET      := DeskNX
 BUILD       := build
 SOURCES     := source
 INCLUDES    := include
-ROMFS       := romfs
+# ROMFS intentionally disabled: do not package legacy translation assets.
 
 APP_TITLE   := DeskNX
 APP_AUTHOR  := DeskNX contributors
@@ -51,7 +51,9 @@ export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 export BUILD_EXEFS_SRC := $(TOPDIR)/exefs_src
 export APP_TITLE APP_AUTHOR APP_VERSION
 export ROMFS
+ifneq ($(strip $(ROMFS)),)
 export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
+endif
 export APP_ICON := $(LIBNX)/default_icon.jpg
 .PHONY: all clean
 all: $(BUILD)
