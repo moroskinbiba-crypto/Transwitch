@@ -54,34 +54,22 @@ jobs:
         run: |
           make -C projects/sSystem -j2 LIBNX="$SL_LIBNX" ATMOSPHERE_DIR="$ATMOSPHERE_DIR"
 
-      - name: Assemble experimental package
+      - name: Assemble PC-side installer bundle
         run: |
-          mkdir -p dist/switch/DeskNX
-          cp -a SdOut/atmosphere dist/
-          mkdir -p dist/switch/DeskNX/bin
-          cp -a SdOut/switch/DeskNX/bin/Menu dist/switch/DeskNX/bin/Menu
-          cp -f DeskNX.nro dist/switch/DeskNX/DeskNX.nro
-          cp README.md dist/README-DeskNX.md
-          cp docs/HOME_INTEGRATION.md dist/HOME_INTEGRATION.md
+          mkdir -p dist/SdOut dist/scripts dist/docs
+          cp -a SdOut/atmosphere dist/SdOut/
+          cp -a SdOut/switch dist/SdOut/
+          cp -f scripts/install-system.sh scripts/uninstall-system.sh dist/scripts/
+          cp -f README.md THIRD_PARTY.md dist/
+          cp -f docs/HOME_INTEGRATION.md dist/docs/
+          bash -n dist/scripts/install-system.sh dist/scripts/uninstall-system.sh
           cd dist
           python3 -c 'import pathlib, zipfile; root=pathlib.Path("."); z=zipfile.ZipFile("../DeskNX-system-experimental.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.as_posix()) for p in root.rglob("*") if p.is_file()]; z.close()'
 
-      - name: Upload experimental system package
+      - name: Upload experimental system bundle
         uses: actions/upload-artifact@v4
         with:
           name: DeskNX-system-experimental
           path: DeskNX-system-experimental.zip
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload build outputs separately
-        uses: actions/upload-artifact@v4
-        with:
-          name: DeskNX-system-exefs
-          path: |
-            SdOut/atmosphere/contents/0100000000001000/exefs/main
-            SdOut/atmosphere/contents/0100000000001000/exefs/main.npdm
-            SdOut/switch/DeskNX/bin/Menu/main
-            SdOut/switch/DeskNX/bin/Menu/main.npdm
           if-no-files-found: error
           retention-days: 14
