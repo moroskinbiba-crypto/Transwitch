@@ -254,7 +254,7 @@ void saveLayout() {
     std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
     if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return;}
     f<<"DESKNX2\n";
-    f<<"A\t"<<g_desktop<<"\n";
+    f<<"A\t"<<deskIndex<<"\n";
     for(const auto& d:desks)f<<"D\t"<<safeField(d.name)<<"\n";
     for(size_t di=0;di<desks.size();++di)for(const auto&t:desks[di].tiles)
         f<<"I\t"<<di<<'\t'<<typeCode(t.kind)<<'\t'<<safeField(t.title)<<'\t'<<safeField(t.data)<<'\t'
