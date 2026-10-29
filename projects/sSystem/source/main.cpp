@@ -77,6 +77,23 @@ bool g_ReopenMenuAfterSleep = false;
 PadState g_RecoveryPad{};
 u64 g_RecoveryChordStartTick = 0;
 bool g_RecoveryChordAttempted = false;
+AccountUid g_PendingUser{};         // SelectUser (IPC cmd 8) / LaunchTitle uid
+bool g_HasPendingUser = false;
+u64 g_PendingLaunchFlags = 0;       // LaunchTitle v2 flag bits (LNC-02)
+// Backend-state for the remaining v2 commands (CloseApp/PowerAction/
+// LaunchSystemApplet). All are honoured after the menu closes so we never
+// fight a live applet for focus.
+bool g_PendingCloseApp = false;
+desknx::ipc::PowerKind g_PendingPowerAction = desknx::ipc::PowerKind::Sleep;
+bool g_HasPendingPowerAction = false;
+u32 g_PendingSystemApplet = 0;
+bool g_HasPendingSystemApplet = false;
+// Last title-launch failure, reported to the menu in the initial state block
+// (IPC-06 §4.4). Cleared when a launch succeeds.
+u32 g_LastLaunchRc = 0;
+u64 g_LastLaunchTitle = 0;
+bool g_SdMountedForBackend = true;  // REC-05: drives the degraded flag
+u64 g_DroppedLogLastTick = 0;       // IPC-01 log rate limit (once per second)
 
 void ResetMenuHeartbeatTracking() {
     g_LastMenuHeartbeatTick = 0;
@@ -321,6 +338,28 @@ void RegisterCurrentSlot() {
     }
 }
 
+// IPC-06: current backend state handed to the menu at every launch so the
+// menu never relies on memory from a previous session.
+desknx::ipc::InitialState BuildInitialState() {
+    desknx::ipc::InitialState state{};
+    state.magic = desknx::ipc::Magic;
+    state.version = desknx::ipc::Version;
+    state.header_size = desknx::ipc::InitialStateSize;
+    state.backend_version = 0x000200u; // 0.2.0
+    if (app::g_AppRunning) {
+        const bool foreground = app::g_AppHasFocus && la::IsMenuAlive() == false;
+        state.app_state = (la::IsMenuAlive() || !foreground) ? 3u : 2u;
+        if (!app::CanSuspend()) state.app_state = 1u; // still in settle window
+        state.app_title_id = app::g_AppId;
+    }
+    state.active_slot = static_cast<u32>(g_MenuSlotIndex);
+    state.degraded = g_SdMountedForBackend ? 0u : 1u;
+    state.last_launch_rc = g_LastLaunchRc;
+    state.last_launch_title = g_LastLaunchTitle;
+    state.selected_user = g_SelectedUser;
+    return state;
+}
+
 bool LaunchMenu() {
     if (la::IsMenuAlive()) {
         if (g_HomebrewLoaderRunning) TransitionTo(BackendState::HomebrewRunning, "loader already alive");
@@ -334,10 +373,13 @@ bool LaunchMenu() {
     const auto& slot = CurrentMenuSlot();
     RegisterCurrentSlot();
 
+    // IPC-06: every fresh menu launch receives the current backend state as
+    // its initial storage, so the UI never acts on stale information.
+    const auto initial = BuildInitialState();
     Result rc = 0;
     for (int attempt = 0; attempt < kMenuStartAttempts; ++attempt) {
         if (attempt != 0) svcSleepThread(kMenuStartRetryDelayNs);
-        rc = la::LaunchMenu(slot.applet_id, nullptr, 0);
+        rc = la::LaunchMenu(slot.applet_id, &initial, sizeof(initial));
         DaemonLog("menu start slot=%s attempt=%d rc=0x%08X",
                   slot.name, attempt + 1, static_cast<unsigned int>(rc));
         if (R_SUCCEEDED(rc)) {
@@ -356,7 +398,7 @@ bool LaunchMenu() {
         RegisterCurrentSlot();
         for (int attempt = 0; attempt < kMenuStartAttempts; ++attempt) {
             if (attempt != 0) svcSleepThread(kMenuStartRetryDelayNs);
-            rc = la::LaunchMenu(CurrentMenuSlot().applet_id, nullptr, 0);
+            rc = la::LaunchMenu(CurrentMenuSlot().applet_id, &initial, sizeof(initial));
             DaemonLog("menu fallback start slot=%s attempt=%d rc=0x%08X",
                       CurrentMenuSlot().name, attempt + 1, static_cast<unsigned int>(rc));
             if (R_SUCCEEDED(rc)) {
@@ -484,17 +526,40 @@ bool ParseMenuCommand(AppletStorage& storage) {
         }
 
         case Command::LaunchTitle: {
-            if (hdr.payload_size != sizeof(desknx::ipc::LaunchTitlePayload))
+            // v2 sends title_id + flags + uid (32 bytes); v1 senders used a
+            // bare 8-byte title_id. Both are accepted (IPC-04 compatibility).
+            u64 title_id = 0;
+            AccountUid uid{};
+            bool has_uid = false;
+            g_PendingLaunchFlags = 0;
+            if (hdr.payload_size == sizeof(desknx::ipc::LaunchTitleV2Payload)) {
+                desknx::ipc::LaunchTitleV2Payload payload{};
+                if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
+                    return false;
+                title_id = payload.title_id;
+                uid = payload.uid;
+                has_uid = accountUidIsValid(&uid);
+                // LNC-02: keep the menu's NACP override bits for Launch().
+                g_PendingLaunchFlags = payload.flags &
+                    (desknx::ipc::LaunchFlagHasUser | desknx::ipc::LaunchFlagNoPreuser);
+            } else if (hdr.payload_size == sizeof(desknx::ipc::LaunchTitlePayload)) {
+                desknx::ipc::LaunchTitlePayload payload{};
+                if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
+                    return false;
+                title_id = payload.title_id;
+            } else {
                 return false;
-            desknx::ipc::LaunchTitlePayload payload{};
-            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
-                return false;
-            if (payload.title_id == 0) return false;
-            g_PendingTitle = payload.title_id;
+            }
+            if (title_id == 0) return false;
+            g_PendingTitle = title_id;
             g_PendingReturnToGame = false;
             g_PendingHomebrew = false;
-            DaemonLog("ipc: launch title=0x%016llX",
-                      static_cast<unsigned long long>(payload.title_id));
+            // LNC-03: a zero uid means "backend decides"; never push an
+            // invalid uid into the game's preselected-user parameter.
+            g_HasPendingUser = has_uid;
+            if (has_uid) g_PendingUser = uid;
+            DaemonLog("ipc: launch title=0x%016llX uid=%d",
+                      static_cast<unsigned long long>(title_id), has_uid ? 1 : 0);
             return true;
         }
 
@@ -528,6 +593,96 @@ bool ParseMenuCommand(AppletStorage& storage) {
             g_PendingReturnToGame = true;
             DaemonLog("ipc: return-to-game requested");
             return true;
+
+        // --- protocol v2 commands ------------------------------------------
+        case Command::CloseApp: {
+            // LNC-06: soft-close of the suspended title. The menu only offers
+            // this behind an explicit confirmation dialog, and the request is
+            // honoured after the menu closes so no focus fight happens while
+            // the applet is alive.
+            if (hdr.payload_size != 0 || hdr.version < desknx::ipc::Version)
+                return false;
+            g_PendingCloseApp = true;
+            DaemonLog("ipc: close-app requested");
+            return true;
+        }
+
+        case Command::SelectUser: {
+            if (hdr.payload_size != sizeof(desknx::ipc::SelectUserPayload) ||
+                hdr.version < desknx::ipc::Version)
+                return false;
+            desknx::ipc::SelectUserPayload payload{};
+            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
+                return false;
+            // LNC-03: never accept a zero/invalid uid from the menu.
+            if (!accountUidIsValid(&payload.uid)) return false;
+            g_PendingUser = payload.uid;
+            g_HasPendingUser = true;
+            g_SelectedUser = payload.uid;
+            DaemonLog("ipc: user selected by menu");
+            return true;
+        }
+
+        case Command::PowerAction: {
+            if (hdr.payload_size != sizeof(desknx::ipc::PowerActionPayload) ||
+                hdr.version < desknx::ipc::Version)
+                return false;
+            desknx::ipc::PowerActionPayload payload{};
+            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
+                return false;
+            if (!desknx::ipc::rules::IsValidPowerAction(payload.action)) return false;
+            const auto action = static_cast<desknx::ipc::PowerKind>(payload.action);
+            // PWR-03: sleep reuses the AM sequence (BK-16 keeps it single
+            // shot); reboot/shutdown go through psm with our SD state synced.
+            if (action == desknx::ipc::PowerKind::Sleep) {
+                g_PendingPowerAction = action;
+                g_HasPendingPowerAction = true;
+            } else {
+                g_PendingPowerAction = action;
+                g_HasPendingPowerAction = true;
+            }
+            DaemonLog("ipc: power action=%u queued", payload.action);
+            return true;
+        }
+
+        case Command::LaunchSystemApplet: {
+            if (hdr.payload_size != sizeof(desknx::ipc::LaunchSystemAppletPayload) ||
+                hdr.version < desknx::ipc::Version)
+                return false;
+            desknx::ipc::LaunchSystemAppletPayload payload{};
+            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
+                return false;
+            // SYS-01: strict whitelist; anything else is dropped like garbage.
+            if (!desknx::ipc::rules::IsAllowedSystemApplet(payload.applet_id)) {
+                DaemonLog("ipc: system applet 0x%X rejected (not whitelisted)",
+                          payload.applet_id);
+                return false;
+            }
+            g_PendingSystemApplet = payload.applet_id;
+            g_HasPendingSystemApplet = true;
+            DaemonLog("ipc: system applet 0x%X queued", payload.applet_id);
+            return true;
+        }
+
+        case Command::Log: {
+            // IPC-01: bounded, NUL-terminated, printable-only lines appended
+            // to daemon.log with a "menu:" prefix.
+            if (hdr.version < desknx::ipc::Version || hdr.payload_size == 0 ||
+                hdr.payload_size > desknx::ipc::MaxLogLineBytes)
+                return false;
+            char line[desknx::ipc::MaxLogLineBytes + 1]{};
+            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), line, hdr.payload_size)))
+                return false;
+            if (line[hdr.payload_size - 1] != '\0') return false;
+            bool printable = true;
+            for (u32 i = 0; i + 1 < hdr.payload_size; ++i) {
+                const unsigned char c = static_cast<unsigned char>(line[i]);
+                if (c < 0x20) { printable = false; break; }
+            }
+            if (!printable || !line[0]) return false;
+            DaemonLog("menu: %s", line);
+            return true;
+        }
 
         default:
             DaemonLog("ipc: ignored unknown command=%u", hdr.command);
@@ -712,7 +867,18 @@ void PumpAppletMessages() {
             case Msg_AutoPowerDown:
             case Msg_RequestToPrepareSleep:
             case Msg_SleepRequiredByHighTemperature:
+                HandleSleepMessage();
+                break;
+
             case Msg_SleepRequiredByLowBattery:
+                // §4.4: warn the menu first if it is alive; the sleep
+                // sequence itself proceeds regardless of delivery success.
+                if (la::IsMenuAlive()) {
+                    const Result eventRc = desknx::ipc::NotifyLowBattery();
+                    if (R_FAILED(eventRc))
+                        DaemonLog("ipc: LowBattery notify rc=0x%08X",
+                                  static_cast<unsigned int>(eventRc));
+                }
                 HandleSleepMessage();
                 break;
 
@@ -735,6 +901,16 @@ void PumpAppletMessages() {
 
             case Msg_SdCardRemoved:
                 DaemonLog("storage: SD card removed; closing SD-backed menu");
+                g_SdMountedForBackend = false; // REC-04: next menu starts degraded
+                // REC-05: notify before tearing the applet down so a menu
+                // that is mid-frame can flush state; delivery failure is
+                // non-fatal (the storage itself may already be gone).
+                if (la::IsMenuAlive()) {
+                    const Result eventRc = desknx::ipc::NotifySdRemoved();
+                    if (R_FAILED(eventRc))
+                        DaemonLog("ipc: SdRemoved notify rc=0x%08X",
+                                  static_cast<unsigned int>(eventRc));
+                }
                 if (la::IsMenuAlive()) la::StopMenu();
                 if (g_HomebrewLoaderRunning) {
                     g_HomebrewLoaderRunning = false;
@@ -821,6 +997,28 @@ void HandleMenuClosed() {
         g_PendingTitle = 0;
         g_PendingReturnToGame = false;
 
+        // BK-17: user choice is re-evaluated for every launch, not only at
+        // backend boot. A uid picked in the menu (SelectUser / LaunchTitle v2)
+        // wins over the account-service default when it is still valid.
+        AccountUid launch_user = g_SelectedUser;
+        if (g_HasPendingUser && accountUidIsValid(&g_PendingUser)) {
+            launch_user = g_PendingUser;
+            g_SelectedUser = g_PendingUser;
+        } else if (!accountUidIsValid(&launch_user)) {
+            PickSelectedUser();
+            launch_user = g_SelectedUser;
+        }
+        g_HasPendingUser = false;
+
+        // LNC-03: with no valid account at all, do not push a zero uid into
+        // the game; relaunch the menu so it can show the user picker (USR-01).
+        if (!accountUidIsValid(&launch_user)) {
+            DaemonLog("app: no valid user for launch; menu must pick one");
+            TransitionTo(BackendState::MenuStarting, "no selected user");
+            LaunchMenu();
+            return;
+        }
+
         // Selecting another game from HOME must retire the suspended title's
         // AppletApplication holder first; launching over a live holder fails.
         if (app::g_AppRunning && app::g_AppId == titleId) {
@@ -837,13 +1035,32 @@ void HandleMenuClosed() {
             app::Terminate();
         }
 
-        const Result rc = app::Launch(titleId, g_SelectedUser);
+        const u64 launch_flags = g_PendingLaunchFlags;
+        g_PendingLaunchFlags = 0;
+
+        const Result rc = app::Launch(titleId, launch_user, launch_flags);
         DaemonLog("app: launch title=0x%016llX rc=0x%08X",
                   static_cast<unsigned long long>(titleId), static_cast<unsigned int>(rc));
         if (R_FAILED(rc)) {
+            // IPC-06/§9.1 step 7: remember the failure and report it to the
+            // menu via both the next initial state and an AppLaunchFailed
+            // event once the menu is back up.
+            g_LastLaunchRc = static_cast<u32>(rc);
+            g_LastLaunchTitle = titleId;
             TransitionTo(BackendState::MenuStarting, "game launch failed");
             LaunchMenu();
+            // The freshly started menu already carries this in its initial
+            // state; push the explicit event too so a menu that stays open
+            // across a retry (e.g. close-app path) also learns the reason.
+            if (la::IsMenuAlive()) {
+                const Result eventRc = desknx::ipc::NotifyAppLaunchFailed(titleId, rc);
+                if (R_FAILED(eventRc))
+                    DaemonLog("ipc: AppLaunchFailed notify rc=0x%08X",
+                              static_cast<unsigned int>(eventRc));
+            }
         } else {
+            g_LastLaunchRc = 0;
+            g_LastLaunchTitle = 0;
             TransitionTo(BackendState::GameRunning, "game launched");
         }
         return;
@@ -859,6 +1076,74 @@ void HandleMenuClosed() {
         } else {
             LaunchMenu();
         }
+        return;
+    }
+
+    // LNC-06: the menu confirmed closing the suspended title. Terminate runs
+    // the soft 15 s + hard 3 s sequence (same as a superseding launch), then
+    // HOME comes back up with no game in flight.
+    if (g_PendingCloseApp) {
+        g_PendingCloseApp = false;
+        if (app::g_AppRunning) {
+            DaemonLog("app: closing title=0x%016llX at menu request",
+                      static_cast<unsigned long long>(app::g_AppId));
+            app::Terminate();
+        }
+        TransitionTo(BackendState::MenuStarting, "close-app command");
+        LaunchMenu();
+        return;
+    }
+
+    // PWR-03: power actions from the menu's power dialog run only after the
+    // menu has closed, so nothing is torn down under a live applet. Sleep
+    // reuses the AM sleep sequence (BK-16 guards re-entry via Sleeping).
+    if (g_HasPendingPowerAction) {
+        const auto action = g_PendingPowerAction;
+        g_HasPendingPowerAction = false;
+        if (action == desknx::ipc::PowerKind::Sleep) {
+            if (g_BackendState != BackendState::Sleeping) HandleSleepMessage();
+            return;
+        }
+        // Reboot/shutdown: unmount our SD state first so fs caches flush, and
+        // drop the hbloader/menu ECS overrides so a failed power op cannot
+        // leave stale registrations behind.
+        if (g_HomebrewLoaderRunning) {
+            g_HomebrewLoaderRunning = false;
+            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+            remove(kHbTargetPath);
+            remove(kHbTargetTemp);
+        }
+        if (app::g_AppRunning) app::Terminate();
+        fsdevUnmountAll();
+        if (action == desknx::ipc::PowerKind::Reboot) {
+            DaemonLog("power: reboot requested by menu");
+            psmRequestOsSystemSetStateFlag(PsmOsSystemFlag_RebootWasRequested);
+            appletRequestToReboot();
+        } else {
+            DaemonLog("power: shutdown requested by menu");
+            appletRequestToShutDown();
+        }
+        // If the request is refused, do not hang on a dead flag: come back.
+        DaemonLog("power: request returned; reopening menu");
+        TransitionTo(BackendState::MenuStarting, "power action fell through");
+        LaunchMenu();
+        return;
+    }
+
+    // SYS-01: whitelisted system applet (Settings, Web, Shop...). am refuses
+    // to start an applet while another library applet holds foreground, so we
+    // launch after the menu closed. These applets are transient: when they
+    // exit, the normal slot machinery brings DeskNX back.
+    if (g_HasPendingSystemApplet) {
+        const u32 pending_id = g_PendingSystemApplet;
+        const auto applet_id = static_cast<AppletId>(g_PendingSystemApplet);
+        g_HasPendingSystemApplet = false;
+        const Result rc = appletLaunchInteractiveSystemApplet(applet_id);
+        DaemonLog("sysapplet: launch id=0x%X rc=0x%08X",
+                  pending_id, static_cast<unsigned int>(rc));
+        if (R_FAILED(rc)) LaunchMenu();
+        // On success AM owns the screen; the next HOME press or message loop
+        // restores DeskNX once the applet exits.
         return;
     }
 
@@ -921,6 +1206,15 @@ void RunMainLoop() {
         const bool appExited = app::g_AppRunning && app::Update(!la::g_MenuRunning);
         if (appExited) {
             DaemonLog("app: title exited naturally while menu_alive=%d", la::g_MenuRunning ? 1 : 0);
+            // LNC-04/§4.4: a live menu must learn about the exit; it keeps no
+            // app state of its own and refreshes its running-title marker.
+            // g_ExitAppId is captured by Application::Update before g_AppId resets.
+            if (la::IsMenuAlive()) {
+                const Result eventRc = desknx::ipc::NotifyAppExited(app::g_ExitAppId, 0);
+                if (R_FAILED(eventRc))
+                    DaemonLog("ipc: AppExited notify rc=0x%08X",
+                              static_cast<unsigned int>(eventRc));
+            }
             if (la::g_MenuRunning) {
                 TransitionTo(g_HomebrewLoaderRunning ? BackendState::HomebrewRunning :
                              (g_MenuReady ? BackendState::MenuActive : BackendState::MenuStarting),

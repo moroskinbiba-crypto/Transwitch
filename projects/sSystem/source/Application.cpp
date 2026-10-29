@@ -1,5 +1,6 @@
 // Derived from sLaunch (GPL-3.0-or-later); see THIRD_PARTY.md.
 #include <desknx/system/Application.hpp>
+#include <desknx/Protocol.hpp>
 #include <cstring>
 #include <memory>
 
@@ -11,6 +12,7 @@ namespace desknx::system::app {
     u64               g_AppId       = 0;
     bool              g_AppRunning  = false;
     bool              g_AppHasFocus = false;
+    u64               g_ExitAppId   = 0;
 
     // Tick when the current app was launched, for the suspend-stabilization guard.
     static u64        g_LaunchTick  = 0;
@@ -128,7 +130,7 @@ namespace desknx::system::app {
         return ctl->nacp.startup_user_account != 0;
     }
 
-    Result Launch(u64 app_id, AccountUid user) {
+    Result Launch(u64 app_id, AccountUid user, u64 flags) {
         if (g_AppRunning) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
 
         // Touch the app (marks as recently used in NS)
@@ -138,6 +140,11 @@ namespace desknx::system::app {
         bool wants_user = true;
         if (const Result src = EnsureSaves(app_id, user, wants_user); IsNoSpace(src))
             return src;
+        // LNC-02: the menu can override the NACP verdict via the v2 flags -
+        // NoPreuser means "the game picks players itself", so the preselected
+        // user parameter must not be sent even when NACP asks for an account.
+        if (flags & desknx::ipc::LaunchFlagNoPreuser) wants_user = false;
+        else if (flags & desknx::ipc::LaunchFlagHasUser) wants_user = true;
 
         Result rc = appletCreateApplication(&g_AppHolder, app_id);
         if (rc != 0) return rc;
@@ -214,7 +221,9 @@ namespace desknx::system::app {
         if (!g_AppRunning) return false;
         if (!appletApplicationCheckFinished(&g_AppHolder)) return false;
 
-        // App has exited naturally
+        // App has exited naturally. Publish the id before clearing state so
+        // the backend can name it in the AppExited event to the menu (LNC-04).
+        g_ExitAppId   = g_AppId;
         appletApplicationClose(&g_AppHolder);
         memset(&g_AppHolder, 0, sizeof(g_AppHolder));
         g_AppId       = 0;

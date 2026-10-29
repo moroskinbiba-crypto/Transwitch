@@ -71,9 +71,23 @@ desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMod
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=true;
+// PowerMenu modal (ТЗ 6.1: "- opens the power menu"). Only in system mode:
+// standalone must not ask a backend that is not there.
+#ifdef DESKNX_SYSTEM_APPLET
+bool powerMenu=false;
+s32 powerIndex=0;
+#endif
 bool sdMounted=false, psmReady=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   A OPEN", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
+#ifdef DESKNX_SYSTEM_APPLET
+// Backend -> menu state (IPC-06/§4.4). The menu keeps no app state of its own:
+// everything here comes from the initial block or live events.
+AccountUid g_backendUser{};         // zero uid = backend decides (LNC-03)
+bool g_backendHasUser=false;
+u64 g_backendAppTitle=0;            // suspended/foreground title id
+desknx::ipc::InitialState g_initialState{};
+#endif
 
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
@@ -121,33 +135,27 @@ std::array<Uint8,7> glyph(char input) {
         default:return {{31,17,1,2,4,0,4}};
     }
 }
-std::string ascii(const std::string& input) {
+// Bitmap fallback pre-processing: keep printable ASCII as-is, map every other
+// UTF-8 sequence to a single '?' replacement cell (glyph() draws it as a box).
+std::string fallbackAscii(const std::string& input) {
     std::string out;
     for(size_t i=0;i<input.size();) {
-        unsigned char b=static_cast<unsigned char>(input[i]);
+        const unsigned char b=static_cast<unsigned char>(input[i]);
         if(b<128) { out.push_back(static_cast<char>(b)); ++i; continue; }
-        uint32_t cp=0; size_t n=1;
-        if((b&0xE0)==0xC0&&i+1<input.size()) { cp=((b&31)<<6)|(static_cast<unsigned char>(input[i+1])&63); n=2; }
-        else if((b&0xF0)==0xE0&&i+2<input.size()) { cp=((b&15)<<12)|((static_cast<unsigned char>(input[i+1])&63)<<6)|(static_cast<unsigned char>(input[i+2])&63); n=3; }
-        else { ++i; out.push_back(' '); continue; }
-        i+=n; if(cp>=0x430&&cp<=0x44f) cp-=0x20; if(cp==0x401) cp=0x415;
-        switch(cp) {
-            case 0x410:out+="A";break; case 0x411:out+="B";break; case 0x412:out+="V";break; case 0x413:out+="G";break;
-            case 0x414:out+="D";break; case 0x415:out+="E";break; case 0x416:out+="ZH";break; case 0x417:out+="Z";break;
-            case 0x418:case 0x419:out+="I";break; case 0x41a:out+="K";break; case 0x41b:out+="L";break;
-            case 0x41c:out+="M";break; case 0x41d:out+="N";break; case 0x41e:out+="O";break; case 0x41f:out+="P";break;
-            case 0x420:out+="R";break; case 0x421:out+="S";break; case 0x422:out+="T";break; case 0x423:out+="U";break;
-            case 0x424:out+="F";break; case 0x425:out+="H";break; case 0x426:out+="TS";break; case 0x427:out+="CH";break;
-            case 0x428:out+="SH";break; case 0x429:out+="SCH";break; case 0x42b:out+="Y";break; case 0x42d:out+="E";break;
-            case 0x42e:out+="YU";break; case 0x42f:out+="YA";break; default:out+=" ";break;
-        }
+        size_t n=1;
+        if((b&0xE0)==0xC0) n=2; else if((b&0xF0)==0xE0) n=3; else if((b&0xF8)==0xF0) n=4;
+        if(i+n>input.size()) n=input.size()-i;
+        i+=n; out.push_back('?');
     }
-    for(char& c:out) c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return out;
 }
+// UI-20: the transliteration helper is removed. When the shared-font path is
+// unavailable (pl/TTF init failed) we fall back to the bitmap glyphs, which
+// pass ASCII through and draw U+FFFD-style replacement boxes for anything
+// else (default glyph in glyph()) instead of silently dropping characters.
 void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
     if(gFontRenderer.draw(value,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
-    const std::string s=ascii(value); color(c); int px=x;
+    const std::string s=fallbackAscii(value); color(c); int px=x;
     for(char ch:s) {
         if(px+5*scale>right) break;
         const auto rows=glyph(ch);
@@ -256,6 +264,71 @@ int heartbeatThreadMain(void*) {
             SDL_AtomicSet(&heartbeatError,1);
     }
     return 0;
+}
+// IPC-06: read the initial state block the backend pushed at launch. A v1
+// backend sends no block (or a legacy-sized one) - that is not an error; the
+// menu simply keeps "backend decides" semantics for the user and title.
+void consumeInitialState() {
+    AppletStorage storage{};
+    const Result rc=appletPopInData(&storage);
+    if(R_FAILED(rc)) return; // nothing queued yet
+    desknx::ipc::InitialState state{};
+    u64 read_size=0;
+    const Result readRc=appletStorageRead(&storage,0,&state,sizeof(state),&read_size);
+    appletStorageClose(&storage);
+    if(R_FAILED(readRc)||read_size<sizeof(desknx::ipc::Header)) return;
+    if(state.magic!=desknx::ipc::Magic||state.header_size!=desknx::ipc::InitialStateSize)
+        return; // not our block (e.g. v1 backend): ignore, stay compatible
+    g_initialState=state;
+    if(accountUidIsValid(&state.selected_user)) {
+        g_backendUser=state.selected_user; g_backendHasUser=true;
+    }
+    if(state.app_state>=2&&state.app_title_id!=0) g_backendAppTitle=state.app_title_id;
+    else g_backendAppTitle=0;
+    if(state.degraded) setStatus("DEGRADED MODE: SD UNAVAILABLE",6000); // REC-04
+    if(state.last_launch_rc!=0) {
+        char detail[96]{};
+        std::snprintf(detail,sizeof(detail),"LAST LAUNCH FAILED: 0X%08X TITLE 0X%016llX",
+                      static_cast<unsigned int>(state.last_launch_rc),
+                      static_cast<unsigned long long>(state.last_launch_title));
+        setStatus(detail,7000);
+    }
+}
+// §4.4 live events. Same header framing as commands but carrying Event ids;
+// unknown events are ignored so future backends stay forward-compatible.
+void pollBackendEvents() {
+    AppletStorage storage{};
+    const Result rc=appletPopInData(&storage);
+    if(R_FAILED(rc)) return;
+    desknx::ipc::Header hdr{};
+    u64 read_size=0;
+    Result readRc=appletStorageRead(&storage,0,&hdr,sizeof(hdr),&read_size);
+    if(R_FAILED(readRc)||read_size!=sizeof(hdr)||hdr.magic!=desknx::ipc::Magic) {
+        appletStorageClose(&storage); return;
+    }
+    const u32 command=hdr.command; // actually an Event id in this direction
+    if(command==static_cast<u32>(desknx::ipc::Event::AppExited)&&
+       hdr.payload_size==sizeof(desknx::ipc::AppExitedEvent)) {
+        desknx::ipc::AppExitedEvent payload{};
+        if(R_SUCCEEDED(appletStorageRead(&storage,sizeof(hdr),&payload,sizeof(payload)))) {
+            if(payload.title_id==g_backendAppTitle) g_backendAppTitle=0;
+            setStatus(payload.reason?"GAME CLOSED BY SYSTEM":"GAME EXITED",4000);
+        }
+    } else if(command==static_cast<u32>(desknx::ipc::Event::AppLaunchFailed)&&
+              hdr.payload_size==sizeof(desknx::ipc::AppLaunchFailedEvent)) {
+        desknx::ipc::AppLaunchFailedEvent payload{};
+        if(R_SUCCEEDED(appletStorageRead(&storage,sizeof(hdr),&payload,sizeof(payload)))) {
+            char detail[96]{};
+            std::snprintf(detail,sizeof(detail),"LAUNCH FAILED: 0X%08X",
+                          static_cast<unsigned int>(payload.rc));
+            setStatus(detail,6000); // LNC-07: code shown, human text by table later
+        }
+    } else if(command==static_cast<u32>(desknx::ipc::Event::SdRemoved)) {
+        setStatus("SD CARD REMOVED - HOME BREW UNAVAILABLE",8000); // REC-05
+    } else if(command==static_cast<u32>(desknx::ipc::Event::LowBattery)) {
+        setStatus("LOW BATTERY - SYSTEM WILL SLEEP SOON",8000);
+    }
+    appletStorageClose(&storage);
 }
 void startHeartbeatThread() {
     SDL_AtomicSet(&heartbeatError,0); SDL_AtomicSet(&heartbeatRunning,1);
@@ -395,8 +468,11 @@ void refreshBattery() {
     if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
 }
 std::string initials(const std::string& name) {
-    std::string s=ascii(name),out;bool begin=true;
-    for(char c:s){if(c==' '||c=='-'||c=='_'||c=='.'){begin=true;continue;}if(begin){out.push_back(c);begin=false;if(out.size()==2)break;}}
+    // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
+    // through, multibyte sequences contribute their lead byte which yields
+    // '?' via fallbackAscii and is skipped as a word separator below.
+    std::string s=fallbackAscii(name),out;bool begin=true;
+    for(char c:s){if(c==' '||c=='-'||c=='_'||c=='.'){begin=true;continue;}if(begin){out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));begin=false;if(out.size()==2)break;}}
     return out.empty()?"APP":out;
 }
 SDL_Rect tileRect(const Tile&t) {
@@ -528,6 +604,20 @@ void drawScreen() {
         text("DELETE WORKSPACE?",405,292,3,WHITE,890);text(desks[static_cast<size_t>(deskIndex)].name,405,334,2,MUTED,890);
         text("A CONFIRM   /   B CANCEL",405,394,2,BLUE,890);
     }
+#ifdef DESKNX_SYSTEM_APPLET
+    // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
+    if(powerMenu) {
+        static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
+        rect(0,0,SW,SH,Color{0,0,0,185});rect(420,220,440,280,Color{25,30,42,255});outline(420,220,440,280,BLUE);
+        text("POWER",470,246,3,WHITE,810);
+        for(int i=0;i<3;++i){
+            int yy=300+i*44;
+            if(i==powerIndex)rect(442,yy-6,396,38,Color{45,61,82,255});
+            text(kPowerItems[i],460,yy,2,i==powerIndex?WHITE:MUTED,810);
+        }
+        text("UP/DOWN SELECT   A EXECUTE   B CANCEL",440,452,1,MUTED,820);
+    }
+#endif
     SDL_RenderPresent(renderer);
 }
 void saveNow(){saveLayout();}
@@ -596,7 +686,12 @@ void launch(const Tile& t) {
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
         if(id==0){setStatus("INVALID TITLE ID");return;}
 #ifdef DESKNX_SYSTEM_APPLET
-        const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id);});
+        // LNC-02/LNC-03: pass the selected user only when we actually have a
+        // valid uid; zero uid means "backend decides" (kept v1-compatible).
+        // HasUser forces the preselection even if NACP would skip it.
+        const AccountUid uid=g_backendHasUser?g_backendUser:accountGetZeroUid();
+        const u64 flags=g_backendHasUser?desknx::ipc::LaunchFlagHasUser:0;
+        const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id,flags,uid);});
         if(R_FAILED(rc)) {
             char b[72]{};
             std::snprintf(b,sizeof(b),"SYSTEM BACKEND REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));
@@ -642,7 +737,23 @@ void launch(const Tile& t) {
     else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
     else setStatus(lastLaunched);
 }
-void keyInput(u64 keys) {
+void keyInput(u64 keys, bool fromRepeat) {
+#ifdef DESKNX_SYSTEM_APPLET
+    // PowerMenu modal first: it is exclusive and B closes it (ТЗ 6.1).
+    if(powerMenu) {
+        if(keys&HidNpadButton_B){powerMenu=false;return;}
+        if(keys&HidNpadButton_Up)powerIndex=(powerIndex+2)%3;
+        if(keys&HidNpadButton_Down)powerIndex=(powerIndex+1)%3;
+        if(keys&HidNpadButton_A) {
+            const auto kind=static_cast<desknx::ipc::PowerKind>(powerIndex);
+            const Result rc=sendIpc([&]{return desknx::ipc::SendPowerAction(kind);});
+            powerMenu=false;
+            if(R_FAILED(rc)){setStatus("SYSTEM BACKEND REQUEST FAILED",3000);return;}
+            setStatus("POWER ACTION SENT TO SYSTEM",2500);
+        }
+        return;
+    }
+#endif
     if(deletePrompt) {
         if(keys&HidNpadButton_B){deletePrompt=false;return;}
         if(keys&HidNpadButton_A){deletePrompt=false;desks.erase(desks.begin()+deskIndex);deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);selectedX=selectedY=0;saveNow();setStatus("WORKSPACE DELETED");}
@@ -704,6 +815,14 @@ void keyInput(u64 keys) {
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
     if(editing&&(keys&HidNpadButton_ZR))resizeTile(true);
     if(editing&&(keys&HidNpadButton_Minus))removeTile();
+#ifdef DESKNX_SYSTEM_APPLET
+    // ТЗ 6.2: "-" in Normal mode opens the power menu (PWR-03). In Edit mode
+    // Minus keeps its remove-tile meaning, handled above. Auto-repeat never
+    // opens modals (UI-14 is about cursor movement only).
+    if(!fromRepeat&&!editing&&!deletePrompt&&!listOpen&&(keys&HidNpadButton_Minus)) {
+        powerMenu=true;powerIndex=0;return;
+    }
+#endif
     if(keys&HidNpadButton_A) {
         Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
         if(editing){if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");}
@@ -812,8 +931,38 @@ int main(int,char**) {
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
 #ifdef DESKNX_SYSTEM_APPLET
         if(SDL_AtomicGet(&heartbeatError)){SDL_AtomicSet(&heartbeatError,0);setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);}
+        consumeInitialState(); // IPC-06: queued at backend launch, read once
+        pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
         padUpdate(&pad);const u64 keys=padGetButtonsDown(&pad);if(keys)keyInput(keys);
+        // UI-14 (P1): holding a direction repeats the cursor move - 350 ms
+        // initial delay, then every 80 ms. Only when no modal owns input.
+        {
+            static Uint32 holdStart = 0, lastRepeat = 0;
+            static u64 lastHeldDirs = 0;
+            const u64 held = padGetButtons(&pad);
+            const u64 dirs = HidNpadButton_Left|HidNpadButton_Right|HidNpadButton_Up|HidNpadButton_Down;
+            const bool modal = listOpen||deletePrompt
+#ifdef DESKNX_SYSTEM_APPLET
+                ||powerMenu
+#endif
+                ;
+            if(!modal && (held&dirs) && !dragging) {
+                const Uint32 now = SDL_GetTicks();
+                if((held&dirs) != lastHeldDirs) { holdStart=now; lastRepeat=now; lastHeldDirs=held&dirs; }
+                else if(now-holdStart >= 350 && now-lastRepeat >= 80) {
+                    lastRepeat = now;
+                    u64 rep = 0;
+                    if(held&HidNpadButton_Left)  rep|=HidNpadButton_Left;
+                    if(held&HidNpadButton_Right) rep|=HidNpadButton_Right;
+                    if(held&HidNpadButton_Up)    rep|=HidNpadButton_Up;
+                    if(held&HidNpadButton_Down)  rep|=HidNpadButton_Down;
+                    keyInput(rep, true);
+                }
+            } else {
+                lastHeldDirs = 0;
+            }
+        }
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         drawScreen();svcSleepThread(16'000'000);
     }

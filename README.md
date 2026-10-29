@@ -61,6 +61,7 @@ Standalone-сборка не нуждается в Atmosphère. Чтобы по�
 - projects/sSystem/ — экспериментальный Atmosphère qlaunch backend, lifecycle приложений и ECS.
 - scripts/install-system.sh и scripts/uninstall-system.sh — отдельные установочные скрипты с проверками и резервированием.
 - docs/HOME_INTEGRATION.md — схема интеграции, сборка, диагностика и recovery.
+- docs/COMPAT.md — матрица проверенных на железе версий прошивки/Atmosphère; всё остальное считается непроверенным.
 - THIRD_PARTY.md — заимствования и лицензии.
 
 ## Качество и проверка

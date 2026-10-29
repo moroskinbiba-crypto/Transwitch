@@ -36,6 +36,20 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
           /tmp/desknx-protocol-rules-test
 
+      - name: Run host IPC parser tests (ТЗ IPC-01/02/04/07)
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/protocol_parser_test.cpp source/ProtocolParser.cpp \
+            -o /tmp/desknx-protocol-parser-test
+          /tmp/desknx-protocol-parser-test
+
+      - name: Run host backend state-machine tests (ТЗ §3.2/§3.3)
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/backend_machine_test.cpp projects/common/source/BackendMachine.cpp \
+            -o /tmp/desknx-backend-machine-test
+          /tmp/desknx-backend-machine-test
+
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
 

@@ -13,6 +13,11 @@ namespace desknx::system::app {
     extern bool         g_AppRunning;
     extern bool         g_AppHasFocus;
 
+    // Title id of the most recent natural exit reported by Update(), so the
+    // backend can name the game in the AppExited event (the holder and
+    // g_AppId are already cleared by then). Reset on every Launch/Terminate.
+    extern u64          g_ExitAppId;
+
     // Launch a game. Sends the preselected-user parameter.
     // Caller must have already called SetSelectedUser.
     // A save could not be created for lack of space (Launch returns it).
@@ -21,7 +26,7 @@ namespace desknx::system::app {
     // The game's NACP asks for a user at launch (StartupUserAccount set).
     bool WantsUser(u64 app_id);
 
-    Result Launch(u64 app_id, AccountUid user);
+    Result Launch(u64 app_id, AccountUid user, u64 flags = 0);
 
     // Give foreground back to the currently suspended application
     Result Resume();

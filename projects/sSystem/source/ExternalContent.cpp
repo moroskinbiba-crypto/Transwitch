@@ -62,6 +62,15 @@ namespace desknx::system::ecs {
             mkdir("sdmc:/switch", 0777);
             mkdir("sdmc:/switch/DeskNX", 0777);
             mkdir("sdmc:/switch/DeskNX/logs", 0777);
+            // Rotation like daemon.log: the ECS thread is long-lived and a
+            // chatty failure path could otherwise grow ecs.log without bound.
+            struct stat st{};
+            if (stat("sdmc:/switch/DeskNX/logs/ecs.log", &st) == 0 &&
+                st.st_size > 256 * 1024) {
+                remove("sdmc:/switch/DeskNX/logs/ecs.prev.log");
+                rename("sdmc:/switch/DeskNX/logs/ecs.log",
+                       "sdmc:/switch/DeskNX/logs/ecs.prev.log");
+            }
             FILE *fp = fopen("sdmc:/switch/DeskNX/logs/ecs.log", "a");
             if (!fp) return;
             fprintf(fp, "%s\n", msg);
