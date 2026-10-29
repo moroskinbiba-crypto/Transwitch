@@ -273,14 +273,20 @@ Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
 #endif
 void loadHistory() {
     if(!sdMounted)return;
+    struct stat historyStat{};
+    constexpr size_t MaxHistoryBytes=64*1024;
+    if(stat(HISTORY_FILE,&historyStat)!=0||!S_ISREG(historyStat.st_mode)||
+       historyStat.st_size<=0||static_cast<uint64_t>(historyStat.st_size)>MaxHistoryBytes)return;
     std::ifstream input(HISTORY_FILE,std::ios::binary);
     std::string line;
-    if(!input||!std::getline(input,line)||line!="DESKNXH1")return;
+    if(!input||!std::getline(input,line)||line.size()>32||line!="DESKNXH1")return;
     while(std::getline(input,line)&&recentLaunches.size()<10) {
+        if(line.size()>2048)continue;
         auto fields=splitTabs(line);
-        if(fields.size()<3)continue;
+        if(fields.size()!=3||fields[0].size()>16||fields[1].empty()||
+           fields[1].size()>512||fields[2].empty()||fields[2].size()>512)continue;
         Kind kind=parseKind(fields[0]);
-        if((kind!=Kind::Game&&kind!=Kind::Nro)||fields[1].empty()||fields[2].empty())continue;
+        if(kind!=Kind::Game&&kind!=Kind::Nro)continue;
         recentLaunches.push_back({kind,fields[1],fields[2]});
     }
     if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
