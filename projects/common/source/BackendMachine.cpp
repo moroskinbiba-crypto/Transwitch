@@ -127,28 +127,15 @@ void Machine::RequestCloseApp() {
 }
 
 std::size_t Machine::OnEvent(Event event, const Input& input, Action* out, std::size_t capacity) {
-    const Machine previous = *this;
-    Action pending[MaxActionsPerEvent]{};
-    std::size_t generated = 0;
-    bool overflow = false;
+    Action* writer = out;
+    std::size_t written = 0;
     auto push = [&](ActionKind kind, std::uint64_t value) {
-        if (generated < MaxActionsPerEvent) {
-            pending[generated] = Action{kind, value};
-        } else {
-            overflow = true;
+        if (writer != nullptr && written < capacity) {
+            writer->kind = kind;
+            writer->value = value;
+            ++writer;
         }
-        ++generated;
-    };
-    auto finish = [&]() -> std::size_t {
-        // Do not silently lose control actions when the caller supplied a
-        // short output buffer: roll back state so the event can be retried.
-        if (overflow || generated > capacity || (generated != 0 && out == nullptr)) {
-            *this = previous;
-            return 0;
-        }
-        for (std::size_t i = 0; i < generated; ++i)
-            out[i] = pending[i];
-        return generated;
+        ++written;
     };
 
     const std::uint64_t now = input.now_ms;
@@ -343,7 +330,7 @@ std::size_t Machine::OnEvent(Event event, const Input& input, Action* out, std::
         break;
     }
     case Event::Tick: {
-        const std::size_t before = written;
+        const std::size_t before = generated;
         // HbStarting watchdog: hbloader never handed control to the NRO.
         if (menu_ == MenuState::Hb && !hb_running_ &&
             now - hb_start_ms_ >= config_.hb_startup_ms) {
@@ -361,8 +348,8 @@ std::size_t Machine::OnEvent(Event event, const Input& input, Action* out, std::
             exhausted_ = false;
             push(ActionKind::LaunchMenu, 0);
         }
-        if (generated != before) {
-            return finish();
+        if (written != before) {
+            return written;
         }
         break;
     }
@@ -372,7 +359,7 @@ std::size_t Machine::OnEvent(Event event, const Input& input, Action* out, std::
         return 0;
     }
     }
-    return finish();
+    return written;
 }
 
 } // namespace desknx::backend
