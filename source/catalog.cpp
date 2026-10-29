@@ -124,11 +124,55 @@ Signatures MakeSignatures(const std::vector<GameRecord>& games, const std::vecto
     }
     return sig;
 }
+bool parseCacheInt(const std::string& text, int& value) {
+    if (text.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    const long parsed = std::strtol(text.c_str(), &end, 10);
+    if (errno != 0 || end == text.c_str() || !end || *end != '\\0' ||
+        parsed < -2147483647L - 1 || parsed > 2147483647L)
+        return false;
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+bool isHexTitleId(const std::string& value) {
+    if (value.size() != 16) return false;
+    for (unsigned char c : value)
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') ||
+              (c >= 'a' && c <= 'f')))
+            return false;
+    return true;
+}
+
+bool isCachedNroPath(const std::string& path) {
+    constexpr char prefix[] = "sdmc:/switch/";
+    if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
+        path.find("..") != std::string::npos || path.size() <= sizeof(prefix) + 3)
+        return false;
+    const std::string extension = path.substr(path.size() - 4);
+    return (extension == ".nro" || extension == ".NRO" ||
+            extension == ".Nro" || extension == ".nRo" ||
+            extension == ".nrO" || extension == ".NrO" ||
+            extension == ".nRO" || extension == ".NRo") && IsRegularFile(path);
+}
+
 bool ReadCache(const Signatures& sig, ScanResult& result) {
+    // The cache is stored on removable media and can be truncated or edited.
+    // Bound the file before getline() so a corrupt single line cannot exhaust
+    // the small heap available to the Switch applet.
+    struct stat cacheStat{};
+    constexpr size_t MaxCacheBytes = 1024 * 1024;
+    constexpr size_t MaxCacheLineBytes = 2048;
+    if (stat(CacheFile, &cacheStat) != 0 || !S_ISREG(cacheStat.st_mode) ||
+        cacheStat.st_size <= 0 ||
+        static_cast<uint64_t>(cacheStat.st_size) > MaxCacheBytes)
+        return false;
+
     std::ifstream input(CacheFile, std::ios::binary);
     if (!input) return false;
     std::string line;
-    if (!std::getline(input, line)) return false;
+    if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
     if (header.size() != 4 || header[0] != "DESKNXCAT1") return false;
     char gameHash[32]{}, sdHash[32]{};
@@ -136,25 +180,40 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
     if (header[1] != std::to_string(sig.gameCount) || header[2] != gameHash || header[3] != sdHash)
         return false;
+
     std::vector<Candidate> items;
     while (std::getline(input, line)) {
+        if (line.size() > MaxCacheLineBytes || items.size() >= MaxItems) return false;
         const auto fields = desknx::model::splitTabs(line);
-        if (fields.size() != 7 || fields[0] != "C") return false;
+        if (fields.size() != 7 || fields[0] != "C" ||
+            fields[1].size() > 16 || fields[2].size() > 512 || fields[3].size() > 512)
+            return false;
+
         Candidate item{};
         item.kind = desknx::model::parseKind(fields[1]);
+        if (item.kind == Kind::Unsupported) return false;
         item.title = fields[2];
         item.data = fields[3];
-        item.w = std::atoi(fields[4].c_str());
-        item.h = std::atoi(fields[5].c_str());
-        item.color = std::atoi(fields[6].c_str());
-        if (item.w < 1 || item.w > 3 || item.h < 1 || item.h > 2) return false;
-        if (item.kind == Kind::Game &&
-            !IsRegularFile(desknx::model::iconCachePath(item.kind, item.data)))
+        if (!parseCacheInt(fields[4], item.w) ||
+            !parseCacheInt(fields[5], item.h) ||
+            !parseCacheInt(fields[6], item.color))
             return false;
+        if (item.w < 1 || item.w > 3 || item.h < 1 || item.h > 2 ||
+            item.color < 0 || item.color > 7 || item.title.empty())
+            return false;
+
+        if (item.kind == Kind::Game) {
+            if (!isHexTitleId(item.data) ||
+                !IsRegularFile(desknx::model::iconCachePath(item.kind, item.data)))
+                return false;
+        } else if (item.kind == Kind::Nro) {
+            if (!isCachedNroPath(item.data)) return false;
+        } else if (!item.data.empty()) {
+            return false;
+        }
         items.push_back(std::move(item));
-        if (items.size() > MaxItems) return false;
     }
-    if (items.size() < WidgetReserve) return false;
+    if (input.bad() || items.size() < WidgetReserve) return false;
     result.items = std::move(items);
     result.fromCache = true;
     return true;
