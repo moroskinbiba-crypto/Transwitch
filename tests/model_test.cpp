@@ -1,7 +1,10 @@
 #include <desknx/Model.hpp>
 #include <desknx/Layout.hpp>
+#include "../source/catalog_view.hpp"
 
 #include <cassert>
+#include <cstdio>
+#include <fstream>
 #include <string>
 
 using namespace desknx::model;
@@ -57,5 +60,27 @@ int main() {
     desknx::layout::LoadResult invalid{};
     assert(!desknx::layout::parse(overlap, invalid));
     assert(!desknx::layout::parse("DESKNX999\nD\tbad\n", invalid));
+
+    using namespace desknx::catalog_view;
+    std::vector<Candidate> catalog{
+        {Kind::Game,"Zelda Adventure","0100",1,1,0},
+        {Kind::Nro,"Retro emulator","/tmp/desknx-small.nro",1,1,1},
+        {Kind::Nro,"Русский перевод","/tmp/desknx-large.nro",1,1,2},
+        {Kind::Clock,"Clock widget","",2,1,1}
+    };
+    { std::ofstream smallFile("/tmp/desknx-small.nro",std::ios::binary); smallFile<<"1234"; }
+    { std::ofstream largeFile("/tmp/desknx-large.nro",std::ios::binary); largeFile<<"1234567890"; }
+    auto filtered=FilterAndSort(catalog,"zelda",FilterMode::Games,SortMode::Name,{});
+    assert(filtered.size()==1 && filtered[0].title=="Zelda Adventure");
+    filtered=FilterAndSort(catalog,"Perevod",FilterMode::All,SortMode::Name,{});
+    assert(filtered.size()==1 && filtered[0].title=="Русский перевод");
+    filtered=FilterAndSort(catalog,"",FilterMode::Homebrew,SortMode::Size,{});
+    assert(filtered.size()==2 && filtered[0].title=="Русский перевод");
+    std::vector<RecentKey> recent{{Kind::Game,"0100"}};
+    filtered=FilterAndSort(catalog,"",FilterMode::All,SortMode::Recent,recent);
+    assert(!filtered.empty() && filtered[0].kind==Kind::Game);
+    std::remove("/tmp/desknx-small.nro");std::remove("/tmp/desknx-large.nro");
+    assert(std::string(FilterName(FilterMode::Homebrew))=="HOMEBREW");
+    assert(std::string(SortName(SortMode::Recent))=="RECENT");
     return 0;
 }

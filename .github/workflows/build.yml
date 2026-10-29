@@ -22,9 +22,9 @@ jobs:
       - name: Validate shell scripts
         run: bash -n scripts/install-system.sh scripts/uninstall-system.sh tests/test-recovery.sh
 
-      - name: Run host model and layout unit tests
+      - name: Run host model, layout and catalog-view unit tests
         run: |
-          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/model_test.cpp source/Layout.cpp -o /tmp/desknx-model-test
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
       - name: Test install and recovery logic on a temporary fake SD card

@@ -5,6 +5,7 @@
 #include "../include/desknx/Model.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
+#include "catalog_view.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
 
@@ -63,6 +64,9 @@ FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
+std::string catalogueQuery;
+desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
+desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=true;
 bool sdMounted=false, psmReady=false, touchDragging=false;
@@ -166,6 +170,44 @@ std::vector<Candidate> catalogueSnapshot() {
     auto result=catalogue;
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
     return result;
+}
+std::vector<Candidate> visibleCatalogueSnapshot() {
+    const auto all=catalogueSnapshot();
+    std::vector<desknx::catalog_view::RecentKey> recent;
+    recent.reserve(recentLaunches.size());
+    for(const auto& item:recentLaunches) recent.push_back({item.kind,item.data});
+    return desknx::catalog_view::FilterAndSort(all,catalogueQuery,catalogueFilter,catalogueSort,recent);
+}
+void searchCatalogue() {
+    SwkbdConfig config{};
+    if(R_FAILED(swkbdCreate(&config,0))){setStatus("SEARCH KEYBOARD UNAVAILABLE",2500);return;}
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,"Search games and Homebrew");
+    swkbdConfigSetInitialText(&config,catalogueQuery.c_str());
+    char value[128]{};
+    std::snprintf(value,sizeof(value),"%s",catalogueQuery.c_str());
+    const Result rc=swkbdShow(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_SUCCEEDED(rc)) {
+        catalogueQuery=value;
+        listIndex=0;listOffset=0;
+        setStatus(catalogueQuery.empty()?"SEARCH CLEARED":"SEARCH: "+catalogueQuery,2500);
+    }
+}
+void cycleCatalogueFilter(int direction) {
+    constexpr int count=4;
+    int current=static_cast<int>(catalogueFilter);
+    current=(current+direction+count)%count;
+    catalogueFilter=static_cast<desknx::catalog_view::FilterMode>(current);
+    listIndex=0;listOffset=0;
+    setStatus(std::string("FILTER: ")+desknx::catalog_view::FilterName(catalogueFilter),1800);
+}
+void cycleCatalogueSort() {
+    constexpr int count=3;
+    int current=(static_cast<int>(catalogueSort)+1)%count;
+    catalogueSort=static_cast<desknx::catalog_view::SortMode>(current);
+    listIndex=0;listOffset=0;
+    setStatus(std::string("SORT: ")+desknx::catalog_view::SortName(catalogueSort),1800);
 }
 void publishCatalogue(const desknx::catalog::ScanResult& result) {
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
@@ -382,7 +424,7 @@ int visibleStart() {
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
 void drawScreen() {
-    const auto available=catalogueSnapshot();
+    const auto available=visibleCatalogueSnapshot();
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow);
     refreshBattery();rect(0,0,SW,SH,BG);
@@ -413,12 +455,17 @@ void drawScreen() {
     text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,694,1,show?BLUE:MUTED,850);
     if(listOpen) {
         rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;rect(mx,my,mw,mh,Color{22,27,38,250});outline(mx,my,mw,mh,BLUE);
-        text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);text("A ADD  /  B CANCEL",mx+28,my+59,1,MUTED,mx+mw-20);
+        text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);
+        text("A ADD  B BACK  Y SEARCH  X SORT  L/R FILTER  - CLEAR",mx+28,my+59,1,MUTED,mx+mw-20);
+        std::string viewLabel=std::string("FILTER: ")+desknx::catalog_view::FilterName(catalogueFilter)+
+            "  SORT: "+desknx::catalog_view::SortName(catalogueSort);
+        if(!catalogueQuery.empty()) viewLabel+="  QUERY: "+catalogueQuery;
+        if(!catalogCompleteNow) viewLabel+="  / SCANNING";
+        text(viewLabel,mx+28,my+77,1,BLUE,mx+mw-20);
         int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
         if(!catalogCompleteNow && available.empty())
             text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+118,2,BLUE,mx+mw-20);
         else {
-            if(!catalogCompleteNow) text("SCANNING... ITEMS APPEAR AS THEY ARE FOUND",mx+28,my+61,1,BLUE,mx+mw-20);
             for(int row=0;row<vis;++row) {
                 int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+92+row*43;
                 if(i==listIndex)rect(mx+22,yy,mw-44,38,Color{45,61,82,255});
@@ -429,7 +476,9 @@ void drawScreen() {
                 text(typeName(candidate.kind),mx+595,yy+12,1,i==listIndex?BLUE:MUTED,mx+mw-18);
             }
         }
-        text(std::to_string(available.size())+" AVAILABLE ITEMS",mx+28,my+mh-26,1,MUTED,mx+mw-18);
+        const size_t totalItems=catalogueSnapshot().size();
+        text(std::to_string(available.size())+" SHOWN / "+std::to_string(totalItems)+" TOTAL ITEMS",
+             mx+28,my+mh-26,1,MUTED,mx+mw-18);
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{0,0,0,185});rect(360,250,560,200,Color{25,30,42,255});outline(360,250,560,200,RED);
@@ -470,7 +519,7 @@ void removeTile() {
     std::string name=d.tiles[static_cast<size_t>(i)].title;d.tiles.erase(d.tiles.begin()+i);dragging=false;setStatus("REMOVED: "+name);saveNow();
 }
 void addSelected() {
-    const auto available=catalogueSnapshot();bool ready=false,complete=false,truncated=false;
+    const auto available=visibleCatalogueSnapshot();bool ready=false,complete=false,truncated=false;
     readCatalogueState(ready,complete,truncated);
     if(available.empty()){setStatus(complete?"NO APPS FOUND":"CATALOGUE IS STILL SCANNING",2200);return;}
     if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())listIndex=0;
@@ -553,14 +602,18 @@ void keyInput(u64 keys) {
         return;
     }
     if(listOpen) {
-        const auto available=catalogueSnapshot();bool ready=false,complete=false,truncated=false;
-        readCatalogueState(ready,complete,truncated);
+        const auto available=visibleCatalogueSnapshot();
         if(keys&HidNpadButton_B){listOpen=false;return;}
+        if(keys&HidNpadButton_Y){searchCatalogue();return;}
+        if(keys&HidNpadButton_X){cycleCatalogueSort();return;}
+        if(keys&HidNpadButton_L){cycleCatalogueFilter(-1);return;}
+        if(keys&HidNpadButton_R){cycleCatalogueFilter(1);return;}
+        if(keys&HidNpadButton_Minus){catalogueQuery.clear();listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);return;}
         if(available.empty())return;
         if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
-        if((keys&HidNpadButton_Up))listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
-        if((keys&HidNpadButton_Down)&&!available.empty())listIndex=(listIndex+1)%static_cast<int>(available.size());
-        if((keys&HidNpadButton_A)&&!available.empty())addSelected();
+        if(keys&HidNpadButton_Up)listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
+        if(keys&HidNpadButton_Down)listIndex=(listIndex+1)%static_cast<int>(available.size());
+        if(keys&HidNpadButton_A)addSelected();
         return;
     }
     if(keys&HidNpadButton_B) {
