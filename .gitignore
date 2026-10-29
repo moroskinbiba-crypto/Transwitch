@@ -1,4 +1,1 @@
-patches/*.bundle
-patches/0001-Fix-PWR-03-build-blockers-drop-unavailable-psm-OsSys.patch
-patches/0002-Fix-CI-build-failure-replace-missing-sdl2-config-wit.patch
-patches/0003-Fix-CI-compile-errors-InitialState-padded-to-exactly.patch
+*.bundle
