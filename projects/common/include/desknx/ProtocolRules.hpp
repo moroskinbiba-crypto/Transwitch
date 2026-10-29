@@ -74,9 +74,10 @@ constexpr std::uint32_t ExpectedPayloadSize(std::uint32_t command) {
         case static_cast<std::uint32_t>(CommandId::CloseApp):
             return 0;
         case static_cast<std::uint32_t>(CommandId::LaunchTitle):
-            // title_id(8) + flags(8) + AccountUid(16); the legacy v1 sender
-            // used a bare title_id, so both sizes are accepted for this id.
-            return 24;
+            // v2: title_id(8) + flags(8) + AccountUid(16) = 32 bytes.
+            // Legacy v1 senders used a bare 8-byte title_id. The parser uses
+            // MatchesLaunchTitleSize() to accept exactly those two formats.
+            return 32;
         case static_cast<std::uint32_t>(CommandId::Busy):
             return 4;   // seconds
         case static_cast<std::uint32_t>(CommandId::SelectUser):
@@ -94,7 +95,7 @@ constexpr std::uint32_t ExpectedPayloadSize(std::uint32_t command) {
     }
 }
 
-// LaunchTitle accepts the v2 24-byte payload and the legacy v1 8-byte one.
+// LaunchTitle accepts the v2 32-byte payload and the legacy v1 8-byte one.
 constexpr bool MatchesLaunchTitleSize(std::uint32_t size) {
     // v1 legacy payload is title_id only (8); v2 adds flags + 16-byte uid (32).
     return size == 32 || size == 8;
