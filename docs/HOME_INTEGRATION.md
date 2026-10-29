@@ -15,7 +15,7 @@ The standard CI builds the standalone NRO and the library applet. A separate wor
 - **qlaunch backend** — system applet process that owns HOME/sleep lifecycle and launches applications.
 - **Target-aware hbloader** — serves NRO launch requests through the album library-applet slot, with a one-shot target file and a return-to-menu path when the target exits.
 - **ECS** — Atmosphère External Content Storage serves the applet's ExeFS from SD to a selected library applet program ID.
-- **IPC protocol** — projects/common/include/desknx/Protocol.hpp; each message is versioned and includes a payload size. Unknown commands and malformed sizes are rejected.
+- **IPC protocol** — `projects/common/include/desknx/Protocol.hpp`; each message is versioned and includes a payload size. Unknown commands and malformed sizes are rejected. Version 2 adds a bounded `Busy` pause for blocking keyboard dialogs: the UI requests at most 30 seconds and sends an explicit zero-second end signal when the dialog returns. The backend preserves heartbeat time remaining, accepts at most one active pause, and resumes heartbeat monitoring when the pause expires. This is watchdog mitigation, not a substitute for a responsive UI.
 - **Workspace storage** — the UI persists its layout to sdmc:/switch/DeskNX/layout.tsv.
 - **Logs** — backend log: sdmc:/switch/DeskNX/logs/daemon.log; ECS log: sdmc:/switch/DeskNX/logs/ecs.log.
 - **Installer/recovery** — guarded scripts require explicit risk acknowledgement, create a manifest, check ownership markers and compare current qlaunch files with stored SHA-256 checksums before uninstalling. Transaction stage/rollback paths include the process id to avoid collisions with stale files or parallel operations.
@@ -82,7 +82,7 @@ Before trying any system install:
 - The backend has not been compiled against the target libstratosphere in the default CI.
 - No physical-console runtime test has been reported.
 - Firmware slot selection and ECS registration are firmware-sensitive.
-- The IPC currently covers readiness, heartbeat, title launch, Homebrew launch and return-to-game; it is not a full replacement for all normal HOME operations or sLaunch command breadth.
+- The IPC currently covers readiness, heartbeat, bounded Busy pause/end, title launch, Homebrew launch and return-to-game; it is not a full replacement for all normal HOME operations or sLaunch command breadth. Host tests cover protocol validation boundaries, but they do not emulate the full qlaunch watchdog state machine.
 - Homebrew launches currently use the library-applet/album slot, so available memory and permissions are limited. Full-RAM donor-slot launches are intentionally disabled.
 - Controller setup, selected-user behavior, suspended-title lifecycle, service initialization, failure recovery and qlaunch NPDM need an expert code review before release.
 - The installer is conservative, but it cannot guarantee recovery if the SD contents are corrupted or the console has unrelated boot problems.
