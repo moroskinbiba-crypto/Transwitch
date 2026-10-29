@@ -125,8 +125,12 @@ std::string serialize(const std::vector<model::Workspace>& workspaces, int activ
         output += "D\t" + model::safeField(workspace.name) + "\n";
     for (size_t desk = 0; desk < workspaces.size(); ++desk) {
         const auto& workspace = workspaces[desk];
-        for (const auto& tile : workspace.tiles) {
-            if (!model::placeable(workspace, tile, tile.x, tile.y)) return {};
+        for (size_t tileIndex = 0; tileIndex < workspace.tiles.size(); ++tileIndex) {
+            const auto& tile = workspace.tiles[tileIndex];
+            // Skip the current tile while checking collisions, but still validate
+            // its dimensions/bounds and ensure it does not overlap its siblings.
+            if (!model::placeable(workspace, tile, tile.x, tile.y,
+                                  static_cast<int>(tileIndex))) return {};
             output += "I\t" + std::to_string(desk) + "\t" + model::typeCode(tile.kind) + "\t" +
                       model::safeField(tile.title) + "\t" + model::safeField(tile.data) + "\t" +
                       std::to_string(tile.x) + "\t" + std::to_string(tile.y) + "\t" +
