@@ -438,7 +438,7 @@ bool ParseMenuCommand(AppletStorage& storage) {
 
             const u64 now = armGetSystemTick();
             const u64 frequency = armGetSystemTickFreq();
-            if (payload.seconds == 0) {
+            if (desknx::ipc::rules::IsBusyEndSignal(payload.seconds)) {
                 // End a pause as soon as a blocking dialog returns. Restore the
                 // remaining heartbeat budget, or start a fresh interval if a
                 // heartbeat arrived while the pause was active.
