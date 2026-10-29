@@ -13,7 +13,7 @@ constexpr bool IsSupportedVersion(std::uint16_t version) {
     return version == LegacyVersion || version == CurrentVersion;
 }
 
-constexpr bool IsValidPayloadSize(std::uint32_t size) {
+constexpr bool IsValidPayloadSize(std::uint64_t size) {
     return size <= MaxPayloadSize;
 }
 
