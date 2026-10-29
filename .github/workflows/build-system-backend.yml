@@ -2,6 +2,17 @@ name: Build experimental DeskNX HOME backend
 
 on:
   workflow_dispatch:
+    inputs:
+      atmosphere_ref:
+        description: "Atmosphère tag compatible with the target console"
+        type: string
+        required: true
+        default: "1.12.1"
+      libnx_ref:
+        description: "libnx branch, tag or commit compatible with that Atmosphère ref"
+        type: string
+        required: true
+        default: "b156b4774fb2df7b93402169509266da7547fc4c"
   push:
     paths:
       - "projects/sSystem/**"
@@ -22,27 +33,33 @@ permissions:
 
 jobs:
   build-system:
-    name: Build against Atmosphere 1.12.0 and libnx master
+    name: Build against selected Atmosphère/libnx refs
     runs-on: ubuntu-latest
     container: devkitpro/devkita64:latest
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
       ATMOSPHERE_DIR: /opt/atmosphere
+      ATMOSPHERE_REF: ${{ github.event.inputs.atmosphere_ref || '1.12.1' }}
+      LIBNX_REF: ${{ github.event.inputs.libnx_ref || 'b156b4774fb2df7b93402169509266da7547fc4c' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build compatible libnx master
         run: |
-          git clone --depth 50 https://github.com/switchbrew/libnx /tmp/libnx-master
+          git clone --no-checkout https://github.com/switchbrew/libnx /tmp/libnx-master
+          git -C /tmp/libnx-master fetch --depth=1 origin "$LIBNX_REF"
+          git -C /tmp/libnx-master checkout --detach FETCH_HEAD
+          echo "Using libnx ref: $(git -C /tmp/libnx-master rev-parse HEAD)"
           make -C /tmp/libnx-master/nx -j2
           make -C /tmp/libnx-master/nx install DESTDIR=/tmp/libnx-master-install
           echo "SL_LIBNX=/tmp/libnx-master-install/opt/devkitpro/libnx" >> "$GITHUB_ENV"
 
       - name: Build Atmosphere libstratosphere
         run: |
-          git clone --depth=1 --branch 1.12.0 https://github.com/Atmosphere-NX/Atmosphere "$ATMOSPHERE_DIR"
+          git clone --depth=1 --branch "$ATMOSPHERE_REF" https://github.com/Atmosphere-NX/Atmosphere "$ATMOSPHERE_DIR"
+          echo "Using Atmosphère ref: $(git -C "$ATMOSPHERE_DIR" rev-parse HEAD)"
           SL_LIBNX=/tmp/libnx-master-install/opt/devkitpro/libnx
           make -C "$ATMOSPHERE_DIR/libraries/libstratosphere" -j2 LIBNX="$SL_LIBNX"
 

@@ -32,7 +32,7 @@ CFLAGS := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections -fno-strict-a
           -fwrapv -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector \
           -Wno-format-zero-length -Wno-stringop-truncation -Wno-format-truncation \
           $(ARCH) $(INCLUDE) $(ATMOSPHERE_DEFINES)
-CXXFLAGS := $(CFLAGS) -std=gnu++23 -fno-rtti -fno-exceptions -Wno-invalid-offset \
+CXXFLAGS := $(CFLAGS) -std=gnu++23 -fno-rtti -fno-exceptions \
             -DSL_VERSION=\"$(APP_VERSION)\"
 ASFLAGS := -g $(ARCH)
 
