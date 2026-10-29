@@ -567,7 +567,7 @@ void drawScreen() {
     if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
     rect(0,628,SW,92,Color{18,22,31,255});rect(0,628,SW,2,EDGE);
     struct Hint{const char*k;const char*v;};
-    const Hint hints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},{"Y","ADD"},{"ZL/ZR","SIZE"},{"-","REMOVE"},{"L/R","DESK"},{"+","NEW DESK"}};
+    const Hint hints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},{"Y","ADD"},{"ZL/ZR","SIZE"},{"-","REMOVE"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
     int hx=18;for(const auto& h:hints){rect(hx,650,50,28,Color{37,45,59,255});outline(hx,650,50,28,EDGE);text(h.k,hx+5,659,1,WHITE,hx+47);text(h.v,hx+56,659,1,MUTED,hx+150);hx+=178;}
     bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
     text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,694,1,show?BLUE:MUTED,850);
