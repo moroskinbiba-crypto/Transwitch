@@ -63,6 +63,11 @@ u64 g_MenuLaunchTick = 0;
 u64 g_LastMenuHeartbeatTick = 0;
 u64 g_BusyUntilTick = 0;
 u64 g_LastBusyCommandTick = 0;
+u64 g_LastBusyEndTick = 0;
+u64 g_HeartbeatDeadlineTick = 0;
+u64 g_BusyRemainingTicks = 0;
+bool g_BusyHeartbeatSeen = false;
+bool g_BusyPauseProcessed = false;
 u64 g_NextMenuRetryTick = 0;
 desknx::system::ecs::MenuSlot g_ActiveMenuSlots[desknx::system::ecs::MenuSlotCount + 1]{};
 size_t g_ActiveMenuSlotCount = 0;
@@ -77,6 +82,11 @@ void ResetMenuHeartbeatTracking() {
     g_LastMenuHeartbeatTick = 0;
     g_BusyUntilTick = 0;
     g_LastBusyCommandTick = 0;
+    g_LastBusyEndTick = 0;
+    g_HeartbeatDeadlineTick = 0;
+    g_BusyRemainingTicks = 0;
+    g_BusyHeartbeatSeen = false;
+    g_BusyPauseProcessed = false;
 }
 
 void MakeDirectories() {
@@ -397,14 +407,24 @@ bool ParseMenuCommand(AppletStorage& storage) {
             ResetMenuHeartbeatTracking();
             g_MenuReady = true;
             g_LastMenuHeartbeatTick = armGetSystemTick();
+            g_HeartbeatDeadlineTick = g_LastMenuHeartbeatTick +
+                armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds;
             TransitionTo(BackendState::MenuActive, "ready handshake");
             DaemonLog("ipc: DeskNX menu ready");
             return true;
 
         case Command::Heartbeat:
             if (hdr.payload_size != 0) return false;
-            if (g_MenuReady)
-                g_LastMenuHeartbeatTick = armGetSystemTick();
+            if (g_MenuReady) {
+                const u64 now = armGetSystemTick();
+                if (g_BusyUntilTick != 0 && now < g_BusyUntilTick) {
+                    g_BusyHeartbeatSeen = true;
+                } else {
+                    g_LastMenuHeartbeatTick = now;
+                    g_HeartbeatDeadlineTick = now +
+                        armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds;
+                }
+            }
             return true;
 
         case Command::Busy: {
@@ -421,15 +441,21 @@ bool ParseMenuCommand(AppletStorage& storage) {
             const u64 frequency = armGetSystemTickFreq();
             // One bounded pause per heartbeat interval. Do not allow nested or
             // back-to-back Busy messages to keep an unresponsive menu alive.
+            if (g_HeartbeatDeadlineTick == 0 || now >= g_HeartbeatDeadlineTick)
+                return false;
             if (g_BusyUntilTick != 0) {
-                if (now < g_BusyUntilTick || g_LastMenuHeartbeatTick <= g_BusyUntilTick)
+                if (now < g_BusyUntilTick || !g_BusyPauseProcessed ||
+                    g_LastMenuHeartbeatTick <= g_LastBusyEndTick)
                     return false;
             }
             if (g_LastBusyCommandTick != 0 &&
                 now - g_LastBusyCommandTick < frequency * kBusyMinimumIntervalSeconds)
                 return false;
 
+            g_BusyRemainingTicks = g_HeartbeatDeadlineTick - now;
             g_BusyUntilTick = now + frequency * payload.seconds;
+            g_BusyHeartbeatSeen = false;
+            g_BusyPauseProcessed = false;
             g_LastBusyCommandTick = now;
             DaemonLog("ipc: heartbeat check paused for %u seconds", payload.seconds);
             return true;
@@ -850,6 +876,21 @@ void RunMainLoop() {
     LaunchMenu();
 
     while (true) {
+        const u64 loopNow = armGetSystemTick();
+        if (g_MenuReady && g_BusyUntilTick != 0 && !g_BusyPauseProcessed &&
+            loopNow >= g_BusyUntilTick) {
+            if (g_BusyHeartbeatSeen) {
+                g_LastMenuHeartbeatTick = loopNow;
+                g_HeartbeatDeadlineTick = loopNow +
+                    armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds;
+            } else {
+                g_HeartbeatDeadlineTick = loopNow + g_BusyRemainingTicks;
+            }
+            g_LastBusyEndTick = loopNow;
+            g_BusyPauseProcessed = true;
+            DaemonLog("ipc: Busy pause ended; heartbeat monitoring resumed");
+        }
+
         if (la::IsMenuAlive()) DrainMenuCommands();
         PumpAppletMessages();
 
@@ -893,11 +934,10 @@ void RunMainLoop() {
             }
         }
 
-        if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && g_MenuReady && g_LastMenuHeartbeatTick != 0) {
+        if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && g_MenuReady && g_HeartbeatDeadlineTick != 0) {
             const u64 heartbeatNow = armGetSystemTick();
             const bool busyPauseActive = g_BusyUntilTick != 0 && heartbeatNow < g_BusyUntilTick;
-            const u64 silent = heartbeatNow - g_LastMenuHeartbeatTick;
-            if (!busyPauseActive && silent >= armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds) {
+            if (!busyPauseActive && heartbeatNow >= g_HeartbeatDeadlineTick) {
                 DaemonLog("menu: heartbeat timeout; slot=%s", CurrentMenuSlot().name);
                 la::StopMenu();
                 g_MenuReady = false;
