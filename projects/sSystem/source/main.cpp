@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
 
@@ -52,6 +53,8 @@ bool g_MenuReady = false;
 u64 g_MenuLaunchTick = 0;
 u64 g_LastMenuHeartbeatTick = 0;
 u64 g_NextMenuRetryTick = 0;
+desknx::system::ecs::MenuSlot g_ActiveMenuSlots[desknx::system::ecs::MenuSlotCount + 1]{};
+size_t g_ActiveMenuSlotCount = 0;
 size_t g_MenuSlotIndex = 0;
 bool g_MenuSlotExhausted = false;
 bool g_ReopenMenuAfterSleep = false;
@@ -186,8 +189,77 @@ bool PickSelectedUser() {
     return false;
 }
 
+void InitializeMenuSlots() {
+    g_ActiveMenuSlotCount = 0;
+
+    // Optional user override: one known shop/offline-web applet program id.
+    // The built-in candidates remain available as fallbacks.
+    u64 customProgramId = 0;
+    AppletId customAppletId = AppletId_None;
+    bool customValid = false;
+    FILE* fp = std::fopen(ecs::MenuSlotOverridePath, "r");
+    if (fp) {
+        char line[64]{};
+        const bool hasLine = std::fgets(line, sizeof(line), fp) != nullptr;
+        if (hasLine) {
+            const bool truncated = std::strchr(line, '\n') == nullptr && !std::feof(fp);
+            line[std::strcspn(line, "\r\n")] = '\0';
+            char* end = nullptr;
+            errno = 0;
+            const unsigned long long parsed = std::strtoull(line, &end, 0);
+            while (end && *end && std::isspace(static_cast<unsigned char>(*end))) ++end;
+
+            bool extraContent = false;
+            char extra[64]{};
+            while (std::fgets(extra, sizeof(extra), fp)) {
+                for (const char* p = extra; *p; ++p) {
+                    if (!std::isspace(static_cast<unsigned char>(*p))) {
+                        extraContent = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!truncated && !extraContent && errno == 0 && end != line &&
+                end && *end == '\0' && parsed != 0) {
+                const AppletId mapped = ecs::AppletIdForProgramId(static_cast<u64>(parsed));
+                // Only slots we deliberately support for takeover are accepted.
+                // In particular, never let this setting steal Album, keyboard,
+                // error or other system-critical applets.
+                if (mapped == AppletId_LibraryAppletShop ||
+                    mapped == AppletId_LibraryAppletOfflineWeb) {
+                    customProgramId = static_cast<u64>(parsed);
+                    customAppletId = mapped;
+                    customValid = true;
+                } else {
+                    DaemonLog("slot: ignored override; program id 0x%016llX is not an approved HOME slot",
+                              parsed);
+                }
+            } else {
+                DaemonLog("slot: ignored malformed takeover override");
+            }
+        }
+        std::fclose(fp);
+    }
+
+    if (customValid) {
+        g_ActiveMenuSlots[g_ActiveMenuSlotCount++] =
+            {customAppletId, "custom", {customProgramId, 0}, 1};
+        DaemonLog("slot: using configured override program=0x%016llX",
+                  static_cast<unsigned long long>(customProgramId));
+    }
+
+    for (size_t i = 0; i < ecs::MenuSlotCount; ++i)
+        g_ActiveMenuSlots[g_ActiveMenuSlotCount++] = ecs::MenuSlots[i];
+
+    DaemonLog("slot: configured %zu candidates", g_ActiveMenuSlotCount);
+}
+
 const desknx::system::ecs::MenuSlot& CurrentMenuSlot() {
-    return desknx::system::ecs::MenuSlots[g_MenuSlotIndex];
+    if (g_ActiveMenuSlotCount == 0)
+        return ecs::MenuSlots[0];
+    const size_t index = std::min(g_MenuSlotIndex, g_ActiveMenuSlotCount - 1);
+    return g_ActiveMenuSlots[index];
 }
 
 void RegisterCurrentSlot() {
@@ -223,7 +295,7 @@ bool LaunchMenu() {
         }
     }
 
-    if (g_MenuSlotIndex + 1 < ecs::MenuSlotCount) {
+    if (g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount) {
         ++g_MenuSlotIndex;
         DaemonLog("menu start failed; falling back to slot=%s",
                   CurrentMenuSlot().name);
@@ -630,7 +702,7 @@ void HandleMenuClosed() {
     }
 
     if (!didHandshake && lifetimeMs < kMenuFastExitMs &&
-        g_MenuSlotIndex + 1 < ecs::MenuSlotCount && !g_MenuSlotExhausted) {
+        g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount && !g_MenuSlotExhausted) {
         ++g_MenuSlotIndex;
         DaemonLog("menu: applet exited before ready after %llu ms; trying slot=%s",
                   static_cast<unsigned long long>(lifetimeMs), CurrentMenuSlot().name);
@@ -646,6 +718,7 @@ void HandleMenuClosed() {
 }
 
 void RunMainLoop() {
+    InitializeMenuSlots();
     DaemonLog("backend: starting; current slot=%s", CurrentMenuSlot().name);
 
     // This policy is part of system-applet startup, not a cosmetic preference.
@@ -687,7 +760,7 @@ void RunMainLoop() {
                     g_MenuSlotExhausted = true;
                     g_NextMenuRetryTick = armGetSystemTick() +
                                           armGetSystemTickFreq() * kMenuRetryDelaySeconds;
-                } else if (g_MenuSlotIndex + 1 < ecs::MenuSlotCount) {
+                } else if (g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount) {
                     ++g_MenuSlotIndex;
                     g_MenuSlotExhausted = false;
                     DaemonLog("menu: testing fallback slot=%s", CurrentMenuSlot().name);
@@ -718,7 +791,7 @@ void RunMainLoop() {
                     g_MenuSlotExhausted = true;
                     g_NextMenuRetryTick = armGetSystemTick() +
                                           armGetSystemTickFreq() * kMenuRetryDelaySeconds;
-                } else if (g_MenuSlotIndex + 1 < ecs::MenuSlotCount) {
+                } else if (g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount) {
                     ++g_MenuSlotIndex;
                     g_MenuSlotExhausted = false;
                 } else {

@@ -27,6 +27,13 @@ namespace desknx::system::ecs {
         // id its slot might resolve to on each launch, so leave headroom.
         constexpr size_t MaxEcsSessions = 12;
 
+        struct RegisteredContent {
+            u64 program_id;
+            char exefs_path[128];
+            bool active;
+        };
+        RegisteredContent g_RegisteredContents[MaxEcsSessions]{};
+
         // No named ports: sessions are added manually via RegisterSession.
         class EcsServerManager : public ams::sf::hipc::ServerManager<0, ServerOptions, MaxEcsSessions> {
             private:
@@ -112,13 +119,39 @@ namespace desknx::system::ecs {
     }
 
     Result RegisterExternalContent(u64 program_id, const char *exefs_path) {
+        if (program_id == 0 || exefs_path == nullptr || exefs_path[0] != '/' ||
+            std::strlen(exefs_path) >= sizeof(g_RegisteredContents[0].exefs_path) ||
+            std::strstr(exefs_path, "..") != nullptr) {
+            return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        }
+
+        size_t free_index = MaxEcsSessions;
+        for (size_t i = 0; i < MaxEcsSessions; ++i) {
+            if (!g_RegisteredContents[i].active) {
+                if (free_index == MaxEcsSessions) free_index = i;
+                continue;
+            }
+            if (g_RegisteredContents[i].program_id != program_id) continue;
+            if (std::strcmp(g_RegisteredContents[i].exefs_path, exefs_path) == 0)
+                return 0; // Reuse the already-registered in-process service.
+            EcsLog("ECS registration refused: program id already maps to another path");
+            return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        }
+        if (free_index == MaxEcsSessions) {
+            EcsLog("ECS registration refused: registration table is full");
+            return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        }
+
         InitializeServer();
+        Handle move_h = INVALID_HANDLE;
+        bool loader_registered = false;
+        bool session_registered = false;
 
         // Run the ams-result logic in a lambda; convert to libnx Result at the
         // boundary so callers (which use libnx Result) stay simple.
         const ams::Result r = [&]() -> ams::Result {
-            Handle move_h = INVALID_HANDLE;
             R_TRY(RegisterExternalCodeCmd(program_id, &move_h));
+            loader_registered = true;
 
             FsFileSystem sd_fs;
             R_TRY(fsOpenSdCardFileSystem(&sd_fs));
@@ -137,14 +170,30 @@ namespace desknx::system::ecs {
                                            ams::fssrv::sf::IFileSystem>(std::move(subdir_fs), false);
             R_TRY(g_Manager.RegisterSession(
                 move_h, ams::sf::cmif::ServiceObjectHolder(std::move(sd_ifs))));
+            session_registered = true;
+            move_h = INVALID_HANDLE; // Ownership transferred to ServerManager.
             R_SUCCEED();
         }();
 
-        // Only now (a session is registered) start the serve loop, so its wait
-        // set is non-empty from the first iteration.
-        if (R_SUCCEEDED(r))
-            StartServerThreadOnce();
+        if (R_FAILED(r)) {
+            if (loader_registered) {
+                const Result unreg_rc = UnregisterExternalCodeCmd(program_id);
+                if (R_FAILED(unreg_rc))
+                    EcsLog("ECS rollback warning: could not unregister failed program id");
+            }
+            if (!session_registered && move_h != INVALID_HANDLE)
+                svcCloseHandle(move_h);
+            EcsLog("ECS registration failed; rolled back loader mapping where possible");
+            return r.GetValue();
+        }
 
+        auto &entry = g_RegisteredContents[free_index];
+        entry.program_id = program_id;
+        std::strncpy(entry.exefs_path, exefs_path, sizeof(entry.exefs_path) - 1);
+        entry.active = true;
+
+        // Start the serving thread only after the first session is registered.
+        StartServerThreadOnce();
         return r.GetValue();
     }
 
@@ -180,10 +229,19 @@ namespace desknx::system::ecs {
     }
 
     Result UnregisterExternalContent(u64 program_id) {
-        // Tell Atmosphere's loader to stop using our external code. The fs
-        // session we registered for it becomes orphaned and is cleaned up by
-        // the server manager when the handle is dropped.
-        return UnregisterExternalCodeCmd(program_id);
+        // Tell Atmosphere's loader to stop using our external code. Once the
+        // peer closes its session, ServerManager can reap the stale connection.
+        const Result rc = UnregisterExternalCodeCmd(program_id);
+        if (R_SUCCEEDED(rc)) {
+            for (size_t i = 0; i < MaxEcsSessions; ++i) {
+                if (g_RegisteredContents[i].active &&
+                    g_RegisteredContents[i].program_id == program_id) {
+                    g_RegisteredContents[i] = {};
+                    break;
+                }
+            }
+        }
+        return rc;
     }
 
 } // namespace desknx::system::ecs
