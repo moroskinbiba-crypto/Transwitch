@@ -74,7 +74,7 @@ u64 g_RecoveryChordStartTick = 0;
 bool g_RecoveryChordAttempted = false;
 
 void ResetMenuHeartbeatTracking() {
-    ResetMenuHeartbeatTracking();
+    g_LastMenuHeartbeatTick = 0;
     g_BusyUntilTick = 0;
     g_LastBusyCommandTick = 0;
 }
