@@ -9,7 +9,8 @@ namespace desknx::ipc {
 // Versioned, size-checked messages between the DeskNX library applet and the
 // qlaunch replacement. Keep command values append-only once packages ship.
 constexpr u32 Magic = 0x584E4B44; // "DKNX"
-constexpr u16 Version = 1;
+constexpr u16 LegacyVersion = 1;
+constexpr u16 Version = 2;
 
 enum class Command : u32 {
     MenuReady = 1,
@@ -17,6 +18,7 @@ enum class Command : u32 {
     ReturnToGame = 3,
     Heartbeat = 4,
     LaunchHomebrew = 5,
+    Busy = 6,
 };
 
 struct Header {
@@ -66,6 +68,18 @@ inline Result Send(Command command, const void* payload = nullptr, size_t payloa
 
     appletStorageClose(&storage);
     return rc;
+}
+
+struct BusyPayload {
+    u32 seconds;
+};
+static_assert(sizeof(BusyPayload) == 4);
+
+inline Result SendBusy(u32 seconds) {
+    if (seconds == 0 || seconds > 120)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    const BusyPayload payload{seconds};
+    return Send(Command::Busy, &payload, sizeof(payload));
 }
 
 inline Result SendMenuReady() {

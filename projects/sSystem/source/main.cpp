@@ -33,6 +33,8 @@ constexpr u64 kHomePressSettleMs = 1500;
 constexpr u64 kMenuFastExitMs = 3000;
 constexpr u64 kMenuReadyTimeoutSeconds = 25;
 constexpr u64 kMenuHeartbeatTimeoutSeconds = 15;
+constexpr u64 kBusyMaximumSeconds = 120;
+constexpr u64 kBusyMinimumIntervalSeconds = 5;
 constexpr u64 kMenuRetryDelaySeconds = 5;
 constexpr u64 kRecoveryChordHoldSeconds = 3;
 constexpr const char* kQlaunchOverride = "sdmc:/atmosphere/contents/0100000000001000";
@@ -59,6 +61,8 @@ char g_PendingHomebrewArgv[desknx::ipc::MaxHomebrewArgv]{};
 bool g_MenuReady = false;
 u64 g_MenuLaunchTick = 0;
 u64 g_LastMenuHeartbeatTick = 0;
+u64 g_BusyUntilTick = 0;
+u64 g_LastBusyCommandTick = 0;
 u64 g_NextMenuRetryTick = 0;
 desknx::system::ecs::MenuSlot g_ActiveMenuSlots[desknx::system::ecs::MenuSlotCount + 1]{};
 size_t g_ActiveMenuSlotCount = 0;
@@ -68,6 +72,12 @@ bool g_ReopenMenuAfterSleep = false;
 PadState g_RecoveryPad{};
 u64 g_RecoveryChordStartTick = 0;
 bool g_RecoveryChordAttempted = false;
+
+void ResetMenuHeartbeatTracking() {
+    ResetMenuHeartbeatTracking();
+    g_BusyUntilTick = 0;
+    g_LastBusyCommandTick = 0;
+}
 
 void MakeDirectories() {
     mkdir("sdmc:/switch", 0777);
@@ -323,7 +333,7 @@ bool LaunchMenu() {
         if (R_SUCCEEDED(rc)) {
             g_MenuReady = false;
             g_MenuLaunchTick = armGetSystemTick();
-            g_LastMenuHeartbeatTick = 0;
+            ResetMenuHeartbeatTracking();
             g_MenuSlotExhausted = false;
             return true;
         }
@@ -342,7 +352,7 @@ bool LaunchMenu() {
             if (R_SUCCEEDED(rc)) {
                 g_MenuReady = false;
                 g_MenuLaunchTick = armGetSystemTick();
-                g_LastMenuHeartbeatTick = 0;
+                ResetMenuHeartbeatTracking();
                 g_MenuSlotExhausted = false;
                 return true;
             }
@@ -373,7 +383,7 @@ bool ParseMenuCommand(AppletStorage& storage) {
         return false;
 
     if (hdr.magic != desknx::ipc::Magic ||
-        hdr.version != desknx::ipc::Version ||
+        (hdr.version != desknx::ipc::LegacyVersion && hdr.version != desknx::ipc::Version) ||
         hdr.header_size != sizeof(desknx::ipc::Header) ||
         hdr.payload_size > 0x3F00) {
         DaemonLog("ipc: dropped malformed message header");
@@ -384,6 +394,7 @@ bool ParseMenuCommand(AppletStorage& storage) {
     switch (command) {
         case Command::MenuReady:
             if (hdr.payload_size != 0) return false;
+            ResetMenuHeartbeatTracking();
             g_MenuReady = true;
             g_LastMenuHeartbeatTick = armGetSystemTick();
             TransitionTo(BackendState::MenuActive, "ready handshake");
@@ -395,6 +406,34 @@ bool ParseMenuCommand(AppletStorage& storage) {
             if (g_MenuReady)
                 g_LastMenuHeartbeatTick = armGetSystemTick();
             return true;
+
+        case Command::Busy: {
+            if (hdr.version < desknx::ipc::Version ||
+                hdr.payload_size != sizeof(desknx::ipc::BusyPayload) || !g_MenuReady)
+                return false;
+
+            desknx::ipc::BusyPayload payload{};
+            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))) ||
+                payload.seconds == 0 || payload.seconds > kBusyMaximumSeconds)
+                return false;
+
+            const u64 now = armGetSystemTick();
+            const u64 frequency = armGetSystemTickFreq();
+            // One bounded pause per heartbeat interval. Do not allow nested or
+            // back-to-back Busy messages to keep an unresponsive menu alive.
+            if (g_BusyUntilTick != 0) {
+                if (now < g_BusyUntilTick || g_LastMenuHeartbeatTick <= g_BusyUntilTick)
+                    return false;
+            }
+            if (g_LastBusyCommandTick != 0 &&
+                now - g_LastBusyCommandTick < frequency * kBusyMinimumIntervalSeconds)
+                return false;
+
+            g_BusyUntilTick = now + frequency * payload.seconds;
+            g_LastBusyCommandTick = now;
+            DaemonLog("ipc: heartbeat check paused for %u seconds", payload.seconds);
+            return true;
+        }
 
         case Command::LaunchTitle: {
             if (hdr.payload_size != sizeof(desknx::ipc::LaunchTitlePayload))
@@ -670,7 +709,7 @@ void HandleMenuClosed() {
     const u64 launchTick = g_MenuLaunchTick;
     la::StopMenu();
     g_MenuReady = false;
-    g_LastMenuHeartbeatTick = 0;
+    ResetMenuHeartbeatTracking();
 
     // The shared AppletHolder also runs nx-hbloader. Its exit is not a failed
     // menu startup: unregister its ECS override and restore DeskNX, even if the
@@ -714,7 +753,7 @@ void HandleMenuClosed() {
         TransitionTo(BackendState::HomebrewStarting, "homebrew target staged");
         g_MenuReady = false;
         g_MenuLaunchTick = 0; // hbloader does not send MenuReady
-        g_LastMenuHeartbeatTick = 0;
+        ResetMenuHeartbeatTracking();
         rc = la::LaunchMenu(ecs::HbloaderAppletId, nullptr, 0);
         if (R_FAILED(rc)) {
             g_HomebrewLoaderRunning = false;
@@ -835,7 +874,7 @@ void RunMainLoop() {
                 DaemonLog("menu: ready timeout; slot=%s", CurrentMenuSlot().name);
                 la::StopMenu();
                 g_MenuReady = false;
-                g_LastMenuHeartbeatTick = 0;
+                ResetMenuHeartbeatTracking();
                 if (app::g_AppRunning) {
                     app::FocusApplication();
                     g_MenuSlotExhausted = true;
@@ -855,12 +894,14 @@ void RunMainLoop() {
         }
 
         if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && g_MenuReady && g_LastMenuHeartbeatTick != 0) {
-            const u64 silent = armGetSystemTick() - g_LastMenuHeartbeatTick;
-            if (silent >= armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds) {
+            const u64 heartbeatNow = armGetSystemTick();
+            const bool busyPauseActive = g_BusyUntilTick != 0 && heartbeatNow < g_BusyUntilTick;
+            const u64 silent = heartbeatNow - g_LastMenuHeartbeatTick;
+            if (!busyPauseActive && silent >= armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds) {
                 DaemonLog("menu: heartbeat timeout; slot=%s", CurrentMenuSlot().name);
                 la::StopMenu();
                 g_MenuReady = false;
-                g_LastMenuHeartbeatTick = 0;
+                ResetMenuHeartbeatTracking();
                 if (app::g_AppRunning) {
                     app::FocusApplication();
                     g_MenuSlotExhausted = true;
