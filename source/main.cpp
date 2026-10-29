@@ -266,6 +266,10 @@ void stopHeartbeatThread() {
     SDL_AtomicSet(&heartbeatRunning,0);
     if(heartbeatThread){SDL_WaitThread(heartbeatThread,nullptr);heartbeatThread=nullptr;}
 }
+#else
+Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
+    return swkbdShow(config,output,outputSize);
+}
 #endif
 void loadHistory() {
     if(!sdMounted)return;
