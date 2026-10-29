@@ -443,9 +443,15 @@ bool ParseMenuCommand(AppletStorage& storage) {
     }
     switch (command) {
         case Command::MenuReady:
-            if (hdr.payload_size != 0) return false;
+            if (hdr.payload_size != 0 || g_MenuReady) {
+                DaemonLog("ipc: ignored duplicate or malformed MenuReady");
+                return false;
+            }
+            if (!g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq())) {
+                DaemonLog("ipc: ignored MenuReady while liveness controller is already ready");
+                return false;
+            }
             g_MenuReady = true;
-            g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq());
             TransitionTo(BackendState::MenuActive, "ready handshake");
             DaemonLog("ipc: DeskNX menu ready");
             return true;

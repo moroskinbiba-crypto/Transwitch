@@ -8,6 +8,20 @@ using desknx::watchdog::BusyTickResult;
 using desknx::watchdog::MenuLiveness;
 
 int main() {
+    // A duplicate MenuReady handshake must not refresh the watchdog. Only a
+    // heartbeat from an already-ready menu may move the deadline.
+    {
+        MenuLiveness liveness;
+        assert(liveness.MarkReady(1000, 100));
+        assert(liveness.HeartbeatDeadlineTick() == 2500);
+        assert(!liveness.MarkReady(2000, 100));
+        assert(liveness.LastHeartbeatTick() == 1000);
+        assert(liveness.HeartbeatDeadlineTick() == 2500);
+        liveness.Heartbeat(2000, 100);
+        assert(liveness.LastHeartbeatTick() == 2000);
+        assert(liveness.HeartbeatDeadlineTick() == 3500);
+    }
+
     // A ready handshake establishes a deadline; ordinary heartbeats renew it.
     {
         MenuLiveness liveness;

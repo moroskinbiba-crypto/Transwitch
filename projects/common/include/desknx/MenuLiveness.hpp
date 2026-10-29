@@ -32,6 +32,7 @@ class MenuLiveness final {
     std::uint64_t m_heartbeatDeadlineTick = 0;
     std::uint64_t m_busyRemainingTicks = 0;
     bool m_hasLastBusyCommand = false;
+    bool m_ready = false;
     bool m_busyHeartbeatSeen = false;
     bool m_busyPauseProcessed = false;
 
@@ -55,15 +56,22 @@ public:
         m_heartbeatDeadlineTick = 0;
         m_busyRemainingTicks = 0;
         m_hasLastBusyCommand = false;
+        m_ready = false;
         m_busyHeartbeatSeen = false;
         m_busyPauseProcessed = false;
     }
 
-    void MarkReady(std::uint64_t now, std::uint64_t frequency) {
+    bool MarkReady(std::uint64_t now, std::uint64_t frequency) {
+        // A duplicate handshake must not act as a watchdog refresh mechanism:
+        // only Heartbeat may renew a menu that has already become ready.
+        if (m_ready || frequency == 0)
+            return false;
         Reset();
+        m_ready = true;
         m_lastHeartbeatTick = now;
         m_heartbeatDeadlineTick =
             AddSaturated(now, DurationTicks(frequency, HeartbeatTimeoutSeconds));
+        return true;
     }
 
     BusyTickResult Heartbeat(std::uint64_t now, std::uint64_t frequency) {
