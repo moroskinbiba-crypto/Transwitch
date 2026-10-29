@@ -21,4 +21,10 @@ constexpr bool IsValidBusySeconds(std::uint32_t seconds) {
     return seconds >= 1 && seconds <= MaxBusySeconds;
 }
 
+// Zero is reserved for the explicit early-end signal; it is never a valid
+// duration for starting or extending a Busy pause.
+constexpr bool IsBusyEndSignal(std::uint32_t seconds) {
+    return seconds == 0;
+}
+
 } // namespace desknx::ipc::rules
