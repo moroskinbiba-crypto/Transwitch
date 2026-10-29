@@ -102,6 +102,7 @@ jobs:
           test -s dist/SdOut/switch/DeskNX/bin/hbloader/main.npdm
           cp -f scripts/install-system.sh scripts/uninstall-system.sh dist/scripts/
           cp -f README.md THIRD_PARTY.md dist/
+          cp -f projects/hbloader/LICENSE.md projects/sSystem/COPYING.sLaunch dist/
           cp -f docs/HOME_INTEGRATION.md dist/docs/
           bash -n dist/scripts/install-system.sh dist/scripts/uninstall-system.sh
           cd dist
