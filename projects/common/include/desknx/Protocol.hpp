@@ -83,6 +83,13 @@ inline Result SendBusy(u32 seconds) {
     return Send(Command::Busy, &payload, sizeof(payload));
 }
 
+inline Result SendBusyEnd() {
+    // A zero-second Busy message releases an active pause early. The backend
+    // rejects this signal when no pause is active.
+    const BusyPayload payload{0};
+    return Send(Command::Busy, &payload, sizeof(payload));
+}
+
 inline Result SendMenuReady() {
     return Send(Command::MenuReady);
 }
