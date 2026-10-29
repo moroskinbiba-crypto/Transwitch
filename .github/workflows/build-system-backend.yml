@@ -46,9 +46,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run host model unit tests
+      - name: Run host model and layout unit tests
         run: |
-          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/model_test.cpp -o /tmp/desknx-model-test
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/model_test.cpp source/Layout.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
       - name: Build compatible libnx master

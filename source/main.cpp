@@ -3,6 +3,7 @@
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
 #include "../include/desknx/Model.hpp"
+#include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
@@ -261,15 +262,13 @@ void backupBrokenLayout() {
 void saveLayout() {
     if(!sdMounted)return;
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
+    const std::string serialized=desknx::layout::serialize(desks,deskIndex);
+    if(serialized.empty()){setStatus("LAYOUT INVALID; SAVE REFUSED",3500);return;}
     std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
     if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return;}
-    f<<"DESKNX3\n";
-    f<<"A\t"<<deskIndex<<"\n";
-    for(const auto& d:desks)f<<"D\t"<<safeField(d.name)<<"\n";
-    for(size_t di=0;di<desks.size();++di)for(const auto&t:desks[di].tiles)
-        f<<"I\t"<<di<<'\t'<<typeCode(t.kind)<<'\t'<<safeField(t.title)<<'\t'<<safeField(t.data)<<'\t'
-         <<t.x<<'\t'<<t.y<<'\t'<<t.w<<'\t'<<t.h<<'\t'<<t.color<<"\n";
-    f.flush();bool good=f.good();f.close();if(!good){setStatus("SAVE FAILED: WRITE ERROR",3500);return;}
+    f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
+    f.flush();const bool good=f.good();f.close();
+    if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return;}
     const char* previous="sdmc:/switch/DeskNX/layout.prev";
     std::remove(previous);
     const bool hadPrevious=std::rename(CFG_FILE,previous)==0;
@@ -281,30 +280,16 @@ void saveLayout() {
     setStatus("LAYOUT SAVED",1600);
 }
 bool loadLayout() {
-    std::ifstream f(CFG_FILE,std::ios::binary);if(!f)return false;
-    std::string line;
-    if(!std::getline(f,line)||(line!="DESKNX1"&&line!="DESKNX2"&&line!="DESKNX3"))return false;
-    const bool hasActiveDesktop=line!="DESKNX1";
-    layoutNeedsMigration=(line!="DESKNX3");
-    int activeDesktop=0;
-    std::vector<Workspace> loaded;std::vector<std::vector<Tile>> items;
-    while(std::getline(f,line)) {
-        auto p=splitTabs(line);if(p.empty())continue;
-        if(p[0]=="A"&&p.size()>=2&&hasActiveDesktop) {
-            activeDesktop=std::max(0,std::atoi(p[1].c_str()));
-        } else if(p[0]=="D"&&p.size()>=2&&loaded.size()<MAX_DESKS) {loaded.push_back(Workspace{p[1],{}});items.emplace_back();}
-        else if(p[0]=="I"&&p.size()>=10) {
-            int d=std::atoi(p[1].c_str());if(d<0||static_cast<size_t>(d)>=items.size())continue;
-            Tile t{};t.kind=parseKind(p[2]);t.title=p[3];t.data=p[4];t.x=std::atoi(p[5].c_str());t.y=std::atoi(p[6].c_str());
-            t.w=std::atoi(p[7].c_str());t.h=std::atoi(p[8].c_str());t.color=std::atoi(p[9].c_str())%static_cast<int>(COLORS.size());
-            if(t.color<0) t.color=0;
-            items[static_cast<size_t>(d)].push_back(t);
-        }
-    }
-    if(loaded.empty())return false;
-    for(size_t d=0;d<loaded.size();++d)for(const Tile&t:items[d])if(placeable(loaded[d],t,t.x,t.y))loaded[d].tiles.push_back(t);
-    desks=std::move(loaded);
-    deskIndex=std::max(0,std::min(activeDesktop,static_cast<int>(desks.size())-1));
+    std::ifstream file(CFG_FILE,std::ios::binary);
+    if(!file)return false;
+    std::ostringstream contents;
+    contents<<file.rdbuf();
+    if(file.bad())return false;
+    desknx::layout::LoadResult loaded{};
+    if(!desknx::layout::parse(contents.str(),loaded))return false;
+    desks=std::move(loaded.workspaces);
+    deskIndex=loaded.activeWorkspace;
+    layoutNeedsMigration=loaded.needsMigration;
     selectedX=selectedY=0;
     return true;
 }
