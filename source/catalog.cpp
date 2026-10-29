@@ -60,13 +60,6 @@ std::string fileTitle(const std::string& path) {
     for (char& c : name) if (c == '_' || c == '-') c = ' ';
     return name;
 }
-std::string asciiSortKey(const std::string& input) {
-    std::string out;
-    out.reserve(input.size());
-    for (unsigned char c : input)
-        out.push_back(c < 0x80 ? static_cast<char>(std::tolower(c)) : static_cast<char>(c));
-    return out;
-}
 bool IsRegularFile(const std::string& path) {
     struct stat st{};
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);

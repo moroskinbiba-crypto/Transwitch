@@ -24,7 +24,7 @@ CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
-LIBS        := `sdl2-config --libs` -lSDL2_image -lSDL2_ttf -lnx
+LIBS        := `sdl2-config --libs` $(shell pkg-config --static --libs SDL2_image SDL2_ttf) -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
