@@ -94,7 +94,9 @@ bool g_HasPendingPowerAction = false;
 u32 g_LastLaunchRc = 0;
 u64 g_LastLaunchTitle = 0;
 bool g_SdMountedForBackend = true;  // REC-05: drives the degraded flag
-u64 g_DroppedLogLastTick = 0;       // IPC-01 log rate limit (once per second)
+u64 g_DroppedLogLastTick = 0;       // IPC-01 suppressed-log summary window
+u64 g_LastMenuLogTick = 0;
+u32 g_DroppedMenuLogCount = 0;
 
 void ResetMenuHeartbeatTracking() {
     g_LastMenuHeartbeatTick = 0;
@@ -695,6 +697,30 @@ bool ParseMenuCommand(AppletStorage& storage) {
                 if (c < 0x20) { printable = false; break; }
             }
             if (!printable || !line[0]) return false;
+
+            // IPC-01: a buggy or hostile menu must not turn the SD log into an
+            // unbounded write sink. Accept at most 10 menu log lines per
+            // second; aggregate suppressed lines into at most one summary/sec.
+            const u64 now = armGetSystemTick();
+            const u64 frequency = armGetSystemTickFreq();
+            const u64 minimumInterval = std::max<u64>(1, frequency / 10);
+            if (g_LastMenuLogTick != 0 &&
+                now - g_LastMenuLogTick < minimumInterval) {
+                if (g_DroppedMenuLogCount != 0xFFFFFFFFu)
+                    ++g_DroppedMenuLogCount;
+                if (g_DroppedLogLastTick == 0) {
+                    g_DroppedLogLastTick = now;
+                } else if (now >= g_DroppedLogLastTick &&
+                           now - g_DroppedLogLastTick >= frequency) {
+                    if (g_DroppedMenuLogCount != 0)
+                        DaemonLog("ipc: suppressed %u menu log messages by rate limiter",
+                                  g_DroppedMenuLogCount);
+                    g_DroppedMenuLogCount = 0;
+                    g_DroppedLogLastTick = now;
+                }
+                return true; // valid IPC accepted, line intentionally rate-limited
+            }
+            g_LastMenuLogTick = now;
             DaemonLog("menu: %s", line);
             return true;
         }
