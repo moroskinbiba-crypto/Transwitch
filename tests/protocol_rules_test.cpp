@@ -14,6 +14,7 @@ int main() {
     static_assert(IsValidPayloadSize(0));
     static_assert(IsValidPayloadSize(MaxPayloadSize));
     static_assert(!IsValidPayloadSize(MaxPayloadSize + 1));
+    static_assert(!IsValidPayloadSize(0x100000000ULL));
 
     static_assert(IsBusyEndSignal(0));
     static_assert(!IsBusyEndSignal(1));
@@ -28,6 +29,7 @@ int main() {
     assert(!IsSupportedVersion(65535));
     assert(IsValidPayloadSize(0x3F00));
     assert(!IsValidPayloadSize(0x3F01));
+    assert(!IsValidPayloadSize(0x100000000ULL));
     assert(IsBusyEndSignal(0));
     assert(!IsBusyEndSignal(1));
     assert(!IsBusyEndSignal(120));
