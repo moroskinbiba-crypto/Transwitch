@@ -156,6 +156,14 @@ int main() {
         assert(readText(backup).empty());
         assert(readText(temporary).empty());
 
+        // Layout saves intentionally keep the old valid version as a backup.
+        writeText(temporary, "next-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   temporary.c_str(), destination.c_str(), backup.c_str(), true) ==
+               desknx::safeio::ReplaceStatus::Success);
+        assert(readText(destination) == "next-state");
+        assert(readText(backup) == "new-state");
+
         // A missing temp simulates publication failure after the old file has
         // been moved aside; the helper must roll the old file back.
         assert(desknx::safeio::replaceFilePreservingOnFailure(

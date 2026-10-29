@@ -64,6 +64,7 @@ SDL_atomic_t heartbeatError{};
 #endif
 bool catalogueReady = false, catalogueScanComplete = false, catalogueTruncated = false;
 bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown = false;
+bool layoutSaveBlocked = false;
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
@@ -421,9 +422,9 @@ void recordRecentLaunch(const Tile& tile) {
     if(recentLaunches.size()>10)recentLaunches.resize(10);
     lastLaunched=tile.title;saveHistory();
 }
-void backupBrokenLayout() {
+bool backupBrokenLayout() {
     struct stat st{};
-    if (stat(CFG_FILE, &st) != 0) return;
+    if (stat(CFG_FILE, &st) != 0) return errno == ENOENT;
     std::time_t now = std::time(nullptr);
     std::tm* tmv = std::localtime(&now);
     char stamp[32]{};
@@ -440,15 +441,20 @@ void backupBrokenLayout() {
         if (stat(dest, &existing) == 0) continue;
         if (std::rename(CFG_FILE, dest) == 0) {
             setStatus("INVALID LAYOUT PRESERVED", 4500);
-            return;
+            return true;
         }
         break;
     }
     setStatus("LAYOUT INVALID; BACKUP FAILED", 4500);
+    return false;
 }
 
 void saveLayout() {
     if(!sdMounted)return;
+    if (layoutSaveBlocked) {
+        setStatus("SAVE BLOCKED: PRESERVE LAYOUT BACKUP", 4500);
+        return;
+    }
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     const std::string serialized=desknx::layout::serialize(desks,deskIndex);
     if(serialized.empty()){setStatus("LAYOUT INVALID; SAVE REFUSED",3500);return;}
@@ -457,13 +463,19 @@ void saveLayout() {
     f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
     f.flush();const bool good=f.good();f.close();
     if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return;}
-    std::remove(CFG_BAK_FILE);
-    const bool hadPrevious=std::rename(CFG_FILE,CFG_BAK_FILE)==0;
-    if(std::rename(CFG_TMP,CFG_FILE)!=0) {
-        if(hadPrevious)std::rename(CFG_BAK_FILE,CFG_FILE);
-        std::remove(CFG_TMP);setStatus("SAVE FAILED: RENAME ERROR",3500);return;
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        CFG_TMP, CFG_FILE, CFG_BAK_FILE, true);
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
+        std::remove(CFG_TMP);
+        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed) {
+            layoutSaveBlocked = true;
+            setStatus("LAYOUT RECOVERY NEEDED: KEEP layout.bak", 5000);
+        } else {
+            setStatus("SAVE FAILED: RENAME ERROR", 3500);
+        }
+        return;
     }
-    // Keep layout.bak as the last known-good version until the next successful save.
+    // Keep layout.bak as the last known-good version after successful replacement.
     layoutLoaded=true;
     setStatus("LAYOUT SAVED",1600);
 }
@@ -935,16 +947,20 @@ int main(int,char**) {
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
     layoutLoaded = loadLayout();
     bool restoredFromBackup = false;
-    if (layoutExists && !layoutLoaded) {
-        backupBrokenLayout();
-        if (backupExists && loadLayoutFrom(CFG_BAK_FILE)) {
-            layoutLoaded = true;
-            restoredFromBackup = true;
-            setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
+    if (!layoutLoaded && backupExists && loadLayoutFrom(CFG_BAK_FILE)) {
+        // The primary may be missing as well as corrupt. Never discard the only
+        // valid backup until the old primary has been preserved or is absent.
+        if (layoutExists && !backupBrokenLayout())
+            layoutSaveBlocked = true;
+        layoutLoaded = true;
+        restoredFromBackup = true;
+        setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
+        if (!layoutSaveBlocked)
             saveLayout();
-        } else {
-            defaultLayout();
-        }
+    } else if (layoutExists && !layoutLoaded) {
+        if (!backupBrokenLayout())
+            layoutSaveBlocked = true;
+        defaultLayout();
     } else if (!layoutLoaded) {
         defaultLayout();
     }

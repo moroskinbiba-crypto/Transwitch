@@ -18,7 +18,8 @@ enum class ReplaceStatus {
 };
 
 inline ReplaceStatus replaceFilePreservingOnFailure(
-    const char* temporary, const char* destination, const char* backup) {
+    const char* temporary, const char* destination, const char* backup,
+    bool keepBackupOnSuccess = false) {
     if (!temporary || !temporary[0] || !destination || !destination[0] ||
         !backup || !backup[0] || std::strcmp(temporary, destination) == 0 ||
         std::strcmp(temporary, backup) == 0 ||
@@ -67,7 +68,7 @@ inline ReplaceStatus replaceFilePreservingOnFailure(
 
     // The new file is now published. A stale backup is no longer required;
     // failure to clean it up does not invalidate the successful replacement.
-    if (hasDestination)
+    if (hasDestination && !keepBackupOnSuccess)
         (void)std::remove(backup);
     return ReplaceStatus::Success;
 }
