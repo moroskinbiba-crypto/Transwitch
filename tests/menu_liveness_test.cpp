@@ -72,6 +72,20 @@ int main() {
         assert(liveness.HandleBusy(2, 1700, 100) == BusyResult::Started);
     }
 
+    // A heartbeat parsed just after Busy expiry must not be overwritten by
+    // a later main-loop tick that uses an older tick snapshot.
+    {
+        MenuLiveness liveness;
+        liveness.MarkReady(1000, 100);
+        liveness.Heartbeat(1100, 100);
+        assert(liveness.HandleBusy(3, 1200, 100) == BusyResult::Started);
+        assert(liveness.Heartbeat(1510, 100) == BusyTickResult::EndedWithoutHeartbeat);
+        assert(liveness.LastHeartbeatTick() == 1510);
+        assert(liveness.HeartbeatDeadlineTick() == 3010);
+        assert(liveness.UpdateBusyPause(1520, 100, true) == BusyTickResult::None);
+        assert(liveness.HeartbeatDeadlineTick() == 3010);
+    }
+
     // Reject bad durations, an expired watchdog, zero frequency and regressing
     // ticks. Saturating deadline arithmetic must not wrap at uint64_t max.
     {

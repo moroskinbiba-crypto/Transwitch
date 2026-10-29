@@ -452,8 +452,12 @@ bool ParseMenuCommand(AppletStorage& storage) {
 
         case Command::Heartbeat:
             if (hdr.payload_size != 0) return false;
-            if (g_MenuReady)
-                g_MenuLiveness.Heartbeat(armGetSystemTick(), armGetSystemTickFreq());
+            if (g_MenuReady) {
+                const auto heartbeatBusyTick =
+                    g_MenuLiveness.Heartbeat(armGetSystemTick(), armGetSystemTickFreq());
+                if (heartbeatBusyTick != desknx::watchdog::BusyTickResult::None)
+                    DaemonLog("ipc: Busy pause ended; heartbeat monitoring resumed");
+            }
             return true;
 
         case Command::Busy: {

@@ -66,14 +66,19 @@ public:
             AddSaturated(now, DurationTicks(frequency, HeartbeatTimeoutSeconds));
     }
 
-    void Heartbeat(std::uint64_t now, std::uint64_t frequency) {
+    BusyTickResult Heartbeat(std::uint64_t now, std::uint64_t frequency) {
+        // Tick and command parsing use separate clock reads. If a heartbeat is
+        // parsed just after Busy expires, process that expiry first so the next
+        // main-loop tick cannot overwrite this newer heartbeat's deadline.
+        const BusyTickResult elapsedPause = UpdateBusyPause(now, frequency, true);
         if (BusyPauseActive(now)) {
             m_busyHeartbeatSeen = true;
-            return;
+            return elapsedPause;
         }
         m_lastHeartbeatTick = now;
         m_heartbeatDeadlineTick =
             AddSaturated(now, DurationTicks(frequency, HeartbeatTimeoutSeconds));
+        return elapsedPause;
     }
 
     BusyResult HandleBusy(std::uint32_t seconds, std::uint64_t now,
