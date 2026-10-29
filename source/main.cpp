@@ -167,12 +167,12 @@ std::vector<Candidate> catalogueSnapshot() {
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
     return result;
 }
-void publishCatalogue(desknx::catalog::ScanResult&& result) {
+void publishCatalogue(const desknx::catalog::ScanResult& result) {
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
-    catalogue=std::move(result.items);
+    catalogue=result.items;
     catalogueTruncated=result.truncated;
-    catalogueReady=true;
-    catalogueScanComplete=true;
+    catalogueReady=!catalogue.empty()||result.complete;
+    catalogueScanComplete=result.complete;
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
 void readCatalogueState(bool& ready,bool& complete,bool& truncated) {
@@ -180,9 +180,11 @@ void readCatalogueState(bool& ready,bool& complete,bool& truncated) {
     ready=catalogueReady; complete=catalogueScanComplete; truncated=catalogueTruncated;
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
+void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
+    publishCatalogue(snapshot);
+}
 int catalogueThreadMain(void*) {
-    auto result=desknx::catalog::Scan();
-    publishCatalogue(std::move(result));
+    (void)desknx::catalog::Scan(catalogueProgress,nullptr);
     return 0;
 }
 #ifdef DESKNX_SYSTEM_APPLET
@@ -277,6 +279,7 @@ void saveLayout() {
         std::remove(CFG_TMP);setStatus("SAVE FAILED: RENAME ERROR",3500);return;
     }
     if(hadPrevious)std::remove(previous);
+    layoutLoaded=true;
     setStatus("LAYOUT SAVED",1600);
 }
 bool loadLayout() {
@@ -412,15 +415,19 @@ void drawScreen() {
         rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;rect(mx,my,mw,mh,Color{22,27,38,250});outline(mx,my,mw,mh,BLUE);
         text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);text("A ADD  /  B CANCEL",mx+28,my+59,1,MUTED,mx+mw-20);
         int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
-        if(!catalogCompleteNow)text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+118,2,BLUE,mx+mw-20);
-        else for(int row=0;row<vis;++row) {
-            int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+92+row*43;
-            if(i==listIndex)rect(mx+22,yy,mw-44,38,Color{45,61,82,255});
-            const Candidate& candidate=available[static_cast<size_t>(i)];
-            Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-            drawTileIcon(iconTile,mx+30,yy+6,26);
-            text(candidate.title,mx+66,yy+8,2,i==listIndex?WHITE:MUTED,mx+575);
-            text(typeName(candidate.kind),mx+595,yy+12,1,i==listIndex?BLUE:MUTED,mx+mw-18);
+        if(!catalogCompleteNow && available.empty())
+            text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+118,2,BLUE,mx+mw-20);
+        else {
+            if(!catalogCompleteNow) text("SCANNING... ITEMS APPEAR AS THEY ARE FOUND",mx+28,my+61,1,BLUE,mx+mw-20);
+            for(int row=0;row<vis;++row) {
+                int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+92+row*43;
+                if(i==listIndex)rect(mx+22,yy,mw-44,38,Color{45,61,82,255});
+                const Candidate& candidate=available[static_cast<size_t>(i)];
+                Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
+                drawTileIcon(iconTile,mx+30,yy+6,26);
+                text(candidate.title,mx+66,yy+8,2,i==listIndex?WHITE:MUTED,mx+575);
+                text(typeName(candidate.kind),mx+595,yy+12,1,i==listIndex?BLUE:MUTED,mx+mw-18);
+            }
         }
         text(std::to_string(available.size())+" AVAILABLE ITEMS",mx+28,my+mh-26,1,MUTED,mx+mw-18);
     }
@@ -465,8 +472,7 @@ void removeTile() {
 void addSelected() {
     const auto available=catalogueSnapshot();bool ready=false,complete=false,truncated=false;
     readCatalogueState(ready,complete,truncated);
-    if(!complete){setStatus("CATALOGUE IS STILL SCANNING",2200);return;}
-    if(available.empty()){listOpen=false;setStatus("NO APPS FOUND");return;}
+    if(available.empty()){setStatus(complete?"NO APPS FOUND":"CATALOGUE IS STILL SCANNING",2200);return;}
     if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())listIndex=0;
     Workspace& d=desks[static_cast<size_t>(deskIndex)];if(itemAt(d,selectedX,selectedY)>=0){listOpen=false;setStatus("CHOOSE AN EMPTY CELL FIRST");return;}
     const Candidate& c=available[static_cast<size_t>(listIndex)];Tile t{c.kind,c.title,c.data,selectedX,selectedY,c.w,c.h,c.color};
@@ -550,8 +556,9 @@ void keyInput(u64 keys) {
         const auto available=catalogueSnapshot();bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
         if(keys&HidNpadButton_B){listOpen=false;return;}
-        if(!complete)return;
-        if((keys&HidNpadButton_Up)&&!available.empty())listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
+        if(available.empty())return;
+        if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
+        if((keys&HidNpadButton_Up))listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
         if((keys&HidNpadButton_Down)&&!available.empty())listIndex=(listIndex+1)%static_cast<int>(available.size());
         if((keys&HidNpadButton_A)&&!available.empty())addSelected();
         return;

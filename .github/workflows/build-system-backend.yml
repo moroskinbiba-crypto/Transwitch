@@ -24,7 +24,7 @@ on:
       - "docs/**"
       - "THIRD_PARTY.md"
       - "README.md"
-      - "source/main.cpp"
+      - "source/**"
       - "Makefile"
       - ".github/workflows/build-system-backend.yml"
 

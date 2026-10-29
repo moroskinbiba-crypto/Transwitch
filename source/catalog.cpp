@@ -148,6 +148,9 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
         item.h = std::atoi(fields[5].c_str());
         item.color = std::atoi(fields[6].c_str());
         if (item.w < 1 || item.w > 3 || item.h < 1 || item.h > 2) return false;
+        if (item.kind == Kind::Game &&
+            !IsRegularFile(desknx::model::iconCachePath(item.kind, item.data)))
+            return false;
         items.push_back(std::move(item));
         if (items.size() > MaxItems) return false;
     }
@@ -260,8 +263,12 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
 }
 } // namespace
 
-ScanResult Scan() {
+ScanResult Scan(ProgressCallback progress, void* context) {
     ScanResult result;
+    auto report = [&](bool complete) {
+        result.complete = complete;
+        if (progress) progress(result, context);
+    };
     EnsureCacheDirectories();
     const bool nsReady = R_SUCCEEDED(nsInitialize());
     const std::vector<GameRecord> games = ReadGameRecords(nsReady);
@@ -272,7 +279,9 @@ ScanResult Scan() {
     });
     const Signatures sig = MakeSignatures(games, nros);
     if (ReadCache(sig, result)) {
+        result.complete = true;
         if (nsReady) nsExit();
+        report(true);
         return result;
     }
 
@@ -300,7 +309,9 @@ ScanResult Scan() {
         char hex[32]{};
         std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
         result.items.push_back({Kind::Game, title, hex, 1, 1, static_cast<int>(colorIndex++ % 8)});
+        if ((i + 1) % 12 == 0) report(false);
     }
+    report(false); // expose the installed-game part before scanning NRO assets
     if (nsReady) nsExit();
 
     for (const auto& nro : nros) {
@@ -309,6 +320,7 @@ ScanResult Scan() {
                        static_cast<int>(result.items.size() % 8)};
         CacheNroIconAndMetadata(nro, item);
         result.items.push_back(std::move(item));
+        if (result.items.size() % 12 == 0) report(false);
     }
     if (games.size() > gameLimit || nros.size() >= MaxItems) result.truncated = true;
     result.items.push_back({Kind::Clock, "Clock widget", "", 2, 1, 1});
@@ -316,6 +328,7 @@ ScanResult Scan() {
     result.items.push_back({Kind::System, "System info widget", "", 2, 1, 5});
     result.items.push_back({Kind::Recent, "Recent launch widget", "", 3, 1, 6});
     WriteCache(sig, result);
+    report(true);
     return result;
 }
 
