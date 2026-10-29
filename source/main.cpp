@@ -71,12 +71,11 @@ desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMod
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=true;
-// PowerMenu modal (ТЗ 6.1: "- opens the power menu"). Only in system mode:
-// standalone must not ask a backend that is not there.
-#ifdef DESKNX_SYSTEM_APPLET
+// PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
+// action is delegated to the backend (PWR-03); in standalone we honour it
+// locally through the applet power APIs, which are available to NROs too.
 bool powerMenu=false;
 s32 powerIndex=0;
-#endif
 bool sdMounted=false, psmReady=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   A OPEN", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
@@ -604,7 +603,6 @@ void drawScreen() {
         text("DELETE WORKSPACE?",405,292,3,WHITE,890);text(desks[static_cast<size_t>(deskIndex)].name,405,334,2,MUTED,890);
         text("A CONFIRM   /   B CANCEL",405,394,2,BLUE,890);
     }
-#ifdef DESKNX_SYSTEM_APPLET
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
@@ -617,7 +615,6 @@ void drawScreen() {
         }
         text("UP/DOWN SELECT   A EXECUTE   B CANCEL",440,452,1,MUTED,820);
     }
-#endif
     SDL_RenderPresent(renderer);
 }
 void saveNow(){saveLayout();}
@@ -738,22 +735,31 @@ void launch(const Tile& t) {
     else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
-#ifdef DESKNX_SYSTEM_APPLET
-    // PowerMenu modal first: it is exclusive and B closes it (ТЗ 6.1).
     if(powerMenu) {
         if(keys&HidNpadButton_B){powerMenu=false;return;}
         if(keys&HidNpadButton_Up)powerIndex=(powerIndex+2)%3;
         if(keys&HidNpadButton_Down)powerIndex=(powerIndex+1)%3;
         if(keys&HidNpadButton_A) {
             const auto kind=static_cast<desknx::ipc::PowerKind>(powerIndex);
+#ifdef DESKNX_SYSTEM_APPLET
             const Result rc=sendIpc([&]{return desknx::ipc::SendPowerAction(kind);});
             powerMenu=false;
             if(R_FAILED(rc)){setStatus("SYSTEM BACKEND REQUEST FAILED",3000);return;}
             setStatus("POWER ACTION SENT TO SYSTEM",2500);
+#else
+            // Standalone: same semantics, executed locally. Sleep is refused
+            // here on purpose: an NRO cannot keep the console asleep while it
+            // is being killed by the sleep sequence (recovery principle 1).
+            powerMenu=false;
+            Result rc=-1;
+            if(kind==desknx::ipc::PowerKind::Reboot) rc=appletRequestToReboot();
+            else if(kind==desknx::ipc::PowerKind::Shutdown) rc=appletRequestToShutDown();
+            else {setStatus("SLEEP NOT SUPPORTED HERE; PRESS THE POWER BUTTON",3000);return;}
+            if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"POWER REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
+#endif
         }
         return;
     }
-#endif
     if(deletePrompt) {
         if(keys&HidNpadButton_B){deletePrompt=false;return;}
         if(keys&HidNpadButton_A){deletePrompt=false;desks.erase(desks.begin()+deskIndex);deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);selectedX=selectedY=0;saveNow();setStatus("WORKSPACE DELETED");}
@@ -815,14 +821,12 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
     if(editing&&(keys&HidNpadButton_ZR))resizeTile(true);
     if(editing&&(keys&HidNpadButton_Minus))removeTile();
-#ifdef DESKNX_SYSTEM_APPLET
     // ТЗ 6.2: "-" in Normal mode opens the power menu (PWR-03). In Edit mode
     // Minus keeps its remove-tile meaning, handled above. Auto-repeat never
     // opens modals (UI-14 is about cursor movement only).
     if(!fromRepeat&&!editing&&!deletePrompt&&!listOpen&&(keys&HidNpadButton_Minus)) {
         powerMenu=true;powerIndex=0;return;
     }
-#endif
     if(keys&HidNpadButton_A) {
         Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
         if(editing){if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");}

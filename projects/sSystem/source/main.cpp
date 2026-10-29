@@ -1116,8 +1116,10 @@ void HandleMenuClosed() {
         if (app::g_AppRunning) app::Terminate();
         fsdevUnmountAll();
         if (action == desknx::ipc::PowerKind::Reboot) {
+            // No PSM module is linked into this applet, and the OsSystem flag
+            // API requires it; appletRequestToReboot() alone performs a normal
+            // reboot from an applet context (same call as the recovery path).
             DaemonLog("power: reboot requested by menu");
-            psmRequestOsSystemSetStateFlag(PsmOsSystemFlag_RebootWasRequested);
             appletRequestToReboot();
         } else {
             DaemonLog("power: shutdown requested by menu");
