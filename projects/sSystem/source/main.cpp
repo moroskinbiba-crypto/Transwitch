@@ -433,12 +433,34 @@ bool ParseMenuCommand(AppletStorage& storage) {
                 return false;
 
             desknx::ipc::BusyPayload payload{};
-            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))) ||
-                !desknx::ipc::rules::IsValidBusySeconds(payload.seconds))
+            if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
                 return false;
 
             const u64 now = armGetSystemTick();
             const u64 frequency = armGetSystemTickFreq();
+            if (payload.seconds == 0) {
+                // End a pause as soon as a blocking dialog returns. Restore the
+                // remaining heartbeat budget, or start a fresh interval if a
+                // heartbeat arrived while the pause was active.
+                if (g_BusyUntilTick == 0 || now >= g_BusyUntilTick ||
+                    g_BusyPauseProcessed)
+                    return false;
+                if (g_BusyHeartbeatSeen) {
+                    g_LastMenuHeartbeatTick = now;
+                    g_HeartbeatDeadlineTick = now +
+                        frequency * kMenuHeartbeatTimeoutSeconds;
+                } else {
+                    g_HeartbeatDeadlineTick = now + g_BusyRemainingTicks;
+                }
+                g_LastBusyEndTick = now;
+                g_BusyUntilTick = now;
+                g_BusyPauseProcessed = true;
+                DaemonLog("ipc: Busy pause ended by menu");
+                return true;
+            }
+            if (!desknx::ipc::rules::IsValidBusySeconds(payload.seconds))
+                return false;
+
             // One bounded pause per heartbeat interval. Do not allow nested or
             // back-to-back Busy messages to keep an unresponsive menu alive.
             if (g_HeartbeatDeadlineTick == 0 || now >= g_HeartbeatDeadlineTick)
