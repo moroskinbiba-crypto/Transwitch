@@ -36,6 +36,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
           /tmp/desknx-protocol-rules-test
 
+      - name: Test production menu liveness controller
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include tests/menu_liveness_test.cpp -o /tmp/desknx-menu-liveness-test
+          /tmp/desknx-menu-liveness-test
+
       - name: Run host IPC parser tests (ТЗ IPC-01/02/04/07)
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
