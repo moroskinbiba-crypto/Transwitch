@@ -45,21 +45,10 @@ bool ParseMessage(const void* data, std::size_t total_size,
     }
 
     const bool known = rules::IsKnownCommand(header.command);
-    if (known) {
-        const std::uint32_t expected = rules::ExpectedPayloadSize(header.command);
-        bool size_ok = false;
-        switch (static_cast<rules::CommandId>(header.command)) {
-            case rules::CommandId::LaunchTitle:
-                size_ok = rules::MatchesLaunchTitleSize(header.payload_size);
-                break;
-            case rules::CommandId::Log:
-                size_ok = header.payload_size >= 1 && header.payload_size <= rules::MaxLogLineBytes;
-                break;
-            default:
-                size_ok = expected == 0xFFFFFFFFu ? true : header.payload_size == expected;
-                break;
-        }
-        if (!size_ok) { status = ParseStatus::BadPayloadSize; return false; }
+    if (known && !rules::IsValidCommandPayloadSize(
+            header.version, header.command, header.payload_size)) {
+        status = ParseStatus::BadPayloadSize;
+        return false;
     }
 
     message.command = header.command;

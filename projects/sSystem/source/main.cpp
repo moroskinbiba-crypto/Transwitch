@@ -443,6 +443,13 @@ bool ParseMenuCommand(AppletStorage& storage) {
     }
 
     const auto command = static_cast<Command>(hdr.command);
+    if (desknx::ipc::rules::IsKnownCommand(hdr.command) &&
+        !desknx::ipc::rules::IsValidCommandPayloadSize(
+            hdr.version, hdr.command, hdr.payload_size)) {
+        DaemonLog("ipc: dropped command with invalid version/payload size (cmd=%u size=%u version=%u)",
+                  hdr.command, hdr.payload_size, hdr.version);
+        return false;
+    }
     switch (command) {
         case Command::MenuReady:
             if (hdr.payload_size != 0) return false;

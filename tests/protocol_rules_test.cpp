@@ -37,4 +37,20 @@ int main() {
     assert(IsValidBusySeconds(120));
     assert(!IsValidBusySeconds(0));
     assert(!IsValidBusySeconds(121));
+
+    // Shared command/payload validation is used by production ParseMenuCommand.
+    static_assert(IsValidCommandPayloadSize(1, 1, 0));      // MenuReady v1
+    static_assert(IsValidCommandPayloadSize(1, 2, 8));      // legacy LaunchTitle
+    static_assert(!IsValidCommandPayloadSize(1, 2, 32));    // v2 payload needs v2
+    static_assert(IsValidCommandPayloadSize(2, 2, 32));     // current LaunchTitle
+    static_assert(IsValidCommandPayloadSize(2, 2, 8));      // legacy-size compatibility
+    static_assert(!IsValidCommandPayloadSize(2, 2, 16));    // malformed title payload
+    static_assert(!IsValidCommandPayloadSize(1, 6, 4));     // Busy requires v2
+    static_assert(IsValidCommandPayloadSize(2, 6, 4));
+    static_assert(!IsValidCommandPayloadSize(2, 7, 0xFFFFFFFFULL));
+    static_assert(!IsValidCommandPayloadSize(2, 11, 0));    // empty log line
+    static_assert(IsValidCommandPayloadSize(2, 11, 1));
+    static_assert(IsValidCommandPayloadSize(2, 11, MaxLogLineBytes));
+    static_assert(!IsValidCommandPayloadSize(2, 11, MaxLogLineBytes + 1));
+    static_assert(!IsValidCommandPayloadSize(2, 999, 0));   // unknown command
 }

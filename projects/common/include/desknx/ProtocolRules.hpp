@@ -158,4 +158,38 @@ constexpr std::uint32_t ExpectedEventPayloadSize(std::uint32_t event) {
     }
 }
 
+// Shared payload contract used by the production sysmodule and host tests.
+// Unknown commands are handled separately so callers can log/ignore them.
+constexpr bool IsValidCommandPayloadSize(std::uint16_t version,
+                                         std::uint32_t command,
+                                         std::uint64_t size) {
+    if (!IsSupportedVersion(version) || !IsKnownCommand(command) ||
+        !IsValidPayloadSize(size))
+        return false;
+
+    if (version < CurrentVersion) {
+        switch (static_cast<CommandId>(command)) {
+            case CommandId::Busy:
+            case CommandId::CloseApp:
+            case CommandId::SelectUser:
+            case CommandId::PowerAction:
+            case CommandId::LaunchSystemApplet:
+            case CommandId::Log:
+                return false;
+            default:
+                break;
+        }
+    }
+
+    if (command == static_cast<std::uint32_t>(CommandId::LaunchTitle)) {
+        return version == LegacyVersion ? size == 8 : MatchesLaunchTitleSize(
+            static_cast<std::uint32_t>(size));
+    }
+    if (command == static_cast<std::uint32_t>(CommandId::Log))
+        return size >= 1 && size <= MaxLogLineBytes;
+
+    const std::uint32_t expected = ExpectedPayloadSize(command);
+    return expected != 0xFFFFFFFFu && size == expected;
+}
+
 } // namespace desknx::ipc::rules
