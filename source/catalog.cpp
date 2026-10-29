@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -150,11 +151,10 @@ bool isCachedNroPath(const std::string& path) {
     if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
         path.find("..") != std::string::npos || path.size() <= sizeof(prefix) + 3)
         return false;
-    const std::string extension = path.substr(path.size() - 4);
-    return (extension == ".nro" || extension == ".NRO" ||
-            extension == ".Nro" || extension == ".nRo" ||
-            extension == ".nrO" || extension == ".NrO" ||
-            extension == ".nRO" || extension == ".NRo") && IsRegularFile(path);
+    std::string extension = path.substr(path.size() - 4);
+    for (char& c : extension)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return extension == ".nro" && IsRegularFile(path);
 }
 
 bool ReadCache(const Signatures& sig, ScanResult& result) {
