@@ -30,6 +30,25 @@ struct Runner {
 } // namespace
 
 int main() {
+    // --- Insufficient output capacity must not partially commit a transition.
+    {
+        Machine machine;
+        machine.NoteHbLaunched(0);
+        machine.NoteHbRunning();
+        Input input;
+        input.now_ms = 100;
+        Action tooSmall[1]{};
+        assert(machine.OnEvent(Event::HomeShort, input, tooSmall, 1) == 0);
+        assert(machine.menu() == MenuState::Hb); // no side effects were committed
+
+        Action enough[MaxActionsPerEvent]{};
+        assert(machine.OnEvent(Event::HomeShort, input, enough, MaxActionsPerEvent) == 3);
+        assert(enough[0].kind == ActionKind::StopMenu);
+        assert(enough[1].kind == ActionKind::UnregisterEcs);
+        assert(enough[2].kind == ActionKind::LaunchMenu);
+        assert(machine.menu() == MenuState::None);
+    }
+
     // --- HOME with nothing running launches the menu (ТЗ row 1).
     {
         Runner r;
