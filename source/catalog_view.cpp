@@ -37,8 +37,8 @@ std::string searchKey(const std::string& value) {
         if (cp>=0x430 && cp<=0x44F) cp-=0x20;
         if (cp>=0x410 && cp<=0x42F) {
             static const char* const map[]={
-                "A","B","V","G","D","E","ZH","Z","I","I","K","L","M","N","O","P",
-                "R","S","T","U","F","H","TS","CH","SH","SCH","","Y","","E","YU","YA"
+                "a","b","v","g","d","e","zh","z","i","i","k","l","m","n","o","p",
+                "r","s","t","u","f","h","ts","ch","sh","sch","","y","","e","yu","ya"
             };
             const size_t index=static_cast<size_t>(cp-0x410);
             if (index<sizeof(map)/sizeof(map[0]) && map[index][0]) key+=map[index];
