@@ -30,12 +30,26 @@ SD_ROOT="$(cd "$SD_ROOT" && pwd -P)"
 DESKNX_ROOT="$SD_ROOT/switch/DeskNX"
 MANIFEST="$DESKNX_ROOT/install-manifest.txt"
 TARGET_QLAUNCH="$SD_ROOT/atmosphere/contents/0100000000001000"
+TARGET_QLAUNCH_DISABLED="$SD_ROOT/atmosphere/contents/0100000000001000.disabled-DeskNX"
+INSTALLED_QLAUNCH="$TARGET_QLAUNCH"
+OVERRIDE_WAS_DISABLED=0
 TARGET_MENU="$DESKNX_ROOT/bin/Menu"
 TARGET_HBLOADER="$DESKNX_ROOT/bin/hbloader"
 TARGET_NRO="$DESKNX_ROOT/DeskNX.nro"
 [[ -s "$MANIFEST" ]] || { echo "DeskNX install manifest not found: $MANIFEST" >&2; exit 1; }
-[[ -f "$TARGET_QLAUNCH/exefs/DeskNX.install-marker" ]] || { echo "DeskNX ownership marker not found; refusing to remove this qlaunch override." >&2; exit 1; }
-[[ "$(cat "$TARGET_QLAUNCH/exefs/DeskNX.install-marker")" == "DeskNX qlaunch override v0.2.0" ]] || {
+if [[ -e "$TARGET_QLAUNCH" && -e "$TARGET_QLAUNCH_DISABLED" ]]; then
+  echo "Both active and emergency-disabled qlaunch override directories exist; refusing ambiguous recovery." >&2
+  exit 1
+elif [[ ! -e "$TARGET_QLAUNCH" && -e "$TARGET_QLAUNCH_DISABLED" ]]; then
+  INSTALLED_QLAUNCH="$TARGET_QLAUNCH_DISABLED"
+  OVERRIDE_WAS_DISABLED=1
+fi
+
+[[ -f "$INSTALLED_QLAUNCH/exefs/DeskNX.install-marker" ]] || {
+  echo "DeskNX ownership marker not found at $INSTALLED_QLAUNCH; refusing to remove this qlaunch override." >&2
+  exit 1
+}
+[[ "$(cat "$INSTALLED_QLAUNCH/exefs/DeskNX.install-marker")" == "DeskNX qlaunch override v0.2.0" ]] || {
   echo "Unexpected ownership marker contents; refusing." >&2; exit 1;
 }
 
@@ -77,8 +91,8 @@ hash_file() {
     echo "no-sha256-tool"
   fi
 }
-actual_main="$(hash_file "$TARGET_QLAUNCH/exefs/main")"
-actual_npdm="$(hash_file "$TARGET_QLAUNCH/exefs/main.npdm")"
+actual_main="$(hash_file "$INSTALLED_QLAUNCH/exefs/main")"
+actual_npdm="$(hash_file "$INSTALLED_QLAUNCH/exefs/main.npdm")"
 if [[ "$FORCE_CHANGED" != 1 && ( "$actual_main" != "$expected_main" || "$actual_npdm" != "$expected_npdm" ) ]]; then
   echo "Installed qlaunch files changed since installation." >&2
   echo "Review them first, or pass --force-changed-files to preserve them and continue." >&2
@@ -129,7 +143,13 @@ cleanup() {
   local rc=$?
   trap - EXIT
   if [[ "$COMMITTED" != 1 ]]; then
-    rollback_dir "$TARGET_QLAUNCH" "$CURRENT_QLAUNCH" "$HAD_QLAUNCH" "$RESTORED_QLAUNCH"
+    # If an emergency-disabled DeskNX override was selected, restoring a prior
+    # qlaunch backup temporarily creates the canonical path. Remove that
+    # staged restoration before putting the disabled DeskNX directory back.
+    if [[ "$OVERRIDE_WAS_DISABLED" == 1 && "$RESTORED_QLAUNCH" == 1 ]]; then
+      rm -rf "$TARGET_QLAUNCH"
+    fi
+    rollback_dir "$INSTALLED_QLAUNCH" "$CURRENT_QLAUNCH" "$HAD_QLAUNCH" "$RESTORED_QLAUNCH"
     rollback_dir "$TARGET_MENU" "$CURRENT_MENU" "$HAD_MENU" "$RESTORED_MENU"
     rollback_dir "$TARGET_HBLOADER" "$CURRENT_HBLOADER" "$HAD_HBLOADER" "$RESTORED_HBLOADER"
     rollback_file "$TARGET_NRO" "$CURRENT_NRO" "$HAD_NRO" "$RESTORED_NRO"
@@ -150,7 +170,7 @@ if [[ "$menu_backup_rel" != "none" ]]; then cp -a "$SD_ROOT/$menu_backup_rel" "$
 if [[ "$nro_backup_rel" != "none" ]]; then cp -p "$SD_ROOT/$nro_backup_rel" "$STAGE/nro"; fi
 if [[ "$hbloader_backup_rel" != "none" ]]; then cp -a "$SD_ROOT/$hbloader_backup_rel" "$STAGE/hbloader"; fi
 
-if [[ -e "$TARGET_QLAUNCH" ]]; then HAD_QLAUNCH=1; mv "$TARGET_QLAUNCH" "$CURRENT_QLAUNCH"; fi
+if [[ -e "$INSTALLED_QLAUNCH" ]]; then HAD_QLAUNCH=1; mv "$INSTALLED_QLAUNCH" "$CURRENT_QLAUNCH"; fi
 if [[ -e "$TARGET_MENU" ]]; then HAD_MENU=1; mv "$TARGET_MENU" "$CURRENT_MENU"; fi
 if [[ -e "$TARGET_HBLOADER" ]]; then HAD_HBLOADER=1; mv "$TARGET_HBLOADER" "$CURRENT_HBLOADER"; fi
 if [[ -e "$TARGET_NRO" ]]; then HAD_NRO=1; mv "$TARGET_NRO" "$CURRENT_NRO"; fi
@@ -183,6 +203,9 @@ COMMITTED=1
 rm -f "$MANIFEST_ARCHIVE"
 
 echo "DeskNX HOME override removed."
+if [[ "$OVERRIDE_WAS_DISABLED" == 1 ]]; then
+  echo "The emergency-disabled DeskNX override was archived and will not be re-enabled."
+fi
 if [[ "$backup_rel" == "none" ]]; then
   echo "No previous qlaunch override existed; Atmosphère should fall back to the system HOME implementation."
 else

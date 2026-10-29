@@ -111,4 +111,24 @@ assert_file_content "$HBLOADER/main.npdm" "original hbloader npdm"
 assert_file_content "$SD2/switch/DeskNX/DeskNX.nro" "original DeskNX NRO"
 assert_absent "$SD2/switch/DeskNX/install-manifest.txt"
 
-echo "PASS: installer and uninstaller recovery scenarios"
+# Case 3: the emergency recovery chord moves qlaunch to the disabled path.
+# Uninstall must still validate and archive that DeskNX build while restoring
+# the previous qlaunch override to its canonical path.
+SD3="$TMP/sd-emergency-disabled"
+QLAUNCH3="$SD3/atmosphere/contents/0100000000001000"
+DISABLED3="$SD3/atmosphere/contents/0100000000001000.disabled-DeskNX"
+mkdir -p "$QLAUNCH3/exefs"
+printf 'original qlaunch executable\n' > "$QLAUNCH3/exefs/main"
+printf 'original qlaunch npdm\n' > "$QLAUNCH3/exefs/main.npdm"
+printf 'keep qlaunch metadata\n' > "$QLAUNCH3/extra.txt"
+DESKNX_PACKAGE_DIR="$PACKAGE" bash "$ROOT/scripts/install-system.sh" --sd-root "$SD3" --acknowledge-risk --backup-existing
+mv "$QLAUNCH3" "$DISABLED3"
+bash "$ROOT/scripts/uninstall-system.sh" --sd-root "$SD3" --acknowledge-risk
+assert_file_content "$QLAUNCH3/exefs/main" "original qlaunch executable"
+assert_file_content "$QLAUNCH3/exefs/main.npdm" "original qlaunch npdm"
+assert_file_content "$QLAUNCH3/extra.txt" "keep qlaunch metadata"
+assert_absent "$DISABLED3"
+assert_absent "$SD3/switch/DeskNX/install-manifest.txt"
+[[ -n "$(find "$SD3/switch/DeskNX/backup" -mindepth 1 -maxdepth 1 -type d -name 'desknx-installed-*' -print -quit)" ]] || fail "emergency-disabled DeskNX override was not archived"
+
+echo "PASS: installer and uninstaller recovery scenarios, including emergency-disabled qlaunch"

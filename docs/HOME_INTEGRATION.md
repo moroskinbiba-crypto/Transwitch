@@ -63,7 +63,7 @@ Restore:
 
     bash scripts/uninstall-system.sh --sd-root /path/to/sd-card --acknowledge-risk
 
-The uninstall script checks the ownership marker in the installed qlaunch directory and verifies the SHA-256 checksums of the qlaunch executable and NPDM before replacing them. If those files changed after install, it refuses by default; --force-changed-files preserves the DeskNX build before restoring the backup.
+The uninstall script checks the ownership marker in the installed qlaunch directory and verifies the SHA-256 checksums of the qlaunch executable and NPDM before replacing them. If those files changed after install, it refuses by default; --force-changed-files preserves the DeskNX build before restoring the backup. If the emergency chord has already moved DeskNX to `0100000000001000.disabled-DeskNX`, the uninstaller recognizes that marked path, archives it without re-enabling it, and restores any previous qlaunch override.
 
 ### Emergency recovery chord
 
