@@ -20,7 +20,7 @@ struct Tile {
     std::string title;
     std::string data;
     int x{0}, y{0}, w{1}, h{1}, color{0};
-    std::string unknownTypeCode;
+    std::string unknownTypeCode{};
 };
 
 struct Workspace {
