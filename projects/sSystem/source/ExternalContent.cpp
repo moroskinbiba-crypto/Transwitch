@@ -153,8 +153,11 @@ namespace desknx::system::ecs {
             &g_ManagerThread, &ManagerThreadFunc, nullptr,
             g_ManagerThreadStack, sizeof(g_ManagerThreadStack), 10);
         if (R_FAILED(rc)) {
-            EcsLog("ECS server thread creation failed (rc=0x%08X)",
-                   static_cast<unsigned int>(rc.GetValue()));
+            char message[96]{};
+            std::snprintf(message, sizeof(message),
+                          "ECS server thread creation failed (rc=0x%08X)",
+                          static_cast<unsigned int>(rc.GetValue()));
+            EcsLog(message);
             return rc.GetValue();
         }
         g_ServerThreadPrepared = true;
@@ -185,8 +188,11 @@ namespace desknx::system::ecs {
                 &g_ManagerThread, &ManagerThreadFunc, nullptr,
                 g_ManagerThreadStack, sizeof(g_ManagerThreadStack), 10);
             if (R_FAILED(rc)) {
-                EcsLog("ECS server restart failed (rc=0x%08X)",
-                       static_cast<unsigned int>(rc.GetValue()));
+                char message[96]{};
+                std::snprintf(message, sizeof(message),
+                              "ECS server restart failed (rc=0x%08X)",
+                              static_cast<unsigned int>(rc.GetValue()));
+                EcsLog(message);
                 return rc.GetValue();
             }
             g_ServerThreadPrepared = true;
@@ -293,8 +299,11 @@ namespace desknx::system::ecs {
             const Result unregRc = UnregisterExternalCodeCmd(program_id);
             if (R_FAILED(unregRc))
                 EcsLog("ECS rollback warning: could not unregister mapping after thread-start failure");
-            EcsLog("ECS registration failed: server thread could not start (rc=0x%08X)",
-                   static_cast<unsigned int>(startRc));
+            char message[112]{};
+            std::snprintf(message, sizeof(message),
+                          "ECS registration failed: server thread could not start (rc=0x%08X)",
+                          static_cast<unsigned int>(startRc));
+            EcsLog(message);
             return startRc;
         }
         return r.GetValue();
