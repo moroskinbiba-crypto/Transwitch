@@ -1,5 +1,6 @@
 #include <desknx/Model.hpp>
 #include <desknx/StrictParse.hpp>
+#include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
 #include "../source/catalog_view.hpp"
 
@@ -7,6 +8,8 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <iterator>
+#include <unistd.h>
 #include <string>
 
 using namespace desknx::model;
@@ -121,5 +124,64 @@ int main() {
     std::remove("/tmp/desknx-small.nro");std::remove("/tmp/desknx-large.nro");
     assert(std::string(FilterName(FilterMode::Homebrew))=="HOMEBREW");
     assert(std::string(SortName(SortMode::Recent))=="RECENT");
+
+    // Safe file replacement preserves the last good destination if publishing
+    // a fully-written temp file fails.
+    {
+        char directoryTemplate[] = "/tmp/desknx-safe-replace-XXXXXX";
+        char* directory = mkdtemp(directoryTemplate);
+        assert(directory != nullptr);
+        const std::string root(directory);
+        const std::string destination = root + "/state.dat";
+        const std::string temporary = root + "/state.tmp";
+        const std::string backup = root + "/state.bak";
+        auto writeText = [](const std::string& path, const std::string& value) {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out << value;
+            out.close();
+            assert(out.good());
+        };
+        auto readText = [](const std::string& path) {
+            std::ifstream in(path, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in),
+                               std::istreambuf_iterator<char>());
+        };
+
+        writeText(destination, "old-state");
+        writeText(temporary, "new-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   temporary.c_str(), destination.c_str(), backup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Success);
+        assert(readText(destination) == "new-state");
+        assert(readText(backup).empty());
+        assert(readText(temporary).empty());
+
+        // A missing temp simulates publication failure after the old file has
+        // been moved aside; the helper must roll the old file back.
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   (root + "/missing.tmp").c_str(),
+                   destination.c_str(), backup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Failed);
+        assert(readText(destination) == "new-state");
+        assert(readText(backup).empty());
+
+        const std::string first = root + "/first.dat";
+        const std::string firstTemp = root + "/first.tmp";
+        const std::string firstBackup = root + "/first.bak";
+        writeText(firstTemp, "first-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   firstTemp.c_str(), first.c_str(), firstBackup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Success);
+        assert(readText(first) == "first-state");
+
+        std::remove(destination.c_str());
+        std::remove(temporary.c_str());
+        std::remove(backup.c_str());
+        std::remove(first.c_str());
+        std::remove(firstTemp.c_str());
+        std::remove(firstBackup.c_str());
+        rmdir(root.c_str());
+    }
+
     return 0;
 }

@@ -28,7 +28,7 @@ jobs:
 
       - name: Run host model, layout and catalog-view unit tests
         run: |
-          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
       - name: Test IPC protocol validation boundaries

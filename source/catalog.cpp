@@ -1,5 +1,6 @@
 #include "catalog.hpp"
 #include "../include/desknx/StrictParse.hpp"
+#include <desknx/SafeReplace.hpp>
 
 #include <switch.h>
 #include <algorithm>
@@ -224,8 +225,10 @@ bool SaveBytes(const std::string& path, const unsigned char* data, size_t length
     const bool good = output.good();
     output.close();
     if (!good) { std::remove(temp.c_str()); return false; }
-    std::remove(path.c_str());
-    if (std::rename(temp.c_str(), path.c_str()) != 0) {
+    const std::string backup = path + ".bak";
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        temp.c_str(), path.c_str(), backup.c_str());
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
         std::remove(temp.c_str());
         return false;
     }
@@ -302,8 +305,9 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     const bool good = output.good();
     output.close();
     if (!good) { std::remove(CacheTemp); return false; }
-    std::remove(CacheFile);
-    if (std::rename(CacheTemp, CacheFile) != 0) {
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        CacheTemp, CacheFile, "sdmc:/switch/DeskNX/cache/catalogue.bak");
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
         std::remove(CacheTemp);
         return false;
     }

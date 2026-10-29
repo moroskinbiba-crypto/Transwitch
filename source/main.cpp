@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
+#include <desknx/SafeReplace.hpp>
 #include "../include/desknx/Model.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
@@ -38,6 +39,7 @@ constexpr const char* CFG_BAK_FILE = "sdmc:/switch/DeskNX/layout.bak";
 size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
+constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
 
 struct Color { Uint8 r, g, b, a; };
 constexpr Color BG{14,17,25,255}, PANEL{24,29,40,255}, EDGE{55,66,83,255};
@@ -401,8 +403,15 @@ void saveHistory() {
     for(const auto& e:recentLaunches)out<<typeCode(e.kind)<<'\t'<<safeField(e.title)<<'\t'<<safeField(e.data)<<'\n';
     out.flush();bool good=out.good();out.close();
     if(!good){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY WRITE FAILED",3000);return;}
-    std::remove(HISTORY_FILE);
-    if(std::rename(HISTORY_TMP,HISTORY_FILE)!=0){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY RENAME FAILED",3000);}
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        HISTORY_TMP, HISTORY_FILE, HISTORY_BAK_FILE);
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
+        std::remove(HISTORY_TMP);
+        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed)
+            setStatus("RECENT HISTORY RECOVERY NEEDED: KEEP recent.bak", 5000);
+        else
+            setStatus("RECENT HISTORY RENAME FAILED", 3000);
+    }
 }
 void recordRecentLaunch(const Tile& tile) {
     if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;

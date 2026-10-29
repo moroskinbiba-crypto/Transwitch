@@ -5,6 +5,7 @@
 #include <stratosphere.hpp>
 
 #include <desknx/Protocol.hpp>
+#include <desknx/SafeReplace.hpp>
 #include <desknx/system/Application.hpp>
 #include <desknx/system/ExternalContent.hpp>
 #include <desknx/system/LibraryApplet.hpp>
@@ -29,6 +30,7 @@ constexpr const char* kLogPath = "sdmc:/switch/DeskNX/logs/daemon.log";
 constexpr const char* kPrevLogPath = "sdmc:/switch/DeskNX/logs/daemon.prev.log";
 constexpr const char* kHbTargetPath = "sdmc:/switch/DeskNX/hbtarget.txt";
 constexpr const char* kHbTargetTemp = "sdmc:/switch/DeskNX/hbtarget.tmp";
+constexpr const char* kHbTargetBackup = "sdmc:/switch/DeskNX/hbtarget.bak";
 constexpr u64 kHomePressSettleMs = 1500;
 constexpr u64 kMenuFastExitMs = 3000;
 constexpr u64 kMenuReadyTimeoutSeconds = 25;
@@ -217,12 +219,17 @@ bool WriteHomebrewTarget(const char* path, const char* argv) {
         return false;
     }
 
-    // The loader only sees the request after the final rename. Replacing the
-    // previous target is safe because the menu slot is free at this point.
-    remove(kHbTargetPath);
-    if (std::rename(kHbTargetTemp, kHbTargetPath) != 0) {
+    // Preserve the previous one-shot target until the complete new request
+    // has been published. A failed rename restores the previous request.
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        kHbTargetTemp, kHbTargetPath, kHbTargetBackup);
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
         remove(kHbTargetTemp);
-        DaemonLog("hb: cannot publish target request (errno=%d)", errno);
+        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed)
+            DaemonLog("hb: target publish and rollback failed; recovery copy may remain at %s",
+                      kHbTargetBackup);
+        else
+            DaemonLog("hb: cannot publish target request (errno=%d)", errno);
         return false;
     }
     return true;
