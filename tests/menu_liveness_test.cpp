@@ -110,7 +110,10 @@ int main() {
         assert(liveness.HandleBusy(1, 1100, 0) == BusyResult::Rejected);
         assert(liveness.HandleBusy(1, 2500, 100) == BusyResult::Rejected);
 
-        liveness.MarkReady(std::numeric_limits<std::uint64_t>::max() - 10, 100);
+        // A second ready handshake is rejected until the previous session was
+        // explicitly reset; use a fresh session for the saturation boundary.
+        liveness.Reset();
+        assert(liveness.MarkReady(std::numeric_limits<std::uint64_t>::max() - 10, 100));
         assert(liveness.HeartbeatDeadlineTick() == std::numeric_limits<std::uint64_t>::max());
         assert(liveness.HeartbeatTimedOut(std::numeric_limits<std::uint64_t>::max(), true));
     }
