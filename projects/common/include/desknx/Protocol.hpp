@@ -3,6 +3,7 @@
 #include <switch.h>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <desknx/ProtocolRules.hpp>
 
 namespace desknx::ipc {
