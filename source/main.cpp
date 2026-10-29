@@ -181,6 +181,7 @@ std::vector<Candidate> visibleCatalogueSnapshot() {
     for(const auto& item:recentLaunches) recent.push_back({item.kind,item.data});
     return desknx::catalog_view::FilterAndSort(all,catalogueQuery,catalogueFilter,catalogueSort,recent);
 }
+Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize);
 void searchCatalogue() {
     SwkbdConfig config{};
     if(R_FAILED(swkbdCreate(&config,0))){setStatus("SEARCH KEYBOARD UNAVAILABLE",2500);return;}
@@ -189,7 +190,7 @@ void searchCatalogue() {
     swkbdConfigSetInitialText(&config,catalogueQuery.c_str());
     char value[128]{};
     std::snprintf(value,sizeof(value),"%s",catalogueQuery.c_str());
-    const Result rc=swkbdShow(&config,value,sizeof(value));
+    const Result rc=showKeyboard(&config,value,sizeof(value));
     swkbdClose(&config);
     if(R_SUCCEEDED(rc)) {
         catalogueQuery=value;
@@ -239,6 +240,13 @@ Result sendIpc(Sender sender) {
     const Result rc=sender();
     if(ipcMutex) SDL_UnlockMutex(ipcMutex);
     return rc;
+}
+Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
+    const Result busyRc=sendIpc([]{return desknx::ipc::SendBusy(30);});
+    const Result dialogRc=swkbdShow(config,output,outputSize);
+    if(R_SUCCEEDED(busyRc))
+        (void)sendIpc([]{return desknx::ipc::SendBusyEnd();});
+    return dialogRc;
 }
 int heartbeatThreadMain(void*) {
     while(SDL_AtomicGet(&heartbeatRunning)) {
@@ -562,7 +570,7 @@ void newDesk() {
 void renameDesk() {
     SwkbdConfig kbd{};if(R_FAILED(swkbdCreate(&kbd,0))){setStatus("KEYBOARD UNAVAILABLE");return;}
     swkbdConfigMakePresetDefault(&kbd);swkbdConfigSetHeaderText(&kbd,"Rename workspace");swkbdConfigSetInitialText(&kbd,desks[static_cast<size_t>(deskIndex)].name.c_str());
-    char result[64]{};Result rc=swkbdShow(&kbd,result,sizeof(result));swkbdClose(&kbd);
+    char result[64]{};Result rc=showKeyboard(&kbd,result,sizeof(result));swkbdClose(&kbd);
     if(R_SUCCEEDED(rc)&&result[0]){desks[static_cast<size_t>(deskIndex)].name=result;saveNow();setStatus("WORKSPACE RENAMED");}
 }
 void deleteDesk() {
