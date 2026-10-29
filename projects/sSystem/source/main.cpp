@@ -80,14 +80,13 @@ bool g_RecoveryChordAttempted = false;
 AccountUid g_PendingUser{};         // SelectUser (IPC cmd 8) / LaunchTitle uid
 bool g_HasPendingUser = false;
 u64 g_PendingLaunchFlags = 0;       // LaunchTitle v2 flag bits (LNC-02)
-// Backend-state for the remaining v2 commands (CloseApp/PowerAction/
-// LaunchSystemApplet). All are honoured after the menu closes so we never
-// fight a live applet for focus.
+// Backend-state for implemented v2 commands (CloseApp/PowerAction).
+// Generic library-applet launch is intentionally not queued: libnx does not
+// expose the assumed appletLaunchInteractiveSystemApplet API, and every
+// supported library applet needs its own validated argument contract.
 bool g_PendingCloseApp = false;
 desknx::ipc::PowerKind g_PendingPowerAction = desknx::ipc::PowerKind::Sleep;
 bool g_HasPendingPowerAction = false;
-u32 g_PendingSystemApplet = 0;
-bool g_HasPendingSystemApplet = false;
 // Last title-launch failure, reported to the menu in the initial state block
 // (IPC-06 §4.4). Cleared when a launch succeeds.
 u32 g_LastLaunchRc = 0;
@@ -659,16 +658,18 @@ bool ParseMenuCommand(AppletStorage& storage) {
             desknx::ipc::LaunchSystemAppletPayload payload{};
             if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
                 return false;
-            // SYS-01: strict whitelist; anything else is dropped like garbage.
             if (!desknx::ipc::rules::IsAllowedSystemApplet(payload.applet_id)) {
-                DaemonLog("ipc: system applet 0x%X rejected (not whitelisted)",
+                DaemonLog("ipc: library applet 0x%X rejected (not whitelisted)",
                           payload.applet_id);
                 return false;
             }
-            g_PendingSystemApplet = payload.applet_id;
-            g_HasPendingSystemApplet = true;
-            DaemonLog("ipc: system applet 0x%X queued", payload.applet_id);
-            return true;
+            // Do not call a nonexistent generic launcher or hand an applet an
+            // empty/unvalidated argument block. Each applet has its own input
+            // format and lifecycle requirements; implement explicit handlers
+            // before enabling this command.
+            DaemonLog("ipc: library applet 0x%X not launched: per-applet arguments/lifecycle are not implemented",
+                      payload.applet_id);
+            return false;
         }
 
         case Command::Log: {
@@ -1136,23 +1137,6 @@ void HandleMenuClosed() {
         DaemonLog("power: request returned; reopening menu");
         TransitionTo(BackendState::MenuStarting, "power action fell through");
         LaunchMenu();
-        return;
-    }
-
-    // SYS-01: whitelisted system applet (Settings, Web, Shop...). am refuses
-    // to start an applet while another library applet holds foreground, so we
-    // launch after the menu closed. These applets are transient: when they
-    // exit, the normal slot machinery brings DeskNX back.
-    if (g_HasPendingSystemApplet) {
-        const u32 pending_id = g_PendingSystemApplet;
-        const auto applet_id = static_cast<AppletId>(g_PendingSystemApplet);
-        g_HasPendingSystemApplet = false;
-        const Result rc = appletLaunchInteractiveSystemApplet(applet_id);
-        DaemonLog("sysapplet: launch id=0x%X rc=0x%08X",
-                  pending_id, static_cast<unsigned int>(rc));
-        if (R_FAILED(rc)) LaunchMenu();
-        // On success AM owns the screen; the next HOME press or message loop
-        // restores DeskNX once the applet exits.
         return;
     }
 

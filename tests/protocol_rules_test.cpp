@@ -38,6 +38,20 @@ int main() {
     assert(!IsValidBusySeconds(0));
     assert(!IsValidBusySeconds(121));
 
+    // AppletId values from libnx. 0x0A..0x0D are Auth/Cabinet/Controller/DataErase,
+    // not Web/Shop/PhotoViewer/Settings.
+    static_assert(IsAllowedSystemApplet(0x13));  // LibraryAppletWeb
+    static_assert(IsAllowedSystemApplet(0x14));  // LibraryAppletShop
+    static_assert(IsAllowedSystemApplet(0x15));  // LibraryAppletPhotoViewer
+    static_assert(!IsAllowedSystemApplet(0x0A)); // LibraryAppletAuth
+    static_assert(!IsAllowedSystemApplet(0x0B)); // LibraryAppletCabinet
+    static_assert(!IsAllowedSystemApplet(0x16)); // unavailable LibraryAppletSet
+    static_assert(IsAllowedSystemApplet(0x17));  // LibraryAppletOfflineWeb
+    static_assert(IsAllowedSystemApplet(0x18));  // LibraryAppletLoginShare
+    static_assert(IsAllowedSystemApplet(0x19));  // LibraryAppletWifiWebAuth
+    static_assert(IsAllowedSystemApplet(0x1A));  // LibraryAppletMyPage
+    static_assert(!IsAllowedSystemApplet(0x1B)); // unknown/unsupported id
+
     // Shared command/payload validation is used by production ParseMenuCommand.
     static_assert(IsValidCommandPayloadSize(1, 1, 0));      // MenuReady v1
     static_assert(IsValidCommandPayloadSize(1, 2, 8));      // legacy LaunchTitle
