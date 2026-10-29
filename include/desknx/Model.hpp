@@ -35,6 +35,15 @@ struct Candidate {
     int w{1}, h{1}, color{0};
 };
 
+inline bool isTitleId(const std::string& value) {
+    if (value.size() != 16) return false;
+    for (unsigned char c : value) {
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') ||
+              (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
 inline std::string typeCode(Kind kind) {
     switch (kind) {
         case Kind::Game: return "G";
@@ -92,8 +101,11 @@ inline bool overlap(const Tile& a, const Tile& b) {
 }
 
 inline bool placeable(const Workspace& desk, const Tile& tile, int x, int y, int ignore = -1) {
-    if (x < 0 || y < 0 || tile.w < 1 || tile.h < 1 ||
-        x + tile.w > Columns || y + tile.h > Rows) return false;
+    // Check against the grid before adding dimensions; x + w can overflow for
+    // malformed coordinates loaded from a user-editable layout file.
+    if (x < 0 || y < 0 || x >= Columns || y >= Rows ||
+        tile.w < 1 || tile.h < 1 ||
+        tile.w > Columns - x || tile.h > Rows - y) return false;
     Tile candidate = tile;
     candidate.x = x;
     candidate.y = y;
@@ -136,8 +148,14 @@ inline uint64_t stableHash(const std::string& value) {
 
 inline std::string iconCachePath(Kind kind, const std::string& data) {
     char key[32]{};
-    if (kind == Kind::Game)
-        return "sdmc:/switch/DeskNX/cache/icons/game-" + safeField(data) + ".jpg";
+    if (kind == Kind::Game) {
+        // Game IDs are used in a filesystem path. Do not let malformed layout
+        // data introduce separators or traversal components.
+        if (!isTitleId(data)) return {};
+        std::string normalized = data;
+        for (char& c : normalized) if (c >= 'a' && c <= 'f') c = static_cast<char>(c - 'a' + 'A');
+        return "sdmc:/switch/DeskNX/cache/icons/game-" + normalized + ".jpg";
+    }
     if (kind == Kind::Nro) {
         std::snprintf(key, sizeof(key), "%016llX",
                       static_cast<unsigned long long>(stableHash(data)));

@@ -356,6 +356,20 @@ Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
     return swkbdShow(config,output,outputSize);
 }
 #endif
+bool isSafeNroPath(const std::string& path) {
+    constexpr char prefix[] = "sdmc:/switch/";
+    if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
+        path.find("..") != std::string::npos ||
+        path.size() < (sizeof(prefix) - 1) + 5)
+        return false;
+    std::string extension = path.substr(path.size() - 4);
+    for (char& c : extension)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    if (extension != ".nro") return false;
+    struct stat st{};
+    return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
 void loadHistory() {
     if(!sdMounted)return;
     struct stat historyStat{};
@@ -372,6 +386,8 @@ void loadHistory() {
            fields[1].size()>512||fields[2].empty()||fields[2].size()>512)continue;
         Kind kind=parseKind(fields[0]);
         if(kind!=Kind::Game&&kind!=Kind::Nro)continue;
+        if(kind==Kind::Game&&!desknx::model::isTitleId(fields[2]))continue;
+        if(kind==Kind::Nro&&!isSafeNroPath(fields[2]))continue;
         recentLaunches.push_back({kind,fields[1],fields[2]});
     }
     if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
@@ -700,6 +716,7 @@ void launch(const Tile& t) {
         return;
     }
     if(t.kind==Kind::Game) {
+        if(!desknx::model::isTitleId(t.data)){setStatus("INVALID TITLE ID");return;}
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
         if(id==0){setStatus("INVALID TITLE ID");return;}
 #ifdef DESKNX_SYSTEM_APPLET
@@ -729,6 +746,7 @@ void launch(const Tile& t) {
         return;
     }
     if(t.kind==Kind::Nro) {
+        if(!isSafeNroPath(t.data)){setStatus("INVALID OR MISSING NRO PATH",3500);return;}
 #ifdef DESKNX_SYSTEM_APPLET
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchHomebrew(t.data.c_str(),"");});
         if(R_FAILED(rc)) {

@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <string>
 
 using namespace desknx::model;
@@ -21,6 +22,8 @@ int main() {
     assert(itemAt(desk, 5, 2) == -1);
     assert(placeable(desk, wide, 1, 1));
     assert(!placeable(desk, Tile{Kind::Game, "bad", "", 0, 0, 4, 1, 0}, 0, 0));
+    assert(!placeable(desk, small, std::numeric_limits<int>::max(), 0));
+    assert(!placeable(desk, small, 0, std::numeric_limits<int>::max()));
     int x = -1, y = -1;
     assert(firstFree(desk, small, x, y));
     assert(x >= 0 && y >= 0 && placeable(desk, small, x, y));
@@ -30,7 +33,14 @@ int main() {
     const auto fields = splitTabs("A\tb\tc");
     assert(fields.size() == 3 && fields[1] == "b");
     assert(safeField("a\tb\nc") == "a b c");
-    assert(iconCachePath(Kind::Game, "0100") == "sdmc:/switch/DeskNX/cache/icons/game-0100.jpg");
+    assert(isTitleId("0100000000001000"));
+    assert(!isTitleId("../../escape"));
+    assert(iconCachePath(Kind::Game, "0100000000001000") ==
+           "sdmc:/switch/DeskNX/cache/icons/game-0100000000001000.jpg");
+    assert(iconCachePath(Kind::Game, "010000000000100a") ==
+           "sdmc:/switch/DeskNX/cache/icons/game-010000000000100A.jpg");
+    assert(iconCachePath(Kind::Game, "0100").empty());
+    assert(iconCachePath(Kind::Game, "../../escape").empty());
     assert(iconCachePath(Kind::Nro, "sdmc:/switch/demo.nro") !=
            iconCachePath(Kind::Nro, "sdmc:/switch/other.nro"));
 
