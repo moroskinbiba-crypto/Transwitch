@@ -45,7 +45,7 @@ struct LaunchHomebrewPayload {
 static_assert(sizeof(LaunchHomebrewPayload) == 1024);
 
 inline Result Send(Command command, const void* payload = nullptr, size_t payload_size = 0) {
-    if (!rules::IsValidPayloadSize(static_cast<std::uint32_t>(payload_size)) ||
+    if (!rules::IsValidPayloadSize(payload_size) ||
         (payload_size != 0 && payload == nullptr))
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
 
