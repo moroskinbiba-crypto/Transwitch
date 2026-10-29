@@ -37,6 +37,34 @@ OVERRIDE_WAS_DISABLED=0
 TARGET_MENU="$DESKNX_ROOT/bin/Menu"
 TARGET_HBLOADER="$DESKNX_ROOT/bin/hbloader"
 TARGET_NRO="$DESKNX_ROOT/DeskNX.nro"
+BACKUP_ROOT="$DESKNX_ROOT/backup"
+
+guard_no_symlink_chain() {
+  local path="$1" current="$SD_ROOT" relative component
+  relative="${path#"$SD_ROOT"/}"
+  [[ "$relative" != "$path" ]] || { echo "Refusing path outside SD root: $path" >&2; return 1; }
+  IFS='/' read -r -a components <<< "$relative"
+  for component in "${components[@]}"; do
+    current="$current/$component"
+    if [[ -L "$current" ]]; then
+      echo "Refusing symlink in SD destination path: $current" >&2
+      return 1
+    fi
+  done
+}
+for parent in "$SD_ROOT/atmosphere" "$SD_ROOT/atmosphere/contents" \
+              "$SD_ROOT/switch" "$DESKNX_ROOT" "$DESKNX_ROOT/bin" "$BACKUP_ROOT"; do
+  guard_no_symlink_chain "$parent" || exit 1
+  if [[ -e "$parent" && ! -d "$parent" ]]; then
+    echo "Refusing non-directory parent path: $parent" >&2
+    exit 1
+  fi
+done
+for guarded_path in "$TARGET_QLAUNCH" "$TARGET_QLAUNCH_DISABLED" "$TARGET_MENU" \
+                    "$TARGET_HBLOADER" "$TARGET_NRO" "$MANIFEST"; do
+  guard_no_symlink_chain "$guarded_path" || exit 1
+done
+
 [[ ! -L "$MANIFEST" && -f "$MANIFEST" && -s "$MANIFEST" ]] || { echo "DeskNX install manifest is missing, not a regular file, or is a symlink: $MANIFEST" >&2; exit 1; }
 if [[ -e "$TARGET_QLAUNCH" && -e "$TARGET_QLAUNCH_DISABLED" ]]; then
   echo "Both active and emergency-disabled qlaunch override directories exist; refusing ambiguous recovery." >&2
@@ -82,6 +110,10 @@ expected_npdm="$(manifest_get npdm_sha256)"
 [[ "$menu_backup_rel" == "none" || -d "$SD_ROOT/$menu_backup_rel" ]] || { echo "Recorded menu backup is missing: $menu_backup_rel" >&2; exit 1; }
 [[ "$nro_backup_rel" == "none" || -f "$SD_ROOT/$nro_backup_rel" ]] || { echo "Recorded NRO backup is missing: $nro_backup_rel" >&2; exit 1; }
 [[ "$hbloader_backup_rel" == "none" || -d "$SD_ROOT/$hbloader_backup_rel" ]] || { echo "Recorded hbloader backup is missing: $hbloader_backup_rel" >&2; exit 1; }
+for rel in "$backup_rel" "$menu_backup_rel" "$nro_backup_rel" "$hbloader_backup_rel"; do
+  [[ "$rel" == "none" ]] && continue
+  guard_no_symlink_chain "$SD_ROOT/$rel" || exit 1
+done
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -101,7 +133,7 @@ if [[ "$FORCE_CHANGED" != 1 && ( "$actual_main" != "$expected_main" || "$actual_
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-BACKUP_ROOT="$DESKNX_ROOT/backup"
+guard_no_symlink_chain "$BACKUP_ROOT" || exit 1
 mkdir -p "$BACKUP_ROOT"
 CURRENT_QLAUNCH="$BACKUP_ROOT/desknx-installed-$STAMP"
 CURRENT_MENU="$BACKUP_ROOT/desknx-menu-$STAMP"

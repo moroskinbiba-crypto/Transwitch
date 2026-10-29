@@ -45,6 +45,36 @@ TARGET_HBLOADER="$SD_ROOT/switch/DeskNX/bin/hbloader"
 TARGET_NRO="$SD_ROOT/switch/DeskNX/DeskNX.nro"
 MANIFEST="$SD_ROOT/switch/DeskNX/install-manifest.txt"
 MARKER="DeskNX qlaunch override v0.2.0"
+BACKUP_ROOT="$SD_ROOT/switch/DeskNX/backup"
+
+guard_no_symlink_chain() {
+  local path="$1" current="$SD_ROOT" relative component
+  relative="${path#"$SD_ROOT"/}"
+  [[ "$relative" != "$path" ]] || { echo "Refusing path outside SD root: $path" >&2; return 1; }
+  IFS='/' read -r -a components <<< "$relative"
+  for component in "${components[@]}"; do
+    current="$current/$component"
+    if [[ -L "$current" ]]; then
+      echo "Refusing symlink in SD destination path: $current" >&2
+      return 1
+    fi
+  done
+}
+
+# Existing ancestor directories are part of the trust boundary too. A valid
+# final target is not sufficient if /switch or /atmosphere redirects elsewhere.
+for parent in "$SD_ROOT/atmosphere" "$SD_ROOT/atmosphere/contents" \
+              "$SD_ROOT/switch" "$SD_ROOT/switch/DeskNX" \
+              "$SD_ROOT/switch/DeskNX/bin" "$BACKUP_ROOT"; do
+  guard_no_symlink_chain "$parent" || exit 1
+  if [[ -e "$parent" && ! -d "$parent" ]]; then
+    echo "Refusing non-directory parent path: $parent" >&2
+    exit 1
+  fi
+done
+for guarded_path in "$TARGET_QLAUNCH" "$TARGET_MENU" "$TARGET_HBLOADER" "$TARGET_NRO" "$MANIFEST"; do
+  guard_no_symlink_chain "$guarded_path" || exit 1
+done
 
 for required in "$SRC_QLAUNCH/exefs/main" "$SRC_QLAUNCH/exefs/main.npdm" "$SRC_MENU/main" "$SRC_MENU/main.npdm" "$SRC_HBLOADER/main" "$SRC_HBLOADER/main.npdm" "$SRC_NRO"; do
   [[ -f "$required" && -s "$required" ]] || {
@@ -82,7 +112,6 @@ if [[ -e "$TARGET_QLAUNCH" && "$BACKUP_EXISTING" != 1 ]]; then
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-BACKUP_ROOT="$SD_ROOT/switch/DeskNX/backup"
 mkdir -p "$BACKUP_ROOT" "$SD_ROOT/atmosphere/contents" "$SD_ROOT/switch/DeskNX/bin"
 
 BACKUP_REL="none"

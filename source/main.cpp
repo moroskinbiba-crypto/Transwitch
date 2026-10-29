@@ -359,7 +359,7 @@ Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
 bool isSafeNroPath(const std::string& path) {
     constexpr char prefix[] = "sdmc:/switch/";
     if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
-        path.find("..") != std::string::npos ||
+        path.find("..") != std::string::npos || path.find('\\0') != std::string::npos ||
         path.size() < (sizeof(prefix) - 1) + 5)
         return false;
     std::string extension = path.substr(path.size() - 4);

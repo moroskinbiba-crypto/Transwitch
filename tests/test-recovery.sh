@@ -48,6 +48,18 @@ fi
 assert_file_content "$SD_BAD_TYPE/atmosphere/contents/0100000000001000" "not a qlaunch directory"
 
 
+# A symlinked ancestor must not redirect a write outside the selected SD root.
+SD_SYMLINK_PARENT="$TMP/sd-symlink-parent"
+OUTSIDE="$TMP/outside-target"
+mkdir -p "$SD_SYMLINK_PARENT" "$OUTSIDE"
+printf 'outside sentinel\n' > "$OUTSIDE/sentinel"
+ln -s "$OUTSIDE" "$SD_SYMLINK_PARENT/switch"
+if DESKNX_PACKAGE_DIR="$PACKAGE" bash "$ROOT/scripts/install-system.sh" --sd-root "$SD_SYMLINK_PARENT" --acknowledge-risk; then
+  fail "installer accepted a symlinked ancestor directory"
+fi
+assert_file_content "$OUTSIDE/sentinel" "outside sentinel"
+assert_absent "$OUTSIDE/DeskNX"
+
 # Case 1: clean SD root. Install and uninstall should remove the active override
 # but preserve the just-installed files under the backup directory.
 SD1="$TMP/sd-clean"
@@ -149,4 +161,30 @@ assert_absent "$DISABLED3"
 assert_absent "$SD3/switch/DeskNX/install-manifest.txt"
 [[ -n "$(find "$SD3/switch/DeskNX/backup" -mindepth 1 -maxdepth 1 -type d -name 'desknx-installed-*' -print -quit)" ]] || fail "emergency-disabled DeskNX override was not archived"
 
-echo "PASS: installer and uninstaller recovery scenarios, including emergency-disabled qlaunch"
+# The uninstaller must also refuse symlink ancestors/backups and leave the
+# installed files plus manifest untouched until the links are repaired.
+SD4="$TMP/sd-symlink-uninstall"
+mkdir -p "$SD4"
+DESKNX_PACKAGE_DIR="$PACKAGE" bash "$ROOT/scripts/install-system.sh" --sd-root "$SD4" --acknowledge-risk
+mv "$SD4/switch" "$SD4/switch-real"
+ln -s switch-real "$SD4/switch"
+if bash "$ROOT/scripts/uninstall-system.sh" --sd-root "$SD4" --acknowledge-risk; then
+  fail "uninstaller accepted a symlinked /switch ancestor"
+fi
+assert_file_content "$SD4/atmosphere/contents/0100000000001000/exefs/DeskNX.install-marker" "DeskNX qlaunch override v0.2.0"
+[[ -s "$SD4/switch/switch-not-real" ]] && fail "unexpected sentinel state"
+rm "$SD4/switch"
+mv "$SD4/switch-real" "$SD4/switch"
+mv "$SD4/switch/DeskNX/backup" "$SD4/switch/DeskNX/backup-real"
+ln -s backup-real "$SD4/switch/DeskNX/backup"
+if bash "$ROOT/scripts/uninstall-system.sh" --sd-root "$SD4" --acknowledge-risk; then
+  fail "uninstaller accepted a symlinked backup directory"
+fi
+assert_file_content "$SD4/atmosphere/contents/0100000000001000/exefs/DeskNX.install-marker" "DeskNX qlaunch override v0.2.0"
+rm "$SD4/switch/DeskNX/backup"
+mv "$SD4/switch/DeskNX/backup-real" "$SD4/switch/DeskNX/backup"
+bash "$ROOT/scripts/uninstall-system.sh" --sd-root "$SD4" --acknowledge-risk
+assert_absent "$SD4/atmosphere/contents/0100000000001000"
+assert_absent "$SD4/switch/DeskNX/install-manifest.txt"
+
+echo "PASS: installer and uninstaller recovery scenarios, including symlink ancestors and emergency-disabled qlaunch"
