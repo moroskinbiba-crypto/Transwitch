@@ -6,6 +6,7 @@
 #include <stratosphere/fs/fs_remote_filesystem.hpp>
 #include <cstring>
 #include <cstdio>
+#include <atomic>
 #include <sys/stat.h>
 
 // ECS implementation adapted from uLaunch's ul::system::ecs / sf::IpcManager
@@ -54,7 +55,9 @@ namespace desknx::system::ecs {
         ams::lmem::HeapHandle    g_AllocatorHeapHandle;
         Allocator                g_Allocator;
         bool                     g_AllocatorReady = false;
-        bool                     g_ServerUp = false;
+        bool                     g_ServerUp = false; // main thread only
+        bool                     g_ServerThreadPrepared = false; // main thread only
+        std::atomic<bool>        g_ServerThreadExited{true}; // written by server thread
 
         // Separate file: this runs on the serve thread, so writing to daemon.log
         // would race with the main thread's writes.
@@ -80,7 +83,11 @@ namespace desknx::system::ecs {
         void ManagerThreadFunc(void *) {
             EcsLog("server thread: entering LoopProcess");
             g_Manager.LoopProcess();
-            EcsLog("server thread: LoopProcess RETURNED (server died!)");
+            // LoopProcess returns when its wait set becomes empty. Keep this
+            // signal atomic: the main thread will join/destroy and recreate the
+            // ended thread before relying on the ECS server again.
+            g_ServerThreadExited.store(true, std::memory_order_release);
+            EcsLog("server thread: LoopProcess returned; restart required on next registration");
         }
 
         template<typename Impl, typename Iface, typename ...Args>
@@ -118,13 +125,80 @@ namespace desknx::system::ecs {
         return 0;
     }
 
-    static void StartServerThreadOnce() {
-        if (g_ServerUp) return;
-        R_ABORT_UNLESS(ams::os::CreateThread(
+    // Create the thread before changing Atmosphere's loader mapping. A
+    // creation failure therefore has no external side effects to roll back.
+    // The thread is not started until RegisterSession has populated the wait set.
+    static Result PrepareServerThread(bool *prepared_here) {
+        if (prepared_here == nullptr)
+            return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        *prepared_here = false;
+
+        if (g_ServerUp && !g_ServerThreadExited.load(std::memory_order_acquire))
+            return 0;
+
+        if (g_ServerUp) {
+            // The thread has returned, but its handle and stack still belong to
+            // this process. Join and destroy before reusing the ThreadType.
+            ams::os::WaitThread(&g_ManagerThread);
+            ams::os::DestroyThread(&g_ManagerThread);
+            g_ServerUp = false;
+        }
+
+        if (g_ServerThreadPrepared) {
+            *prepared_here = true;
+            return 0;
+        }
+
+        const ams::Result rc = ams::os::CreateThread(
             &g_ManagerThread, &ManagerThreadFunc, nullptr,
-            g_ManagerThreadStack, sizeof(g_ManagerThreadStack), 10));
-        ams::os::StartThread(&g_ManagerThread);
+            g_ManagerThreadStack, sizeof(g_ManagerThreadStack), 10);
+        if (R_FAILED(rc)) {
+            EcsLog("ECS server thread creation failed (rc=0x%08X)",
+                   static_cast<unsigned int>(rc.GetValue()));
+            return rc.GetValue();
+        }
+        g_ServerThreadPrepared = true;
+        *prepared_here = true;
+        return 0;
+    }
+
+    static void CancelPreparedServerThread(bool prepared_here) {
+        if (!prepared_here || !g_ServerThreadPrepared) return;
+        // This thread was created but never started; DestroyThread releases its
+        // kernel object without waiting for a thread entry point that never ran.
+        ams::os::DestroyThread(&g_ManagerThread);
+        g_ServerThreadPrepared = false;
+    }
+
+    static Result StartServerThreadOnce() {
+        if (g_ServerUp && !g_ServerThreadExited.load(std::memory_order_acquire))
+            return 0;
+
+        if (g_ServerUp) {
+            ams::os::WaitThread(&g_ManagerThread);
+            ams::os::DestroyThread(&g_ManagerThread);
+            g_ServerUp = false;
+        }
+
+        if (!g_ServerThreadPrepared) {
+            const ams::Result rc = ams::os::CreateThread(
+                &g_ManagerThread, &ManagerThreadFunc, nullptr,
+                g_ManagerThreadStack, sizeof(g_ManagerThreadStack), 10);
+            if (R_FAILED(rc)) {
+                EcsLog("ECS server restart failed (rc=0x%08X)",
+                       static_cast<unsigned int>(rc.GetValue()));
+                return rc.GetValue();
+            }
+            g_ServerThreadPrepared = true;
+        }
+
+        // Publish state before the thread starts, so a very fast return cannot
+        // be overwritten by the caller after StartThread.
+        g_ServerThreadExited.store(false, std::memory_order_release);
         g_ServerUp = true;
+        g_ServerThreadPrepared = false;
+        ams::os::StartThread(&g_ManagerThread);
+        return 0;
     }
 
     Result RegisterExternalContent(u64 program_id, const char *exefs_path) {
@@ -141,8 +215,11 @@ namespace desknx::system::ecs {
                 continue;
             }
             if (g_RegisteredContents[i].program_id != program_id) continue;
-            if (std::strcmp(g_RegisteredContents[i].exefs_path, exefs_path) == 0)
-                return 0; // Reuse the already-registered in-process service.
+            if (std::strcmp(g_RegisteredContents[i].exefs_path, exefs_path) == 0) {
+                // Idempotent registration also gives a returned server thread
+                // a chance to restart if the old wait set became empty.
+                return StartServerThreadOnce();
+            }
             EcsLog("ECS registration refused: program id already maps to another path");
             return MAKERESULT(Module_Libnx, LibnxError_BadInput);
         }
@@ -152,6 +229,13 @@ namespace desknx::system::ecs {
         }
 
         InitializeServer();
+        bool preparedThreadHere = false;
+        const Result prepareRc = PrepareServerThread(&preparedThreadHere);
+        if (R_FAILED(prepareRc)) {
+            EcsLog("ECS registration refused: server thread cannot be prepared");
+            return prepareRc;
+        }
+
         Handle move_h = INVALID_HANDLE;
         bool loader_registered = false;
         bool session_registered = false;
@@ -192,6 +276,7 @@ namespace desknx::system::ecs {
             }
             if (!session_registered && move_h != INVALID_HANDLE)
                 svcCloseHandle(move_h);
+            CancelPreparedServerThread(preparedThreadHere);
             EcsLog("ECS registration failed; rolled back loader mapping where possible");
             return r.GetValue();
         }
@@ -202,7 +287,16 @@ namespace desknx::system::ecs {
         entry.active = true;
 
         // Start the serving thread only after the first session is registered.
-        StartServerThreadOnce();
+        const Result startRc = StartServerThreadOnce();
+        if (R_FAILED(startRc)) {
+            entry = {};
+            const Result unregRc = UnregisterExternalCodeCmd(program_id);
+            if (R_FAILED(unregRc))
+                EcsLog("ECS rollback warning: could not unregister mapping after thread-start failure");
+            EcsLog("ECS registration failed: server thread could not start (rc=0x%08X)",
+                   static_cast<unsigned int>(startRc));
+            return startRc;
+        }
         return r.GetValue();
     }
 

@@ -55,6 +55,14 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test production menu liveness controller
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include tests/menu_liveness_test.cpp -o /tmp/desknx-menu-liveness-test
+          /tmp/desknx-menu-liveness-test
+
+      - name: Test installer and uninstaller rollback with injected rename failures
+        run: bash tests/test-recovery.sh
+
       - name: Build compatible libnx master
         run: |
           git clone --no-checkout https://github.com/switchbrew/libnx /tmp/libnx-master
