@@ -26,7 +26,7 @@ int main() {
     assert(x >= 0 && y >= 0 && placeable(desk, small, x, y));
     assert(typeCode(parseKind("N")) == "N");
     assert(typeCode(parseKind("C")) == "C");
-    assert(parseKind("unknown") == Kind::Game);
+    assert(parseKind("unknown") == Kind::Unsupported);
     const auto fields = splitTabs("A\tb\tc");
     assert(fields.size() == 3 && fields[1] == "b");
     assert(safeField("a\tb\nc") == "a b c");
@@ -57,9 +57,25 @@ int main() {
         "DESKNX3\nA\t0\nD\tBroken\n"
         "I\t0\tG\tOne\t0100\t0\t0\t2\t1\t0\n"
         "I\t0\tN\tTwo\tsdmc:/switch/two.nro\t1\t0\t1\t1\t1\n";
-    desknx::layout::LoadResult invalid{};
-    assert(!desknx::layout::parse(overlap, invalid));
-    assert(!desknx::layout::parse("DESKNX999\nD\tbad\n", invalid));
+    desknx::layout::LoadResult recovered{};
+    assert(desknx::layout::parse(overlap, recovered));
+    assert(recovered.recoveredTiles == 1);
+    assert(recovered.workspaces[0].tiles.size() == 2);
+    assert(recovered.workspaces[0].tiles[1].x != 1);
+
+    const std::string unknown =
+        "DESKNX3\nA\t0\nD\tLegacy\n"
+        "I\t0\tQX\tOlder plug-in\topaque-data\t0\t0\t1\t1\t2\n";
+    desknx::layout::LoadResult parsedUnknown{};
+    assert(desknx::layout::parse(unknown, parsedUnknown));
+    assert(parsedUnknown.workspaces[0].tiles[0].kind == Kind::Unsupported);
+    assert(parsedUnknown.workspaces[0].tiles[0].unknownTypeCode == "QX");
+    const std::string unknownRoundTrip = desknx::layout::serialize(
+        parsedUnknown.workspaces, parsedUnknown.activeWorkspace);
+    assert(unknownRoundTrip.find("\tQX\t") != std::string::npos);
+
+    assert(!desknx::layout::parse("DESKNX999\nD\tbad\n", recovered));
+    assert(!desknx::layout::parse(std::string(1024 * 1024 + 1, 'x'), recovered));
 
     using namespace desknx::catalog_view;
     std::vector<Candidate> catalog{

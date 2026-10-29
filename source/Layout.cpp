@@ -1,6 +1,7 @@
 #include "../include/desknx/Layout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <utility>
@@ -21,15 +22,50 @@ bool parseInteger(const std::string& text, int& value) {
 }
 
 bool validKindCode(const std::string& code) {
-    return code == "G" || code == "N" || code == "C" ||
-           code == "B" || code == "S" || code == "R";
+    if (code.empty() || code.size() > 16) return false;
+    for (unsigned char c : code) {
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+            return false;
+    }
+    return true;
+}
+
+size_t utf8Codepoints(const std::string& value) {
+    size_t count = 0;
+    for (unsigned char c : value)
+        if ((c & 0xC0) != 0x80) ++count;
+    return count;
+}
+
+int nearestAllowedDimension(int w, int h, bool wantWidth) {
+    const std::array<std::pair<int,int>,4> allowed{{{1,1},{2,1},{2,2},{3,2}}};
+    size_t best = 0;
+    int bestDistance = 1000;
+    for (size_t i=0;i<allowed.size();++i) {
+        const int distance = std::abs(allowed[i].first - w) + std::abs(allowed[i].second - h);
+        if (distance < bestDistance) { bestDistance = distance; best = i; }
+    }
+    return wantWidth ? allowed[best].first : allowed[best].second;
+}
+
+bool hasRecoveredWorkspace(const std::vector<model::Workspace>& workspaces, size_t& index) {
+    for (size_t i=0;i<workspaces.size();++i) {
+        if (workspaces[i].name == "Recovered") { index = i; return true; }
+    }
+    return false;
 }
 
 } // namespace
 
 bool parse(const std::string& input, LoadResult& result) {
+    constexpr size_t MaxInputBytes = 1024 * 1024;
+    constexpr size_t MaxLines = 4096;
+    constexpr size_t MaxLineBytes = 2048;
+    constexpr size_t MaxTitleBytes = 512;
+    constexpr size_t MaxDataBytes = 512;
+    if (input.empty() || input.size() > MaxInputBytes) return false;
+
     LoadResult parsed{};
-    std::vector<std::vector<model::Tile>> pending;
     size_t lineStart = 0;
     size_t lineNumber = 0;
     bool sawHeader = false;
@@ -44,6 +80,7 @@ bool parse(const std::string& input, LoadResult& result) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         lineStart = newline == std::string::npos ? input.size() + 1 : newline + 1;
         ++lineNumber;
+        if (lineNumber > MaxLines || line.size() > MaxLineBytes) return false;
         if (line.empty()) {
             if (newline == std::string::npos) break;
             continue;
@@ -70,12 +107,13 @@ bool parse(const std::string& input, LoadResult& result) {
             sawActive = true;
         } else if (fields[0] == "D") {
             if (fields.size() != 2 || fields[1].empty() ||
+                fields[1].size() > 124 || utf8Codepoints(fields[1]) > 31 ||
+                fields[1].find('\0') != std::string::npos ||
                 parsed.workspaces.size() >= static_cast<size_t>(model::MaxDesks)) {
                 structuralError = true;
                 break;
             }
-            parsed.workspaces.push_back({fields[1], {}});
-            pending.emplace_back();
+            parsed.workspaces.push_back({model::safeField(fields[1]), {}});
         } else if (fields[0] == "I") {
             if (fields.size() != 10) {
                 structuralError = true;
@@ -85,23 +123,58 @@ bool parse(const std::string& input, LoadResult& result) {
             if (!parseInteger(fields[1], desk) || desk < 0 ||
                 static_cast<size_t>(desk) >= parsed.workspaces.size() ||
                 !validKindCode(fields[2]) ||
+                fields[3].size() > MaxTitleBytes || fields[4].size() > MaxDataBytes ||
+                fields[3].find('\0') != std::string::npos ||
+                fields[4].find('\0') != std::string::npos ||
                 !parseInteger(fields[5], x) || !parseInteger(fields[6], y) ||
                 !parseInteger(fields[7], w) || !parseInteger(fields[8], h) ||
-                !parseInteger(fields[9], color) || color < 0 || color > 7) {
+                !parseInteger(fields[9], color)) {
                 structuralError = true;
                 break;
             }
             model::Tile tile{};
             tile.kind = model::parseKind(fields[2]);
-            tile.title = fields[3];
-            tile.data = fields[4];
-            tile.x = x; tile.y = y; tile.w = w; tile.h = h; tile.color = color;
-            if (!model::placeable(parsed.workspaces[static_cast<size_t>(desk)],
-                                  tile, x, y)) {
-                structuralError = true;
-                break;
+            if (tile.kind == model::Kind::Unsupported) tile.unknownTypeCode = fields[2];
+            tile.title = model::safeField(fields[3]);
+            tile.data = model::safeField(fields[4]);
+            tile.x = x; tile.y = y;
+            tile.w = std::max(1, std::min(3, w));
+            tile.h = std::max(1, std::min(2, h));
+            tile.color = std::max(0, std::min(7, color));
+
+            // Normalize the dimensions to one of the four supported tile shapes.
+            const int normalizedW = nearestAllowedDimension(tile.w, tile.h, true);
+            const int normalizedH = nearestAllowedDimension(tile.w, tile.h, false);
+            tile.w = normalizedW;
+            tile.h = normalizedH;
+
+            auto& targetDesk = parsed.workspaces[static_cast<size_t>(desk)];
+            int nx = tile.x, ny = tile.y;
+            bool placed = model::placeable(targetDesk, tile, nx, ny);
+            if (!placed) placed = model::firstFree(targetDesk, tile, nx, ny);
+            if (placed) {
+                tile.x = nx;
+                tile.y = ny;
+                targetDesk.tiles.push_back(std::move(tile));
+                if (nx != x || ny != y || normalizedW != w || normalizedH != h || color < 0 || color > 7)
+                    ++parsed.recoveredTiles;
+            } else {
+                size_t recoveredIndex = 0;
+                if (!hasRecoveredWorkspace(parsed.workspaces, recoveredIndex) &&
+                    parsed.workspaces.size() < static_cast<size_t>(model::MaxDesks)) {
+                    parsed.workspaces.push_back({"Recovered", {}});
+                    recoveredIndex = parsed.workspaces.size() - 1;
+                }
+                if (hasRecoveredWorkspace(parsed.workspaces, recoveredIndex) &&
+                    model::firstFree(parsed.workspaces[recoveredIndex], tile, nx, ny)) {
+                    tile.x = nx;
+                    tile.y = ny;
+                    parsed.workspaces[recoveredIndex].tiles.push_back(std::move(tile));
+                    ++parsed.recoveredTiles;
+                } else {
+                    ++parsed.droppedTiles;
+                }
             }
-            parsed.workspaces[static_cast<size_t>(desk)].tiles.push_back(std::move(tile));
         } else {
             structuralError = true;
             break;
@@ -122,7 +195,7 @@ std::string serialize(const std::vector<model::Workspace>& workspaces, int activ
     activeWorkspace = std::max(0, std::min(activeWorkspace, static_cast<int>(workspaces.size()) - 1));
     std::string output = "DESKNX3\nA\t" + std::to_string(activeWorkspace) + "\n";
     for (const auto& workspace : workspaces)
-        output += "D\t" + model::safeField(workspace.name) + "\n";
+        output += "D\t" + model::safeField(workspace.name.substr(0, workspace.name.size() > 124 ? 124 : workspace.name.size())) + "\n";
     for (size_t desk = 0; desk < workspaces.size(); ++desk) {
         const auto& workspace = workspaces[desk];
         for (size_t tileIndex = 0; tileIndex < workspace.tiles.size(); ++tileIndex) {
@@ -131,7 +204,7 @@ std::string serialize(const std::vector<model::Workspace>& workspaces, int activ
             // its dimensions/bounds and ensure it does not overlap its siblings.
             if (!model::placeable(workspace, tile, tile.x, tile.y,
                                   static_cast<int>(tileIndex))) return {};
-            output += "I\t" + std::to_string(desk) + "\t" + model::typeCode(tile.kind) + "\t" +
+            output += "I\t" + std::to_string(desk) + "\t" + model::typeCode(tile) + "\t" +
                       model::safeField(tile.title) + "\t" + model::safeField(tile.data) + "\t" +
                       std::to_string(tile.x) + "\t" + std::to_string(tile.y) + "\t" +
                       std::to_string(tile.w) + "\t" + std::to_string(tile.h) + "\t" +

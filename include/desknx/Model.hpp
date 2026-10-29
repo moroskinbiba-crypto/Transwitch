@@ -13,13 +13,14 @@ constexpr int Rows = 3;
 constexpr int MaxItems = 600;
 constexpr int MaxDesks = 12;
 
-enum class Kind { Game, Nro, Clock, Battery, System, Recent };
+enum class Kind { Game, Nro, Clock, Battery, System, Recent, Unsupported };
 
 struct Tile {
     Kind kind{Kind::Game};
     std::string title;
     std::string data;
     int x{0}, y{0}, w{1}, h{1}, color{0};
+    std::string unknownTypeCode;
 };
 
 struct Workspace {
@@ -42,17 +43,25 @@ inline std::string typeCode(Kind kind) {
         case Kind::Battery: return "B";
         case Kind::System: return "S";
         case Kind::Recent: return "R";
+        case Kind::Unsupported: return "U";
     }
-    return "G";
+    return "U";
 }
 
 inline Kind parseKind(const std::string& value) {
+    if (value == "G") return Kind::Game;
     if (value == "N") return Kind::Nro;
     if (value == "C") return Kind::Clock;
     if (value == "B") return Kind::Battery;
     if (value == "S") return Kind::System;
     if (value == "R") return Kind::Recent;
-    return Kind::Game;
+    return Kind::Unsupported;
+}
+
+inline std::string typeCode(const Tile& tile) {
+    if (tile.kind == Kind::Unsupported && !tile.unknownTypeCode.empty())
+        return tile.unknownTypeCode;
+    return typeCode(tile.kind);
 }
 
 inline std::vector<std::string> splitTabs(const std::string& line) {

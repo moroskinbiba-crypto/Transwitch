@@ -34,6 +34,8 @@ constexpr const char* CFG_DIR = "sdmc:/switch/DeskNX";
 constexpr const char* CFG_FILE = "sdmc:/switch/DeskNX/layout.tsv";
 constexpr const char* CFG_TMP = "sdmc:/switch/DeskNX/layout.tmp";
 constexpr const char* CFG_BACKUP_BASE = "sdmc:/switch/DeskNX/layout.corrupt";
+constexpr const char* CFG_BAK_FILE = "sdmc:/switch/DeskNX/layout.bak";
+size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 
@@ -161,7 +163,8 @@ std::string clockText(bool date=false) {
 }
 std::string typeName(Kind k) {
     switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
-        case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT"; }
+        case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT";
+        case Kind::Unsupported:return "UNSUPPORTED"; }
     return "ITEM";
 }
 
@@ -291,16 +294,29 @@ void recordRecentLaunch(const Tile& tile) {
     lastLaunched=tile.title;saveHistory();
 }
 void backupBrokenLayout() {
-    struct stat st{};if(stat(CFG_FILE,&st)!=0)return;
-    char dest[160]{};
-    for(int i=0;i<100;++i) {
-        if(i==0)std::snprintf(dest,sizeof(dest),"%s.bak",CFG_BACKUP_BASE);
-        else std::snprintf(dest,sizeof(dest),"%s-%d.bak",CFG_BACKUP_BASE,i);
-        struct stat existing{};if(stat(dest,&existing)==0)continue;
-        if(std::rename(CFG_FILE,dest)==0){setStatus("INVALID LAYOUT BACKED UP",4500);return;}
+    struct stat st{};
+    if (stat(CFG_FILE, &st) != 0) return;
+    std::time_t now = std::time(nullptr);
+    std::tm* tmv = std::localtime(&now);
+    char stamp[32]{};
+    if (tmv) std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%S", tmv);
+    else std::snprintf(stamp, sizeof(stamp), "%u", static_cast<unsigned int>(SDL_GetTicks()));
+
+    char dest[192]{};
+    for (int i = 0; i < 100; ++i) {
+        if (i == 0)
+            std::snprintf(dest, sizeof(dest), "%s-%s.tsv", CFG_BACKUP_BASE, stamp);
+        else
+            std::snprintf(dest, sizeof(dest), "%s-%s-%d.tsv", CFG_BACKUP_BASE, stamp, i);
+        struct stat existing{};
+        if (stat(dest, &existing) == 0) continue;
+        if (std::rename(CFG_FILE, dest) == 0) {
+            setStatus("INVALID LAYOUT PRESERVED", 4500);
+            return;
+        }
         break;
     }
-    setStatus("LAYOUT INVALID; BACKUP FAILED",4500);
+    setStatus("LAYOUT INVALID; BACKUP FAILED", 4500);
 }
 
 void saveLayout() {
@@ -313,31 +329,36 @@ void saveLayout() {
     f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
     f.flush();const bool good=f.good();f.close();
     if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return;}
-    const char* previous="sdmc:/switch/DeskNX/layout.prev";
-    std::remove(previous);
-    const bool hadPrevious=std::rename(CFG_FILE,previous)==0;
+    std::remove(CFG_BAK_FILE);
+    const bool hadPrevious=std::rename(CFG_FILE,CFG_BAK_FILE)==0;
     if(std::rename(CFG_TMP,CFG_FILE)!=0) {
-        if(hadPrevious)std::rename(previous,CFG_FILE);
+        if(hadPrevious)std::rename(CFG_BAK_FILE,CFG_FILE);
         std::remove(CFG_TMP);setStatus("SAVE FAILED: RENAME ERROR",3500);return;
     }
-    if(hadPrevious)std::remove(previous);
+    // Keep layout.bak as the last known-good version until the next successful save.
     layoutLoaded=true;
     setStatus("LAYOUT SAVED",1600);
 }
-bool loadLayout() {
-    std::ifstream file(CFG_FILE,std::ios::binary);
-    if(!file)return false;
+bool loadLayoutFrom(const char* path) {
+    struct stat fileStat{};
+    if (stat(path, &fileStat) != 0 || !S_ISREG(fileStat.st_mode) ||
+        fileStat.st_size <= 0 || fileStat.st_size > 1024 * 1024) return false;
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return false;
     std::ostringstream contents;
-    contents<<file.rdbuf();
-    if(file.bad())return false;
+    contents << file.rdbuf();
+    if (file.bad()) return false;
     desknx::layout::LoadResult loaded{};
-    if(!desknx::layout::parse(contents.str(),loaded))return false;
-    desks=std::move(loaded.workspaces);
-    deskIndex=loaded.activeWorkspace;
-    layoutNeedsMigration=loaded.needsMigration;
-    selectedX=selectedY=0;
+    if (!desknx::layout::parse(contents.str(), loaded)) return false;
+    desks = std::move(loaded.workspaces);
+    deskIndex = loaded.activeWorkspace;
+    layoutNeedsMigration = loaded.needsMigration;
+    layoutRecoveredTiles = loaded.recoveredTiles;
+    layoutDroppedTiles = loaded.droppedTiles;
+    selectedX = selectedY = 0;
     return true;
 }
+bool loadLayout() { return loadLayoutFrom(CFG_FILE); }
 void defaultLayout() {
     const auto available=catalogueSnapshot();
     desks={{"Games",{}},{"Homebrew",{}},{"Widgets",{}}};int gi=0,hi=0;
@@ -394,6 +415,10 @@ void drawTile(const Tile&t,bool selected) {
     } else if(t.kind==Kind::System) {
         text("SYSTEM",r.x+18,r.y+14,2,MUTED,r.x+r.w-10);text("DESKNX",r.x+18,r.y+39,3,WHITE,r.x+r.w-10);
         text("HOME REPLACEMENT INACTIVE",r.x+18,r.y+78,1,accent,r.x+r.w-10);
+    } else if(t.kind==Kind::Unsupported) {
+        rect(r.x+3,r.y+3,r.w-6,r.h-6,Color{52,55,61,255});
+        text("UNSUPPORTED TILE",r.x+12,r.y+18,2,WHITE,r.x+r.w-10);
+        text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,r.x+12,r.y+52,2,MUTED,r.x+r.w-10);
     } else if(t.kind==Kind::Recent) {
         text("RECENT LAUNCHES",r.x+18,r.y+10,2,MUTED,r.x+r.w-10);
         if(recentLaunches.empty())text("NOTHING LAUNCHED YET",r.x+18,r.y+44,2,WHITE,r.x+r.w-10);
@@ -545,6 +570,10 @@ void deleteDesk() {
     deletePrompt=true;
 }
 void launch(const Tile& t) {
+    if (t.kind == Kind::Unsupported) {
+        setStatus("UNSUPPORTED TILE TYPE: " + t.unknownTypeCode, 3500);
+        return;
+    }
     if(t.kind==Kind::Game) {
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
         if(id==0){setStatus("INVALID TITLE ID");return;}
@@ -713,10 +742,32 @@ int main(int,char**) {
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
 
     loadHistory();
-    struct stat layoutStat{};const bool layoutExists=stat(CFG_FILE,&layoutStat)==0;
-    layoutLoaded=loadLayout();
-    if(layoutExists&&!layoutLoaded){backupBrokenLayout();defaultLayout();}
-    else if(!layoutLoaded)defaultLayout();
+    struct stat layoutStat{}, backupStat{};
+    const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
+    const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
+    layoutLoaded = loadLayout();
+    bool restoredFromBackup = false;
+    if (layoutExists && !layoutLoaded) {
+        backupBrokenLayout();
+        if (backupExists && loadLayoutFrom(CFG_BAK_FILE)) {
+            layoutLoaded = true;
+            restoredFromBackup = true;
+            setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
+            saveLayout();
+        } else {
+            defaultLayout();
+        }
+    } else if (!layoutLoaded) {
+        defaultLayout();
+    }
+    if (layoutRecoveredTiles > 0 || layoutDroppedTiles > 0) {
+        char message[96]{};
+        std::snprintf(message, sizeof(message), "LAYOUT RECOVERED: %zu MOVED, %zu OMITTED",
+                      layoutRecoveredTiles, layoutDroppedTiles);
+        setStatus(message, 6000);
+    } else if (restoredFromBackup) {
+        setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
+    }
 
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
     setStatus("STARTING DESKNX...",5000);

@@ -9,6 +9,8 @@ struct LoadResult {
     std::vector<model::Workspace> workspaces;
     int activeWorkspace{0};
     bool needsMigration{false};
+    size_t recoveredTiles{0};
+    size_t droppedTiles{0};
 };
 
 bool parse(const std::string& input, LoadResult& result);
