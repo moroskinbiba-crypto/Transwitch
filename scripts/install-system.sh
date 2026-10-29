@@ -30,6 +30,7 @@ done
 [[ "$ACK" == 1 ]] || { echo "Refusing: review docs/HOME_INTEGRATION.md, then pass --acknowledge-risk." >&2; exit 2; }
 [[ -n "$SD_ROOT" && -d "$SD_ROOT" ]] || { echo "SD root is missing or not a directory." >&2; usage; exit 2; }
 SD_ROOT="$(cd "$SD_ROOT" && pwd -P)"
+[[ "$SD_ROOT" != "/" ]] || { echo "Refusing to use the host filesystem root as an SD-card root." >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -52,6 +53,20 @@ for required in "$SRC_QLAUNCH/exefs/main" "$SRC_QLAUNCH/exefs/main.npdm" "$SRC_M
     exit 1
   }
 done
+
+# Existing destinations must have the type expected by rollback/uninstall.
+# Refuse symlinks as well: the SD root is removable input and destinations
+# must not redirect writes outside the selected card.
+for target_dir in "$TARGET_QLAUNCH" "$TARGET_MENU" "$TARGET_HBLOADER"; do
+  if [[ -L "$target_dir" || ( -e "$target_dir" && ! -d "$target_dir" ) ]]; then
+    echo "Refusing unexpected non-directory or symlink target: $target_dir" >&2
+    exit 1
+  fi
+done
+if [[ -L "$TARGET_NRO" || ( -e "$TARGET_NRO" && ! -f "$TARGET_NRO" ) ]]; then
+  echo "Refusing unexpected non-file or symlink target: $TARGET_NRO" >&2
+  exit 1
+fi
 
 [[ ! -e "$MANIFEST" ]] || {
   echo "An install manifest already exists at $MANIFEST. Uninstall the current DeskNX version first." >&2

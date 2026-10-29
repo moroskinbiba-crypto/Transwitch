@@ -26,6 +26,7 @@ done
 [[ "$ACK" == 1 ]] || { echo "Refusing: review docs/HOME_INTEGRATION.md, then pass --acknowledge-risk." >&2; exit 2; }
 [[ -n "$SD_ROOT" && -d "$SD_ROOT" ]] || { echo "SD root is missing or not a directory." >&2; usage; exit 2; }
 SD_ROOT="$(cd "$SD_ROOT" && pwd -P)"
+[[ "$SD_ROOT" != "/" ]] || { echo "Refusing to use the host filesystem root as an SD-card root." >&2; exit 2; }
 
 DESKNX_ROOT="$SD_ROOT/switch/DeskNX"
 MANIFEST="$DESKNX_ROOT/install-manifest.txt"
@@ -36,7 +37,7 @@ OVERRIDE_WAS_DISABLED=0
 TARGET_MENU="$DESKNX_ROOT/bin/Menu"
 TARGET_HBLOADER="$DESKNX_ROOT/bin/hbloader"
 TARGET_NRO="$DESKNX_ROOT/DeskNX.nro"
-[[ -s "$MANIFEST" ]] || { echo "DeskNX install manifest not found: $MANIFEST" >&2; exit 1; }
+[[ ! -L "$MANIFEST" && -f "$MANIFEST" && -s "$MANIFEST" ]] || { echo "DeskNX install manifest is missing, not a regular file, or is a symlink: $MANIFEST" >&2; exit 1; }
 if [[ -e "$TARGET_QLAUNCH" && -e "$TARGET_QLAUNCH_DISABLED" ]]; then
   echo "Both active and emergency-disabled qlaunch override directories exist; refusing ambiguous recovery." >&2
   exit 1
