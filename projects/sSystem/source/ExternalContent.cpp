@@ -5,6 +5,8 @@
 #include <stratosphere/fssystem/fssystem_subdirectory_filesystem.hpp>
 #include <stratosphere/fs/fs_remote_filesystem.hpp>
 #include <cstring>
+#include <cstdio>
+#include <sys/stat.h>
 
 // ECS implementation adapted from uLaunch's ul::system::ecs / sf::IpcManager
 // (https://github.com/Xortroll/uLaunch, GPLv2, (C) Xortroll & contributors).

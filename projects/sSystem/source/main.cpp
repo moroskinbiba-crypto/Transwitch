@@ -486,6 +486,20 @@ void HandleSleepMessage() {
     DaemonLog("power: sleep sequence rc=0x%08X", static_cast<unsigned int>(rc));
 }
 
+// qlaunch-only messages omitted from libnx's public AppletMessage enum.
+// Values are defined by Horizon AM for the system applet; keep them local so
+// normal Homebrew builds do not depend on undocumented libnx names.
+enum SystemAppletMessage : u32 {
+    Msg_DetectShortPressingHomeButton  = 20,
+    Msg_DetectShortPressingPowerButton = 22,
+    Msg_RequestToPrepareSleep          = 25,
+    Msg_FinishedSleepSequence          = 26,
+    Msg_SleepRequiredByHighTemperature = 27,
+    Msg_SleepRequiredByLowBattery      = 28,
+    Msg_AutoPowerDown                  = 29,
+    Msg_SdCardRemoved                  = 33,
+};
+
 void PumpAppletMessages() {
     u32 msg = 0;
     while (R_SUCCEEDED(appletGetMessage(&msg))) {
