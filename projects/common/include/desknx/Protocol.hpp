@@ -3,6 +3,7 @@
 #include <switch.h>
 #include <cstddef>
 #include <cstdint>
+#include <desknx/ProtocolRules.hpp>
 
 namespace desknx::ipc {
 
@@ -76,7 +77,7 @@ struct BusyPayload {
 static_assert(sizeof(BusyPayload) == 4);
 
 inline Result SendBusy(u32 seconds) {
-    if (seconds == 0 || seconds > 120)
+    if (!rules::IsValidBusySeconds(seconds))
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     const BusyPayload payload{seconds};
     return Send(Command::Busy, &payload, sizeof(payload));
