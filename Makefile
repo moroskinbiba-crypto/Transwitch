@@ -89,6 +89,7 @@ package-system: system-package
 	@cp -a SdOut/switch DeskNX-system-bundle/SdOut/
 	@cp -f scripts/install-system.sh scripts/uninstall-system.sh DeskNX-system-bundle/scripts/
 	@cp -f README.md THIRD_PARTY.md DeskNX-system-bundle/
+	@cp -f projects/hbloader/LICENSE.md projects/sSystem/COPYING.sLaunch DeskNX-system-bundle/
 	@cp -f docs/HOME_INTEGRATION.md DeskNX-system-bundle/docs/
 	@python3 -c 'import pathlib,zipfile; root=pathlib.Path("DeskNX-system-bundle"); z=zipfile.ZipFile("DeskNX-system-sdcard.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.relative_to(root)) for p in root.rglob("*") if p.is_file()]; z.close()'
 	@echo "Created DeskNX-system-sdcard.zip (extract on a PC and run the guarded installer; do not extract directly to the SD-card root)"
