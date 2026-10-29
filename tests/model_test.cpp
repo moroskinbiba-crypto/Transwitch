@@ -5,6 +5,7 @@
 #include "../source/catalog_view.hpp"
 
 #include <cassert>
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <limits>
@@ -170,7 +171,18 @@ int main() {
                    (root + "/missing.tmp").c_str(),
                    destination.c_str(), backup.c_str()) ==
                desknx::safeio::ReplaceStatus::Failed);
-        assert(readText(destination) == "new-state");
+        assert(readText(destination) == "next-state");
+        assert(readText(backup).empty());
+
+        // If a prior failed rollback left only the backup, a later failed
+        // publish must first restore and then preserve that recovery copy.
+        std::remove(destination.c_str());
+        writeText(backup, "recovery-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   (root + "/still-missing.tmp").c_str(),
+                   destination.c_str(), backup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Failed);
+        assert(readText(destination) == "recovery-state");
         assert(readText(backup).empty());
 
         const std::string first = root + "/first.dat";
