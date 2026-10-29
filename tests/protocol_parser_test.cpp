@@ -158,6 +158,23 @@ void testUnknownCommandIgnored() {
     assert(status == ParseStatus::IgnoredUnknownCommand);
 }
 
+void testReadOffsetsCannotOverflow() {
+    const std::uint8_t payload[8] = {1,2,3,4,5,6,7,8};
+    ParsedMessage local{};
+    local.payload = payload;
+    local.payload_size = sizeof(payload);
+    std::uint32_t u32 = 0;
+    std::uint64_t u64 = 0;
+    const std::size_t max = static_cast<std::size_t>(-1);
+    assert(!ReadU32(local, max, u32));
+    assert(!ReadU32(local, max - 1, u32));
+    assert(!ReadU64(local, max, u64));
+    assert(!ReadU64(local, max - 7, u64));
+    assert(!ReadUid(local, max - 7, u64, u64));
+    assert(ReadU32(local, 4, u32));
+    assert(u32 == 0x08070605u);
+}
+
 void testStringsMustTerminate() {
     char out[64];
     const char good[] = "sdmc:/switch/a.nro";
@@ -219,6 +236,7 @@ int main() {
     testTruncatedDelivery();
     testWrongFixedPayloadSize();
     testUnknownCommandIgnored();
+    testReadOffsetsCannotOverflow();
     testStringsMustTerminate();
     testLogBounds();
     testNullAndTinyInput();
