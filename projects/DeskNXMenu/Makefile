@@ -5,6 +5,8 @@ endif
 
 LIBNX    := $(DEVKITPRO)/libnx
 PORTLIBS := $(DEVKITPRO)/portlibs/switch
+# Cross-compiled SDL ports install their .pc files under the Switch portlibs prefix.
+export PKG_CONFIG_PATH := $(PORTLIBS)/lib/pkgconfig:$(PKG_CONFIG_PATH)
 export PATH := $(PORTLIBS)/bin:$(PATH)
 
 include $(LIBNX)/switch_rules

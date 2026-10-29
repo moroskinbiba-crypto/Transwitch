@@ -7,6 +7,8 @@ endif
 # environment scripts may not be sourced by the Actions runner.
 LIBNX    := $(DEVKITPRO)/libnx
 PORTLIBS := $(DEVKITPRO)/portlibs/switch
+# Cross-compiled SDL ports install their .pc files under the Switch portlibs prefix.
+export PKG_CONFIG_PATH := $(PORTLIBS)/lib/pkgconfig:$(PKG_CONFIG_PATH)
 
 include $(LIBNX)/switch_rules
 
