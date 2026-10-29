@@ -1123,7 +1123,7 @@ void HandleMenuClosed() {
             appletRequestToReboot();
         } else {
             DaemonLog("power: shutdown requested by menu");
-            appletRequestToShutDown();
+            appletRequestToShutdown();
         }
         // If the request is refused, do not hang on a dead flag: come back.
         DaemonLog("power: request returned; reopening menu");

@@ -205,8 +205,9 @@ struct InitialState {
     u32 degraded;           // REC-04: running without SD-backed assets
     u32 last_launch_rc;     // most recent title-launch failure (0 = none)
     u64 last_launch_title;
-    AccountUid selected_user;
-    u32 reserved;
+    AccountUid selected_user; // 16 bytes
+    // Padded so the whole block is exactly InitialStateSize (64):
+    // 4+2+2 +4+4+8 +4+4 +4+8 +16 = 64.
 };
 static_assert(sizeof(InitialState) == InitialStateSize);
 

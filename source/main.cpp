@@ -753,7 +753,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             powerMenu=false;
             Result rc=-1;
             if(kind==desknx::ipc::PowerKind::Reboot) rc=appletRequestToReboot();
-            else if(kind==desknx::ipc::PowerKind::Shutdown) rc=appletRequestToShutDown();
+            else if(kind==desknx::ipc::PowerKind::Shutdown) rc=appletRequestToShutdown();
             else {setStatus("SLEEP NOT SUPPORTED HERE; PRESS THE POWER BUTTON",3000);return;}
             if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"POWER REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
 #endif
@@ -938,7 +938,7 @@ int main(int,char**) {
         consumeInitialState(); // IPC-06: queued at backend launch, read once
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
-        padUpdate(&pad);const u64 keys=padGetButtonsDown(&pad);if(keys)keyInput(keys);
+        padUpdate(&pad);const u64 keys=padGetButtonsDown(&pad);if(keys)keyInput(keys, false);
         // UI-14 (P1): holding a direction repeats the cursor move - 350 ms
         // initial delay, then every 80 ms. Only when no modal owns input.
         {
@@ -976,8 +976,10 @@ int main(int,char**) {
     if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
     gIconCache.shutdown();gFontRenderer.shutdown();IMG_Quit();
     if(psmReady)psmExit();
-    if(ipcMutex)SDL_DestroyMutex(ipcMutex);if(catalogueMutex)SDL_DestroyMutex(catalogueMutex);
-    if(renderer)SDL_DestroyRenderer(renderer);if(window)SDL_DestroyWindow(window);
+    if (ipcMutex) SDL_DestroyMutex(ipcMutex);
+    if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
+    if (renderer) SDL_DestroyRenderer(renderer);
+    if (window) SDL_DestroyWindow(window);
     SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");
     return 0;
 }
