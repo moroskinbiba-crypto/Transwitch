@@ -143,10 +143,10 @@ cleanup() {
   local rc=$?
   trap - EXIT
   if [[ "$COMMITTED" != 1 ]]; then
-    # If an emergency-disabled DeskNX override was selected, restoring a prior
-    # qlaunch backup temporarily creates the canonical path. Remove that
-    # staged restoration before putting the disabled DeskNX directory back.
-    if [[ "$OVERRIDE_WAS_DISABLED" == 1 && "$RESTORED_QLAUNCH" == 1 ]]; then
+    # The canonical qlaunch path was absent before an emergency-disabled
+    # uninstall. Remove any partially restored backup or empty staging directory
+    # before putting the disabled DeskNX directory back at its original path.
+    if [[ "$OVERRIDE_WAS_DISABLED" == 1 ]]; then
       rm -rf "$TARGET_QLAUNCH"
     fi
     rollback_dir "$INSTALLED_QLAUNCH" "$CURRENT_QLAUNCH" "$HAD_QLAUNCH" "$RESTORED_QLAUNCH"
