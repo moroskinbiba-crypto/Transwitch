@@ -49,14 +49,19 @@ bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=
 bool sdMounted=false, psmReady=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   A OPEN", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
+#ifdef DESKNX_SYSTEM_APPLET
 Uint32 lastHeartbeatTick=0;
+#endif
 
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
 }
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
 void rect(int x,int y,int w,int h,Color c) {
-    if(w<=0||h<=0) return; color(c); SDL_Rect r{x,y,w,h}; SDL_RenderFillRect(renderer,&r);
+    if(w<=0||h<=0) return;
+    color(c);
+    SDL_Rect r{x,y,w,h};
+    SDL_RenderFillRect(renderer,&r);
 }
 void outline(int x,int y,int w,int h,Color c) {
     color(c); SDL_Rect r{x,y,w,h}; SDL_RenderDrawRect(renderer,&r);
@@ -139,8 +144,12 @@ std::string typeCode(Kind k) {
     return "G";
 }
 Kind parseKind(const std::string& s) {
-    if(s=="N")return Kind::Nro; if(s=="C")return Kind::Clock; if(s=="B")return Kind::Battery;
-    if(s=="S")return Kind::System; if(s=="R")return Kind::Recent; return Kind::Game;
+    if(s=="N") return Kind::Nro;
+    if(s=="C") return Kind::Clock;
+    if(s=="B") return Kind::Battery;
+    if(s=="S") return Kind::System;
+    if(s=="R") return Kind::Recent;
+    return Kind::Game;
 }
 std::string typeName(Kind k) {
     switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
@@ -149,17 +158,23 @@ std::string typeName(Kind k) {
 }
 std::vector<std::string> splitTabs(const std::string& line) {
     std::vector<std::string> out; std::stringstream ss(line); std::string part;
-    while(std::getline(ss,part,'\t')) out.push_back(part); return out;
+    while(std::getline(ss,part,'\t')) out.push_back(part);
+    return out;
 }
 std::string safeField(std::string s) {
-    for(char& c:s) if(c=='\t'||c=='\n'||c=='\r') c=' '; return s;
+    for(char& c:s) {
+        if(c=='\t'||c=='\n'||c=='\r') c=' ';
+    }
+    return s;
 }
 std::string fileTitle(const std::string& p) {
     size_t s=p.find_last_of('/'); std::string n=s==std::string::npos?p:p.substr(s+1);
     size_t d=n.find_last_of('.'); if(d!=std::string::npos)n.resize(d);
-    for(char& c:n) if(c=='_'||c=='-')c=' '; return n;
+    for(char& c:n) {
+        if(c=='_'||c=='-') c=' ';
+    }
+    return n;
 }
-bool isWidget(Kind k) { return k==Kind::Clock||k==Kind::Battery||k==Kind::System||k==Kind::Recent; }
 bool overlap(const Tile& a,const Tile& b) {
     return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
 }
@@ -280,7 +295,8 @@ bool loadLayout() {
             int d=std::atoi(p[1].c_str());if(d<0||static_cast<size_t>(d)>=items.size())continue;
             Tile t{};t.kind=parseKind(p[2]);t.title=p[3];t.data=p[4];t.x=std::atoi(p[5].c_str());t.y=std::atoi(p[6].c_str());
             t.w=std::atoi(p[7].c_str());t.h=std::atoi(p[8].c_str());t.color=std::atoi(p[9].c_str())%static_cast<int>(COLORS.size());
-            if(t.color<0)t.color=0;items[static_cast<size_t>(d)].push_back(t);
+            if(t.color<0) t.color=0;
+            items[static_cast<size_t>(d)].push_back(t);
         }
     }
     if(loaded.empty())return false;
@@ -364,7 +380,8 @@ void drawScreen() {
     for(int i=0;i<7&&start+i<static_cast<int>(desks.size());++i) {
         int idx=start+i;bool active=idx==deskIndex;rect(x,94,tabW,42,active?Color{42,61,86,255}:Color{24,29,40,255});
         outline(x,94,tabW,42,active?BLUE:EDGE);text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
-        if(active)rect(x+10,132,tabW-20,2,BLUE);x+=166;
+        if(active) rect(x+10,132,tabW-20,2,BLUE);
+        x+=166;
     }
     text("L / R SWITCH DESK",930,110,1,MUTED,1105);
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
@@ -407,7 +424,10 @@ bool moveTile(int dx,int dy) {
     t.x=nx;t.y=ny;selectedX=nx;selectedY=ny;return true;
 }
 bool moveAcrossDesk(int step) {
-    if(desks.size()<2)return false;Workspace& src=desks[static_cast<size_t>(deskIndex)];int i=itemAt(src,selectedX,selectedY);if(i<0)return false;
+    if(desks.size()<2) return false;
+    Workspace& src=desks[static_cast<size_t>(deskIndex)];
+    int i=itemAt(src,selectedX,selectedY);
+    if(i<0) return false;
     int next=(deskIndex+step+static_cast<int>(desks.size()))%static_cast<int>(desks.size());Tile t=src.tiles[static_cast<size_t>(i)];
     int nx=t.x,ny=t.y;Workspace& dst=desks[static_cast<size_t>(next)];
     if(!placeable(dst,t,nx,ny)&&!firstFree(dst,t,nx,ny)){setStatus("TARGET WORKSPACE IS FULL");return false;}
@@ -508,7 +528,8 @@ void keyInput(u64 keys) {
         if(keys&HidNpadButton_B){listOpen=false;return;}
         if((keys&HidNpadButton_Up)&&!catalogue.empty())listIndex=(listIndex-1+static_cast<int>(catalogue.size()))%static_cast<int>(catalogue.size());
         if((keys&HidNpadButton_Down)&&!catalogue.empty())listIndex=(listIndex+1)%static_cast<int>(catalogue.size());
-        if((keys&HidNpadButton_A)&&!catalogue.empty())addSelected();return;
+        if((keys&HidNpadButton_A)&&!catalogue.empty()) addSelected();
+        return;
     }
     if(keys&HidNpadButton_B) {
         if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");return;}
@@ -637,6 +658,10 @@ int main(int,char**) {
         }
         drawScreen();svcSleepThread(16'000'000);
     }
-    if(psmReady)psmExit();if(renderer)SDL_DestroyRenderer(renderer);if(window)SDL_DestroyWindow(window);
-    SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 0;
+    if(psmReady) psmExit();
+    if(renderer) SDL_DestroyRenderer(renderer);
+    if(window) SDL_DestroyWindow(window);
+    SDL_Quit();
+    if(sdMounted) fsdevUnmountDevice("sdmc");
+    return 0;
 }
