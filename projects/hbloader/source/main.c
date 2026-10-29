@@ -505,37 +505,92 @@ void loadNro(void)
     // Reset NRO path to load hbmenu by default next time.
     g_nextNroPath[0] = '\0';
 
+    struct stat nro_stat;
+    if (fstat(fd, &nro_stat) != 0 || nro_stat.st_size < 0)
+    {
+        close(fd);
+        if (g_targetMode) {
+            HbLog("invalid target NRO: could not stat file");
+            svcExitProcess();
+        }
+        diagAbortWithResult(MAKERESULT(Module_HomebrewLoader, 41));
+    }
+
     if (read(fd, start, sizeof(*start)) != sizeof(*start))
+    {
+        close(fd);
+        if (g_targetMode) {
+            HbLog("invalid target NRO: truncated start header");
+            svcExitProcess();
+        }
         diagAbortWithResult(MAKERESULT(Module_HomebrewLoader, 4));
+    }
 
     if (read(fd, header, sizeof(*header)) != sizeof(*header))
+    {
+        close(fd);
+        if (g_targetMode) {
+            HbLog("invalid target NRO: truncated header");
+            svcExitProcess();
+        }
         diagAbortWithResult(MAKERESULT(Module_HomebrewLoader, 4));
+    }
 
     if (header->magic != NROHEADER_MAGIC)
+    {
+        close(fd);
+        if (g_targetMode) {
+            HbLog("invalid target NRO: bad magic");
+            svcExitProcess();
+        }
         diagAbortWithResult(MAKERESULT(Module_HomebrewLoader, 5));
+    }
 
-    size_t rest_size = header->size - (sizeof(NroStart) + sizeof(NroHeader));
-    if (read(fd, rest, rest_size) != rest_size)
+    // Validate every size/offset before reading into the fixed applet heap.
+    // NROs come from removable storage, so malformed headers must never make
+    // rest_size underflow or let a segment extend beyond the mapped image.
+    const u64 header_min = sizeof(NroStart) + sizeof(NroHeader);
+    const u64 image_size = header->size;
+    const u64 bss_size = header->bss_size;
+    bool invalid_image = image_size < header_min ||
+                         image_size > (u64)nro_stat.st_size ||
+                         image_size > (u64)g_heapSize ||
+                         bss_size > (u64)g_heapSize - image_size;
+    for (int i = 0; i < 3 && !invalid_image; ++i) {
+        const u64 segment_start = header->segments[i].file_off;
+        const u64 segment_size = header->segments[i].size;
+        if (segment_start >= image_size || segment_size > image_size ||
+            segment_start + segment_size > image_size)
+            invalid_image = true;
+    }
+    if (invalid_image) {
+        close(fd);
+        if (g_targetMode) {
+            HbLog("invalid target NRO: size, BSS, or segment range is out of bounds");
+            svcExitProcess();
+        }
+        diagAbortWithResult(MAKERESULT(Module_HomebrewLoader, 42));
+    }
+
+    size_t rest_size = (size_t)(image_size - header_min);
+    if (read(fd, rest, rest_size) != (ssize_t)rest_size)
+    {
+        close(fd);
+        if (g_targetMode) {
+            HbLog("invalid target NRO: truncated image data");
+            svcExitProcess();
+        }
         diagAbortWithResult(MAKERESULT(Module_HomebrewLoader, 7));
+    }
 
     close(fd);
     fsdevUnmountAll();
 
-    size_t total_size = header->size + header->bss_size;
-    total_size = (total_size+0xFFF) & ~0xFFF;
+    size_t total_size = (size_t)(image_size + bss_size);
+    total_size = (total_size + 0xFFF) & ~(size_t)0xFFF;
 
-    rw_size = header->segments[2].size + header->bss_size;
-    rw_size = (rw_size+0xFFF) & ~0xFFF;
-
-    int i;
-    for (i=0; i<3; i++)
-    {
-        if (header->segments[i].file_off >= header->size || header->segments[i].size > header->size ||
-            (header->segments[i].file_off + header->segments[i].size) > header->size)
-        {
-            diagAbortWithResult(MAKERESULT(Module_HomebrewLoader, 6));
-        }
-    }
+    rw_size = (size_t)header->segments[2].size + (size_t)bss_size;
+    rw_size = (rw_size + 0xFFF) & ~(size_t)0xFFF;
 
     // todo: Detect whether NRO fits into heap or not.
 
