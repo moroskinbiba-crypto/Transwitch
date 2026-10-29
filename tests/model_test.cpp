@@ -1,4 +1,5 @@
 #include <desknx/Model.hpp>
+#include <desknx/StrictParse.hpp>
 #include <desknx/Layout.hpp>
 #include "../source/catalog_view.hpp"
 
@@ -11,6 +12,18 @@
 using namespace desknx::model;
 
 int main() {
+    int parsedInt = 0;
+    assert(desknx::strict::parseInt32("0", parsedInt) && parsedInt == 0);
+    assert(desknx::strict::parseInt32("-2147483648", parsedInt) && parsedInt == (-2147483647 - 1));
+    assert(desknx::strict::parseInt32("2147483647", parsedInt) && parsedInt == 2147483647);
+    assert(!desknx::strict::parseInt32("", parsedInt));
+    assert(!desknx::strict::parseInt32("+", parsedInt));
+    assert(!desknx::strict::parseInt32("123tail", parsedInt));
+    assert(!desknx::strict::parseInt32(" 123", parsedInt));
+    assert(!desknx::strict::parseInt32("123 ", parsedInt));
+    assert(!desknx::strict::parseInt32("2147483648", parsedInt));
+    assert(!desknx::strict::parseInt32("-2147483649", parsedInt));
+
     Workspace desk{"test", {}};
     Tile wide{Kind::Game, "wide", "0100", 0, 0, 2, 1, 0};
     Tile small{Kind::Nro, "small", "sdmc:/switch/demo.nro", 2, 0, 1, 1, 1};

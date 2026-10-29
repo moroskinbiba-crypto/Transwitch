@@ -1,4 +1,5 @@
 #include "catalog.hpp"
+#include "../include/desknx/StrictParse.hpp"
 
 #include <switch.h>
 #include <algorithm>
@@ -125,18 +126,6 @@ Signatures MakeSignatures(const std::vector<GameRecord>& games, const std::vecto
     }
     return sig;
 }
-bool parseCacheInt(const std::string& text, int& value) {
-    if (text.empty()) return false;
-    errno = 0;
-    char* end = nullptr;
-    const long parsed = std::strtol(text.c_str(), &end, 10);
-    if (errno != 0 || end == text.c_str() || !end || *end != '\\0' ||
-        parsed < -2147483647L - 1 || parsed > 2147483647L)
-        return false;
-    value = static_cast<int>(parsed);
-    return true;
-}
-
 bool isHexTitleId(const std::string& value) {
     if (value.size() != 16) return false;
     for (unsigned char c : value)
@@ -194,9 +183,9 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
         if (item.kind == Kind::Unsupported) return false;
         item.title = fields[2];
         item.data = fields[3];
-        if (!parseCacheInt(fields[4], item.w) ||
-            !parseCacheInt(fields[5], item.h) ||
-            !parseCacheInt(fields[6], item.color))
+        if (!desknx::strict::parseInt32(fields[4], item.w) ||
+            !desknx::strict::parseInt32(fields[5], item.h) ||
+            !desknx::strict::parseInt32(fields[6], item.color))
             return false;
         if (item.w < 1 || item.w > 3 || item.h < 1 || item.h > 2 ||
             item.color < 0 || item.color > 7 || item.title.empty())
