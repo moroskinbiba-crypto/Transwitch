@@ -9,6 +9,8 @@ LIBNX    := $(DEVKITPRO)/libnx
 PORTLIBS := $(DEVKITPRO)/portlibs/switch
 # Cross-compiled SDL ports install their .pc files under the Switch portlibs prefix.
 export PKG_CONFIG_PATH := $(PORTLIBS)/lib/pkgconfig:$(PKG_CONFIG_PATH)
+# devkitA64 ships no sdl2-config; use plain pkg-config for all SDL components.
+SDL_PC := SDL2 SDL2_image SDL2_ttf
 
 include $(LIBNX)/switch_rules
 
@@ -29,7 +31,7 @@ CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
 
-LIBS        := `sdl2-config --libs` $(shell pkg-config --static --libs SDL2_image SDL2_ttf)
+LIBS        := $(shell pkg-config --static --libs $(SDL_PC))
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))

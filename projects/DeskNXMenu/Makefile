@@ -8,6 +8,8 @@ PORTLIBS := $(DEVKITPRO)/portlibs/switch
 # Cross-compiled SDL ports install their .pc files under the Switch portlibs prefix.
 export PKG_CONFIG_PATH := $(PORTLIBS)/lib/pkgconfig:$(PKG_CONFIG_PATH)
 export PATH := $(PORTLIBS)/bin:$(PATH)
+# devkitA64 ships no sdl2-config; use plain pkg-config for all SDL components.
+SDL_PC := SDL2 SDL2_image SDL2_ttf
 
 include $(LIBNX)/switch_rules
 
@@ -18,7 +20,9 @@ INCLUDES    := ../../include ../../projects/common/include
 APP_TITLE   := DeskNX
 APP_AUTHOR  := DeskNX contributors
 APP_VERSION := 0.2.0
-APP_JSON    = $(TOPDIR)/DeskNXMenu.json
+# TOPDIR is exported by the outer invocation; fall back to CURDIR when this
+# Makefile is invoked directly (e.g. `make -C projects/DeskNXMenu` in CI).
+APP_JSON    = $(if $(TOPDIR),$(TOPDIR),$(CURDIR))/DeskNXMenu.json
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__ -DDESKNX_SYSTEM_APPLET
@@ -26,7 +30,7 @@ CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
-LIBS        := `sdl2-config --libs` $(shell pkg-config --static --libs SDL2_image SDL2_ttf) -lnx
+LIBS        := $(shell pkg-config --static --libs $(SDL_PC)) -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
