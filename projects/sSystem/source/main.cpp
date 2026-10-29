@@ -393,9 +393,9 @@ bool ParseMenuCommand(AppletStorage& storage) {
         return false;
 
     if (hdr.magic != desknx::ipc::Magic ||
-        (hdr.version != desknx::ipc::LegacyVersion && hdr.version != desknx::ipc::Version) ||
+        !desknx::ipc::rules::IsSupportedVersion(hdr.version) ||
         hdr.header_size != sizeof(desknx::ipc::Header) ||
-        hdr.payload_size > 0x3F00) {
+        !desknx::ipc::rules::IsValidPayloadSize(hdr.payload_size)) {
         DaemonLog("ipc: dropped malformed message header");
         return false;
     }
@@ -434,7 +434,7 @@ bool ParseMenuCommand(AppletStorage& storage) {
 
             desknx::ipc::BusyPayload payload{};
             if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))) ||
-                payload.seconds == 0 || payload.seconds > kBusyMaximumSeconds)
+                !desknx::ipc::rules::IsValidBusySeconds(payload.seconds))
                 return false;
 
             const u64 now = armGetSystemTick();
