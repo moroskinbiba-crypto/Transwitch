@@ -2,7 +2,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
-#include <desknx/Model.hpp>
+#include "../include/desknx/Model.hpp"
 #include "catalog.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"

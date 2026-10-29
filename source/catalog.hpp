@@ -1,6 +1,6 @@
 #pragma once
 
-#include <desknx/Model.hpp>
+#include "../include/desknx/Model.hpp"
 #include <vector>
 
 namespace desknx::catalog {
