@@ -30,6 +30,24 @@ make_fake_package() {
 PACKAGE="$TMP/package"
 make_fake_package "$PACKAGE"
 
+# Refuse an accidental host-root target before touching any host paths.
+if DESKNX_PACKAGE_DIR="$PACKAGE" bash "$ROOT/scripts/install-system.sh" --sd-root / --acknowledge-risk; then
+  fail "installer accepted / as the SD-card root"
+fi
+if bash "$ROOT/scripts/uninstall-system.sh" --sd-root / --acknowledge-risk; then
+  fail "uninstaller accepted / as the SD-card root"
+fi
+
+# Reject destination types that cannot be restored by the manifest contract.
+SD_BAD_TYPE="$TMP/sd-bad-target-type"
+mkdir -p "$SD_BAD_TYPE/atmosphere/contents" "$SD_BAD_TYPE/switch/DeskNX"
+printf 'not a qlaunch directory\n' > "$SD_BAD_TYPE/atmosphere/contents/0100000000001000"
+if DESKNX_PACKAGE_DIR="$PACKAGE" bash "$ROOT/scripts/install-system.sh" --sd-root "$SD_BAD_TYPE" --acknowledge-risk --backup-existing; then
+  fail "installer accepted a file at the qlaunch directory path"
+fi
+assert_file_content "$SD_BAD_TYPE/atmosphere/contents/0100000000001000" "not a qlaunch directory"
+
+
 # Case 1: clean SD root. Install and uninstall should remove the active override
 # but preserve the just-installed files under the backup directory.
 SD1="$TMP/sd-clean"
