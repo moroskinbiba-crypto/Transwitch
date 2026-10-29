@@ -977,7 +977,8 @@ void RunMainLoop() {
 
         CheckEmergencyRollback();
         svcSleepThread(16'666'666ULL);
-    }}
+    }
+}
 
 } // namespace
 

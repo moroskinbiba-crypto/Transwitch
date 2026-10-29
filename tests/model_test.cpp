@@ -43,7 +43,7 @@ int main() {
     second.tiles.push_back(Tile{Kind::Nro,"Demo","sdmc:/switch/demo.nro",1,1,2,1,2});
     std::vector<Workspace> source{{"Games",{wide}},second};
     const std::string v3 = desknx::layout::serialize(source,1);
-    assert(v3.rfind("DESKNX3\\n",0) == 0);
+    assert(v3.rfind("DESKNX3\n",0) == 0);
     desknx::layout::LoadResult roundTrip{};
     assert(desknx::layout::parse(v3, roundTrip));
     assert(!roundTrip.needsMigration && roundTrip.activeWorkspace == 1);
@@ -56,6 +56,6 @@ int main() {
         "I\t0\tN\tTwo\tsdmc:/switch/two.nro\t1\t0\t1\t1\t1\n";
     desknx::layout::LoadResult invalid{};
     assert(!desknx::layout::parse(overlap, invalid));
-    assert(!desknx::layout::parse("DESKNX999\\nD\\tbad\\n", invalid));
+    assert(!desknx::layout::parse("DESKNX999\nD\tbad\n", invalid));
     return 0;
 }

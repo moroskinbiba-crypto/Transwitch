@@ -1,5 +1,6 @@
 #include "../include/desknx/Layout.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <utility>
