@@ -210,7 +210,7 @@ namespace desknx::system::app {
         appletRequestToGetForeground();
     }
 
-    bool Update() {
+    bool Update(bool request_foreground) {
         if (!g_AppRunning) return false;
         if (!appletApplicationCheckFinished(&g_AppHolder)) return false;
 
@@ -221,7 +221,8 @@ namespace desknx::system::app {
         g_AppRunning  = false;
         g_AppHasFocus = false;
 
-        appletRequestToGetForeground();
+        if (request_foreground)
+            appletRequestToGetForeground();
         return true;
     }
 

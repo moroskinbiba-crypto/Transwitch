@@ -42,6 +42,13 @@ constexpr const char* kInstallMarkerText = "DeskNX qlaunch override v0.2.0";
 constexpr u64 kMenuStartRetryDelayNs = 500'000'000ULL;
 constexpr int kMenuStartAttempts = 4;
 
+enum class BackendState {
+    Booting, MenuStarting, MenuActive, GameLaunching, GameRunning,
+    HomebrewStarting, HomebrewRunning, Sleeping, RecoveryWait
+};
+BackendState g_BackendState = BackendState::Booting;
+bool g_AppWasRunningBeforeSleep = false;
+
 AccountUid g_SelectedUser{};
 u64 g_PendingTitle = 0;
 bool g_PendingReturnToGame = false;
@@ -99,6 +106,27 @@ void DaemonLog(const char* fmt, ...) {
 }
 
 namespace {
+
+const char* BackendStateName(BackendState state) {
+    switch (state) {
+        case BackendState::Booting: return "booting";
+        case BackendState::MenuStarting: return "menu-starting";
+        case BackendState::MenuActive: return "menu-active";
+        case BackendState::GameLaunching: return "game-launching";
+        case BackendState::GameRunning: return "game-running";
+        case BackendState::HomebrewStarting: return "homebrew-starting";
+        case BackendState::HomebrewRunning: return "homebrew-running";
+        case BackendState::Sleeping: return "sleeping";
+        case BackendState::RecoveryWait: return "recovery-wait";
+    }
+    return "unknown";
+}
+void TransitionTo(BackendState next, const char* reason) {
+    if (g_BackendState == next) return;
+    DaemonLog("state: %s -> %s (%s)", BackendStateName(g_BackendState),
+              BackendStateName(next), reason ? reason : "unspecified");
+    g_BackendState = next;
+}
 
 bool IsSafeHomebrewPath(const char* path) {
     if (!path || !path[0] || std::strlen(path) >= desknx::ipc::MaxHomebrewPath)
@@ -274,7 +302,13 @@ void RegisterCurrentSlot() {
 }
 
 bool LaunchMenu() {
-    if (la::IsMenuAlive()) return true;
+    if (la::IsMenuAlive()) {
+        if (g_HomebrewLoaderRunning) TransitionTo(BackendState::HomebrewRunning, "loader already alive");
+        else if (g_MenuReady) TransitionTo(BackendState::MenuActive, "menu already alive");
+        else TransitionTo(BackendState::MenuStarting, "menu already alive");
+        return true;
+    }
+    TransitionTo(BackendState::MenuStarting, "launch requested");
     g_MenuSlotExhausted = false;
     g_NextMenuRetryTick = 0;
     const auto& slot = CurrentMenuSlot();
@@ -324,8 +358,11 @@ bool LaunchMenu() {
     // the player on a black screen.
     if (app::g_AppRunning) {
         const Result focusRc = app::FocusApplication();
+        TransitionTo(BackendState::GameRunning, "HOME slots failed; returned to title");
         DaemonLog("menu: restored title focus after startup failure rc=0x%08X",
                   static_cast<unsigned int>(focusRc));
+    } else {
+        TransitionTo(BackendState::RecoveryWait, "all HOME slots failed");
     }
     return false;
 }
@@ -349,6 +386,7 @@ bool ParseMenuCommand(AppletStorage& storage) {
             if (hdr.payload_size != 0) return false;
             g_MenuReady = true;
             g_LastMenuHeartbeatTick = armGetSystemTick();
+            TransitionTo(BackendState::MenuActive, "ready handshake");
             DaemonLog("ipc: DeskNX menu ready");
             return true;
 
@@ -523,6 +561,7 @@ void OpenMenuForHomePress() {
         if (app::g_AppRunning) {
             la::StopMenu();
             app::FocusApplication();
+            TransitionTo(BackendState::GameRunning, "HOME dismissed menu");
             DaemonLog("home: dismissed DeskNX, returned to title=0x%016llX",
                       static_cast<unsigned long long>(app::g_AppId));
         }
@@ -542,6 +581,7 @@ void OpenMenuForHomePress() {
 }
 
 void HandleSleepMessage() {
+    g_AppWasRunningBeforeSleep = app::g_AppRunning;
     g_ReopenMenuAfterSleep = la::IsMenuAlive();
     if (g_ReopenMenuAfterSleep) {
         la::StopMenu();
@@ -554,6 +594,7 @@ void HandleSleepMessage() {
         }
     }
 
+    TransitionTo(BackendState::Sleeping, "sleep sequence requested");
     const Result rc = appletStartSleepSequence(true);
     DaemonLog("power: sleep sequence rc=0x%08X", static_cast<unsigned int>(rc));
 }
@@ -592,6 +633,15 @@ void PumpAppletMessages() {
                 DaemonLog("power: wake event");
                 if (g_ReopenMenuAfterSleep) {
                     g_ReopenMenuAfterSleep = false;
+                    TransitionTo(BackendState::MenuStarting, "wake; reopen menu");
+                    LaunchMenu();
+                } else if (g_AppWasRunningBeforeSleep && app::g_AppRunning) {
+                    g_AppWasRunningBeforeSleep = false;
+                    app::FocusApplication();
+                    TransitionTo(BackendState::GameRunning, "wake; restore game focus");
+                } else {
+                    g_AppWasRunningBeforeSleep = false;
+                    TransitionTo(BackendState::MenuStarting, "wake; no prior foreground");
                     LaunchMenu();
                 }
                 break;
@@ -646,6 +696,7 @@ void HandleMenuClosed() {
         g_PendingHomebrew = false;
 
         if (!WriteHomebrewTarget(path, argv)) {
+            TransitionTo(BackendState::MenuStarting, "homebrew target rejected");
             DaemonLog("hb: could not stage target NRO; returning to DeskNX");
             LaunchMenu();
             return;
@@ -660,6 +711,7 @@ void HandleMenuClosed() {
         }
 
         g_HomebrewLoaderRunning = true;
+        TransitionTo(BackendState::HomebrewStarting, "homebrew target staged");
         g_MenuReady = false;
         g_MenuLaunchTick = 0; // hbloader does not send MenuReady
         g_LastMenuHeartbeatTick = 0;
@@ -672,6 +724,7 @@ void HandleMenuClosed() {
             LaunchMenu();
             return;
         }
+        TransitionTo(BackendState::HomebrewRunning, "hbloader applet launched");
         DaemonLog("hb: launched %s through the album applet slot", path);
         return;
     }
@@ -681,11 +734,31 @@ void HandleMenuClosed() {
         g_PendingTitle = 0;
         g_PendingReturnToGame = false;
 
+        // Selecting another game from HOME must retire the suspended title's
+        // AppletApplication holder first; launching over a live holder fails.
+        if (app::g_AppRunning && app::g_AppId == titleId) {
+            app::FocusApplication();
+            TransitionTo(BackendState::GameRunning, "selected already-running title");
+            DaemonLog("app: resumed selected title=0x%016llX",
+                      static_cast<unsigned long long>(titleId));
+            return;
+        }
+        TransitionTo(BackendState::GameLaunching, "user selected title");
+        if (app::g_AppRunning) {
+            DaemonLog("app: terminating suspended title=0x%016llX before new launch",
+                      static_cast<unsigned long long>(app::g_AppId));
+            app::Terminate();
+        }
+
         const Result rc = app::Launch(titleId, g_SelectedUser);
         DaemonLog("app: launch title=0x%016llX rc=0x%08X",
                   static_cast<unsigned long long>(titleId), static_cast<unsigned int>(rc));
-        if (R_FAILED(rc))
+        if (R_FAILED(rc)) {
+            TransitionTo(BackendState::MenuStarting, "game launch failed");
             LaunchMenu();
+        } else {
+            TransitionTo(BackendState::GameRunning, "game launched");
+        }
         return;
     }
 
@@ -693,6 +766,7 @@ void HandleMenuClosed() {
         g_PendingReturnToGame = false;
         if (app::g_AppRunning) {
             app::FocusApplication();
+            TransitionTo(BackendState::GameRunning, "return-to-game command");
             DaemonLog("app: returned to title=0x%016llX",
                       static_cast<unsigned long long>(app::g_AppId));
         } else {
@@ -737,92 +811,173 @@ void RunMainLoop() {
     LaunchMenu();
 
     while (true) {
-        if (la::IsMenuAlive())
-            DrainMenuCommands();
+        if (la::IsMenuAlive()) DrainMenuCommands();
         PumpAppletMessages();
 
-        // A slot that starts but never speaks is probably the firmware's own
-        // applet or a crashed menu. Stop it and test the next known slot instead
-        // of leaving the HOME button attached to a frozen screen forever.
+        // Poll even while DeskNX is open. If a suspended game exits naturally,
+        // close its holder without requesting foreground away from the menu.
+        const bool appExited = app::g_AppRunning && app::Update(!la::g_MenuRunning);
+        if (appExited) {
+            DaemonLog("app: title exited naturally while menu_alive=%d", la::g_MenuRunning ? 1 : 0);
+            if (la::g_MenuRunning) {
+                TransitionTo(g_HomebrewLoaderRunning ? BackendState::HomebrewRunning :
+                             (g_MenuReady ? BackendState::MenuActive : BackendState::MenuStarting),
+                             "title ended under menu");
+            } else {
+                TransitionTo(BackendState::MenuStarting, "title exited");
+            }
+        }
+
+        // A menu slot that never sends MenuReady is a failed candidate.
         if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && !g_MenuReady && g_MenuLaunchTick != 0) {
-            const u64 liveTicks = armGetSystemTick() - g_MenuLaunchTick;
-            if (liveTicks >= armGetSystemTickFreq() * kMenuReadyTimeoutSeconds) {
-                DaemonLog("menu: no ready IPC after %llu seconds in slot=%s",
-                          static_cast<unsigned long long>(kMenuReadyTimeoutSeconds),
-                          CurrentMenuSlot().name);
+            const u64 elapsed = armGetSystemTick() - g_MenuLaunchTick;
+            if (elapsed >= armGetSystemTickFreq() * kMenuReadyTimeoutSeconds) {
+                DaemonLog("menu: ready timeout; slot=%s", CurrentMenuSlot().name);
                 la::StopMenu();
                 g_MenuReady = false;
                 g_LastMenuHeartbeatTick = 0;
                 if (app::g_AppRunning) {
-                    // Failed HOME applet: restore the game and wait for another
-                    // HOME press rather than repeatedly stealing the foreground.
                     app::FocusApplication();
                     g_MenuSlotExhausted = true;
-                    g_NextMenuRetryTick = armGetSystemTick() +
-                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    g_NextMenuRetryTick = armGetSystemTick() + armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    TransitionTo(BackendState::GameRunning, "menu failed while game suspended");
                 } else if (g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount) {
                     ++g_MenuSlotIndex;
                     g_MenuSlotExhausted = false;
-                    DaemonLog("menu: testing fallback slot=%s", CurrentMenuSlot().name);
+                    TransitionTo(BackendState::MenuStarting, "ready timeout; try fallback slot");
                 } else {
                     g_MenuSlotIndex = 0;
                     g_MenuSlotExhausted = true;
-                    g_NextMenuRetryTick = armGetSystemTick() +
-                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    g_NextMenuRetryTick = armGetSystemTick() + armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    TransitionTo(BackendState::RecoveryWait, "all menu candidates timed out");
                 }
             }
         }
 
-        // A menu can finish startup and then hang. The heartbeat distinguishes
-        // a responsive workspace from an applet that remains alive but stopped
-        // processing input. When a game is suspended, restore it and wait for
-        // the next HOME press; never retry in a loop that steals its foreground.
         if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && g_MenuReady && g_LastMenuHeartbeatTick != 0) {
-            const u64 silentTicks = armGetSystemTick() - g_LastMenuHeartbeatTick;
-            if (silentTicks >= armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds) {
-                DaemonLog("menu: heartbeat timed out after %llu seconds; restarting slot=%s",
-                          static_cast<unsigned long long>(kMenuHeartbeatTimeoutSeconds),
-                          CurrentMenuSlot().name);
+            const u64 silent = armGetSystemTick() - g_LastMenuHeartbeatTick;
+            if (silent >= armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds) {
+                DaemonLog("menu: heartbeat timeout; slot=%s", CurrentMenuSlot().name);
                 la::StopMenu();
                 g_MenuReady = false;
                 g_LastMenuHeartbeatTick = 0;
                 if (app::g_AppRunning) {
                     app::FocusApplication();
                     g_MenuSlotExhausted = true;
-                    g_NextMenuRetryTick = armGetSystemTick() +
-                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    g_NextMenuRetryTick = armGetSystemTick() + armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    TransitionTo(BackendState::GameRunning, "menu heartbeat failed while game suspended");
                 } else if (g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount) {
                     ++g_MenuSlotIndex;
                     g_MenuSlotExhausted = false;
+                    TransitionTo(BackendState::MenuStarting, "heartbeat timeout; try fallback slot");
                 } else {
                     g_MenuSlotIndex = 0;
                     g_MenuSlotExhausted = true;
-                    g_NextMenuRetryTick = armGetSystemTick() +
-                                          armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    g_NextMenuRetryTick = armGetSystemTick() + armGetSystemTickFreq() * kMenuRetryDelaySeconds;
+                    TransitionTo(BackendState::RecoveryWait, "all menu candidates stopped heartbeating");
                 }
             }
         }
 
-        if (la::g_MenuRunning && !la::IsMenuAlive()) {
+        if (la::g_MenuRunning && !la::IsMenuAlive())
             HandleMenuClosed();
-        } else if (!la::g_MenuRunning && app::g_AppRunning && app::Update()) {
-            DaemonLog("app: title exited naturally");
-            LaunchMenu();
-         } else if (!la::g_MenuRunning && !app::g_AppRunning && g_MenuSlotExhausted &&
-                   armGetSystemTick() >= g_NextMenuRetryTick) {
-            // Reset to the preferred slot on every retry so transient startup
-            // failures don't permanently pin a console to the fallback slot.
-            g_MenuSlotIndex = 0;
-            g_MenuSlotExhausted = false;
-            LaunchMenu();
-        } else if (!la::g_MenuRunning && !app::g_AppRunning && !g_MenuSlotExhausted) {
-            LaunchMenu();
+
+        switch (g_BackendState) {
+            case BackendState::Booting:
+                TransitionTo(BackendState::MenuStarting, "backend initialized");
+                LaunchMenu();
+                break;
+
+            case BackendState::MenuStarting:
+                if (la::IsMenuAlive()) {
+                    if (g_HomebrewLoaderRunning)
+                        TransitionTo(BackendState::HomebrewRunning, "homebrew applet alive");
+                    else if (g_MenuReady)
+                        TransitionTo(BackendState::MenuActive, "menu handshake complete");
+                } else if (!la::g_MenuRunning && app::g_AppRunning) {
+                    app::FocusApplication();
+                    TransitionTo(BackendState::GameRunning, "menu unavailable; preserve game");
+                } else if (!la::g_MenuRunning && g_MenuSlotExhausted) {
+                    if (!app::g_AppRunning && armGetSystemTick() >= g_NextMenuRetryTick) {
+                        g_MenuSlotIndex = 0;
+                        g_MenuSlotExhausted = false;
+                        LaunchMenu();
+                    }
+                } else if (!la::g_MenuRunning && !app::g_AppRunning) {
+                    LaunchMenu();
+                }
+                break;
+
+            case BackendState::MenuActive:
+                if (!la::g_MenuRunning) {
+                    if (app::g_AppRunning) {
+                        app::FocusApplication();
+                        TransitionTo(BackendState::GameRunning, "menu closed; resume title");
+                    } else {
+                        TransitionTo(BackendState::MenuStarting, "menu closed without title");
+                        LaunchMenu();
+                    }
+                } else if (!g_MenuReady && !g_HomebrewLoaderRunning) {
+                    TransitionTo(BackendState::MenuStarting, "menu awaiting ready handshake");
+                }
+                break;
+
+            case BackendState::GameLaunching:
+                if (app::g_AppRunning)
+                    TransitionTo(BackendState::GameRunning, "application holder is live");
+                else if (!la::g_MenuRunning) {
+                    TransitionTo(BackendState::MenuStarting, "game launch did not start");
+                    LaunchMenu();
+                }
+                break;
+
+            case BackendState::GameRunning:
+                if (!app::g_AppRunning && !la::g_MenuRunning) {
+                    TransitionTo(BackendState::MenuStarting, "title no longer running");
+                    LaunchMenu();
+                }
+                break;
+
+            case BackendState::HomebrewStarting:
+                if (la::IsMenuAlive())
+                    TransitionTo(BackendState::HomebrewRunning, "hbloader is alive");
+                else if (!la::g_MenuRunning) {
+                    TransitionTo(BackendState::MenuStarting, "hbloader failed to start");
+                    LaunchMenu();
+                }
+                break;
+
+            case BackendState::HomebrewRunning:
+                if (!g_HomebrewLoaderRunning) {
+                    if (app::g_AppRunning)
+                        TransitionTo(BackendState::GameRunning, "homebrew session ended");
+                    else {
+                        TransitionTo(BackendState::MenuStarting, "restore DeskNX after homebrew");
+                        LaunchMenu();
+                    }
+                }
+                break;
+
+            case BackendState::Sleeping:
+                // Only Msg_FinishedSleepSequence may leave this state.
+                break;
+
+            case BackendState::RecoveryWait:
+                if (app::g_AppRunning) {
+                    app::FocusApplication();
+                    TransitionTo(BackendState::GameRunning, "recovery wait has a live title");
+                } else if (!la::g_MenuRunning && armGetSystemTick() >= g_NextMenuRetryTick) {
+                    g_MenuSlotIndex = 0;
+                    g_MenuSlotExhausted = false;
+                    TransitionTo(BackendState::MenuStarting, "retry HOME slot candidates");
+                    LaunchMenu();
+                }
+                break;
         }
 
         CheckEmergencyRollback();
         svcSleepThread(16'666'666ULL);
-    }
-}
+    }}
 
 } // namespace
 

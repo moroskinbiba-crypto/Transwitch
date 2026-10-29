@@ -30,7 +30,7 @@ namespace desknx::system::app {
     void   Terminate();
 
     // Called each frame from the main loop; returns true when the app exited
-    bool   Update();
+    bool   Update(bool request_foreground = true);
 
     // Give foreground to the application (take it from ourselves)
     Result FocusApplication();
