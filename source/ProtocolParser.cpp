@@ -73,13 +73,17 @@ bool ParseMessage(const void* data, std::size_t total_size,
 }
 
 bool ReadU32(const ParsedMessage& message, std::size_t offset, std::uint32_t& out) {
-    if (!message.payload || offset + 4 > message.payload_size) return false;
+    if (!message.payload || offset > message.payload_size ||
+        sizeof(std::uint32_t) > message.payload_size - offset)
+        return false;
     out = LoadU32(message.payload + offset);
     return true;
 }
 
 bool ReadU64(const ParsedMessage& message, std::size_t offset, std::uint64_t& out) {
-    if (!message.payload || offset + 8 > message.payload_size) return false;
+    if (!message.payload || offset > message.payload_size ||
+        sizeof(std::uint64_t) > message.payload_size - offset)
+        return false;
     out = LoadU64(message.payload + offset);
     return true;
 }
