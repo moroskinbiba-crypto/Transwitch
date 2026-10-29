@@ -425,6 +425,10 @@ void recordRecentLaunch(const Tile& tile) {
 bool backupBrokenLayout() {
     struct stat st{};
     if (stat(CFG_FILE, &st) != 0) return errno == ENOENT;
+    if (!S_ISREG(st.st_mode)) {
+        setStatus("LAYOUT PATH IS NOT A REGULAR FILE", 4500);
+        return false;
+    }
     std::time_t now = std::time(nullptr);
     std::tm* tmv = std::localtime(&now);
     char stamp[32]{};
