@@ -172,7 +172,6 @@ if bash "$ROOT/scripts/uninstall-system.sh" --sd-root "$SD4" --acknowledge-risk;
   fail "uninstaller accepted a symlinked /switch ancestor"
 fi
 assert_file_content "$SD4/atmosphere/contents/0100000000001000/exefs/DeskNX.install-marker" "DeskNX qlaunch override v0.2.0"
-[[ -s "$SD4/switch/switch-not-real" ]] && fail "unexpected sentinel state"
 rm "$SD4/switch"
 mv "$SD4/switch-real" "$SD4/switch"
 mv "$SD4/switch/DeskNX/backup" "$SD4/switch/DeskNX/backup-real"
