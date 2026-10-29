@@ -272,10 +272,15 @@ void consumeInitialState() {
     const Result rc=appletPopInData(&storage);
     if(R_FAILED(rc)) return; // nothing queued yet
     desknx::ipc::InitialState state{};
-    u64 read_size=0;
-    const Result readRc=appletStorageRead(&storage,0,&state,sizeof(state),&read_size);
+    s64 storage_size=0;
+    const Result sizeRc=appletStorageGetSize(&storage,&storage_size);
+    if(R_FAILED(sizeRc)||storage_size<static_cast<s64>(sizeof(state))) {
+        appletStorageClose(&storage);
+        return;
+    }
+    const Result readRc=appletStorageRead(&storage,0,&state,sizeof(state));
     appletStorageClose(&storage);
-    if(R_FAILED(readRc)||read_size<sizeof(desknx::ipc::Header)) return;
+    if(R_FAILED(readRc)) return;
     if(state.magic!=desknx::ipc::Magic||state.header_size!=desknx::ipc::InitialStateSize)
         return; // not our block (e.g. v1 backend): ignore, stay compatible
     g_initialState=state;
@@ -300,9 +305,17 @@ void pollBackendEvents() {
     const Result rc=appletPopInData(&storage);
     if(R_FAILED(rc)) return;
     desknx::ipc::Header hdr{};
-    u64 read_size=0;
-    Result readRc=appletStorageRead(&storage,0,&hdr,sizeof(hdr),&read_size);
-    if(R_FAILED(readRc)||read_size!=sizeof(hdr)||hdr.magic!=desknx::ipc::Magic) {
+    s64 storage_size=0;
+    const Result sizeRc=appletStorageGetSize(&storage,&storage_size);
+    if(R_FAILED(sizeRc)||storage_size<static_cast<s64>(sizeof(hdr))) {
+        appletStorageClose(&storage); return;
+    }
+    const Result readRc=appletStorageRead(&storage,0,&hdr,sizeof(hdr));
+    if(R_FAILED(readRc)||hdr.magic!=desknx::ipc::Magic||
+       !desknx::ipc::rules::IsSupportedVersion(hdr.version)||
+       hdr.header_size!=sizeof(hdr)||
+       !desknx::ipc::rules::IsValidPayloadSize(hdr.payload_size)||
+       static_cast<u64>(storage_size)<static_cast<u64>(sizeof(hdr))+hdr.payload_size) {
         appletStorageClose(&storage); return;
     }
     const u32 command=hdr.command; // actually an Event id in this direction
@@ -693,7 +706,7 @@ void launch(const Tile& t) {
         // LNC-02/LNC-03: pass the selected user only when we actually have a
         // valid uid; zero uid means "backend decides" (kept v1-compatible).
         // HasUser forces the preselection even if NACP would skip it.
-        const AccountUid uid=g_backendHasUser?g_backendUser:accountGetZeroUid();
+        const AccountUid uid=g_backendHasUser?g_backendUser:AccountUid{};
         const u64 flags=g_backendHasUser?desknx::ipc::LaunchFlagHasUser:0;
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id,flags,uid);});
         if(R_FAILED(rc)) {
