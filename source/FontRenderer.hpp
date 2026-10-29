@@ -3,6 +3,7 @@
 #include <switch.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
+#include <algorithm>
 #include <climits>
 #include <string>
 #include <vector>

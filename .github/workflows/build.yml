@@ -22,6 +22,11 @@ jobs:
       - name: Validate shell scripts
         run: bash -n scripts/install-system.sh scripts/uninstall-system.sh tests/test-recovery.sh
 
+      - name: Run host model unit tests
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/model_test.cpp -o /tmp/desknx-model-test
+          /tmp/desknx-model-test
+
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
 

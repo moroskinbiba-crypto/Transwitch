@@ -12,7 +12,7 @@ include $(LIBNX)/switch_rules
 TARGET      := DeskNXMenu
 BUILD       := build
 SOURCES     := ../../source
-INCLUDES    := ../../projects/common/include
+INCLUDES    := ../../include ../../projects/common/include
 APP_TITLE   := DeskNX
 APP_AUTHOR  := DeskNX contributors
 APP_VERSION := 0.2.0
@@ -24,7 +24,7 @@ CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
-LIBS        := `sdl2-config --libs` -lnx
+LIBS        := `sdl2-config --libs` -lSDL2_image -lSDL2_ttf -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))

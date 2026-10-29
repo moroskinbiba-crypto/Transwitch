@@ -1,6 +1,11 @@
 #include <switch.h>
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
+#include <desknx/Model.hpp>
+#include "catalog.hpp"
+#include "FontRenderer.hpp"
+#include "IconCache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,12 +24,16 @@
 #include <vector>
 
 namespace {
-constexpr int SW = 1280, SH = 720, COLS = 6, ROWS = 3;
+using namespace desknx::model;
+constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 170;
-constexpr int MAX_ITEMS = 600, MAX_DESKS = 12;
+constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 constexpr const char* CFG_DIR = "sdmc:/switch/DeskNX";
 constexpr const char* CFG_FILE = "sdmc:/switch/DeskNX/layout.tsv";
 constexpr const char* CFG_TMP = "sdmc:/switch/DeskNX/layout.tmp";
+constexpr const char* CFG_BACKUP_BASE = "sdmc:/switch/DeskNX/layout.corrupt";
+constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
+constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 
 struct Color { Uint8 r, g, b, a; };
 constexpr Color BG{14,17,25,255}, PANEL{24,29,40,255}, EDGE{55,66,83,255};
@@ -35,23 +44,29 @@ constexpr std::array<Color,8> COLORS{{
     {177,77,99,255},{67,135,177,255},{115,128,74,255},{89,99,119,255}
 }};
 
-enum class Kind { Game, Nro, Clock, Battery, System, Recent };
-struct Tile { Kind kind{Kind::Game}; std::string title, data; int x{0}, y{0}, w{1}, h{1}, color{0}; };
-struct Workspace { std::string name; std::vector<Tile> tiles; };
-struct Candidate { Kind kind; std::string title, data; int w, h, color; };
-
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
+SDL_mutex* catalogueMutex = nullptr;
+SDL_mutex* ipcMutex = nullptr;
+SDL_Thread* catalogueThread = nullptr;
+#ifdef DESKNX_SYSTEM_APPLET
+SDL_Thread* heartbeatThread = nullptr;
+SDL_atomic_t heartbeatRunning{};
+SDL_atomic_t heartbeatError{};
+#endif
+bool catalogueReady = false, catalogueScanComplete = false, catalogueTruncated = false;
+bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown = false;
+FontRenderer gFontRenderer;
+IconCache gIconCache;
+struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
+std::vector<HistoryEntry> recentLaunches;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=true;
 bool sdMounted=false, psmReady=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   A OPEN", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
-#ifdef DESKNX_SYSTEM_APPLET
-Uint32 lastHeartbeatTick=0;
-#endif
 
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
@@ -124,6 +139,7 @@ std::string ascii(const std::string& input) {
     return out;
 }
 void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
+    if(gFontRenderer.draw(value,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
     const std::string s=ascii(value); color(c); int px=x;
     for(char ch:s) {
         if(px+5*scale>right) break;
@@ -138,152 +154,138 @@ std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
 }
-std::string typeCode(Kind k) {
-    switch(k) { case Kind::Game:return "G"; case Kind::Nro:return "N"; case Kind::Clock:return "C";
-        case Kind::Battery:return "B"; case Kind::System:return "S"; case Kind::Recent:return "R"; }
-    return "G";
-}
-Kind parseKind(const std::string& s) {
-    if(s=="N") return Kind::Nro;
-    if(s=="C") return Kind::Clock;
-    if(s=="B") return Kind::Battery;
-    if(s=="S") return Kind::System;
-    if(s=="R") return Kind::Recent;
-    return Kind::Game;
-}
 std::string typeName(Kind k) {
     switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
         case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT"; }
     return "ITEM";
 }
-std::vector<std::string> splitTabs(const std::string& line) {
-    std::vector<std::string> out; std::stringstream ss(line); std::string part;
-    while(std::getline(ss,part,'\t')) out.push_back(part);
-    return out;
+
+std::vector<Candidate> catalogueSnapshot() {
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    auto result=catalogue;
+    if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
+    return result;
 }
-std::string safeField(std::string s) {
-    for(char& c:s) {
-        if(c=='\t'||c=='\n'||c=='\r') c=' ';
+void publishCatalogue(desknx::catalog::ScanResult&& result) {
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    catalogue=std::move(result.items);
+    catalogueTruncated=result.truncated;
+    catalogueReady=true;
+    catalogueScanComplete=true;
+    if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
+}
+void readCatalogueState(bool& ready,bool& complete,bool& truncated) {
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    ready=catalogueReady; complete=catalogueScanComplete; truncated=catalogueTruncated;
+    if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
+}
+int catalogueThreadMain(void*) {
+    auto result=desknx::catalog::Scan();
+    publishCatalogue(std::move(result));
+    return 0;
+}
+#ifdef DESKNX_SYSTEM_APPLET
+template<typename Sender>
+Result sendIpc(Sender sender) {
+    if(ipcMutex) SDL_LockMutex(ipcMutex);
+    const Result rc=sender();
+    if(ipcMutex) SDL_UnlockMutex(ipcMutex);
+    return rc;
+}
+int heartbeatThreadMain(void*) {
+    while(SDL_AtomicGet(&heartbeatRunning)) {
+        SDL_Delay(1000);
+        if(!SDL_AtomicGet(&heartbeatRunning)) break;
+        if(R_FAILED(sendIpc([]{return desknx::ipc::SendHeartbeat();})))
+            SDL_AtomicSet(&heartbeatError,1);
     }
-    return s;
+    return 0;
 }
-std::string fileTitle(const std::string& p) {
-    size_t s=p.find_last_of('/'); std::string n=s==std::string::npos?p:p.substr(s+1);
-    size_t d=n.find_last_of('.'); if(d!=std::string::npos)n.resize(d);
-    for(char& c:n) {
-        if(c=='_'||c=='-') c=' ';
+void startHeartbeatThread() {
+    SDL_AtomicSet(&heartbeatError,0); SDL_AtomicSet(&heartbeatRunning,1);
+    heartbeatThread=SDL_CreateThread(heartbeatThreadMain,"DeskNX heartbeat",nullptr);
+    if(!heartbeatThread){SDL_AtomicSet(&heartbeatRunning,0);setStatus("HEARTBEAT THREAD FAILED",4000);}
+}
+void stopHeartbeatThread() {
+    SDL_AtomicSet(&heartbeatRunning,0);
+    if(heartbeatThread){SDL_WaitThread(heartbeatThread,nullptr);heartbeatThread=nullptr;}
+}
+#endif
+void loadHistory() {
+    if(!sdMounted)return;
+    std::ifstream input(HISTORY_FILE,std::ios::binary);
+    std::string line;
+    if(!input||!std::getline(input,line)||line!="DESKNXH1")return;
+    while(std::getline(input,line)&&recentLaunches.size()<10) {
+        auto fields=splitTabs(line);
+        if(fields.size()<3)continue;
+        Kind kind=parseKind(fields[0]);
+        if((kind!=Kind::Game&&kind!=Kind::Nro)||fields[1].empty()||fields[2].empty())continue;
+        recentLaunches.push_back({kind,fields[1],fields[2]});
     }
-    return n;
+    if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
 }
-bool overlap(const Tile& a,const Tile& b) {
-    return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+void saveHistory() {
+    if(!sdMounted)return;
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
+    std::ofstream out(HISTORY_TMP,std::ios::binary|std::ios::trunc);
+    if(!out){setStatus("RECENT HISTORY SAVE FAILED",3000);return;}
+    out<<"DESKNXH1\n";
+    for(const auto& e:recentLaunches)out<<typeCode(e.kind)<<'\t'<<safeField(e.title)<<'\t'<<safeField(e.data)<<'\n';
+    out.flush();bool good=out.good();out.close();
+    if(!good){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY WRITE FAILED",3000);return;}
+    std::remove(HISTORY_FILE);
+    if(std::rename(HISTORY_TMP,HISTORY_FILE)!=0){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY RENAME FAILED",3000);}
 }
-bool placeable(const Workspace& d,const Tile& t,int x,int y,int ignore=-1) {
-    if(x<0||y<0||t.w<1||t.h<1||x+t.w>COLS||y+t.h>ROWS)return false;
-    Tile p=t;p.x=x;p.y=y;
-    for(size_t i=0;i<d.tiles.size();++i)if(static_cast<int>(i)!=ignore&&overlap(p,d.tiles[i]))return false;
-    return true;
+void recordRecentLaunch(const Tile& tile) {
+    if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;
+    recentLaunches.erase(std::remove_if(recentLaunches.begin(),recentLaunches.end(),
+        [&](const HistoryEntry& e){return e.kind==tile.kind&&e.data==tile.data;}),recentLaunches.end());
+    recentLaunches.insert(recentLaunches.begin(),{tile.kind,tile.title,tile.data});
+    if(recentLaunches.size()>10)recentLaunches.resize(10);
+    lastLaunched=tile.title;saveHistory();
 }
-int itemAt(const Workspace& d,int x,int y) {
-    for(size_t i=0;i<d.tiles.size();++i) { const Tile&t=d.tiles[i];
-        if(x>=t.x&&x<t.x+t.w&&y>=t.y&&y<t.y+t.h)return static_cast<int>(i); }
-    return -1;
-}
-bool firstFree(const Workspace& d,const Tile& t,int& x,int& y) {
-    for(int yy=0;yy<ROWS;++yy)for(int xx=0;xx<COLS;++xx)if(placeable(d,t,xx,yy)){x=xx;y=yy;return true;}
-    return false;
-}
-void addCandidate(Kind k,const std::string& title,const std::string& data,int w=1,int h=1,int c=0) {
-    if(catalogue.size()<MAX_ITEMS) catalogue.push_back(Candidate{k,title,data,w,h,c%static_cast<int>(COLORS.size())});
-}
-void scanNros(const std::string& path,int depth,std::vector<Candidate>& found) {
-    if(depth>3||found.size()>=MAX_ITEMS)return;
-    DIR* d=opendir(path.c_str());if(!d)return;dirent* e=nullptr;
-    while((e=readdir(d))&&found.size()<MAX_ITEMS) {
-        std::string n=e->d_name;if(n=="."||n==".."||(!n.empty()&&n[0]=='.'))continue;
-        std::string p=path+"/"+n;struct stat st{};if(stat(p.c_str(),&st)!=0)continue;
-        if(S_ISDIR(st.st_mode)) scanNros(p,depth+1,found);
-        else if(S_ISREG(st.st_mode)&&n.size()>4) {
-            std::string ext=n.substr(n.size()-4);for(char& c:ext)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if(ext==".nro"&&p.find("/DeskNX.nro")==std::string::npos)
-                found.push_back(Candidate{Kind::Nro,fileTitle(p),p,1,1,static_cast<int>(found.size()%COLORS.size())});
-        }
+void backupBrokenLayout() {
+    struct stat st{};if(stat(CFG_FILE,&st)!=0)return;
+    char dest[160]{};
+    for(int i=0;i<100;++i) {
+        if(i==0)std::snprintf(dest,sizeof(dest),"%s.bak",CFG_BACKUP_BASE);
+        else std::snprintf(dest,sizeof(dest),"%s-%d.bak",CFG_BACKUP_BASE,i);
+        struct stat existing{};if(stat(dest,&existing)==0)continue;
+        if(std::rename(CFG_FILE,dest)==0){setStatus("INVALID LAYOUT BACKED UP",4500);return;}
+        break;
     }
-    closedir(d);
+    setStatus("LAYOUT INVALID; BACKUP FAILED",4500);
 }
-void scanApps() {
-    catalogue.clear();
-    if(R_SUCCEEDED(nsInitialize())) {
-        constexpr s32 PageSize=128;
-        constexpr size_t AppReserve=32;
-        std::array<NsApplicationRecord,PageSize> records{};
-        s32 offset=0;
-        size_t colorIndex=0;
-        static NsApplicationControlData ctl{};
-        while(catalogue.size()<MAX_ITEMS-AppReserve) {
-            s32 count=0;
-            const Result listRc=nsListApplicationRecord(records.data(),PageSize,offset,&count);
-            if(R_FAILED(listRc)||count<=0) break;
-            const s32 n=std::max<s32>(0,std::min<s32>(count,PageSize));
-            if(n==0) break;
-            for(s32 i=0;i<n && catalogue.size()<MAX_ITEMS-AppReserve;++i) {
-                const u64 id=records[static_cast<size_t>(i)].application_id;
-                u64 actual=0;
-                if(R_FAILED(nsGetApplicationControlData(NsApplicationControlSource_Storage,id,&ctl,sizeof(ctl),&actual)))
-                    continue;
-                NacpLanguageEntry* entry=nullptr;
-                std::string title;
-                if(R_SUCCEEDED(nacpGetLanguageEntry(&ctl.nacp,&entry))&&entry&&entry->name[0])
-                    title=entry->name;
-                else {
-                    char b[32]{};
-                    std::snprintf(b,sizeof(b),"Game %08X",static_cast<unsigned int>(id&0xffffffffu));
-                    title=b;
-                }
-                char hex[32]{};
-                std::snprintf(hex,sizeof(hex),"%016llX",static_cast<unsigned long long>(id));
-                addCandidate(Kind::Game,title,hex,1,1,static_cast<int>(colorIndex++));
-            }
-            offset+=n;
-            if(n<PageSize) break;
-        }
-        nsExit();
-    }
-    std::vector<Candidate> homebrew;
-    scanNros("sdmc:/switch",0,homebrew);
-    std::sort(homebrew.begin(),homebrew.end(),[](const Candidate&a,const Candidate&b){return ascii(a.title)<ascii(b.title);});
-    // Always leave room for widgets even when the SD card contains hundreds
-    // of NROs; otherwise an overflowing Homebrew list could hide the widgets.
-    for(const auto& candidate:homebrew) {
-        if(catalogue.size()>=MAX_ITEMS-4) break;
-        addCandidate(candidate.kind,candidate.title,candidate.data,candidate.w,candidate.h,candidate.color);
-    }
-    addCandidate(Kind::Clock,"Clock widget","",2,1,1);
-    addCandidate(Kind::Battery,"Battery widget","",2,1,2);
-    addCandidate(Kind::System,"System info widget","",2,1,5);
-    addCandidate(Kind::Recent,"Recent launch widget","",3,1,6);
-}
+
 void saveLayout() {
     if(!sdMounted)return;
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
     if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return;}
-    f<<"DESKNX2\n";
+    f<<"DESKNX3\n";
     f<<"A\t"<<deskIndex<<"\n";
     for(const auto& d:desks)f<<"D\t"<<safeField(d.name)<<"\n";
     for(size_t di=0;di<desks.size();++di)for(const auto&t:desks[di].tiles)
         f<<"I\t"<<di<<'\t'<<typeCode(t.kind)<<'\t'<<safeField(t.title)<<'\t'<<safeField(t.data)<<'\t'
          <<t.x<<'\t'<<t.y<<'\t'<<t.w<<'\t'<<t.h<<'\t'<<t.color<<"\n";
     f.flush();bool good=f.good();f.close();if(!good){setStatus("SAVE FAILED: WRITE ERROR",3500);return;}
-    std::remove(CFG_FILE);
-    if(std::rename(CFG_TMP,CFG_FILE)!=0){setStatus("SAVE FAILED: RENAME ERROR",3500);return;}
+    const char* previous="sdmc:/switch/DeskNX/layout.prev";
+    std::remove(previous);
+    const bool hadPrevious=std::rename(CFG_FILE,previous)==0;
+    if(std::rename(CFG_TMP,CFG_FILE)!=0) {
+        if(hadPrevious)std::rename(previous,CFG_FILE);
+        std::remove(CFG_TMP);setStatus("SAVE FAILED: RENAME ERROR",3500);return;
+    }
+    if(hadPrevious)std::remove(previous);
     setStatus("LAYOUT SAVED",1600);
 }
 bool loadLayout() {
     std::ifstream f(CFG_FILE,std::ios::binary);if(!f)return false;
     std::string line;
-    if(!std::getline(f,line)||(line!="DESKNX1"&&line!="DESKNX2"))return false;
-    const bool hasActiveDesktop=line=="DESKNX2";
+    if(!std::getline(f,line)||(line!="DESKNX1"&&line!="DESKNX2"&&line!="DESKNX3"))return false;
+    const bool hasActiveDesktop=line!="DESKNX1";
+    layoutNeedsMigration=(line!="DESKNX3");
     int activeDesktop=0;
     std::vector<Workspace> loaded;std::vector<std::vector<Tile>> items;
     while(std::getline(f,line)) {
@@ -307,8 +309,9 @@ bool loadLayout() {
     return true;
 }
 void defaultLayout() {
+    const auto available=catalogueSnapshot();
     desks={{"Games",{}},{"Homebrew",{}},{"Widgets",{}}};int gi=0,hi=0;
-    for(const auto& c:catalogue) {
+    for(const auto& c:available) {
         if(c.kind==Kind::Game&&gi<12) {desks[0].tiles.push_back(Tile{c.kind,c.title,c.data,gi%COLS,gi/COLS,1,1,c.color});++gi;}
         if(c.kind==Kind::Nro&&hi<12) {desks[1].tiles.push_back(Tile{c.kind,c.title,c.data,hi%COLS,hi/COLS,1,1,c.color});++hi;}
     }
@@ -331,7 +334,18 @@ SDL_Rect tileRect(const Tile&t) {
     return SDL_Rect{LEFT+t.x*(CW+GX),TOP+t.y*(CH+GY),t.w*CW+(t.w-1)*GX,t.h*CH+(t.h-1)*GY};
 }
 void drawTileIcon(const Tile&t,int x,int y,int size) {
-    Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];rect(x,y,size,size,c);outline(x,y,size,size,Color{255,255,255,55});
+    Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
+    if(SDL_Texture* texture=gIconCache.get(t)) {
+        int width=0,height=0;
+        if(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)==0) {
+            const int inset=std::max(2,size/24),inner=std::max(1,size-inset*2);
+            const float factor=std::min(static_cast<float>(inner)/std::max(1,width),static_cast<float>(inner)/std::max(1,height));
+            const int dw=std::max(1,static_cast<int>(width*factor)),dh=std::max(1,static_cast<int>(height*factor));
+            SDL_Rect dst{x+(size-dw)/2,y+(size-dh)/2,dw,dh};SDL_RenderCopy(renderer,texture,nullptr,&dst);
+            outline(x,y,size,size,Color{255,255,255,55});return;
+        }
+    }
+    rect(x,y,size,size,c);outline(x,y,size,size,Color{255,255,255,55});
     std::string mark=initials(t.title);int s=size>=70?3:2;int w=static_cast<int>(mark.size())*6*s-s;
     text(mark,x+(size-w)/2,y+(size-7*s)/2,s,WHITE,x+size-2);
 }
@@ -351,8 +365,17 @@ void drawTile(const Tile&t,bool selected) {
         text("SYSTEM",r.x+18,r.y+14,2,MUTED,r.x+r.w-10);text("DESKNX",r.x+18,r.y+39,3,WHITE,r.x+r.w-10);
         text("HOME REPLACEMENT INACTIVE",r.x+18,r.y+78,1,accent,r.x+r.w-10);
     } else if(t.kind==Kind::Recent) {
-        text("RECENT LAUNCH",r.x+18,r.y+14,2,MUTED,r.x+r.w-10);text(lastLaunched,r.x+18,r.y+43,2,WHITE,r.x+r.w-10);
-        text("EMPTY CELLS ARE KEPT",r.x+18,r.y+r.h-23,1,accent,r.x+r.w-10);
+        text("RECENT LAUNCHES",r.x+18,r.y+10,2,MUTED,r.x+r.w-10);
+        if(recentLaunches.empty())text("NOTHING LAUNCHED YET",r.x+18,r.y+44,2,WHITE,r.x+r.w-10);
+        else {
+            const size_t visible=std::min<size_t>(2,recentLaunches.size());
+            for(size_t i=0;i<visible;++i) {
+                const auto& e=recentLaunches[i];Tile iconTile{e.kind,e.title,e.data,0,0,1,1,static_cast<int>(i)};
+                const int iy=r.y+37+static_cast<int>(i)*28;drawTileIcon(iconTile,r.x+18,iy,22);
+                text(e.title,r.x+48,iy+5,1,WHITE,r.x+r.w-12);
+            }
+        }
+        text("HISTORY STORED ON SD",r.x+18,r.y+r.h-18,1,accent,r.x+r.w-10);
     } else if(t.w==1&&t.h==1) {
         drawTileIcon(t,r.x+(r.w-56)/2,r.y+10,56);text(t.title,r.x+9,r.y+r.h-22,1,WHITE,r.x+r.w-6);
         if(t.kind==Kind::Nro)rect(r.x+7,r.y+7,5,5,GREEN);
@@ -371,6 +394,9 @@ int visibleStart() {
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
 void drawScreen() {
+    const auto available=catalogueSnapshot();
+    bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
+    readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow);
     refreshBattery();rect(0,0,SW,SH,BG);
     for(int y=0;y<SH;y+=28)rect(0,y,SW,1,Color{255,255,255,static_cast<Uint8>(y%3==0?7:3)});
     rect(0,0,SW,76,Color{19,23,33,255});rect(0,74,SW,2,Color{43,53,69,255});
@@ -401,12 +427,17 @@ void drawScreen() {
         rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;rect(mx,my,mw,mh,Color{22,27,38,250});outline(mx,my,mw,mh,BLUE);
         text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);text("A ADD  /  B CANCEL",mx+28,my+59,1,MUTED,mx+mw-20);
         int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
-        for(int row=0;row<vis;++row){int i=listOffset+row;if(i>=static_cast<int>(catalogue.size()))break;int yy=my+92+row*43;
+        if(!catalogCompleteNow)text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+118,2,BLUE,mx+mw-20);
+        else for(int row=0;row<vis;++row) {
+            int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+92+row*43;
             if(i==listIndex)rect(mx+22,yy,mw-44,38,Color{45,61,82,255});
-            text(catalogue[static_cast<size_t>(i)].title,mx+34,yy+8,2,i==listIndex?WHITE:MUTED,mx+575);
-            text(typeName(catalogue[static_cast<size_t>(i)].kind),mx+595,yy+12,1,i==listIndex?BLUE:MUTED,mx+mw-18);
+            const Candidate& candidate=available[static_cast<size_t>(i)];
+            Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
+            drawTileIcon(iconTile,mx+30,yy+6,26);
+            text(candidate.title,mx+66,yy+8,2,i==listIndex?WHITE:MUTED,mx+575);
+            text(typeName(candidate.kind),mx+595,yy+12,1,i==listIndex?BLUE:MUTED,mx+mw-18);
         }
-        text(std::to_string(catalogue.size())+" AVAILABLE ITEMS",mx+28,my+mh-26,1,MUTED,mx+mw-18);
+        text(std::to_string(available.size())+" AVAILABLE ITEMS",mx+28,my+mh-26,1,MUTED,mx+mw-18);
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{0,0,0,185});rect(360,250,560,200,Color{25,30,42,255});outline(360,250,560,200,RED);
@@ -447,9 +478,13 @@ void removeTile() {
     std::string name=d.tiles[static_cast<size_t>(i)].title;d.tiles.erase(d.tiles.begin()+i);dragging=false;setStatus("REMOVED: "+name);saveNow();
 }
 void addSelected() {
-    if(catalogue.empty()){listOpen=false;setStatus("NO APPS FOUND");return;}
+    const auto available=catalogueSnapshot();bool ready=false,complete=false,truncated=false;
+    readCatalogueState(ready,complete,truncated);
+    if(!complete){setStatus("CATALOGUE IS STILL SCANNING",2200);return;}
+    if(available.empty()){listOpen=false;setStatus("NO APPS FOUND");return;}
+    if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())listIndex=0;
     Workspace& d=desks[static_cast<size_t>(deskIndex)];if(itemAt(d,selectedX,selectedY)>=0){listOpen=false;setStatus("CHOOSE AN EMPTY CELL FIRST");return;}
-    const Candidate& c=catalogue[static_cast<size_t>(listIndex)];Tile t{c.kind,c.title,c.data,selectedX,selectedY,c.w,c.h,c.color};
+    const Candidate& c=available[static_cast<size_t>(listIndex)];Tile t{c.kind,c.title,c.data,selectedX,selectedY,c.w,c.h,c.color};
     if(!placeable(d,t,t.x,t.y)){listOpen=false;setStatus("ITEM NEEDS MORE SPACE");return;}
     d.tiles.push_back(t);selectedX=t.x;selectedY=t.y;listOpen=false;editing=true;setStatus("ADDED: "+t.title);saveNow();
 }
@@ -470,18 +505,18 @@ void deleteDesk() {
     deletePrompt=true;
 }
 void launch(const Tile& t) {
-    lastLaunched=t.title;
     if(t.kind==Kind::Game) {
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
         if(id==0){setStatus("INVALID TITLE ID");return;}
 #ifdef DESKNX_SYSTEM_APPLET
-        const Result rc=desknx::ipc::SendLaunchTitle(id);
+        const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id);});
         if(R_FAILED(rc)) {
             char b[72]{};
             std::snprintf(b,sizeof(b),"SYSTEM BACKEND REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));
             setStatus(b,4000);
             return;
         }
+        recordRecentLaunch(t);
         saveLayout();
         appletRequestExitToSelf();
         running=false;
@@ -490,25 +525,27 @@ void launch(const Tile& t) {
         const Result rc=appletRequestLaunchApplication(id,nullptr);
         nsExit();
         if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"GAME LAUNCH FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
-        else setStatus("LAUNCH REQUEST SENT");
+        else {recordRecentLaunch(t);setStatus("LAUNCH REQUEST SENT");}
 #endif
         return;
     }
     if(t.kind==Kind::Nro) {
 #ifdef DESKNX_SYSTEM_APPLET
-        const Result rc=desknx::ipc::SendLaunchHomebrew(t.data.c_str(),"");
+        const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchHomebrew(t.data.c_str(),"");});
         if(R_FAILED(rc)) {
             char b[72]{};
             std::snprintf(b,sizeof(b),"HOMEBREW REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));
             setStatus(b,4000);
             return;
         }
+        recordRecentLaunch(t);
         saveLayout();
         appletRequestExitToSelf();
         running=false;
 #else
         if(!envHasNextLoad()){setStatus("NRO CHAIN-LOAD UNAVAILABLE; USE HBMENU TAKEOVER",4500);return;}
         if(R_FAILED(envSetNextLoad(t.data.c_str(),""))){setStatus("CANNOT PREPARE NEXT NRO");return;}
+        recordRecentLaunch(t);
         appletRequestExitToSelf();
 #endif
         return;
@@ -525,17 +562,20 @@ void keyInput(u64 keys) {
         return;
     }
     if(listOpen) {
+        const auto available=catalogueSnapshot();bool ready=false,complete=false,truncated=false;
+        readCatalogueState(ready,complete,truncated);
         if(keys&HidNpadButton_B){listOpen=false;return;}
-        if((keys&HidNpadButton_Up)&&!catalogue.empty())listIndex=(listIndex-1+static_cast<int>(catalogue.size()))%static_cast<int>(catalogue.size());
-        if((keys&HidNpadButton_Down)&&!catalogue.empty())listIndex=(listIndex+1)%static_cast<int>(catalogue.size());
-        if((keys&HidNpadButton_A)&&!catalogue.empty()) addSelected();
+        if(!complete)return;
+        if((keys&HidNpadButton_Up)&&!available.empty())listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
+        if((keys&HidNpadButton_Down)&&!available.empty())listIndex=(listIndex+1)%static_cast<int>(available.size());
+        if((keys&HidNpadButton_A)&&!available.empty())addSelected();
         return;
     }
     if(keys&HidNpadButton_B) {
         if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");return;}
 #ifdef DESKNX_SYSTEM_APPLET
         {
-            const Result rc=desknx::ipc::Send(desknx::ipc::Command::ReturnToGame);
+            const Result rc=sendIpc([]{return desknx::ipc::Send(desknx::ipc::Command::ReturnToGame);});
             if(R_FAILED(rc)){setStatus("SYSTEM BACKEND REQUEST FAILED",3000);return;}
             appletRequestExitToSelf();
             running=false;
@@ -617,8 +657,6 @@ void touchInput(const SDL_Event&e) {
 
 int main(int,char**) {
     if(R_SUCCEEDED(fsdevMountSdmc()))sdMounted=true;
-    scanApps();
-    if(!loadLayout()){defaultLayout();saveLayout();}
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){if(sdMounted)fsdevUnmountDevice("sdmc");return 1;}
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"1");
     window=SDL_CreateWindow("DeskNX",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -627,41 +665,52 @@ int main(int,char**) {
     if(!renderer)renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
     if(!renderer){SDL_DestroyWindow(window);SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 3;}
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
-    PadState pad{};
-    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-    padInitializeDefault(&pad);
-    // Tell the system backend the menu is alive. It uses this handshake to
-    // distinguish a visible menu from an applet that crashed during startup.
+    catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
+
+    loadHistory();
+    struct stat layoutStat{};const bool layoutExists=stat(CFG_FILE,&layoutStat)==0;
+    layoutLoaded=loadLayout();
+    if(layoutExists&&!layoutLoaded){backupBrokenLayout();defaultLayout();}
+    else if(!layoutLoaded)defaultLayout();
+
+    PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
+    setStatus("STARTING DESKNX...",5000);
+    drawScreen(); // first frame precedes application enumeration, SD recursion and font service init
 #ifdef DESKNX_SYSTEM_APPLET
-    const Result readyRc=desknx::ipc::SendMenuReady();
-    if(R_FAILED(readyRc)) setStatus("SYSTEM BACKEND NOT CONNECTED",5000);
-    else setStatus("DESKNX READY  -  Y ADD  X EDIT  + NEW DESK",4000);
-    lastHeartbeatTick=SDL_GetTicks();
+    const Result readyRc=sendIpc([]{return desknx::ipc::SendMenuReady();});
+    if(R_FAILED(readyRc))setStatus("SYSTEM BACKEND NOT CONNECTED",5000);
+    else setStatus("DESKNX READY - CATALOGUE LOADING",4000);
+    startHeartbeatThread();
 #else
-    setStatus("Y ADD  X EDIT  ZL/ZR RESIZE  - REMOVE  + NEW DESK",5000);
+    setStatus("CATALOGUE LOADING - Y ADD  X EDIT",5000);
 #endif
+    IMG_Init(IMG_INIT_JPG);
+    gIconCache.setRenderer(renderer);
+    gFontRenderer.setRenderer(renderer);
+    gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
+    if(layoutNeedsMigration&&layoutLoaded){saveLayout();layoutNeedsMigration=false;}
+
+    catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
+    if(!catalogueThread){setStatus("BACKGROUND SCAN UNAVAILABLE",3000);publishCatalogue(desknx::catalog::Scan());}
     while(running&&appletMainLoop()) {
+        bool ready=false,complete=false,truncated=false;readCatalogueState(ready,complete,truncated);
+        if(complete&&!layoutLoaded){defaultLayout();saveLayout();layoutLoaded=true;setStatus("DESKNX READY - Y ADD  X EDIT",4000);}
+        if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
 #ifdef DESKNX_SYSTEM_APPLET
-        const Uint32 now=SDL_GetTicks();
-        if(now-lastHeartbeatTick>=1000) {
-            const Result heartbeatRc=desknx::ipc::SendHeartbeat();
-            if(R_FAILED(heartbeatRc)) setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);
-            lastHeartbeatTick=now;
-        }
+        if(SDL_AtomicGet(&heartbeatError)){SDL_AtomicSet(&heartbeatError,0);setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);}
 #endif
-        padUpdate(&pad);
-        u64 keys=padGetButtonsDown(&pad);
-        if(keys)keyInput(keys);
-        SDL_Event e;while(SDL_PollEvent(&e)){
-            if(e.type==SDL_QUIT){appletRequestExitToSelf();running=false;}
-            else touchInput(e);
-        }
+        padUpdate(&pad);const u64 keys=padGetButtonsDown(&pad);if(keys)keyInput(keys);
+        SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         drawScreen();svcSleepThread(16'000'000);
     }
-    if(psmReady) psmExit();
-    if(renderer) SDL_DestroyRenderer(renderer);
-    if(window) SDL_DestroyWindow(window);
-    SDL_Quit();
-    if(sdMounted) fsdevUnmountDevice("sdmc");
+#ifdef DESKNX_SYSTEM_APPLET
+    stopHeartbeatThread();
+#endif
+    if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
+    gIconCache.shutdown();gFontRenderer.shutdown();IMG_Quit();
+    if(psmReady)psmExit();
+    if(ipcMutex)SDL_DestroyMutex(ipcMutex);if(catalogueMutex)SDL_DestroyMutex(catalogueMutex);
+    if(renderer)SDL_DestroyRenderer(renderer);if(window)SDL_DestroyWindow(window);
+    SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");
     return 0;
 }

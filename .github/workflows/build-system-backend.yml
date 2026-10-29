@@ -46,6 +46,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Run host model unit tests
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/model_test.cpp -o /tmp/desknx-model-test
+          /tmp/desknx-model-test
+
       - name: Build compatible libnx master
         run: |
           git clone --no-checkout https://github.com/switchbrew/libnx /tmp/libnx-master
