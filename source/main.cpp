@@ -943,12 +943,24 @@ void drawScreen() {
     const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L/R","SPACES"}};
     const Hint editHints[]={{"A","MOVE / ADD"},{"D-PAD","POSITION"},{"ZL/ZR","SIZE"},{"-","REMOVE"}};
     const Hint dragHints[]={{"D-PAD","MOVE"},{"L/R","CHANGE DESK"},{"A / B","DROP"},{"-","REMOVE"}};
-    const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
-    for(int i=0;i<4;++i) {
-        const int hx=642+i*148;
-        roundRect(hx,571,48,28,8,Color{34,45,63,255});
-        text(hints[i].key,hx+5,581,1,BLUE,hx+43);
-        text(hints[i].action,hx+56,581,1,MUTED,hx+144);
+    const int selectedTileIndex=itemAt(d,selectedX,selectedY);
+    if(editing&&!dragging&&selectedTileIndex>=0) {
+        // Touchscreen users need the same tile-management actions as controller
+        // users. Keep these real, generous hit targets in the persistent footer.
+        roundRect(650,571,165,28,8,Color{35,57,83,255});
+        text("SIZE -  /  ZL",665,581,1,WHITE,808);
+        roundRect(826,571,165,28,8,Color{35,57,83,255});
+        text("SIZE +  /  ZR",841,581,1,WHITE,984);
+        roundRect(1002,571,228,28,8,Color{91,39,48,255});
+        text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
+    } else {
+        const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
+        for(int i=0;i<4;++i) {
+            const int hx=642+i*148;
+            roundRect(hx,571,48,28,8,Color{34,45,63,255});
+            text(hints[i].key,hx+5,581,1,BLUE,hx+43);
+            text(hints[i].action,hx+56,581,1,MUTED,hx+144);
+        }
     }
     softCard(300,624,680,82,Color{18,26,39,246},Color{255,255,255,24});
     struct DockItem { int x; int icon; const char* label; bool active; };
@@ -1136,15 +1148,18 @@ void drawScreen() {
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{3,7,14,194});
-        softCard(360,242,560,216,Color{24,27,38,255},Color{255,99,112,100});
-        text("DELETE WORKSPACE?",405,274,3,WHITE,890);
-        text(desks[static_cast<size_t>(deskIndex)].name,405,320,2,MUTED,890);
-        roundRect(405,366,210,48,12,Color{112,38,42,255});
-        outline(405,366,210,48,Color{255,69,58,130});
-        text("DELETE",466,383,2,WHITE,600);
-        roundRect(635,366,240,48,12,Color{54,57,66,255});
-        text("CANCEL",706,383,2,WHITE,865);
-        text("A CONFIRM     B CANCEL",405,425,1,MUTED,890);
+        const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
+        softCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
+        text("DELETE WORKSPACE?",405,270,3,WHITE,890);
+        text(desks[static_cast<size_t>(deskIndex)].name,405,314,2,MUTED,890);
+        text(std::to_string(tileCount)+" SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
+             405,346,1,MUTED,890);
+        roundRect(405,382,210,48,12,Color{112,38,42,255});
+        outline(405,382,210,48,Color{255,69,58,130});
+        text("DELETE",466,399,2,WHITE,600);
+        roundRect(635,382,240,48,12,Color{54,57,66,255});
+        text("CANCEL",706,399,2,WHITE,865);
+        text("A CONFIRM     B CANCEL",405,444,1,MUTED,890);
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(recentOpen) {
@@ -1738,9 +1753,11 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A) {
             deletePrompt=false;
             if(deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return;
-            desks.erase(desks.begin()+deskIndex);
+            if(!desknx::workspace_ops::deleteWorkspace(desks,deskIndex,deskIndex)) {
+                setStatus("AT LEAST ONE WORKSPACE IS REQUIRED");
+                return;
+            }
             layoutUserModified=true;
-            deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);
             selectedX=selectedY=0;
             dragging=false;touchDragging=false;touchPressActive=false;
             touchPressFingerId=0;
@@ -1967,9 +1984,19 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && deletePrompt) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=366&&y<=414&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
-        else if(y>=366&&y<=414&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
+        if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
+        else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
+    }
+    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(y>=566&&y<=614&&itemAt(
+               desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
+            if(x>=650&&x<815) resizeTile(false);
+            else if(x>=826&&x<991) resizeTile(true);
+            else if(x>=1002&&x<1230) removeTile();
+            return;
+        }
     }
     if(e.type==SDL_FINGERDOWN && powerMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
