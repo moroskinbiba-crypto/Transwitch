@@ -34,6 +34,9 @@ struct Candidate {
     std::string data;
     int w{1}, h{1}, color{0};
     uint32_t viewFlags{0}; // NS live metadata; never used to hide installed titles
+    uint64_t playtimeSeconds{0};
+    uint64_t lastPlayed{0}; // POSIX seconds
+    uint32_t launchCount{0};
 };
 
 inline bool isTitleId(const std::string& value) {
