@@ -791,7 +791,23 @@ void addSelected() {
     if(!placeable(d,t,t.x,t.y)){listOpen=false;setStatus("ITEM NEEDS MORE SPACE");return;}
     d.tiles.push_back(t);selectedX=t.x;selectedY=t.y;listOpen=false;editing=true;setStatus("ADDED: "+t.title);saveNow();
 }
-void openList(){listOpen=true;listIndex=0;listOffset=0;}
+void openList(){
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    if(itemAt(desk,selectedX,selectedY)>=0) {
+        Tile placeholder{Kind::Game,"","",0,0,1,1,0};
+        int freeX=0,freeY=0;
+        if(firstFree(desk,placeholder,freeX,freeY)) {
+            selectedX=freeX;
+            selectedY=freeY;
+        } else {
+            setStatus("WORKSPACE FULL - REMOVE A TILE BEFORE ADDING APPS",3500);
+        }
+    }
+    listOpen=true;
+    listIndex=0;
+    listOffset=0;
+    lastCatalogueTap=-1;
+}
 void newDesk() {
     if(desks.size()>=MAX_DESKS){setStatus("MAXIMUM OF 12 WORKSPACES");return;}
     desks.push_back(Workspace{"Workspace "+std::to_string(desks.size()+1),{}});deskIndex=static_cast<int>(desks.size())-1;selectedX=selectedY=0;editing=true;saveNow();
