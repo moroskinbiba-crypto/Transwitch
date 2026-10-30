@@ -937,12 +937,15 @@ void drawScreen() {
     text(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
          68,575,1,show?WHITE:MUTED,620);
     struct Hint { const char* key; const char* action; };
-    const Hint hints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L/R","SPACES"}};
+    const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L/R","SPACES"}};
+    const Hint editHints[]={{"A","MOVE / ADD"},{"D-PAD","POSITION"},{"ZL/ZR","SIZE"},{"-","REMOVE"}};
+    const Hint dragHints[]={{"D-PAD","MOVE"},{"L/R","CHANGE DESK"},{"A / B","DROP"},{"-","REMOVE"}};
+    const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
     for(int i=0;i<4;++i) {
-        const int hx=660+i*142;
-        roundRect(hx,571,34,28,8,Color{34,45,63,255});
-        text(hints[i].key,hx+7,581,1,BLUE,hx+30);
-        text(hints[i].action,hx+43,581,1,MUTED,hx+132);
+        const int hx=642+i*148;
+        roundRect(hx,571,48,28,8,Color{34,45,63,255});
+        text(hints[i].key,hx+5,581,1,BLUE,hx+43);
+        text(hints[i].action,hx+56,581,1,MUTED,hx+144);
     }
     softCard(300,624,680,82,Color{18,26,39,246},Color{255,255,255,24});
     struct DockItem { int x; int icon; const char* label; bool active; };
