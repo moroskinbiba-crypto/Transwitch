@@ -162,6 +162,24 @@ inline bool moveSelectedTileToWorkspace(std::vector<model::Workspace>& workspace
     if (index < 0) return false;
     model::Tile tile = source.tiles[static_cast<size_t>(index)];
     auto& destination = workspaces[static_cast<size_t>(targetWorkspace)];
+
+    // A workspace may already contain the same application shortcut. Treat
+    // "move" as deduplication in that case: remove the source copy and focus
+    // the existing destination tile instead of creating a duplicate.
+    const auto duplicate = std::find_if(destination.tiles.begin(), destination.tiles.end(),
+        [&](const model::Tile& existing) {
+            return existing.kind == tile.kind && existing.data == tile.data;
+        });
+    if (duplicate != destination.tiles.end()) {
+        const int existingX = duplicate->x;
+        const int existingY = duplicate->y;
+        source.tiles.erase(source.tiles.begin() + index);
+        activeWorkspace = targetWorkspace;
+        selectedX = existingX;
+        selectedY = existingY;
+        return true;
+    }
+
     int nextX = tile.x;
     int nextY = tile.y;
     if (!model::placeable(destination, tile, nextX, nextY) &&
