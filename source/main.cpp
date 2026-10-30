@@ -62,6 +62,7 @@ constexpr std::array<Color,8> COLORS{{
 
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
+bool rendererVsync=false;
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
 SDL_mutex* catalogueMutex = nullptr;
