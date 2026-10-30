@@ -143,6 +143,21 @@ int main() {
         assert(spaces[1].tiles[1].data=="0100000000000004");
     }
 
+    // Moving onto a workspace that already has the same shortcut removes
+    // the source copy and selects the existing destination tile.
+    {
+        using namespace desknx::workspace_ops;
+        std::vector<Workspace> spaces{{"Source",{}},{"Destination",{}}};
+        spaces[0].tiles.push_back(Tile{Kind::Game,"Game","0100000000000010",2,1,1,1,0});
+        spaces[1].tiles.push_back(Tile{Kind::Game,"Game copy","0100000000000010",4,2,1,1,1});
+        int active=0,sx=2,sy=1;
+        assert(moveSelectedTileToWorkspace(spaces,active,sx,sy,1));
+        assert(active==1 && sx==4 && sy==2);
+        assert(spaces[0].tiles.empty());
+        assert(spaces[1].tiles.size()==1);
+        assert(spaces[1].tiles[0].title=="Game copy");
+    }
+
     // A full destination cannot cause a source tile to disappear.
     {
         using namespace desknx::workspace_ops;
