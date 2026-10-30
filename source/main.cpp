@@ -1177,12 +1177,17 @@ void drawScreen() {
         &catalogueGameCountNow,&catalogueNroCountNow);
     refreshBattery();
     rect(0,0,SW,SH,BG);
-    for(int band=0;band<30;++band) {
-        const Uint8 lift=static_cast<Uint8>(18-band/2);
-        rect(0,band*24,SW,25,Color{static_cast<Uint8>(10+lift/3),
-            static_cast<Uint8>(15+lift/2),static_cast<Uint8>(25+lift),255});
+    for(int band=0;band<24;++band) {
+        const double t=static_cast<double>(band)/23.0;
+        const auto blend=[&](Uint8 a,Uint8 b) {
+            return static_cast<Uint8>(static_cast<double>(a)+
+                (static_cast<double>(b)-static_cast<double>(a))*t);
+        };
+        rect(0,band*30,SW,31,Color{blend(THEME_TOP.r,THEME_BOTTOM.r),
+            blend(THEME_TOP.g,THEME_BOTTOM.g),blend(THEME_TOP.b,THEME_BOTTOM.b),255});
     }
-    rect(0,0,SW,76,Color{11,16,26,242});
+    drawWallpaper();
+    rect(0,0,SW,76,Color{11,16,26,224});
     rect(0,75,SW,1,Color{255,255,255,13});
     roundRect(28,16,44,44,14,Color{48,119,211,255});
     drawSystemIcon(5,40,28,20,WHITE);
@@ -2772,6 +2777,8 @@ int main(int,char**) {
         setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
     }
 
+    loadLauncherSettings();
+    applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
     setStatus("STARTING DESKNX...",5000);
     drawScreen(); // first frame precedes application enumeration, SD recursion and font service init
@@ -2783,10 +2790,20 @@ int main(int,char**) {
 #else
     setStatus("CATALOGUE LOADING - Y ADD  X EDIT",5000);
 #endif
-    IMG_Init(IMG_INIT_JPG);
+    IMG_Init(IMG_INIT_JPG|IMG_INIT_PNG);
     gIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
+    if(!fontPath.empty()&&!gFontRenderer.setCustomFont(fontPath)) {
+        fontPath.clear();
+        setStatus("CUSTOM FONT UNAVAILABLE - USING SYSTEM FONT",3000);
+        (void)saveLauncherSettings();
+    }
+    if(!wallpaperPath.empty()&&!loadWallpaperTexture(wallpaperPath)) {
+        wallpaperPath.clear();
+        setStatus("WALLPAPER UNAVAILABLE - USING DEFAULT",3000);
+        (void)saveLauncherSettings();
+    }
     if(layoutNeedsMigration&&layoutLoaded&&saveLayout())
         layoutNeedsMigration=false;
 
@@ -2886,7 +2903,9 @@ int main(int,char**) {
     if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
     desknx::catalog::ShutdownServices();
     if (setsysReady) setsysExit();
-    gIconCache.shutdown();gFontRenderer.shutdown();IMG_Quit();
+    gIconCache.shutdown();gFontRenderer.shutdown();
+    if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
+    IMG_Quit();
     if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
