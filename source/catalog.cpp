@@ -9,6 +9,8 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <cstdarg>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -63,6 +65,25 @@ void EnsureCacheDirectories() {
     mkdir("sdmc:/switch/DeskNX", 0777);
     mkdir(CacheDir, 0777);
     mkdir(IconsDir, 0777);
+}
+
+void LogDiagnostic(const char* format, ...) {
+    EnsureCacheDirectories();
+    constexpr const char* LogFile = "sdmc:/switch/DeskNX/catalogue.log";
+    struct stat st{};
+    if (stat(LogFile, &st) == 0 && st.st_size > 128 * 1024) {
+        std::remove("sdmc:/switch/DeskNX/catalogue.log.old");
+        std::rename(LogFile, "sdmc:/switch/DeskNX/catalogue.log.old");
+    }
+    FILE* file = std::fopen(LogFile, "a");
+    if (!file) return;
+    std::fprintf(file, "[%lld] ", static_cast<long long>(std::time(nullptr)));
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(file, format, args);
+    va_end(args);
+    std::fputc('\\n', file);
+    std::fclose(file);
 }
 std::string fileTitle(const std::string& path) {
     const size_t slash = path.find_last_of('/');
@@ -122,7 +143,10 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
     // SLaunch sequence: enumerate every installed record, then query the
     // matching live views. View flags are presentation metadata, never filters.
     std::vector<NsApplicationRecord> installed;
+    LogDiagnostic("ns_list begin");
     const Result listRc = desknx::slaunch::EnumerateInstalled(installed);
+    LogDiagnostic("ns_list end rc=0x%08X records=%zu",
+                  static_cast<unsigned int>(listRc), installed.size());
     if (R_FAILED(listRc)) {
         errorCode = static_cast<std::uint32_t>(listRc);
         return records;
@@ -134,6 +158,8 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
 
     std::vector<NsApplicationView> views;
     const Result viewsRc = desknx::slaunch::QueryApplicationViews(titleIds, views);
+    LogDiagnostic("ns_views rc=0x%08X requested=%zu returned=%zu",
+                  static_cast<unsigned int>(viewsRc), titleIds.size(), views.size());
     if (R_FAILED(viewsRc)) views.clear();
 
     records.reserve(installed.size());
@@ -150,7 +176,11 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
 
     // SLaunch parity: query play statistics once per catalogue refresh, not
     // from the render loop. A missing PDM record is a normal never-played game.
-    if (R_SUCCEEDED(pdmqryInitialize())) {
+    const Result pdmRc = pdmqryInitialize();
+    LogDiagnostic("pdm_init rc=0x%08X titles=%zu",
+                  static_cast<unsigned int>(pdmRc), records.size());
+    if (R_SUCCEEDED(pdmRc)) {
+        size_t statsOk = 0;
         for (auto& record : records) {
             PdmPlayStatistics stats{};
             if (R_SUCCEEDED(pdmqryQueryPlayStatisticsByApplicationId(
@@ -158,9 +188,11 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
                 record.playtimeSeconds = stats.playtime / 1000000000ULL;
                 record.lastPlayed = stats.last_timestamp_user;
                 record.launchCount = stats.total_launches;
+                ++statsOk;
             }
         }
         pdmqryExit();
+        LogDiagnostic("pdm_done successful=%zu total=%zu", statsOk, records.size());
     }
     return records;
 }
@@ -471,9 +503,12 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if (progress) progress(result, context);
     };
     EnsureCacheDirectories();
+    const std::time_t scanStarted = std::time(nullptr);
     // NS/account are initialized once on the main thread after setting the
     // actual firmware version; this worker only uses the persistent sessions.
     const bool nsReady = gNsServiceReady;
+    LogDiagnostic("scan_begin ns_ready=%d ns_error=0x%08X",
+                  nsReady ? 1 : 0, static_cast<unsigned int>(gNsServiceError));
     result.nsErrorCode = nsReady ? 0 : gNsServiceError;
     result.nsAvailable = nsReady;
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
@@ -503,6 +538,9 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             item.launchCount = found->launchCount;
         }
                 result.complete = true;
+        LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu elapsed=%llds",
+                      result.gameCount, result.nroCount, result.items.size(),
+                      static_cast<long long>(std::time(nullptr) - scanStarted));
         report(true);
         return result;
     }
@@ -577,7 +615,12 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     result.items.push_back({Kind::Recent, "Recent launch widget", "", 3, 1, 6});
     // Preserve the last known-good catalogue if NS enumeration failed.
     if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
-        report(true);
+    LogDiagnostic("scan_done games=%zu nros=%zu items=%zu truncated=%d ns_error=0x%08X elapsed=%llds",
+                  result.gameCount, result.nroCount, result.items.size(),
+                  result.truncated ? 1 : 0,
+                  static_cast<unsigned int>(result.nsErrorCode),
+                  static_cast<long long>(std::time(nullptr) - scanStarted));
+    report(true);
     return result;
 }
 
