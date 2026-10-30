@@ -1436,7 +1436,9 @@ void renameDesk() {
     swkbdConfigMakePresetDefault(&kbd);
     swkbdConfigSetHeaderText(&kbd,"Rename workspace");
     swkbdConfigSetInitialText(&kbd,desks[static_cast<size_t>(deskIndex)].name.c_str());
-    char result[64]{};
+    // DESKNX3 stores up to 31 UTF-8 codepoints (124 bytes). The larger
+    // input buffer permits 31 four-byte characters without truncation.
+    char result[128]{};
     const Result rc=showKeyboard(&kbd,result,sizeof(result));
     swkbdClose(&kbd);
     if(R_FAILED(rc)||!result[0])return;
@@ -1448,8 +1450,8 @@ void renameDesk() {
     }
     const size_t last=name.find_last_not_of(" \t\r\n");
     name=name.substr(first,last-first+1);
-    if(name.size()>124) {
-        setStatus("WORKSPACE NAME IS TOO LONG");
+    if(!desknx::workspace_ops::isValidWorkspaceName(name)) {
+        setStatus("NAME LIMIT: 31 CHARACTERS / 124 UTF-8 BYTES");
         return;
     }
     for(size_t i=0;i<desks.size();++i) {
