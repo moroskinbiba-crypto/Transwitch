@@ -837,8 +837,14 @@ void drawScreen() {
                 text("TITLE ID",mx+654,my+296,1,MUTED,mx+818);
                 text(selected.data,mx+654,my+314,1,WHITE,mx+818);
             } else if(selected.kind==Kind::Nro) {
-                text("LOCATION",mx+654,my+296,1,MUTED,mx+818);
-                text(selected.data,mx+654,my+314,1,WHITE,mx+818);
+                std::string fileName=selected.data;
+                const size_t slash=fileName.find_last_of('/');
+                const std::string folder=slash==std::string::npos?std::string{}:fileName.substr(0,slash);
+                if(slash!=std::string::npos)fileName=fileName.substr(slash+1);
+                text("FILE",mx+654,my+296,1,MUTED,mx+818);
+                text(fileName,mx+654,my+314,1,WHITE,mx+818);
+                text("FOLDER",mx+654,my+338,1,MUTED,mx+818);
+                text(folder,mx+654,my+356,1,WHITE,mx+818);
                 struct stat appStat{};
                 if(stat(selected.data.c_str(),&appStat)==0 && S_ISREG(appStat.st_mode) && appStat.st_size>=0) {
                     const unsigned long long bytes=static_cast<unsigned long long>(appStat.st_size);
@@ -847,7 +853,7 @@ void drawScreen() {
                         std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu MB",bytes/(1024ULL*1024ULL));
                     else
                         std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu KB",bytes/1024ULL);
-                    text(sizeLabel,mx+654,my+352,1,MUTED,mx+818);
+                    text(sizeLabel,mx+654,my+382,1,MUTED,mx+818);
                 }
             } else {
                 text("DESKTOP WIDGET",mx+654,my+296,1,MUTED,mx+818);
