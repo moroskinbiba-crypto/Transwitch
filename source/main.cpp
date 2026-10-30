@@ -1669,7 +1669,7 @@ int main(int,char**) {
         mkdir("sdmc:/switch/DeskNX", 0777);
         if (FILE* log = std::fopen("sdmc:/switch/DeskNX/catalogue.log", "a")) {
             std::fprintf(log,
-                "[%lld] startup setsys_ready=%d firmware_read=%d firmware=%u.%u.%u ns_ready=%d ns_error=0x%08X\\n",
+                "[%lld] startup setsys_ready=%d firmware_read=%d firmware=%u.%u.%u ns_ready=%d ns_error=0x%08X\n",
                 static_cast<long long>(std::time(nullptr)), setsysReady ? 1 : 0,
                 firmwareRead ? 1 : 0, firmware.major, firmware.minor, firmware.micro,
                 nsServicesReady ? 1 : 0, static_cast<unsigned int>(nsInitError));
