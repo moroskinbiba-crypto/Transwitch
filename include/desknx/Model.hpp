@@ -37,6 +37,8 @@ struct Candidate {
     uint64_t playtimeSeconds{0};
     uint64_t lastPlayed{0}; // POSIX seconds
     uint32_t launchCount{0};
+    bool playStatsQueried{false};
+    bool playStatsAvailable{false};
 };
 
 inline bool isTitleId(const std::string& value) {
