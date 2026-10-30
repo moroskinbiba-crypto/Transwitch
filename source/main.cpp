@@ -1,6 +1,7 @@
 #include <switch.h>
 #include <switch/applets/hid_la.h>
 #include <switch/applets/album_la.h>
+#include <switch/applets/friends_la.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
@@ -698,6 +699,14 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
     } else if(kind==6) { // Recent / history
         circle(size/3,false);line(cx,cy,cx,cy-size/5);line(cx,cy,cx+size/5,cy+size/8);
         line(x+3,y+size/4,x+3,y+size/2);line(x+3,y+size/4,x+size/5,y+size/4);
+    } else if(kind==7) { // User profile
+        circle(size/8,true);
+        for(int dy=0;dy<size/3;++dy) {
+            const int half=static_cast<int>(std::sqrt(std::max(0,(size/3)*(size/3)-dy*dy)));
+            line(cx-half,cy+size/8+dy,cx+half,cy+size/8+dy);
+        }
+        line(cx-size/3,cy+size/3,cx-size/4,cy+size/2);
+        line(cx+size/3,cy+size/3,cx+size/4,cy+size/2);
     }
 }
 void drawTileIcon(const Tile&t,int x,int y,int size) {
@@ -734,7 +743,7 @@ void drawTile(const Tile&t,bool selected) {
         drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
         text("SYSTEM TOOLS",r.x+104,r.y+28,2,WHITE,r.x+r.w-10);
         text("DESKNX SETTINGS  /  GAMEPAD",r.x+104,r.y+54,1,MUTED,r.x+r.w-10);
-        text("ALBUM  /  POWER  /  MORE",r.x+104,r.y+73,1,accent,r.x+r.w-10);
+        text("ALBUM  /  PROFILE  /  MORE",r.x+104,r.y+73,1,accent,r.x+r.w-10);
     } else if(t.kind==Kind::Unsupported) {
         rect(r.x+3,r.y+3,r.w-6,r.h-6,Color{52,55,61,255});
         text("UNSUPPORTED TILE",r.x+12,r.y+18,2,WHITE,r.x+r.w-10);
@@ -1033,17 +1042,18 @@ void drawScreen() {
     }
     if(systemMenu) {
         rect(0,0,SW,SH,Color{0,0,0,190});
-        softCard(270,112,740,496,Color{31,33,39,252},Color{255,255,255,30});
-        text("SYSTEM TOOLS",306,136,3,WHITE,960);
-        text("QUICK ACCESS TO NINTENDO SWITCH FEATURES",308,174,1,MUTED,960);
+        softCard(110,112,1060,496,Color{31,33,39,252},Color{255,255,255,30});
+        text("SYSTEM TOOLS",146,136,3,WHITE,1020);
+        text("QUICK ACCESS TO CONSOLE AND DESKNX FEATURES",148,174,1,MUTED,1020);
         struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
-            {308,218,0,"SETTINGS","APP OPTIONS AND MAINTENANCE"},
-            {542,218,1,"CONTROLLERS","PAIR / CHANGE CONTROLLERS"},
-            {776,218,2,"ALBUM","SCREENSHOTS AND VIDEOS"},
-            {308,382,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
-            {542,382,5,"EDIT MODE","MOVE AND RESIZE TILES"},
-            {776,382,6,"RECENT","RECENTLY LAUNCHED APPS"}
+            {154,218,0,"SETTINGS","DESKNX OPTIONS"},
+            {398,218,1,"CONTROLLERS","PAIR / CHANGE CONTROLLERS"},
+            {642,218,2,"ALBUM","SCREENSHOTS AND VIDEOS"},
+            {886,218,7,"PROFILE","NINTENDO ACCOUNT"},
+            {154,382,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
+            {398,382,5,"EDIT MODE","MOVE AND RESIZE TILES"},
+            {642,382,6,"RECENT","RECENTLY LAUNCHED APPS"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
@@ -1054,9 +1064,9 @@ void drawScreen() {
             text(item.title,item.x+80,item.y+23,2,WHITE,item.x+202);
             text(item.subtitle,item.x+16,item.y+91,1,MUTED,item.x+202);
         }
-        roundRect(890,136,82,34,10,Color{54,57,66,255});
-        text("B BACK",906,147,1,WHITE,962);
-        text("A SELECT     TOUCH ANY CARD",308,568,1,BLUE,960);
+        roundRect(1058,136,82,34,10,Color{54,57,66,255});
+        text("B BACK",1074,147,1,WHITE,1130);
+        text("A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(appSettingsMenu) {
         rect(0,0,SW,SH,Color{0,0,0,192});
@@ -1369,10 +1379,25 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(systemMenu) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
-        if(keys&HidNpadButton_Left)systemMenuIndex=(systemMenuIndex+5)%6;
-        if(keys&HidNpadButton_Right)systemMenuIndex=(systemMenuIndex+1)%6;
-        if(keys&HidNpadButton_Up)systemMenuIndex=(systemMenuIndex+3)%6;
-        if(keys&HidNpadButton_Down)systemMenuIndex=(systemMenuIndex+3)%6;
+        if(systemMenuIndex<0||systemMenuIndex>6)systemMenuIndex=0;
+        if(keys&HidNpadButton_Left) {
+            if(systemMenuIndex==0)systemMenuIndex=3;
+            else if(systemMenuIndex==4)systemMenuIndex=6;
+            else --systemMenuIndex;
+        }
+        if(keys&HidNpadButton_Right) {
+            if(systemMenuIndex==3)systemMenuIndex=0;
+            else if(systemMenuIndex==6)systemMenuIndex=4;
+            else ++systemMenuIndex;
+        }
+        if(keys&HidNpadButton_Up) {
+            if(systemMenuIndex>=4)systemMenuIndex-=4;
+            else systemMenuIndex=(systemMenuIndex==3)?6:systemMenuIndex+4;
+        }
+        if(keys&HidNpadButton_Down) {
+            if(systemMenuIndex<4)systemMenuIndex+=(systemMenuIndex==3)?3:4;
+            else systemMenuIndex-=4;
+        }
         if(keys&HidNpadButton_A) {
             const int action=systemMenuIndex;
             systemMenu=false;
@@ -1389,12 +1414,29 @@ void keyInput(u64 keys, bool fromRepeat) {
             } else if(action==2) {
                 if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
             } else if(action==3) {
-                powerMenu=true;powerIndex=0;
+                AccountUid uid{};
+                Result userRc=accountGetPreselectedUser(&uid);
+                if(R_FAILED(userRc)||!accountUidIsValid(&uid)) {
+                    AccountUid users[8]{};
+                    s32 actual=0;
+                    userRc=accountListAllUsers(users,8,&actual);
+                    bool found=false;
+                    if(R_SUCCEEDED(userRc)) {
+                        for(s32 i=0;i<std::min<s32>(actual,8);++i) {
+                            if(accountUidIsValid(&users[i])){uid=users[i];found=true;break;}
+                        }
+                    }
+                    if(!found){setStatus("NO NINTENDO ACCOUNT PROFILE",3000);return;}
+                }
+                if(R_FAILED(friendsLaShowMyProfile(uid)))
+                    setStatus("PROFILE APPLET UNAVAILABLE",3000);
             } else if(action==4) {
+                powerMenu=true;powerIndex=0;
+            } else if(action==5) {
                 editing=!editing;
                 if(!editing&&dragging){dragging=false;saveNow();}
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-            } else if(action==5) {
+            } else if(action==6) {
                 recentIndex=0;recentOpen=true;
             }
         }
@@ -1561,16 +1603,17 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && systemMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=890&&x<=972&&y>=136&&y<=170){systemMenu=false;return;}
+        if(x>=1058&&x<=1140&&y>=136&&y<=170){systemMenu=false;return;}
         bool cardHit=false;
         if(y>=218&&y<354) {
-            if(x>=308&&x<518){systemMenuIndex=0;cardHit=true;}
-            else if(x>=542&&x<752){systemMenuIndex=1;cardHit=true;}
-            else if(x>=776&&x<986){systemMenuIndex=2;cardHit=true;}
+            if(x>=154&&x<364){systemMenuIndex=0;cardHit=true;}
+            else if(x>=398&&x<608){systemMenuIndex=1;cardHit=true;}
+            else if(x>=642&&x<852){systemMenuIndex=2;cardHit=true;}
+            else if(x>=886&&x<1096){systemMenuIndex=3;cardHit=true;}
         } else if(y>=382&&y<518) {
-            if(x>=308&&x<518){systemMenuIndex=3;cardHit=true;}
-            else if(x>=542&&x<752){systemMenuIndex=4;cardHit=true;}
-            else if(x>=776&&x<986){systemMenuIndex=5;cardHit=true;}
+            if(x>=154&&x<364){systemMenuIndex=4;cardHit=true;}
+            else if(x>=398&&x<608){systemMenuIndex=5;cardHit=true;}
+            else if(x>=642&&x<852){systemMenuIndex=6;cardHit=true;}
         }
         if(cardHit) {
             systemMenu=false;
@@ -1586,12 +1629,29 @@ void touchInput(const SDL_Event&e) {
             } else if(systemMenuIndex==2) {
                 if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
             } else if(systemMenuIndex==3) {
-                powerMenu=true;powerIndex=0;
+                AccountUid uid{};
+                Result userRc=accountGetPreselectedUser(&uid);
+                if(R_FAILED(userRc)||!accountUidIsValid(&uid)) {
+                    AccountUid users[8]{};
+                    s32 actual=0;
+                    userRc=accountListAllUsers(users,8,&actual);
+                    bool found=false;
+                    if(R_SUCCEEDED(userRc)) {
+                        for(s32 i=0;i<std::min<s32>(actual,8);++i) {
+                            if(accountUidIsValid(&users[i])){uid=users[i];found=true;break;}
+                        }
+                    }
+                    if(!found){setStatus("NO NINTENDO ACCOUNT PROFILE",3000);return;}
+                }
+                if(R_FAILED(friendsLaShowMyProfile(uid)))
+                    setStatus("PROFILE APPLET UNAVAILABLE",3000);
             } else if(systemMenuIndex==4) {
+                powerMenu=true;powerIndex=0;
+            } else if(systemMenuIndex==5) {
                 editing=!editing;
                 if(!editing&&dragging){dragging=false;saveNow();}
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-            } else if(systemMenuIndex==5) {
+            } else if(systemMenuIndex==6) {
                 recentIndex=0;recentOpen=true;
             }
         }
