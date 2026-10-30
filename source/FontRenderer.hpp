@@ -13,15 +13,32 @@ public:
     bool initialize() {
         if (TTF_Init() != 0) return false;
         ttfReady_ = true;
-        if (R_FAILED(plInitialize(PlServiceType_User))) return false;
-        plReady_ = true;
-        if (R_FAILED(plGetSharedFontByType(&sharedFont_, PlSharedFontType_Standard)) ||
-            !sharedFont_.address || sharedFont_.size == 0) return false;
+        // The system shared font is the fallback, not a hard dependency:
+        // user-installed TTF/OTF fonts work even when pl is unavailable.
+        if (R_SUCCEEDED(plInitialize(PlServiceType_User))) {
+            plReady_ = true;
+            (void)plGetSharedFontByType(&sharedFont_, PlSharedFontType_Standard);
+        }
         return true;
     }
     void setRenderer(SDL_Renderer* renderer) { renderer_ = renderer; }
+    bool setCustomFont(const std::string& path) {
+        if (path == customFontPath_) return true;
+        clearCache();
+        for (auto*& font : fonts_) {
+            if (font) TTF_CloseFont(font);
+            font = nullptr;
+        }
+        customFontPath_ = path;
+        if (path.empty() || !ttfReady_) return true;
+        fonts_[0] = TTF_OpenFont(path.c_str(), 8);
+        if (fonts_[0]) return true;
+        customFontPath_.clear();
+        return false;
+    }
+    const std::string& customFontPath() const { return customFontPath_; }
     bool draw(const std::string& value, int x, int y, int scale, SDL_Color color, int right) {
-        if (!ttfReady_ || !sharedFont_.address || value.empty()) return false;
+        if (!ttfReady_ || value.empty()) return false;
         TTF_Font* font = fontForScale(scale);
         if (!font) return false;
         const std::string key = makeKey(value, scale, color);
@@ -68,6 +85,7 @@ private:
     SDL_Renderer* renderer_{nullptr};
     PlFontData sharedFont_{};
     TTF_Font* fonts_[8]{};
+    std::string customFontPath_;
     std::vector<CacheEntry> cache_;
     unsigned long long clock_{0};
     bool ttfReady_{false};
@@ -76,6 +94,10 @@ private:
     TTF_Font* fontForScale(int scale) {
         const int index = std::max(0, std::min(7, scale - 1));
         if (fonts_[index]) return fonts_[index];
+        if (!customFontPath_.empty()) {
+            fonts_[index] = TTF_OpenFont(customFontPath_.c_str(), (index + 1) * 8);
+            if (fonts_[index]) return fonts_[index];
+        }
         if (!sharedFont_.address || sharedFont_.size > static_cast<u32>(INT_MAX)) return nullptr;
         SDL_RWops* rw = SDL_RWFromConstMem(sharedFont_.address, static_cast<int>(sharedFont_.size));
         if (!rw) return nullptr;

@@ -245,6 +245,10 @@ int main() {
 
     assert(typeCode(parseKind("N")) == "N");
     assert(typeCode(parseKind("C")) == "C");
+    assert(typeCode(Kind::Storage) == "V");
+    assert(parseKind("V") == Kind::Storage);
+    assert(typeCode(Kind::Calendar) == "A");
+    assert(parseKind("A") == Kind::Calendar);
     assert(parseKind("unknown") == Kind::Unsupported);
     const auto fields = splitTabs("A\tb\tc");
     assert(fields.size() == 3 && fields[1] == "b");
@@ -318,7 +322,9 @@ int main() {
         {Kind::Game,"Zelda Adventure","0100",1,1,0},
         {Kind::Nro,"Retro emulator","/tmp/desknx-small.nro",1,1,1},
         {Kind::Nro,"Русский перевод","/tmp/desknx-large.nro",1,1,2},
-        {Kind::Clock,"Clock widget","",2,1,1}
+        {Kind::Clock,"Clock widget","",2,1,1},
+        {Kind::Storage,"Storage widget","",3,1,2},
+        {Kind::Calendar,"Calendar widget","",3,1,3}
     };
     { std::ofstream smallFile("/tmp/desknx-small.nro",std::ios::binary); smallFile<<"1234"; }
     { std::ofstream largeFile("/tmp/desknx-large.nro",std::ios::binary); largeFile<<"1234567890"; }
@@ -334,6 +340,11 @@ int main() {
     std::remove("/tmp/desknx-small.nro");std::remove("/tmp/desknx-large.nro");
     assert(std::string(FilterName(FilterMode::Homebrew))=="HOMEBREW");
     assert(std::string(SortName(SortMode::Recent))=="RECENT");
+    filtered=FilterAndSort(catalog,"",FilterMode::Widgets,SortMode::Name,{});
+    assert(filtered.size()==3);
+    assert(filtered[0].kind==Kind::Calendar ||
+           filtered[0].kind==Kind::Clock ||
+           filtered[0].kind==Kind::Storage);
 
     // Safe file replacement preserves the last good destination if publishing
     // a fully-written temp file fails.

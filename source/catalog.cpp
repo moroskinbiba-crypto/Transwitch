@@ -766,6 +766,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     result.items.push_back({Kind::Battery, "Battery widget", "", 2, 1, 2});
     result.items.push_back({Kind::System, "System info widget", "", 2, 1, 5});
     result.items.push_back({Kind::Recent, "Recent launch widget", "", 3, 1, 6});
+    result.items.push_back({Kind::Storage, "SD storage widget", "", 3, 1, 3});
+    result.items.push_back({Kind::Calendar, "Calendar widget", "", 3, 1, 4});
     // Preserve the last known-good catalogue if NS enumeration failed.
     if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
     LogDiagnostic("scan_done games=%zu nros=%zu items=%zu truncated=%d ns_error=0x%08X elapsed=%llds",
