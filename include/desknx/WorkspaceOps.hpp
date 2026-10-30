@@ -109,29 +109,39 @@ inline bool resizeSelectedTile(model::Workspace& desk, int& selectedX,
                                int& selectedY, bool bigger) {
     const int index = model::itemAt(desk, selectedX, selectedY);
     if (index < 0) return false;
-    constexpr std::array<std::pair<int, int>, 5> sizes{{
-        {1, 1}, {2, 1}, {3, 1}, {2, 2}, {3, 2}
-    }};
     auto& tile = desk.tiles[static_cast<size_t>(index)];
-    size_t current = 0;
-    for (size_t i = 0; i < sizes.size(); ++i) {
-        if (sizes[i].first == tile.w && sizes[i].second == tile.h) {
-            current = i;
-            break;
-        }
+
+    // Preserve the original, predictable resize ladder for all existing
+    // shapes. The 3x1 banner is a separate branch used by the Recent widget:
+    // it can expand vertically to 3x2 or shrink to the compact 2x1 shape.
+    int nextW = tile.w;
+    int nextH = tile.h;
+    if (tile.w == 1 && tile.h == 1) {
+        if (!bigger) return false;
+        nextW = 2; nextH = 1;
+    } else if (tile.w == 2 && tile.h == 1) {
+        if (bigger) { nextW = 2; nextH = 2; }
+        else { nextW = 1; nextH = 1; }
+    } else if (tile.w == 2 && tile.h == 2) {
+        if (bigger) { nextW = 3; nextH = 2; }
+        else { nextW = 2; nextH = 1; }
+    } else if (tile.w == 3 && tile.h == 2) {
+        if (!bigger) { nextW = 2; nextH = 2; }
+        else return false;
+    } else if (tile.w == 3 && tile.h == 1) {
+        if (bigger) { nextW = 3; nextH = 2; }
+        else { nextW = 2; nextH = 1; }
+    } else {
+        return false;
     }
-    const size_t next = bigger
-        ? std::min(sizes.size() - 1, current + 1)
-        : (current == 0 ? 0 : current - 1);
-    if (next == current) return false;
+
     model::Tile proposed = tile;
-    proposed.w = sizes[next].first;
-    proposed.h = sizes[next].second;
+    proposed.w = nextW;
+    proposed.h = nextH;
     if (!model::placeable(desk, proposed, tile.x, tile.y, index)) return false;
     tile.w = proposed.w;
     tile.h = proposed.h;
-    // Keep focus on the tile itself even when the old cursor cell is removed
-    // by shrinking a 2x2 or 3x2 tile.
+    // Keep focus on the tile itself even when the old cursor cell is removed.
     selectedX = tile.x;
     selectedY = tile.y;
     return true;
