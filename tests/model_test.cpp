@@ -47,6 +47,19 @@ int main() {
     assert(firstFree(desk, small, x, y));
     assert(x >= 0 && y >= 0 && placeable(desk, small, x, y));
 
+    // Workspace names must fit the exact persisted UTF-8 limits so a
+    // successful save is guaranteed to be readable on the next launch.
+    {
+        using desknx::workspace_ops::isValidWorkspaceName;
+        assert(isValidWorkspaceName("Games"));
+        assert(isValidWorkspaceName(std::string(31,'A')));
+        assert(!isValidWorkspaceName(std::string(32,'A')));
+        assert(isValidWorkspaceName(std::string(31,'я'))); // 62 UTF-8 bytes
+        assert(!isValidWorkspaceName(std::string(32,'я'))); // 64 bytes / 32 codepoints
+        assert(!isValidWorkspaceName(""));
+        assert(!isValidWorkspaceName(std::string("bad\tname")));
+    }
+
     // Touch hit-testing must reject empty gutters, preserve spanning tile
     // bounds, and use the same 6x3 grid geometry as the renderer.
     {
