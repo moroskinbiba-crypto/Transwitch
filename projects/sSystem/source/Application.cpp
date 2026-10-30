@@ -82,8 +82,24 @@ namespace desknx::system::app {
                                                        : FsSaveDataMetaType_Thumbnail),
         };
         const Result crc = fsCreateSaveDataFileSystem(&attr, &info, &meta);
-        DaemonLog("save: app=0x%016lx type=%d size=0x%lx open rc=0x%x -> create rc=0x%x",
-                  app_id, (int)type, size, orc, crc);
+        if (R_FAILED(crc)) {
+            // The open may have raced another creator (for example, a save
+            // created while the HOME transition was in progress). Only treat
+            // the create failure as fatal if the save is still not mountable.
+            FsFileSystem retryFs;
+            const Result retryOpenRc = fsOpenSaveDataFileSystem(&retryFs, space, &attr);
+            if (R_SUCCEEDED(retryOpenRc)) {
+                fsFsClose(&retryFs);
+                DaemonLog("save: app=0x%016lx type=%d appeared during create (create rc=0x%x)",
+                          app_id, (int)type, crc);
+                return 0;
+            }
+            DaemonLog("save: app=0x%016lx type=%d create failed rc=0x%x; retry open rc=0x%x",
+                      app_id, (int)type, crc, retryOpenRc);
+        } else {
+            DaemonLog("save: app=0x%016lx type=%d size=0x%lx created after open rc=0x%x",
+                      app_id, (int)type, size, orc);
+        }
         return crc;
     }
 
@@ -148,8 +164,16 @@ namespace desknx::system::app {
         // Launching anyway would only start a game that aborts on its save
         // mount; the caller tells the user why instead.
         bool wants_user = true;
-        if (const Result src = EnsureSaves(app_id, user, wants_user); IsNoSpace(src))
-            return src;
+        const Result saveRc = EnsureSaves(app_id, user, wants_user);
+        if (R_FAILED(saveRc)) {
+            if (IsNoSpace(saveRc))
+                DaemonLog("save: refusing launch of 0x%016lx because save data needs more free space",
+                          app_id);
+            else
+                DaemonLog("save: refusing launch of 0x%016lx because save data is unavailable rc=0x%x",
+                          app_id, saveRc);
+            return saveRc;
+        }
         // LNC-02: the menu can override the NACP verdict via the v2 flags -
         // NoPreuser means "the game picks players itself", so the preselected
         // user parameter must not be sent even when NACP asks for an account.
