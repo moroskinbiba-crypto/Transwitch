@@ -8,6 +8,7 @@
 #include "../include/desknx/Model.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
+#include "../include/desknx/Diagnostics.hpp"
 #include "catalog_view.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
@@ -311,7 +312,13 @@ void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
     publishCatalogue(snapshot);
 }
 int catalogueThreadMain(void*) {
-    (void)desknx::catalog::Scan(catalogueProgress,nullptr);
+    desknx::diag::Write("catalogue", "thread_begin", "background scan started");
+    const auto result = desknx::catalog::Scan(catalogueProgress,nullptr);
+    desknx::diag::Write("catalogue", "thread_end",
+        "complete=%d games=%zu nros=%zu items=%zu ns_available=%d ns_error=0x%08X truncated=%d",
+        result.complete ? 1 : 0, result.gameCount, result.nroCount, result.items.size(),
+        result.nsAvailable ? 1 : 0, static_cast<unsigned int>(result.nsErrorCode),
+        result.truncated ? 1 : 0);
     return 0;
 }
 void restartCatalogueScan() {
@@ -1184,6 +1191,8 @@ void deleteDesk() {
     deletePrompt=true;
 }
 void launch(const Tile& t) {
+    desknx::diag::Write("launch", "requested", "kind=%s",
+        t.kind == Kind::Game ? "game" : t.kind == Kind::Nro ? "homebrew" : "widget");
     if (t.kind == Kind::Unsupported) {
         setStatus("UNSUPPORTED TILE TYPE: " + t.unknownTypeCode, 3500);
         return;
@@ -1198,7 +1207,11 @@ void launch(const Tile& t) {
         // HasUser forces the preselection even if NACP would skip it.
         const AccountUid uid=g_backendHasUser?g_backendUser:AccountUid{};
         const u64 flags=g_backendHasUser?desknx::ipc::LaunchFlagHasUser:0;
+        desknx::diag::Write("launch", "game_ipc_begin", "title_id=%016llX",
+                            static_cast<unsigned long long>(id));
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id,flags,uid);});
+        desknx::diag::Write("launch", "game_ipc_end", "rc=0x%08X",
+                            static_cast<unsigned int>(rc));
         if(R_FAILED(rc)) {
             char b[72]{};
             std::snprintf(b,sizeof(b),"SYSTEM BACKEND REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));
@@ -1210,8 +1223,15 @@ void launch(const Tile& t) {
         appletRequestExitToSelf();
         running=false;
 #else
-        if(R_FAILED(nsInitialize())){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
+        const Result initRc = nsInitialize();
+        desknx::diag::Write("launch", "standalone_ns_init", "rc=0x%08X",
+                            static_cast<unsigned int>(initRc));
+        if(R_FAILED(initRc)){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
+        desknx::diag::Write("launch", "game_request_begin", "title_id=%016llX",
+                            static_cast<unsigned long long>(id));
         const Result rc=appletRequestLaunchApplication(id,nullptr);
+        desknx::diag::Write("launch", "game_request_end", "rc=0x%08X",
+                            static_cast<unsigned int>(rc));
         nsExit();
         if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"GAME LAUNCH FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
         else {recordRecentLaunch(t);setStatus("LAUNCH REQUEST SENT");}
@@ -1221,7 +1241,10 @@ void launch(const Tile& t) {
     if(t.kind==Kind::Nro) {
         if(!isSafeNroPath(t.data)){setStatus("INVALID OR MISSING NRO PATH",3500);return;}
 #ifdef DESKNX_SYSTEM_APPLET
+        desknx::diag::Write("launch", "homebrew_ipc_begin", "path_valid=1");
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchHomebrew(t.data.c_str(),"");});
+        desknx::diag::Write("launch", "homebrew_ipc_end", "rc=0x%08X",
+                            static_cast<unsigned int>(rc));
         if(R_FAILED(rc)) {
             char b[72]{};
             std::snprintf(b,sizeof(b),"HOMEBREW REQUEST FAILED: 0X%08X",static_cast<unsigned int>(rc));
@@ -1233,8 +1256,14 @@ void launch(const Tile& t) {
         appletRequestExitToSelf();
         running=false;
 #else
-        if(!envHasNextLoad()){setStatus("NRO CHAIN-LOAD UNAVAILABLE; USE HBMENU TAKEOVER",4500);return;}
-        if(R_FAILED(envSetNextLoad(t.data.c_str(),""))){setStatus("CANNOT PREPARE NEXT NRO");return;}
+        if(!envHasNextLoad()){
+            desknx::diag::Write("launch", "homebrew_rejected", "reason=next_load_unavailable");
+            setStatus("NRO CHAIN-LOAD UNAVAILABLE; USE HBMENU TAKEOVER",4500);return;
+        }
+        const Result nextLoadRc = envSetNextLoad(t.data.c_str(),"");
+        desknx::diag::Write("launch", "homebrew_next_load", "rc=0x%08X",
+                            static_cast<unsigned int>(nextLoadRc));
+        if(R_FAILED(nextLoadRc)){setStatus("CANNOT PREPARE NEXT NRO");return;}
         recordRecentLaunch(t);
         appletRequestExitToSelf();
 #endif
@@ -1638,14 +1667,40 @@ void touchInput(const SDL_Event&e) {
 } // namespace
 
 int main(int,char**) {
-    if(R_SUCCEEDED(fsdevMountSdmc()))sdMounted=true;
-    if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){if(sdMounted)fsdevUnmountDevice("sdmc");return 1;}
+    const Result sdMountRc = fsdevMountSdmc();
+    if(R_SUCCEEDED(sdMountRc))sdMounted=true;
+    desknx::diag::Initialize(sdMounted);
+#ifdef DESKNX_SYSTEM_APPLET
+    constexpr const char* buildMode = "system-applet";
+#else
+    constexpr const char* buildMode = "standalone-nro";
+#endif
+    desknx::diag::Write("session", "start", "mode=%s sd_mounted=%d sd_mount_rc=0x%08X",
+        buildMode, sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
+    if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){
+        desknx::diag::Write("startup", "sdl_init_failed", "error=%s", SDL_GetError());
+        if(sdMounted)fsdevUnmountDevice("sdmc");return 1;
+    }
+    desknx::diag::Write("startup", "sdl_init_ok", "sdl_version=%u.%u.%u",
+        SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"1");
     window=SDL_CreateWindow("DeskNX",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
-    if(!window){SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 2;}
+    if(!window){
+        desknx::diag::Write("startup", "window_create_failed", "error=%s", SDL_GetError());
+        SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 2;
+    }
+    desknx::diag::Write("startup", "window_created", "logical_width=%d logical_height=%d", SW, SH);
     renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
     if(!renderer)renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
-    if(!renderer){SDL_DestroyWindow(window);SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 3;}
+    if(!renderer){
+        desknx::diag::Write("startup", "renderer_create_failed", "error=%s", SDL_GetError());
+        SDL_DestroyWindow(window);SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 3;
+    }
+    SDL_RendererInfo rendererInfo{};
+    const int rendererInfoRc = SDL_GetRendererInfo(renderer, &rendererInfo);
+    desknx::diag::Write("startup", "renderer_ready", "name=%s info_rc=%d flags=0x%08X",
+        rendererInfo.name ? rendererInfo.name : "unknown", rendererInfoRc,
+        static_cast<unsigned int>(rendererInfo.flags));
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
 
@@ -1654,16 +1709,23 @@ int main(int,char**) {
     // Initializing NS later from the scan worker while libnx still reports an
     // unknown/default HOS version can make NS calls fail or stall on firmware
     // newer than the build SDK.
-    const bool setsysReady = R_SUCCEEDED(setsysInitialize());
+    const Result setsysRc = setsysInitialize();
+    const bool setsysReady = R_SUCCEEDED(setsysRc);
     SetSysFirmwareVersion firmware{};
-    const bool firmwareRead = setsysReady &&
-        R_SUCCEEDED(setsysGetFirmwareVersion(&firmware));
+    const Result firmwareRc = setsysReady ? setsysGetFirmwareVersion(&firmware) : setsysRc;
+    const bool firmwareRead = setsysReady && R_SUCCEEDED(firmwareRc);
     if (firmwareRead) {
         hosversionSet(MAKEHOSVERSION(firmware.major, firmware.minor,
                                      firmware.micro) | BIT(31));
     }
+    desknx::diag::Write("startup", "firmware",
+        "setsys_rc=0x%08X firmware_rc=0x%08X firmware_read=%d version=%u.%u.%u",
+        static_cast<unsigned int>(setsysRc), static_cast<unsigned int>(firmwareRc),
+        firmwareRead ? 1 : 0, firmware.major, firmware.minor, firmware.micro);
     std::uint32_t nsInitError = 0;
     const bool nsServicesReady = desknx::catalog::InitializeServices(nsInitError);
+    desknx::diag::Write("startup", "services_ready", "ns_ready=%d ns_error=0x%08X",
+        nsServicesReady ? 1 : 0, static_cast<unsigned int>(nsInitError));
     if (sdMounted) {
         mkdir("sdmc:/switch", 0777);
         mkdir("sdmc:/switch/DeskNX", 0777);
@@ -1733,8 +1795,23 @@ int main(int,char**) {
         setStatus(message, 6000);
     }
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
-    if(!catalogueThread){setStatus("BACKGROUND SCAN UNAVAILABLE",3000);publishCatalogue(desknx::catalog::Scan());}
+    if(!catalogueThread){
+        desknx::diag::Write("catalogue", "thread_create_failed", "fallback= synchronous_scan");
+        setStatus("BACKGROUND SCAN UNAVAILABLE",3000);
+        publishCatalogue(desknx::catalog::Scan());
+    }
+    Uint32 previousFrameTick = SDL_GetTicks();
+    Uint32 lastSlowFrameLog = 0;
     while(running&&appletMainLoop()) {
+        const Uint32 frameNow = SDL_GetTicks();
+        const Uint32 frameDelta = frameNow - previousFrameTick;
+        previousFrameTick = frameNow;
+        if (frameDelta > 500 && frameNow - lastSlowFrameLog > 5000) {
+            lastSlowFrameLog = frameNow;
+            desknx::diag::Write("runtime", "slow_frame",
+                "delta_ms=%u catalogue_ready=%d scan_complete=%d",
+                frameDelta, catalogueReady ? 1 : 0, catalogueScanComplete ? 1 : 0);
+        }
         bool ready=false,complete=false,truncated=false;readCatalogueState(ready,complete,truncated);
         if(complete&&!layoutLoaded){defaultLayout();saveLayout();layoutLoaded=true;setStatus("DESKNX READY - Y ADD  X EDIT",4000);}
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
@@ -1777,6 +1854,8 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
+                        catalogueThread ? 1 : 0);
     if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
     desknx::catalog::ShutdownServices();
     if (setsysReady) setsysExit();
@@ -1786,6 +1865,8 @@ int main(int,char**) {
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
-    SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");
+    SDL_Quit();
+    desknx::diag::Write("session", "end", "normal_exit=1");
+    if(sdMounted)fsdevUnmountDevice("sdmc");
     return 0;
 }
