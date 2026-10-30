@@ -42,6 +42,12 @@ struct Signatures {
     uint64_t sdHash{14695981039346656037ULL};
 };
 
+// libnx service sessions are process-wide. Keep them alive for the menu
+// lifetime, matching SLauncher's __appInit/__appExit lifecycle.
+bool gAccountServiceReady = false;
+bool gNsServiceReady = false;
+std::uint32_t gNsServiceError = 0;
+
 uint64_t hashBytes(uint64_t hash, const void* data, size_t size) {
     const auto* bytes = static_cast<const unsigned char*>(data);
     for (size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ULL; }
@@ -441,6 +447,23 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
 }
 } // namespace
 
+bool InitializeServices(std::uint32_t& nsErrorCode) {
+    if (!gAccountServiceReady)
+        gAccountServiceReady = R_SUCCEEDED(accountInitialize(AccountServiceType_System));
+    if (!gNsServiceReady) {
+        const Result rc = nsInitialize();
+        gNsServiceReady = R_SUCCEEDED(rc);
+        gNsServiceError = static_cast<std::uint32_t>(rc);
+    }
+    nsErrorCode = gNsServiceReady ? 0 : gNsServiceError;
+    return gNsServiceReady;
+}
+
+void ShutdownServices() {
+    if (gNsServiceReady) { nsExit(); gNsServiceReady = false; }
+    if (gAccountServiceReady) { accountExit(); gAccountServiceReady = false; }
+}
+
 ScanResult Scan(ProgressCallback progress, void* context) {
     ScanResult result;
     auto report = [&](bool complete) {
@@ -448,16 +471,10 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if (progress) progress(result, context);
     };
     EnsureCacheDirectories();
-    // SLaunch explicitly initializes NS before its background catalogue
-    // worker starts. libnx's default homebrew startup does not guarantee that
-    // the NS service is open, so never assume it is ready merely because the
-    // applet is running. Each scan owns one NS session; this also makes manual
-    // catalogue refreshes safe and keeps service lifetime out of the renderer.
-    const Result accountRc = accountInitialize(AccountServiceType_System);
-    const bool accountReady = R_SUCCEEDED(accountRc);
-    result.nsErrorCode = static_cast<std::uint32_t>(
-        accountReady ? nsInitialize() : accountRc);
-    const bool nsReady = result.nsErrorCode == 0;
+    // NS/account are initialized once on the main thread after setting the
+    // actual firmware version; this worker only uses the persistent sessions.
+    const bool nsReady = gNsServiceReady;
+    result.nsErrorCode = nsReady ? 0 : gNsServiceError;
     result.nsAvailable = nsReady;
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
     if (result.nsErrorCode != 0) result.nsAvailable = false;
@@ -485,9 +502,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             item.lastPlayed = found->lastPlayed;
             item.launchCount = found->launchCount;
         }
-        if (nsReady) nsExit();
-        if (accountReady) accountExit();
-        result.complete = true;
+                result.complete = true;
         report(true);
         return result;
     }
@@ -562,9 +577,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     result.items.push_back({Kind::Recent, "Recent launch widget", "", 3, 1, 6});
     // Preserve the last known-good catalogue if NS enumeration failed.
     if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
-    if (nsReady) nsExit();
-    if (accountReady) accountExit();
-    report(true);
+        report(true);
     return result;
 }
 
