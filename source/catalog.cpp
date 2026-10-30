@@ -405,7 +405,7 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     char gameHash[32]{}, sdHash[32]{};
     std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
-    output << "DESKNXCAT1\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
+    output << "DESKNXCAT2\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
     for (const auto& item : result.items) {
         output << "C\t" << desknx::model::typeCode(item.kind) << '\t'
                << desknx::model::safeField(item.title) << '\t'
