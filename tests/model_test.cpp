@@ -293,6 +293,24 @@ int main() {
     assert(roundTrip.workspaces.size() == 2);
     assert(roundTrip.workspaces[1].tiles[0].data == "sdmc:/switch/demo.nro");
 
+    // The active workspace is stored independently so a selection survives
+    // restarts even if the main layout file is being migrated or replaced.
+    const std::string activeState =
+        desknx::layout::serializeActiveWorkspaceState(source, 1);
+    assert(!activeState.empty());
+    int restoredActiveWorkspace = 0;
+    assert(desknx::layout::parseActiveWorkspaceState(
+        activeState, source, restoredActiveWorkspace));
+    assert(restoredActiveWorkspace == 1);
+    auto renamedWorkspaces = source;
+    renamedWorkspaces[1].name = "Renamed Homebrew";
+    assert(!desknx::layout::parseActiveWorkspaceState(
+        activeState, renamedWorkspaces, restoredActiveWorkspace));
+    auto extraWorkspace = source;
+    extraWorkspace.push_back(Workspace{"Tools", {}});
+    assert(!desknx::layout::parseActiveWorkspaceState(
+        activeState, extraWorkspace, restoredActiveWorkspace));
+
     const std::string overlap =
         "DESKNX3\nA\t0\nD\tBroken\n"
         "I\t0\tG\tOne\t0100\t0\t0\t2\t1\t0\n"
