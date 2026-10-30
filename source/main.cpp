@@ -65,7 +65,7 @@ std::array<Color,8> COLORS{{
     {91,145,226,255},{53,169,151,255},{155,116,226,255},{222,151,83,255},
     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255}
 }};
-int themeIndex=0;
+int themeIndex=1;
 std::string wallpaperPath, fontPath;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
@@ -1996,7 +1996,7 @@ void activateAppSettings(int action) {
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
         case 7:
-            wallpaperPath.clear();fontPath.clear();themeIndex=0;
+            wallpaperPath.clear();fontPath.clear();themeIndex=1;
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
             applyThemePalette();
@@ -2934,8 +2934,8 @@ int main(int,char**) {
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
         padUpdate(&pad);const u64 keys=padGetButtonsDown(&pad);if(keys)keyInput(keys, false);
-        // UI-14 (P1): holding a direction repeats the cursor move - 350 ms
-        // initial delay, then every 80 ms. Only when no modal owns input.
+        // Holding a direction repeats navigation after a short, responsive delay.
+        // Modal ownership remains centralized in keyInput().
         {
             static Uint32 holdStart = 0, lastRepeat = 0;
             static u64 lastHeldDirs = 0;
@@ -2948,7 +2948,7 @@ int main(int,char**) {
             if(!modalBlocksRepeat && (held&dirs) && !touchDragging) {
                 const Uint32 now = SDL_GetTicks();
                 if((held&dirs) != lastHeldDirs) { holdStart=now; lastRepeat=now; lastHeldDirs=held&dirs; }
-                else if(now-holdStart >= 350 && now-lastRepeat >= 80) {
+                else if(now-holdStart >= 240 && now-lastRepeat >= 62) {
                     lastRepeat = now;
                     u64 rep = 0;
                     if(held&HidNpadButton_Left)  rep|=HidNpadButton_Left;
