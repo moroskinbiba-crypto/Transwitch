@@ -31,6 +31,9 @@ constexpr const char* IconsDir = "sdmc:/switch/DeskNX/cache/icons";
 constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
 constexpr const char* CacheTemp = "sdmc:/switch/DeskNX/cache/catalogue.tmp";
 constexpr size_t MaxNroAssetBytes = 2 * 1024 * 1024;
+bool gNsReady = false;
+bool gSetSysReady = false;
+std::uint32_t gNsInitError = 0;
 
 struct GameRecord { u64 id; u64 last_updated; };
 struct NroFile { std::string path; u64 size; u64 mtime; };
@@ -98,10 +101,9 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
     s32 offset = 0;
     while (records.size() < 4096) {
         const ApplicationPageRequest request = MakeApplicationPageRequest(offset);
-        // libnx treats this argument as both requested capacity and returned
-        // count. Passing zero here asks NS for zero records: the old code then
-        // silently built an empty games catalogue on every console.
-        s32 count = request.capacity;
+        // The count pointer is OUTPUT-only; capacity is the separate second
+        // argument. SLauncher uses this exact zero-initialized pattern.
+        s32 count = 0;
         const Result rc = nsListApplicationRecord(page.data(), request.capacity,
                                                    request.offset, &count);
         if (R_FAILED(rc)) {
@@ -326,6 +328,36 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
 }
 } // namespace
 
+bool InitializeServices() {
+    if (gNsReady) return true;
+    const Result setRc = setsysInitialize();
+    if (R_FAILED(setRc)) {
+        gNsInitError = static_cast<std::uint32_t>(setRc);
+        return false;
+    }
+    gSetSysReady = true;
+
+    // SLauncher sets the actual HOS version before opening ns. Without this,
+    // libnx's version-gated NS command selection can run against 0.0.0.
+    SetSysFirmwareVersion firmware{};
+    const Result fwRc = setsysGetFirmwareVersion(&firmware);
+    if (R_FAILED(fwRc)) {
+        gNsInitError = static_cast<std::uint32_t>(fwRc);
+        return false;
+    }
+    hosversionSet(MAKEHOSVERSION(firmware.major, firmware.minor, firmware.micro) | BIT(31));
+
+    const Result nsRc = nsInitialize();
+    gNsReady = R_SUCCEEDED(nsRc);
+    gNsInitError = gNsReady ? 0u : static_cast<std::uint32_t>(nsRc);
+    return gNsReady;
+}
+
+void ShutdownServices() {
+    if (gNsReady) { nsExit(); gNsReady = false; }
+    if (gSetSysReady) { setsysExit(); gSetSysReady = false; }
+}
+
 ScanResult Scan(ProgressCallback progress, void* context) {
     ScanResult result;
     auto report = [&](bool complete) {
@@ -333,10 +365,9 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if (progress) progress(result, context);
     };
     EnsureCacheDirectories();
-    const Result nsRc = nsInitialize();
-    const bool nsReady = R_SUCCEEDED(nsRc);
+    const bool nsReady = gNsReady;
     result.nsAvailable = nsReady;
-    result.nsErrorCode = nsReady ? 0u : static_cast<std::uint32_t>(nsRc);
+    result.nsErrorCode = nsReady ? 0u : gNsInitError;
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
     result.gameCount = games.size();
     std::vector<NroFile> nros;
@@ -349,7 +380,6 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     // Never reuse a cache after NS failed or returned a partial application list.
     if (nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
         result.complete = true;
-        if (nsReady) nsExit();
         report(true);
         return result;
     }
@@ -381,7 +411,6 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if ((i + 1) % 12 == 0) report(false);
     }
     report(false); // expose the installed-game part before scanning NRO assets
-    if (nsReady) nsExit();
 
     for (const auto& nro : nros) {
         if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
