@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <sys/stat.h>
+#include <utility>
 #include <vector>
 
 namespace desknx::catalog_view {
