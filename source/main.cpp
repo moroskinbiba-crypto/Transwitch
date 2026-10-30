@@ -1679,7 +1679,8 @@ int main(int,char**) {
         buildMode, sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){
         desknx::diag::Write("startup", "sdl_init_failed", "error=%s", SDL_GetError());
-        if(sdMounted)fsdevUnmountDevice("sdmc");return 1;
+        if(sdMounted) fsdevUnmountDevice("sdmc");
+        return 1;
     }
     desknx::diag::Write("startup", "sdl_init_ok", "sdl_version=%u.%u.%u",
         SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL);
@@ -1803,6 +1804,8 @@ int main(int,char**) {
     Uint32 previousFrameTick = SDL_GetTicks();
     Uint32 lastSlowFrameLog = 0;
     while(running&&appletMainLoop()) {
+        bool ready=false,complete=false,truncated=false;
+        readCatalogueState(ready,complete,truncated);
         const Uint32 frameNow = SDL_GetTicks();
         const Uint32 frameDelta = frameNow - previousFrameTick;
         previousFrameTick = frameNow;
@@ -1812,7 +1815,6 @@ int main(int,char**) {
                 "delta_ms=%u catalogue_ready=%d scan_complete=%d",
                 frameDelta, ready ? 1 : 0, complete ? 1 : 0);
         }
-        bool ready=false,complete=false,truncated=false;readCatalogueState(ready,complete,truncated);
         if(complete&&!layoutLoaded){defaultLayout();saveLayout();layoutLoaded=true;setStatus("DESKNX READY - Y ADD  X EDIT",4000);}
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
 #ifdef DESKNX_SYSTEM_APPLET
