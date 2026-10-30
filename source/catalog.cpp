@@ -1,4 +1,5 @@
 #include "catalog.hpp"
+#include "slaunch_applications.hpp"
 #include "../include/desknx/StrictParse.hpp"
 #include "../include/desknx/CatalogPagination.hpp"
 #include <desknx/SafeReplace.hpp>
@@ -33,7 +34,7 @@ constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
 constexpr const char* CacheTemp = "sdmc:/switch/DeskNX/cache/catalogue.tmp";
 constexpr size_t MaxNroAssetBytes = 2 * 1024 * 1024;
 
-struct GameRecord { u64 id; u64 last_updated; };
+struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; u8 recordType; };
 struct NroFile { std::string path; u64 size; u64 mtime; };
 struct Signatures {
     size_t gameCount{0};
@@ -111,34 +112,36 @@ void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) 
 std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) {
     std::vector<GameRecord> records;
     if (!nsReady) return records;
-    std::array<NsApplicationRecord, ApplicationPageCapacity> page{};
-    s32 offset = 0;
-    while (records.size() < 4096) {
-        const ApplicationPageRequest request = MakeApplicationPageRequest(offset);
-        // libnx treats this argument as both requested capacity and returned
-        // count. Passing zero here asks NS for zero records: the old code then
-        // silently built an empty games catalogue on every console.
-        s32 count = request.capacity;
-        const Result rc = nsListApplicationRecord(page.data(), request.capacity,
-                                                   request.offset, &count);
-        if (R_FAILED(rc)) {
-            errorCode = static_cast<std::uint32_t>(rc);
-            break;
-        }
-        if (!IsValidApplicationPageCount(request.capacity, count)) {
-            errorCode = 0xD35C0001u; // invalid count returned by NS/libnx
-            break;
-        }
-        if (count == 0) break;
-        for (s32 i = 0; i < count && records.size() < 4096; ++i)
-            records.push_back({page[static_cast<size_t>(i)].application_id,
-                               page[static_cast<size_t>(i)].last_updated});
-        offset = NextApplicationPageOffset(request.offset, count);
-        if (count < request.capacity) break;
+
+    // SLaunch sequence: enumerate every installed record, then query the
+    // matching live views. View flags are presentation metadata, never filters.
+    std::vector<NsApplicationRecord> installed;
+    const Result listRc = desknx::slaunch::EnumerateInstalled(installed);
+    if (R_FAILED(listRc)) {
+        errorCode = static_cast<std::uint32_t>(listRc);
+        return records;
     }
-    std::sort(records.begin(), records.end(), [](const GameRecord& a, const GameRecord& b) {
-        return a.id < b.id;
-    });
+
+    std::vector<u64> titleIds;
+    titleIds.reserve(installed.size());
+    for (const auto& record : installed) titleIds.push_back(record.application_id);
+
+    std::vector<NsApplicationView> views;
+    const Result viewsRc = desknx::slaunch::QueryApplicationViews(titleIds, views);
+    if (R_FAILED(viewsRc)) views.clear();
+
+    records.reserve(installed.size());
+    for (size_t i = 0; i < installed.size(); ++i) {
+        u32 flags = 0;
+        if (i < views.size()) {
+            const auto* bytes = reinterpret_cast<const u8*>(&views[i]);
+            std::memcpy(&flags, bytes + 0x0C, sizeof(flags));
+        }
+        records.push_back({installed[i].application_id,
+                           installed[i].last_updated,
+                           flags,
+                           installed[i].type});
+    }
     return records;
 }
 Signatures MakeSignatures(const std::vector<GameRecord>& games, const std::vector<NroFile>& nros) {
@@ -467,10 +470,9 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
-            if (nsReady && R_SUCCEEDED(nsGetApplicationControlData(
-                    NsApplicationControlSource_Storage, id, &control,
-                    sizeof(control), &actual))) {
-                title = GetApplicationName(control.nacp);
+            if (nsReady && R_SUCCEEDED(desknx::slaunch::ReadControlData(
+                    id, control, actual))) {
+                title = desknx::slaunch::ResolveTitleName(control.nacp);
                 if (title.empty() && cachedName != nameCache.end())
                     title = cachedName->second;
                 if (!iconCached) CacheGameIcon(id, control, actual);
