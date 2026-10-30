@@ -905,6 +905,30 @@ void drawScreen() {
             if(selected.kind==Kind::Game) {
                 text("TITLE ID",mx+654,my+296,1,MUTED,mx+818);
                 text(selected.data,mx+654,my+314,1,WHITE,mx+818);
+                char playLabel[48]{};
+                const unsigned long long minutes =
+                    static_cast<unsigned long long>(selected.playtimeSeconds / 60);
+                if (minutes < 60)
+                    std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %llu MIN",
+                                  minutes);
+                else
+                    std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %llUH %02lluM",
+                                  minutes / 60, minutes % 60);
+                text(playLabel,mx+654,my+340,1,MUTED,mx+818);
+                char launchLabel[48]{};
+                std::snprintf(launchLabel, sizeof(launchLabel), "LAUNCHES  %u",
+                              selected.launchCount);
+                text(launchLabel,mx+654,my+362,1,MUTED,mx+818);
+                if (selected.lastPlayed != 0) {
+                    const std::time_t stamp = static_cast<std::time_t>(selected.lastPlayed);
+                    std::tm local{};
+                    char dateLabel[48]{};
+                    if (localtime_r(&stamp, &local) &&
+                        std::strftime(dateLabel, sizeof(dateLabel), "LAST PLAYED  %d.%m.%Y", &local))
+                        text(dateLabel,mx+654,my+384,1,MUTED,mx+818);
+                } else {
+                    text("NOT PLAYED YET",mx+654,my+384,1,MUTED,mx+818);
+                }
             } else if(selected.kind==Kind::Nro) {
                 std::string fileName=selected.data;
                 const size_t slash=fileName.find_last_of('/');
