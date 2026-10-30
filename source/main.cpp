@@ -725,7 +725,6 @@ void drawScreen() {
                 text(typeName(candidate.kind),mx+595,yy+11,1,i==listIndex?BLUE:MUTED,mx+mw-18);
             }
         }
-        const size_t totalItems=catalogueSnapshot().size();
         const std::string counts=std::to_string(catalogueGameCount)+" GAMES  /  "+
             std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
