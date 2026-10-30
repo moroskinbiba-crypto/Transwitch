@@ -29,6 +29,15 @@ namespace desknx::system::app {
     // IApplicationAccessor's state-change event also fires on focus/suspend
     // transitions. Query its explicit IsCompleted command (AM cmd 1) before
     // Join/GetResult so a stale event can never be mistaken for app exit.
+    static Result CheckApplicationCompleted(bool* out_completed) {
+        if (!out_completed)
+            return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        u8 completed = 0;
+        const Result rc = serviceDispatchOut(&g_AppHolder.s, 1, completed);
+        if (R_SUCCEEDED(rc)) *out_completed = completed != 0;
+        return rc;
+    }
+
     static Result WaitForApplicationCompleted(u64 timeout_ns) {
         const u64 start = armGetSystemTick();
         const u64 frequency = armGetSystemTickFreq();
@@ -37,10 +46,10 @@ namespace desknx::system::app {
         const u64 deadline = start + timeout_ticks;
 
         do {
-            u8 completed = 0;
-            const Result rc = serviceDispatchOut(&g_AppHolder.s, 1, completed);
+            bool completed = false;
+            const Result rc = CheckApplicationCompleted(&completed);
             if (R_FAILED(rc)) return rc;
-            if (completed != 0) return 0;
+            if (completed) return 0;
             if (armGetSystemTick() >= deadline) break;
             svcSleepThread(50'000'000ULL);
         } while (true);
@@ -433,14 +442,15 @@ namespace desknx::system::app {
         // IsCompleted state before consuming GetResult and releasing the
         // accessor. If AM is still finalizing, retain the holder and retry on
         // the next backend poll instead of blocking the qlaunch event loop.
-        const Result completedRc = WaitForApplicationCompleted(5'000'000'000ULL);
-        if (R_FAILED(completedRc)) {
+        bool amCompleted = false;
+        const Result completedRc = CheckApplicationCompleted(&amCompleted);
+        if (R_FAILED(completedRc) || !amCompleted) {
             static u64 lastAmWaitLogTick = 0;
             const u64 now = armGetSystemTick();
             const u64 logInterval = armGetSystemTickFreq() * 5;
             if (lastAmWaitLogTick == 0 || now - lastAmWaitLogTick >= logInterval) {
-                DaemonLog("app: PM reports process gone but AM completion is pending rc=0x%08X; retaining holder",
-                          static_cast<unsigned int>(completedRc));
+                DaemonLog("app: PM reports process gone but AM completion is pending (rc=0x%08X completed=%d); retaining holder",
+                          static_cast<unsigned int>(completedRc), amCompleted ? 1 : 0);
                 lastAmWaitLogTick = now;
             }
             return false;
