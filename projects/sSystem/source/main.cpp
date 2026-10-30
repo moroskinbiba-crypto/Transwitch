@@ -56,6 +56,9 @@ u64 g_PendingTitle = 0;
 bool g_PendingReturnToGame = false;
 bool g_PendingHomebrew = false;
 bool g_HomebrewLoaderRunning = false;
+bool g_HbloaderUnregisterPending = false;
+u64 g_NextHbloaderUnregisterRetryTick = 0;
+u64 g_LastHbloaderUnregisterLogTick = 0;
 bool g_MenuStopFailureLogged = false;
 char g_PendingHomebrewPath[desknx::ipc::MaxHomebrewPath]{};
 char g_PendingHomebrewArgv[desknx::ipc::MaxHomebrewArgv]{};
@@ -165,6 +168,64 @@ Result StopMenuSafely(const char* reason) {
         g_MenuStopFailureLogged = false;
     }
     return rc;
+}
+
+void ClearHbloaderTargetFiles() {
+    // An empty one-shot target prevents a still-registered Album override from
+    // unexpectedly relaunching the previous NRO while unregister is retried.
+    remove(kHbTargetPath);
+    remove(kHbTargetTemp);
+}
+
+void ResetHbloaderUnregisterRetry() {
+    g_HbloaderUnregisterPending = false;
+    g_NextHbloaderUnregisterRetryTick = 0;
+    g_LastHbloaderUnregisterLogTick = 0;
+}
+
+Result RestoreAlbumSlotAfterHomebrew(const char* reason) {
+    const Result rc = ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+    ClearHbloaderTargetFiles();
+    if (R_SUCCEEDED(rc)) {
+        ResetHbloaderUnregisterRetry();
+        DaemonLog("hb: restored original Album slot (%s)", reason ? reason : "unspecified");
+        return 0;
+    }
+
+    g_HbloaderUnregisterPending = true;
+    const u64 now = armGetSystemTick();
+    const u64 frequency = armGetSystemTickFreq();
+    g_NextHbloaderUnregisterRetryTick = now + frequency * 2;
+    g_LastHbloaderUnregisterLogTick = now;
+    DaemonLog("hb: Album ECS unregister failed (%s) rc=0x%08X; target cleared, retry scheduled",
+              reason ? reason : "unspecified", static_cast<unsigned int>(rc));
+    return rc;
+}
+
+void RetryPendingHbloaderUnregister() {
+    if (!g_HbloaderUnregisterPending) return;
+
+    const u64 now = armGetSystemTick();
+    if (g_NextHbloaderUnregisterRetryTick != 0 &&
+        now < g_NextHbloaderUnregisterRetryTick)
+        return;
+
+    const u64 frequency = armGetSystemTickFreq();
+    g_NextHbloaderUnregisterRetryTick = now + frequency * 5;
+    const Result rc = ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
+    ClearHbloaderTargetFiles();
+    if (R_SUCCEEDED(rc)) {
+        ResetHbloaderUnregisterRetry();
+        DaemonLog("hb: deferred Album ECS unregister succeeded");
+        return;
+    }
+
+    if (g_LastHbloaderUnregisterLogTick == 0 ||
+        now - g_LastHbloaderUnregisterLogTick >= frequency * 15) {
+        DaemonLog("hb: Album ECS unregister still pending rc=0x%08X",
+                  static_cast<unsigned int>(rc));
+        g_LastHbloaderUnregisterLogTick = now;
+    }
 }
 
 // A successful HOME-menu close should return control to the suspended title.
@@ -838,9 +899,7 @@ void OpenMenuForHomePress() {
             // Album slot immediately.
             if (R_FAILED(StopMenuSafely("HOME closes Homebrew"))) return;
             g_HomebrewLoaderRunning = false;
-            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
-            remove(kHbTargetPath);
-            remove(kHbTargetTemp);
+            RestoreAlbumSlotAfterHomebrew("HOME from Homebrew");
             DaemonLog("home: stopped Homebrew loader and returned to DeskNX");
             LaunchMenu();
             return;
@@ -881,9 +940,7 @@ void HandleSleepMessage() {
         const Result stopRc = StopMenuSafely("sleep transition");
         if (R_SUCCEEDED(stopRc) && g_HomebrewLoaderRunning) {
             g_HomebrewLoaderRunning = false;
-            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
-            remove(kHbTargetPath);
-            remove(kHbTargetTemp);
+            RestoreAlbumSlotAfterHomebrew("sleep transition");
             DaemonLog("power: ended Homebrew session before sleep");
         }
     }
@@ -969,9 +1026,7 @@ void PumpAppletMessages() {
                 }
                 if (g_HomebrewLoaderRunning && !la::g_MenuRunning) {
                     g_HomebrewLoaderRunning = false;
-                    ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
-                    remove(kHbTargetPath);
-                    remove(kHbTargetTemp);
+                    RestoreAlbumSlotAfterHomebrew("SD card removed");
                 }
                 break;
 
@@ -995,9 +1050,7 @@ void HandleMenuClosed() {
     // chosen NRO exits without chainloading or fails to start.
     if (g_HomebrewLoaderRunning) {
         g_HomebrewLoaderRunning = false;
-        ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
-        remove(kHbTargetPath);
-        remove(kHbTargetTemp);
+        RestoreAlbumSlotAfterHomebrew("loader session ended");
         DaemonLog("hb: loader session ended; restoring DeskNX");
         LaunchMenu();
         return;
@@ -1028,6 +1081,7 @@ void HandleMenuClosed() {
             return;
         }
 
+        ResetHbloaderUnregisterRetry();
         g_HomebrewLoaderRunning = true;
         TransitionTo(BackendState::HomebrewStarting, "homebrew target staged");
         g_MenuReady = false;
@@ -1036,8 +1090,7 @@ void HandleMenuClosed() {
         rc = la::LaunchMenu(ecs::HbloaderAppletId, nullptr, 0);
         if (R_FAILED(rc)) {
             g_HomebrewLoaderRunning = false;
-            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
-            remove(kHbTargetPath);
+            RestoreAlbumSlotAfterHomebrew("hbloader launch failed");
             DaemonLog("hb: hbloader launch failed rc=0x%08X", static_cast<unsigned int>(rc));
             LaunchMenu();
             return;
@@ -1185,9 +1238,7 @@ void HandleMenuClosed() {
         // leave stale registrations behind.
         if (g_HomebrewLoaderRunning) {
             g_HomebrewLoaderRunning = false;
-            ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
-            remove(kHbTargetPath);
-            remove(kHbTargetTemp);
+            RestoreAlbumSlotAfterHomebrew("power action");
         }
         if (app::g_AppRunning) {
             const Result terminateRc = app::Terminate();
@@ -1250,6 +1301,7 @@ void RunMainLoop() {
 
     while (true) {
         RetryPmshellInitialization();
+        RetryPendingHbloaderUnregister();
         const u64 loopNow = armGetSystemTick();
         const auto busyTick = g_MenuLiveness.UpdateBusyPause(
             loopNow, armGetSystemTickFreq(), g_MenuReady);
