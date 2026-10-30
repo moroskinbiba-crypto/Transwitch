@@ -915,29 +915,34 @@ void drawScreen() {
             if(selected.kind==Kind::Game) {
                 text("TITLE ID",mx+654,my+296,1,MUTED,mx+818);
                 text(selected.data,mx+654,my+314,1,WHITE,mx+818);
-                char playLabel[48]{};
-                const unsigned long long minutes =
-                    static_cast<unsigned long long>(selected.playtimeSeconds / 60);
-                if (minutes < 60)
-                    std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %llu MIN",
-                                  minutes);
-                else
-                    std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %llUH %02lluM",
-                                  minutes / 60, minutes % 60);
-                text(playLabel,mx+654,my+340,1,MUTED,mx+818);
-                char launchLabel[48]{};
-                std::snprintf(launchLabel, sizeof(launchLabel), "LAUNCHES  %u",
-                              selected.launchCount);
-                text(launchLabel,mx+654,my+362,1,MUTED,mx+818);
-                if (selected.lastPlayed != 0) {
-                    const std::time_t stamp = static_cast<std::time_t>(selected.lastPlayed);
-                    std::tm local{};
-                    char dateLabel[48]{};
-                    if (localtime_r(&stamp, &local) &&
-                        std::strftime(dateLabel, sizeof(dateLabel), "LAST PLAYED  %d.%m.%Y", &local))
-                        text(dateLabel,mx+654,my+384,1,MUTED,mx+818);
+                if (!selected.playStatsQueried) {
+                    text("PLAY STATS NOT LOADED",mx+654,my+340,1,MUTED,mx+818);
+                } else if (!selected.playStatsAvailable) {
+                    text("PLAY STATS UNAVAILABLE",mx+654,my+340,1,RED,mx+818);
                 } else {
-                    text("NOT PLAYED YET",mx+654,my+384,1,MUTED,mx+818);
+                    char playLabel[48]{};
+                    const unsigned long long minutes =
+                        static_cast<unsigned long long>(selected.playtimeSeconds / 60);
+                    if (minutes < 60)
+                        std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %llu MIN", minutes);
+                    else
+                        std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %lluH %02lluM",
+                                      minutes / 60, minutes % 60);
+                    text(playLabel,mx+654,my+340,1,MUTED,mx+818);
+                    char launchLabel[48]{};
+                    std::snprintf(launchLabel, sizeof(launchLabel), "LAUNCHES  %u",
+                                  selected.launchCount);
+                    text(launchLabel,mx+654,my+362,1,MUTED,mx+818);
+                    if (selected.lastPlayed != 0) {
+                        const std::time_t stamp = static_cast<std::time_t>(selected.lastPlayed);
+                        std::tm local{};
+                        char dateLabel[48]{};
+                        if (localtime_r(&stamp, &local) &&
+                            std::strftime(dateLabel, sizeof(dateLabel), "LAST PLAYED  %d.%m.%Y", &local))
+                            text(dateLabel,mx+654,my+384,1,MUTED,mx+818);
+                    } else {
+                        text("NOT PLAYED YET",mx+654,my+384,1,MUTED,mx+818);
+                    }
                 }
             } else if(selected.kind==Kind::Nro) {
                 std::string fileName=selected.data;
@@ -1167,6 +1172,47 @@ void addSelected() {
     }
     saveNow();
 }
+void loadPlayStatsForSelection() {
+    const auto& available=visibleCatalogueSnapshot();
+    if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())return;
+    const Candidate selected=available[static_cast<size_t>(listIndex)];
+    if(selected.kind!=Kind::Game||selected.playStatsQueried||
+       !desknx::model::isTitleId(selected.data))return;
+
+    const u64 titleId=std::strtoull(selected.data.c_str(),nullptr,16);
+    if(titleId==0)return;
+    PdmPlayStatistics stats{};
+    const Result initRc=pdmqryInitialize();
+    Result queryRc=initRc;
+    if(R_SUCCEEDED(initRc)) {
+        queryRc=pdmqryQueryPlayStatisticsByApplicationId(titleId,false,&stats);
+        pdmqryExit();
+    }
+    const bool availableStats=R_SUCCEEDED(queryRc);
+    if(availableStats) {
+        stats.playtime /= 1000000000ULL;
+    }
+    if(catalogueMutex)SDL_LockMutex(catalogueMutex);
+    auto update=[&](Candidate& item) {
+        if(item.kind!=Kind::Game||item.data!=selected.data)return;
+        item.playStatsQueried=true;
+        item.playStatsAvailable=availableStats;
+        if(availableStats) {
+            item.playtimeSeconds=stats.playtime;
+            item.lastPlayed=stats.last_timestamp_user;
+            item.launchCount=stats.total_launches;
+        }
+    };
+    for(auto& item:catalogue)update(item);
+    if(catalogueMutex)SDL_UnlockMutex(catalogueMutex);
+    // The filtered/sorted inspector is owned by the UI thread, so updating
+    // this snapshot does not race the catalogue worker.
+    for(auto& item:visibleCatalogueCache)update(item);
+    desknx::diag::Write("catalogue","play_stats",
+        "title_id=%016llX init_rc=0x%08X query_rc=0x%08X available=%d",
+        static_cast<unsigned long long>(titleId),static_cast<unsigned int>(initRc),
+        static_cast<unsigned int>(queryRc),availableStats?1:0);
+}
 void openList(){
     Workspace& desk=desks[static_cast<size_t>(deskIndex)];
     if(itemAt(desk,selectedX,selectedY)>=0) {
@@ -1183,6 +1229,7 @@ void openList(){
     listIndex=0;
     listOffset=0;
     lastCatalogueTap=-1;
+    loadPlayStatsForSelection();
 }
 void newDesk() {
     if(desks.size()>=MAX_DESKS){setStatus("MAXIMUM OF 12 WORKSPACES");return;}
@@ -1421,8 +1468,14 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_StickR){restartCatalogueScan();return;}
         if(available.empty())return;
         if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
-        if(keys&HidNpadButton_Up)listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
-        if(keys&HidNpadButton_Down)listIndex=(listIndex+1)%static_cast<int>(available.size());
+        if(keys&HidNpadButton_Up) {
+            listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
+            loadPlayStatsForSelection();
+        }
+        if(keys&HidNpadButton_Down) {
+            listIndex=(listIndex+1)%static_cast<int>(available.size());
+            loadPlayStatsForSelection();
+        }
         if(keys&HidNpadButton_A)addSelected();
         return;
     }
@@ -1627,6 +1680,7 @@ void touchInput(const SDL_Event&e) {
                         listIndex=index;
                         lastCatalogueTap=index;
                         lastCatalogueTapTick=now;
+                        loadPlayStatsForSelection();
                     }
                     catalogueTouchActive=true;
                     catalogueTouchMoved=false;
