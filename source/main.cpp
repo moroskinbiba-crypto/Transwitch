@@ -87,6 +87,7 @@ int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, recentOpen=false, workspaceMenu=false, deletePrompt=false, running=true;
 int recentIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
+int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
 // action is delegated to the backend (PWR-03); in standalone we honour it
@@ -697,6 +698,7 @@ void drawDotted(int x,int y,int w,int h) {
     for(int yy=y;yy<y+h;yy+=12){rect(x,yy,2,6,Color{67,79,98,180});rect(x+w-2,yy,2,6,Color{67,79,98,180});}
 }
 int visibleStart() {
+    if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
 void drawScreen() {
@@ -1270,7 +1272,10 @@ void touchSelect(int x,int y) {
     selectedX=cx;selectedY=cy;
     if(editing){int i=itemAt(desks[static_cast<size_t>(deskIndex)],cx,cy);if(i>=0){const Tile&t=desks[static_cast<size_t>(deskIndex)].tiles[static_cast<size_t>(i)];selectedX=t.x;selectedY=t.y;}}
 }
-int tabStart(){return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));}
+int tabStart(){
+    if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
+    return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
+}
 void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN && workspaceMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
@@ -1400,7 +1405,7 @@ void touchInput(const SDL_Event&e) {
         }
         if(y>=TOP&&y<TOP+ROWS*(CH+GY)) {
             int oldX=selectedX,oldY=selectedY;touchSelect(x,y);Workspace&d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
-            if(editing){if(i>=0&&oldX==selectedX&&oldY==selectedY){dragging=true;touchDragging=true;}else if(i<0)openList();}
+            if(editing){if(i>=0&&oldX==selectedX&&oldY==selectedY){dragging=true;touchDragging=true;touchDragTabStart=tabStart();}else if(i<0)openList();}
             else if(i>=0)launch(d.tiles[static_cast<size_t>(i)]);
             else openList();
             return;
@@ -1443,7 +1448,7 @@ void touchInput(const SDL_Event&e) {
             touchSelect(x,y);
         }
     } else if(e.type==SDL_FINGERUP&&touchDragging) {
-        touchDragging=false;dragging=false;saveNow();
+        touchDragging=false;touchDragTabStart=-1;dragging=false;saveNow();
     }
 }
 } // namespace
