@@ -1810,7 +1810,7 @@ int main(int,char**) {
             lastSlowFrameLog = frameNow;
             desknx::diag::Write("runtime", "slow_frame",
                 "delta_ms=%u catalogue_ready=%d scan_complete=%d",
-                frameDelta, catalogueReady ? 1 : 0, catalogueScanComplete ? 1 : 0);
+                frameDelta, ready ? 1 : 0, complete ? 1 : 0);
         }
         bool ready=false,complete=false,truncated=false;readCatalogueState(ready,complete,truncated);
         if(complete&&!layoutLoaded){defaultLayout();saveLayout();layoutLoaded=true;setStatus("DESKNX READY - Y ADD  X EDIT",4000);}
