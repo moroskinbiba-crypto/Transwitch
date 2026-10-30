@@ -20,6 +20,12 @@ namespace desknx::system::app {
     // be interpreted as proof of process exit when that service was unavailable.
     static bool       g_ProcessMonitorAvailable = false;
 
+    // Atmosphere's pm module (15), ProcessNotFound result (description 1).
+    // No other PM error is proof that the application's process has exited.
+    static bool IsApplicationProcessMissing(Result rc) {
+        return R_MODULE(rc) == 15 && R_DESCRIPTION(rc) == 1;
+    }
+
     // Build the 0x88-byte preselected-user launch parameter expected by games.
     // Layout (from qlaunch / uLaunch): magic(4) + is_user_selected(1) + pad(3) +
     // uid(16) + padding. The is_user_selected byte MUST be 1 -- leaving it 0
@@ -213,10 +219,6 @@ namespace desknx::system::app {
             auto queryProcess = [](u64 *pid) {
                 return pmshellGetApplicationProcessIdForShell(pid);
             };
-            auto isProcessMissing = [](Result rc) {
-                // pm module = 15, ResultProcessNotFound description = 1.
-                return R_MODULE(rc) == 15 && R_DESCRIPTION(rc) == 1;
-            };
             const u64 hz = armGetSystemTickFreq();
             bool processMissing = false;
             u64 deadline = armGetSystemTick() + hz * 15;
@@ -232,7 +234,7 @@ namespace desknx::system::app {
                     svcSleepThread(50'000'000ULL);
                     continue;
                 }
-                if (isProcessMissing(queryRc)) {
+                if (IsApplicationProcessMissing(queryRc)) {
                     processMissing = true;
                     break;
                 }
@@ -262,7 +264,7 @@ namespace desknx::system::app {
                         svcSleepThread(50'000'000ULL);
                         continue;
                     }
-                    if (isProcessMissing(queryRc)) {
+                    if (IsApplicationProcessMissing(queryRc)) {
                         processMissing = true;
                         break;
                     }
@@ -306,19 +308,51 @@ namespace desknx::system::app {
 
     bool Update(bool request_foreground) {
         if (!g_AppRunning) return false;
-        if (!appletApplicationCheckFinished(&g_AppHolder)) return false;
 
-        // App has exited naturally. Publish the id before clearing state so
-        // the backend can name it in the AppExited event to the menu (LNC-04).
-        g_ExitAppId   = g_AppId;
+        // IApplicationAccessor's StateChangedEvent is not an exit event: it
+        // can be signalled by focus/suspend transitions and remains signalled.
+        // Use pm:shell's application-process query as the authoritative exit
+        // signal. If the optional service is unavailable, preserve the holder
+        // rather than mistaking HOME suspension for a natural game exit.
+        if (!g_ProcessMonitorAvailable)
+            return false;
+
+        u64 pid = 0;
+        const Result queryRc = pmshellGetApplicationProcessIdForShell(&pid);
+        if (R_SUCCEEDED(queryRc)) {
+            if (pid == 0)
+                DaemonLog("app: pm:shell returned zero PID during exit poll; keeping application holder");
+            return false;
+        }
+        if (!IsApplicationProcessMissing(queryRc)) {
+            // PM can briefly fail while services are transitioning. A
+            // transport/permission error must never close a live holder.
+            static u64 lastQueryErrorLogTick = 0;
+            const u64 now = armGetSystemTick();
+            const u64 logInterval = armGetSystemTickFreq() * 5;
+            if (lastQueryErrorLogTick == 0 || now - lastQueryErrorLogTick >= logInterval) {
+                DaemonLog("app: natural-exit PM query failed rc=0x%08X; retaining application holder",
+                          static_cast<unsigned int>(queryRc));
+                lastQueryErrorLogTick = now;
+            }
+            return false;
+        }
+
+        // The application process is confirmed gone. Publish the id before
+        // clearing state so the backend can name it in the AppExited event.
+        g_ExitAppId = g_AppId;
         appletApplicationClose(&g_AppHolder);
         memset(&g_AppHolder, 0, sizeof(g_AppHolder));
         g_AppId       = 0;
         g_AppRunning  = false;
         g_AppHasFocus = false;
 
-        if (request_foreground)
-            appletRequestToGetForeground();
+        if (request_foreground) {
+            const Result foregroundRc = appletRequestToGetForeground();
+            if (R_FAILED(foregroundRc))
+                DaemonLog("app: request foreground after natural exit rc=0x%08X",
+                          static_cast<unsigned int>(foregroundRc));
+        }
         return true;
     }
 
