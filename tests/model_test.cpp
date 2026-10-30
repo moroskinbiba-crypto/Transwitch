@@ -157,6 +157,46 @@ int main() {
         assert(active==0 && spaces[0].tiles.size()==1);
         assert(spaces[0].tiles[0].title=="Keep");
     }
+    // Workspace deletion must keep the active index pointing at the
+    // same surviving workspace, choosing the next one when deleting active.
+    {
+        using namespace desknx::workspace_ops;
+        std::vector<Workspace> spaces{{"First",{}},{"Second",{}},{"Third",{}}};
+        spaces[1].tiles.push_back(Tile{Kind::Game,"Only here","0100000000000007",0,0,1,1,0});
+        int active=1;
+        assert(deleteWorkspace(spaces,active,1));
+        assert(spaces.size()==2 && active==1 && spaces[1].name=="Third");
+        assert(spaces[0].name=="First" && spaces[0].tiles.empty());
+
+        // Removing a workspace before the active one shifts the index left.
+        active=1;
+        assert(deleteWorkspace(spaces,active,0));
+        assert(active==0 && spaces.size()==1 && spaces[0].name=="Third");
+        assert(!deleteWorkspace(spaces,active,0)); // The final workspace is protected.
+        assert(spaces.size()==1 && spaces[0].name=="Third");
+        assert(!deleteWorkspace(spaces,active,-1));
+        assert(!deleteWorkspace(spaces,active,4));
+    }
+
+    // Growing a tile is transactional: an occupied neighbour or the grid edge
+    // rejects the resize without changing its footprint.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace resizeDesk{"resize-blocked",{}};
+        resizeDesk.tiles.push_back(Tile{Kind::Game,"Target","0100000000000008",0,0,1,1,0});
+        resizeDesk.tiles.push_back(Tile{Kind::Nro,"Neighbour","sdmc:/switch/neighbour.nro",1,0,1,1,1});
+        int sx=0,sy=0;
+        assert(!resizeSelectedTile(resizeDesk,sx,sy,true));
+        assert(resizeDesk.tiles[0].w==1 && resizeDesk.tiles[0].h==1);
+        assert(sx==0 && sy==0);
+        resizeDesk.tiles.erase(resizeDesk.tiles.begin()+1);
+        resizeDesk.tiles[0].x=Columns-1;
+        sx=Columns-1;sy=0;
+        assert(!resizeSelectedTile(resizeDesk,sx,sy,true));
+        assert(resizeDesk.tiles[0].x==Columns-1 &&
+               resizeDesk.tiles[0].w==1 && sx==Columns-1);
+    }
+
     assert(typeCode(parseKind("N")) == "N");
     assert(typeCode(parseKind("C")) == "C");
     assert(parseKind("unknown") == Kind::Unsupported);
