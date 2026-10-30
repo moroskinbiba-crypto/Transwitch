@@ -19,6 +19,9 @@ struct ScanResult {
 };
 
 using ProgressCallback = void (*)(const ScanResult& snapshot, void* context);
+// Initialize NS after setting the real firmware version, before worker threads start.
+bool InitializeServices();
+void ShutdownServices();
 ScanResult Scan(ProgressCallback progress = nullptr, void* context = nullptr);
 
 } // namespace desknx::catalog

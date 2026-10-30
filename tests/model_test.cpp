@@ -204,20 +204,21 @@ int main() {
         rmdir(root.c_str());
     }
 
-    // NS application-record pagination: count is an in/out parameter and
-    // must start at the output buffer capacity, not zero.
+    // NS application-record pagination mirrors SLauncher: a 30-record
+    // output buffer, a separately zero-initialized output count, and offset
+    // advancement by the number of records actually returned.
     {
         using namespace desknx::catalog;
         const auto firstPage = MakeApplicationPageRequest(0);
         assert(firstPage.offset == 0);
-        assert(firstPage.capacity == 128);
-        assert(IsValidApplicationPageCount(firstPage.capacity, 128));
-        assert(NextApplicationPageOffset(firstPage.offset, 128) == 128);
-        const auto secondPage = MakeApplicationPageRequest(128);
-        assert(secondPage.capacity == 128);
-        assert(IsValidApplicationPageCount(secondPage.capacity, 37));
-        assert(NextApplicationPageOffset(secondPage.offset, 37) == 165);
-        assert(!IsValidApplicationPageCount(secondPage.capacity, 129));
+        assert(firstPage.capacity == 30);
+        assert(IsValidApplicationPageCount(firstPage.capacity, 30));
+        assert(NextApplicationPageOffset(firstPage.offset, 30) == 30);
+        const auto secondPage = MakeApplicationPageRequest(30);
+        assert(secondPage.capacity == 30);
+        assert(IsValidApplicationPageCount(secondPage.capacity, 17));
+        assert(NextApplicationPageOffset(secondPage.offset, 17) == 47);
+        assert(!IsValidApplicationPageCount(secondPage.capacity, 31));
         assert(!IsValidApplicationPageCount(secondPage.capacity, -1));
     }
 
