@@ -76,9 +76,9 @@ bool IsRegularFile(const std::string& path) {
 // console-language entry is absent.
 std::string GetApplicationName(const NacpStruct& nacp) {
     const NacpLanguageEntry* entry = nullptr;
-    if (nacp.lang[0].name[0] != '\\0') entry = &nacp.lang[0];
+    if (nacp.lang[0].name[0] != '\0') entry = &nacp.lang[0];
     for (int i = 1; !entry && i < 16; ++i) {
-        if (nacp.lang[i].name[0] != '\\0') entry = &nacp.lang[i];
+        if (nacp.lang[i].name[0] != '\0') entry = &nacp.lang[i];
     }
     if (!entry) return {};
     char name[129]{};
