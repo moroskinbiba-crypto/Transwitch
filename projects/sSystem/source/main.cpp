@@ -1024,7 +1024,19 @@ void HandleMenuClosed() {
         if (app::g_AppRunning) {
             DaemonLog("app: terminating suspended title=0x%016llX before new launch",
                       static_cast<unsigned long long>(app::g_AppId));
-            app::Terminate();
+            const Result terminateRc = app::Terminate();
+            if (R_FAILED(terminateRc)) {
+                g_LastLaunchRc = static_cast<u32>(terminateRc);
+                g_LastLaunchTitle = titleId;
+                const Result focusRc = app::FocusApplication();
+                TransitionTo(BackendState::GameRunning,
+                             "previous title could not be safely terminated");
+                DaemonLog("app: refused new title=0x%016llX because previous title remains active (terminate=0x%08X focus=0x%08X)",
+                          static_cast<unsigned long long>(titleId),
+                          static_cast<unsigned int>(terminateRc),
+                          static_cast<unsigned int>(focusRc));
+                return;
+            }
         }
 
         const u64 launch_flags = g_PendingLaunchFlags;
@@ -1079,7 +1091,16 @@ void HandleMenuClosed() {
         if (app::g_AppRunning) {
             DaemonLog("app: closing title=0x%016llX at menu request",
                       static_cast<unsigned long long>(app::g_AppId));
-            app::Terminate();
+            const Result terminateRc = app::Terminate();
+            if (R_FAILED(terminateRc)) {
+                const Result focusRc = app::FocusApplication();
+                TransitionTo(BackendState::GameRunning,
+                             "close request failed; preserving application holder");
+                DaemonLog("app: close request could not safely retire title (terminate=0x%08X focus=0x%08X)",
+                          static_cast<unsigned int>(terminateRc),
+                          static_cast<unsigned int>(focusRc));
+                return;
+            }
         }
         TransitionTo(BackendState::MenuStarting, "close-app command");
         LaunchMenu();
@@ -1105,7 +1126,12 @@ void HandleMenuClosed() {
             remove(kHbTargetPath);
             remove(kHbTargetTemp);
         }
-        if (app::g_AppRunning) app::Terminate();
+        if (app::g_AppRunning) {
+            const Result terminateRc = app::Terminate();
+            if (R_FAILED(terminateRc))
+                DaemonLog("power: title termination was not confirmed (rc=0x%08X); continuing explicit power action",
+                          static_cast<unsigned int>(terminateRc));
+        }
         fsdevUnmountAll();
         if (action == desknx::ipc::PowerKind::Reboot) {
             // No PSM module is linked into this applet, and the OsSystem flag
@@ -1373,6 +1399,7 @@ struct InitStep {
 };
 InitStep g_InitSteps[16]{};
 size_t g_InitStepCount = 0;
+bool g_PmshellInitialized = false;
 
 Result RecordInit(const char* name, Result rc, bool critical) {
     if (g_InitStepCount < sizeof(g_InitSteps) / sizeof(g_InitSteps[0]))
@@ -1417,7 +1444,9 @@ void InitializeSystemModule() {
     RecordInit("ldr:shel", ldrShellInitialize(), true);
     // pmshell is needed for reliable tracking/termination but sLaunch treats it
     // as optional so a service refusal cannot turn into a black-screen boot.
-    RecordInit("pmshell", pmshellInitialize(), false);
+    const Result pmshellRc = RecordInit("pmshell", pmshellInitialize(), false);
+    g_PmshellInitialized = R_SUCCEEDED(pmshellRc);
+    desknx::system::app::SetProcessMonitorAvailable(g_PmshellInitialized);
 
     // The SD card must be mounted before diagnostics can be persisted.
     R_ABORT_UNLESS(fsdevMountSdmc());
@@ -1442,7 +1471,10 @@ void InitializeSystemModule() {
 }
 
 void FinalizeSystemModule() {
-    pmshellExit();
+    if (g_PmshellInitialized) {
+        pmshellExit();
+        g_PmshellInitialized = false;
+    }
     ldrShellExit();
     setExit();
     setsysExit();

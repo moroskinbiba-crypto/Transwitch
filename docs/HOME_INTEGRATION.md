@@ -87,6 +87,17 @@ Before trying any system install:
 - Controller setup, selected-user behavior, suspended-title lifecycle, service initialization, failure recovery and qlaunch NPDM need an expert code review before release.
 - The installer is conservative, but it cannot guarantee recovery if the SD contents are corrupted or the console has unrelated boot problems.
 
+### Process termination safety
+
+The backend treats `pmshell` as optional at startup, but it no longer treats
+a failed PID query as proof that a running title has exited. When the service
+is available, the backend waits for the application process to disappear and
+checks the result of forced termination. When `pmshell` initialization fails,
+it gives the title a short graceful-exit window and uses AM's direct
+application-termination command. If termination is not confirmed, the
+application holder is kept open and a replacement title is not launched over it.
+This path still requires validation on a physical console and matching firmware.
+
 ## Licensing
 
 System-layer code adapted from sLaunch is covered by its upstream GPL-3.0-or-later terms; see projects/sSystem/COPYING.sLaunch and THIRD_PARTY.md. The ECS implementation in upstream sLaunch also credits uLaunch as an upstream source. Review these notices before redistributing a combined build.

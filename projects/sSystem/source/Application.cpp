@@ -16,6 +16,9 @@ namespace desknx::system::app {
 
     // Tick when the current app was launched, for the suspend-stabilization guard.
     static u64        g_LaunchTick  = 0;
+    // pmshell is optional during qlaunch startup. A failed PID query must not
+    // be interpreted as proof of process exit when that service was unavailable.
+    static bool       g_ProcessMonitorAvailable = false;
 
     // Build the 0x88-byte preselected-user launch parameter expected by games.
     // Layout (from qlaunch / uLaunch): magic(4) + is_user_selected(1) + pad(3) +
@@ -186,26 +189,64 @@ namespace desknx::system::app {
         return FocusApplication();
     }
 
-    void Terminate() {
-        if (!g_AppRunning) return;
+    void SetProcessMonitorAvailable(bool available) {
+        g_ProcessMonitorAvailable = available;
+    }
+
+    Result Terminate() {
+        if (!g_AppRunning) return 0;
 
         appletApplicationTerminateAllLibraryApplets(&g_AppHolder);
-        appletApplicationRequestExit(&g_AppHolder);
+        const Result requestRc = appletApplicationRequestExit(&g_AppHolder);
+        if (R_FAILED(requestRc)) {
+            DaemonLog("app: graceful exit request rc=0x%08X",
+                      static_cast<unsigned int>(requestRc));
+        }
 
-        // Up to 15 s for a graceful exit. StateChangedEvent is no proof of
-        // one (it also fires on suspend and stays signalled), so watch for the
-        // application process itself to be gone: closing the holder of an app
-        // that is still running leaves am an application nobody owns, and the
-        // next launch is refused.
-        auto alive = [] { u64 pid = 0; return R_SUCCEEDED(pmshellGetApplicationProcessIdForShell(&pid)); };
-        const u64 hz = armGetSystemTickFreq();
-        u64 deadline = armGetSystemTick() + hz * 15;
-        while (alive() && armGetSystemTick() < deadline) svcSleepThread(50'000'000ULL);
-        if (alive()) {
-            DaemonLog("app: 0x%016lx ignored the exit request - terminating", g_AppId);
-            appletApplicationTerminate(&g_AppHolder);
-            deadline = armGetSystemTick() + hz * 3;
-            while (alive() && armGetSystemTick() < deadline) svcSleepThread(50'000'000ULL);
+        // StateChangedEvent is not proof of process exit: it also fires on
+        // suspend and can remain signalled while the title is still alive.
+        // Only use the PID service after its initialization succeeded.
+        if (g_ProcessMonitorAvailable) {
+            auto alive = [] {
+                u64 pid = 0;
+                return R_SUCCEEDED(pmshellGetApplicationProcessIdForShell(&pid));
+            };
+            const u64 hz = armGetSystemTickFreq();
+            u64 deadline = armGetSystemTick() + hz * 15;
+            while (alive() && armGetSystemTick() < deadline)
+                svcSleepThread(50'000'000ULL);
+
+            if (alive()) {
+                DaemonLog("app: 0x%016lx ignored the exit request - terminating", g_AppId);
+                const Result terminateRc = appletApplicationTerminate(&g_AppHolder);
+                if (R_FAILED(terminateRc)) {
+                    DaemonLog("app: forced termination failed rc=0x%08X; keeping application holder",
+                              static_cast<unsigned int>(terminateRc));
+                    return terminateRc;
+                }
+
+                deadline = armGetSystemTick() + hz * 3;
+                while (alive() && armGetSystemTick() < deadline)
+                    svcSleepThread(50'000'000ULL);
+                if (alive()) {
+                    DaemonLog("app: process 0x%016lx is still reported alive after termination; keeping holder",
+                              g_AppId);
+                    return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+                }
+            }
+        } else {
+            // Without pmshell, a failed PID query is ambiguous. Give the title
+            // a short opportunity to handle RequestExit, then ask AM to
+            // terminate it explicitly. Never close the holder on a guessed exit.
+            DaemonLog("app: pmshell unavailable; using direct AM termination for title=0x%016lx",
+                      g_AppId);
+            svcSleepThread(500'000'000ULL);
+            const Result terminateRc = appletApplicationTerminate(&g_AppHolder);
+            if (R_FAILED(terminateRc)) {
+                DaemonLog("app: direct AM termination failed rc=0x%08X; keeping application holder",
+                          static_cast<unsigned int>(terminateRc));
+                return terminateRc;
+            }
         }
 
         appletApplicationClose(&g_AppHolder);
@@ -214,7 +255,11 @@ namespace desknx::system::app {
         g_AppRunning  = false;
         g_AppHasFocus = false;
 
-        appletRequestToGetForeground();
+        const Result foregroundRc = appletRequestToGetForeground();
+        if (R_FAILED(foregroundRc))
+            DaemonLog("app: request foreground after termination rc=0x%08X",
+                      static_cast<unsigned int>(foregroundRc));
+        return 0;
     }
 
     bool Update(bool request_foreground) {

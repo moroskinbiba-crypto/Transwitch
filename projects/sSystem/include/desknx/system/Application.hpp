@@ -31,8 +31,11 @@ namespace desknx::system::app {
     // Give foreground back to the currently suspended application
     Result Resume();
 
-    // Request clean exit, fall back to force-terminate after timeout
-    void   Terminate();
+    // Let the PM service confirm process exit when available. If it is not
+    // available, use AM's direct terminate command instead of treating a failed
+    // PID query as proof that the game has exited.
+    void   SetProcessMonitorAvailable(bool available);
+    Result Terminate();
 
     // Called each frame from the main loop; returns true when the app exited
     bool   Update(bool request_foreground = true);
