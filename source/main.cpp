@@ -662,12 +662,26 @@ void drawDotted(int x,int y,int w,int h) {
 int visibleStart() {
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
+void drawWallpaper() {
+    // A restrained, low-contrast gradient replaces the old technical grid.
+    // The translucent color fields give the workspace a little depth without
+    // competing with application icons or reducing text contrast.
+    for(int y=0;y<SH;y+=8) {
+        const float t=static_cast<float>(y)/static_cast<float>(SH);
+        const Uint8 r=static_cast<Uint8>(16+static_cast<int>(5*t));
+        const Uint8 g=static_cast<Uint8>(18+static_cast<int>(2*t));
+        const Uint8 b=static_cast<Uint8>(29+static_cast<int>(12*t));
+        rect(0,y,SW,8,Color{r,g,b,255});
+    }
+    roundRect(760,104,540,360,180,Color{10,132,255,10});
+    roundRect(805,136,460,300,150,Color{94,92,230,8});
+    roundRect(52,360,500,300,150,Color{48,209,160,7});
+}
 void drawScreen() {
     const auto available=visibleCatalogueSnapshot();
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow);
-    refreshBattery();rect(0,0,SW,SH,BG);
-    for(int y=0;y<SH;y+=28)rect(0,y,SW,1,Color{255,255,255,static_cast<Uint8>(y%3==0?7:3)});
+    refreshBattery();drawWallpaper();
     rect(0,0,SW,76,Color{24,25,30,245});rect(0,74,SW,1,Color{255,255,255,18});
     text("DESKNX",30,21,4,WHITE,260);text("PERSONAL HOME WORKSPACE",34,50,1,MUTED,420);
     text(clockText(),1124,20,3,WHITE,1260);text(battery>=0?std::to_string(battery)+"%":"BAT --",1130,50,1,MUTED,1260);
