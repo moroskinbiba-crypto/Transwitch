@@ -28,6 +28,7 @@
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -138,16 +139,25 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
     if(w<=0||h<=0) return;
     const int r=std::max(0,std::min(radius,std::min(w,h)/2));
     color(c);
-    for(int row=0;row<h;++row) {
-        int inset=0;
-        if(row<r) {
-            const double dy=static_cast<double>(r-row);
-            inset=static_cast<int>(std::ceil(r-std::sqrt(std::max(0.0,static_cast<double>(r*r)-dy*dy))));
-        } else if(row>=h-r) {
-            const double dy=static_cast<double>(row-(h-r-1));
-            inset=static_cast<int>(std::ceil(r-std::sqrt(std::max(0.0,static_cast<double>(r*r)-dy*dy))));
-        }
-        SDL_RenderDrawLine(renderer,x+inset,y+row,x+w-inset-1,y+row);
+    if(r==0) {
+        SDL_Rect full{x,y,w,h};
+        SDL_RenderFillRect(renderer,&full);
+        return;
+    }
+    // Fill the centre with one SDL call and draw only the rounded corner bands.
+    // The previous implementation emitted one draw call for every row of each
+    // card and tile - hundreds of calls per frame on the home screen.
+    if(h>2*r) {
+        SDL_Rect middle{x,y+r,w,h-2*r};
+        SDL_RenderFillRect(renderer,&middle);
+    }
+    for(int row=0;row<r;++row) {
+        const double dy=static_cast<double>(r-row);
+        const int inset=static_cast<int>(std::ceil(r-std::sqrt(
+            std::max(0.0,static_cast<double>(r*r)-dy*dy))));
+        const int left=x+inset,right=x+w-inset-1;
+        SDL_RenderDrawLine(renderer,left,y+row,right,y+row);
+        SDL_RenderDrawLine(renderer,left,y+h-1-row,right,y+h-1-row);
     }
 }
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
@@ -225,6 +235,7 @@ std::string clockText(bool date=false) {
 std::string typeName(Kind k) {
     switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
         case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT";
+        case Kind::Storage:return "WIDGET / STORAGE"; case Kind::Calendar:return "WIDGET / CALENDAR";
         case Kind::Unsupported:return "UNSUPPORTED"; }
     return "ITEM";
 }
@@ -666,6 +677,8 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Battery,"Battery","",2,0,2,1,2});
     desks[2].tiles.push_back(Tile{Kind::System,"System info","",4,0,2,1,5});
     desks[2].tiles.push_back(Tile{Kind::Recent,"Recent launches","",0,1,3,1,6});
+    desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
+    desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
 }
 void refreshBattery() {
     Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<3000)return;lastBatteryTick=now;
@@ -851,6 +864,36 @@ void drawTile(const Tile&t,bool selected) {
             }
         }
         text("HISTORY ON THIS CONSOLE",r.x+18,r.y+r.h-18,1,BLUE,r.x+r.w-12);
+    } else if(t.kind==Kind::Storage) {
+        struct statvfs fs{};
+        text("SD CARD STORAGE",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
+        if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
+            const uint64_t total=static_cast<uint64_t>(fs.f_blocks)*fs.f_frsize;
+            const uint64_t free=static_cast<uint64_t>(fs.f_bavail)*fs.f_frsize;
+            const uint64_t used=total>free?total-free:0;
+            const int percent=total?static_cast<int>(std::min<uint64_t>(100,used*100/total)):0;
+            char sizeText[64]{};
+            std::snprintf(sizeText,sizeof(sizeText),"%.1f GB FREE",
+                static_cast<double>(free)/(1024.0*1024.0*1024.0));
+            text(sizeText,r.x+18,r.y+37,3,WHITE,r.x+r.w-14);
+            roundRect(r.x+18,r.y+r.h-29,r.w-36,9,5,Color{48,62,79,255});
+            roundRect(r.x+18,r.y+r.h-29,std::max(3,(r.w-36)*percent/100),9,5,GREEN);
+            text(std::to_string(percent)+"% USED",r.x+18,r.y+r.h-16,1,MUTED,r.x+r.w-14);
+        } else {
+            text("SD STATUS UNAVAILABLE",r.x+18,r.y+45,1,RED,r.x+r.w-14);
+        }
+    } else if(t.kind==Kind::Calendar) {
+        std::time_t now=std::time(nullptr);
+        std::tm* tmv=std::localtime(&now);
+        char date[48]="--";
+        char day[48]="CALENDAR";
+        if(tmv) {
+            std::strftime(date,sizeof(date),"%d %b %Y",tmv);
+            std::strftime(day,sizeof(day),"%A",tmv);
+        }
+        text("TODAY",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
+        text(date,r.x+18,r.y+35,3,WHITE,r.x+r.w-14);
+        text(day,r.x+18,r.y+r.h-24,1,BLUE,r.x+r.w-14);
     } else if(t.w==1&&t.h==1) {
         drawTileIcon(t,r.x+(r.w-60)/2,r.y+9,60);
         text(t.title,r.x+9,r.y+r.h-21,1,WHITE,r.x+r.w-8);
@@ -1691,6 +1734,8 @@ void launch(const Tile& t) {
         return;
     }
     if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
+    else if(t.kind==Kind::Storage)setStatus("SD STORAGE WIDGET");
+    else if(t.kind==Kind::Calendar)setStatus("CALENDAR WIDGET");
     else if(t.kind==Kind::System){systemMenu=true;systemMenuIndex=0;}
     else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
     else if(t.kind==Kind::Recent) {
@@ -2357,9 +2402,10 @@ int main(int,char**) {
     }
     SDL_RendererInfo rendererInfo{};
     const int rendererInfoRc = SDL_GetRendererInfo(renderer, &rendererInfo);
-    desknx::diag::Write("startup", "renderer_ready", "name=%s info_rc=%d flags=0x%08X",
+    rendererVsync=(rendererInfoRc==0)&&(rendererInfo.flags&SDL_RENDERER_PRESENTVSYNC);
+    desknx::diag::Write("startup", "renderer_ready", "name=%s info_rc=%d flags=0x%08X vsync=%d",
         rendererInfo.name ? rendererInfo.name : "unknown", rendererInfoRc,
-        static_cast<unsigned int>(rendererInfo.flags));
+        static_cast<unsigned int>(rendererInfo.flags),rendererVsync?1:0);
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
 
@@ -2523,7 +2569,14 @@ int main(int,char**) {
             }
         }
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
-        drawScreen();svcSleepThread(16'000'000);
+        const Uint32 renderStarted=SDL_GetTicks();
+        drawScreen();
+        // Present already waits for the display when VSync is active. Sleeping
+        // another 16ms here capped the accelerated path at roughly 30 FPS.
+        if(!rendererVsync) {
+            const Uint32 elapsed=SDL_GetTicks()-renderStarted;
+            if(elapsed<16)svcSleepThread(static_cast<s64>(16-elapsed)*1'000'000LL);
+        }
     }
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
