@@ -167,6 +167,226 @@ void rect(int x,int y,int w,int h,Color c) {
 void outline(int x,int y,int w,int h,Color c) {
     color(c); SDL_Rect r{x,y,w,h}; SDL_RenderDrawRect(renderer,&r);
 }
+
+void applyThemePalette() {
+    switch(themeIndex) {
+        case 1: // Frosted glass
+            BG={63,69,78,255}; THEME_TOP={74,79,89,255}; THEME_BOTTOM={45,91,137,255};
+            MUTED={215,222,231,255}; BLUE={193,147,255,255};
+            GREEN={73,173,12,255}; RED={255,115,123,255};
+            COLORS={{{110,151,207,255},{99,172,180,255},{163,138,206,255},{220,158,126,255},
+                     {205,123,150,255},{104,162,199,255},{142,176,116,255},{135,143,159,255}}};
+            break;
+        case 2: // Graphite
+            BG={15,17,21,255}; THEME_TOP={34,37,43,255}; THEME_BOTTOM={12,14,18,255};
+            MUTED={164,169,180,255}; BLUE={187,151,255,255};
+            GREEN={120,209,148,255}; RED={255,118,128,255};
+            COLORS={{{142,151,166,255},{105,160,173,255},{153,132,194,255},{187,148,112,255},
+                     {177,121,143,255},{115,160,180,255},{148,169,126,255},{118,126,142,255}}};
+            break;
+        case 3: // Violet
+            BG={17,12,27,255}; THEME_TOP={48,27,68,255}; THEME_BOTTOM={12,17,39,255};
+            MUTED={174,160,193,255}; BLUE={200,153,255,255};
+            GREEN={127,222,181,255}; RED={255,116,147,255};
+            COLORS={{{148,103,212,255},{80,155,169,255},{187,114,221,255},{209,140,111,255},
+                     {209,102,153,255},{83,154,205,255},{133,175,127,255},{127,118,160,255}}};
+            break;
+        case 4: // Sunset
+            BG={25,17,20,255}; THEME_TOP={70,37,44,255}; THEME_BOTTOM={29,36,61,255};
+            MUTED={198,172,168,255}; BLUE={255,172,133,255};
+            GREEN={153,210,119,255}; RED={255,105,105,255};
+            COLORS={{{218,128,104,255},{104,168,145,255},{177,129,190,255},{235,162,95,255},
+                     {217,110,126,255},{113,171,196,255},{170,180,101,255},{145,130,136,255}}};
+            break;
+        default: // Ocean
+            themeIndex=0;
+            BG={10,14,22,255}; THEME_TOP={16,27,44,255}; THEME_BOTTOM={9,17,31,255};
+            MUTED={145,158,180,255}; BLUE={83,157,255,255};
+            GREEN={52,211,153,255}; RED={255,99,112,255};
+            COLORS={{{91,145,226,255},{53,169,151,255},{155,116,226,255},{222,151,83,255},
+                     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255}}};
+            break;
+    }
+}
+
+bool hasExtension(const std::string& path,const char* const* extensions,size_t count) {
+    const size_t dot=path.find_last_of('.');
+    if(dot==std::string::npos)return false;
+    std::string ext=path.substr(dot);
+    for(char& ch:ext)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    for(size_t i=0;i<count;++i)if(ext==extensions[i])return true;
+    return false;
+}
+
+bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
+    const std::string prefix=std::string(MEDIA_ROOT)+"/";
+    if(path.compare(0,prefix.size(),prefix)!=0||path.size()>240||
+       path.find("..")!=std::string::npos||path.find('\0')!=std::string::npos)
+        return false;
+    static const char* imageExts[]={".jpg",".jpeg",".png"};
+    static const char* fontExts[]={".ttf",".otf",".ttc"};
+    return type==MediaPickerType::Wallpaper
+        ?hasExtension(path,imageExts,3):hasExtension(path,fontExts,3);
+}
+
+void loadLauncherSettings() {
+    if(!sdMounted){applyThemePalette();return;}
+    struct stat st{};
+    if(stat(SETTINGS_FILE,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>4096) {
+        applyThemePalette();
+        return;
+    }
+    std::ifstream in(SETTINGS_FILE,std::ios::binary);
+    std::string line;
+    if(!std::getline(in,line)||line!="DESKNXSET1") {
+        applyThemePalette();
+        return;
+    }
+    while(std::getline(in,line)) {
+        const size_t eq=line.find('=');
+        if(eq==std::string::npos)continue;
+        const std::string key=line.substr(0,eq),value=line.substr(eq+1);
+        if(key=="theme") {
+            char* end=nullptr;
+            const long valueLong=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&valueLong>=0&&valueLong<=4)
+                themeIndex=static_cast<int>(valueLong);
+        } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
+            wallpaperPath=value;
+        } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
+            fontPath=value;
+        }
+    }
+    applyThemePalette();
+}
+
+bool saveLauncherSettings() {
+    if(!sdMounted){setStatus("SD CARD REQUIRED TO SAVE APPEARANCE",3000);return false;}
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
+    std::ofstream out(SETTINGS_TMP,std::ios::binary|std::ios::trunc);
+    if(!out){setStatus("SETTINGS SAVE FAILED",3000);return false;}
+    out<<"DESKNXSET1\n"
+       <<"theme="<<themeIndex<<"\n"
+       <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
+       <<"font="<<safeField(fontPath)<<"\n";
+    out.flush();const bool good=out.good();out.close();
+    if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
+    const auto rc=desknx::safeio::replaceFilePreservingOnFailure(
+        SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,true);
+    if(rc!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(SETTINGS_TMP);
+        setStatus("SETTINGS PUBLISH FAILED",3000);
+        return false;
+    }
+    return true;
+}
+
+bool loadWallpaperTexture(const std::string& path) {
+    if(path.empty()) {
+        if(wallpaperTexture)SDL_DestroyTexture(wallpaperTexture);
+        wallpaperTexture=nullptr;wallpaperWidth=wallpaperHeight=0;
+        return true;
+    }
+    if(!isAllowedMediaPath(path,MediaPickerType::Wallpaper))return false;
+    struct stat st{};
+    if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
+       st.st_size>24LL*1024*1024)return false;
+    SDL_Surface* surface=IMG_Load(path.c_str());
+    if(!surface)return false;
+    const bool sizeOk=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
+        static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
+    if(!sizeOk){SDL_FreeSurface(surface);return false;}
+    SDL_Texture* next=SDL_CreateTextureFromSurface(renderer,surface);
+    const int width=surface->w,height=surface->h;
+    SDL_FreeSurface(surface);
+    if(!next)return false;
+    SDL_SetTextureBlendMode(next,SDL_BLENDMODE_NONE);
+    if(wallpaperTexture)SDL_DestroyTexture(wallpaperTexture);
+    wallpaperTexture=next;wallpaperWidth=width;wallpaperHeight=height;
+    return true;
+}
+
+void drawWallpaper() {
+    if(!wallpaperTexture||wallpaperWidth<=0||wallpaperHeight<=0)return;
+    SDL_Rect src{0,0,wallpaperWidth,wallpaperHeight};
+    const double sourceAspect=static_cast<double>(wallpaperWidth)/wallpaperHeight;
+    const double targetAspect=static_cast<double>(SW)/SH;
+    if(sourceAspect>targetAspect) {
+        src.w=std::max(1,std::min(wallpaperWidth,static_cast<int>(wallpaperHeight*targetAspect)));
+        src.x=(wallpaperWidth-src.w)/2;
+    } else if(sourceAspect<targetAspect) {
+        src.h=std::max(1,std::min(wallpaperHeight,static_cast<int>(wallpaperWidth/targetAspect)));
+        src.y=(wallpaperHeight-src.h)/2;
+    }
+    SDL_Rect dst{0,0,SW,SH};
+    SDL_RenderCopy(renderer,wallpaperTexture,&src,&dst);
+    SDL_SetRenderDrawColor(renderer,3,7,14,92);
+    SDL_RenderFillRect(renderer,&dst);
+}
+
+void refreshMediaPicker() {
+    mediaPickerEntries.clear();
+    DIR* dir=opendir(mediaPickerDirectory.c_str());
+    if(!dir){setStatus("CANNOT OPEN MEDIA FOLDER",2500);return;}
+    while(dirent* entry=readdir(dir)) {
+        const char* name=entry->d_name;
+        if(!name||name[0]=='.')continue;
+        const std::string path=mediaPickerDirectory+"/"+name;
+        struct stat st{};
+        if(lstat(path.c_str(),&st)!=0||S_ISLNK(st.st_mode))continue;
+        if(S_ISDIR(st.st_mode))mediaPickerEntries.push_back({name,path,true});
+        else if(S_ISREG(st.st_mode)&&isAllowedMediaPath(path,mediaPickerType))
+            mediaPickerEntries.push_back({name,path,false});
+        if(mediaPickerEntries.size()>=256)break;
+    }
+    closedir(dir);
+    std::sort(mediaPickerEntries.begin(),mediaPickerEntries.end(),
+        [](const MediaEntry& a,const MediaEntry& b) {
+            if(a.directory!=b.directory)return a.directory>b.directory;
+            return a.name<b.name;
+        });
+    mediaPickerIndex=std::max(0,std::min(mediaPickerIndex,
+        std::max(0,static_cast<int>(mediaPickerEntries.size())-1)));
+    mediaPickerOffset=std::max(0,std::min(mediaPickerOffset,
+        std::max(0,static_cast<int>(mediaPickerEntries.size())-12)));
+}
+
+void openMediaPicker(MediaPickerType type) {
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
+    mediaPickerType=type;
+    mediaPickerDirectory=MEDIA_ROOT;
+    mediaPickerIndex=mediaPickerOffset=0;
+    refreshMediaPicker();
+    mediaPickerOpen=true;
+}
+
+void applyMediaPickerSelection(int index) {
+    if(index<0||index>=static_cast<int>(mediaPickerEntries.size()))return;
+    const MediaEntry selected=mediaPickerEntries[static_cast<size_t>(index)];
+    if(selected.directory) {
+        mediaPickerDirectory=selected.path;
+        mediaPickerIndex=mediaPickerOffset=0;
+        refreshMediaPicker();
+        return;
+    }
+    if(mediaPickerType==MediaPickerType::Wallpaper) {
+        if(!loadWallpaperTexture(selected.path)) {
+            setStatus("IMAGE LOAD FAILED - USE JPG OR PNG",3500);
+            return;
+        }
+        wallpaperPath=selected.path;
+    } else {
+        if(!gFontRenderer.setCustomFont(selected.path)) {
+            setStatus("FONT LOAD FAILED - CHOOSE ANOTHER FILE",3500);
+            return;
+        }
+        fontPath=selected.path;
+    }
+    if(saveLauncherSettings())setStatus(mediaPickerType==MediaPickerType::Wallpaper
+        ?"WALLPAPER APPLIED":"CUSTOM FONT APPLIED");
+    mediaPickerOpen=false;
+}
+
 void roundRect(int x,int y,int w,int h,int radius,Color c) {
     if(w<=0||h<=0) return;
     const int r=std::max(0,std::min(radius,std::min(w,h)/2));
