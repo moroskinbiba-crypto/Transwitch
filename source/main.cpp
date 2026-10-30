@@ -1105,7 +1105,7 @@ void drawScreen() {
         text(nsInfo,384,270,1,catalogueNsAvailableNow?GREEN:RED,900);
         const std::string scanInfo=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
-            (catalogueScanComplete?"SCAN COMPLETE":"SCANNING");
+            (catalogCompleteNow?"SCAN COMPLETE":"SCANNING");
         text(scanInfo,384,286,1,MUTED,900);
         const char* actions[]={"RESCAN GAME AND HOMEBREW LIBRARY",
                                "RENAME CURRENT WORKSPACE",
