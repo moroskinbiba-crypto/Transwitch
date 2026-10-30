@@ -998,6 +998,8 @@ void touchInput(const SDL_Event&e) {
                         listIndex=index;
                         addSelected();
                         lastCatalogueTap=-1;
+                        catalogueTouchActive=false;
+                        return;
                     } else {
                         listIndex=index;
                         lastCatalogueTap=index;
