@@ -472,6 +472,8 @@ void mediaPickerBack() {
     mediaPickerIndex=mediaPickerOffset=0;
     refreshMediaPicker();
 }
+bool saveLayout();
+
 void applyMediaPickerSelection(int index) {
     if(index<0||index>=static_cast<int>(mediaPickerEntries.size()))return;
     const MediaEntry selected=mediaPickerEntries[static_cast<size_t>(index)];
