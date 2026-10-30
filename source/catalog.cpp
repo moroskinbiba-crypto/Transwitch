@@ -154,6 +154,16 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
         return records;
     }
 
+    const size_t listedCount = installed.size();
+    installed.erase(std::remove_if(installed.begin(), installed.end(),
+        [](const NsApplicationRecord& record) {
+            return record.application_id == 0;
+        }), installed.end());
+    if (installed.size() != listedCount) {
+        LogDiagnostic("ns_list ignored_invalid_ids count=%zu",
+                      listedCount - installed.size());
+    }
+
     std::vector<u64> titleIds;
     titleIds.reserve(installed.size());
     for (const auto& record : installed) titleIds.push_back(record.application_id);
