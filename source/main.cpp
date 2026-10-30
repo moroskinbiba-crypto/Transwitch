@@ -1282,6 +1282,40 @@ void deleteDesk() {
     if(desks.size()<=1){setStatus("AT LEAST ONE WORKSPACE IS REQUIRED");return;}
     deletePrompt=true;
 }
+void openUserProfile() {
+    AccountUid uid{};
+    bool haveUser=false;
+#ifdef DESKNX_SYSTEM_APPLET
+    if(g_backendHasUser&&accountUidIsValid(&g_backendUser)) {
+        uid=g_backendUser;
+        haveUser=true;
+    }
+#endif
+    if(!haveUser) {
+        const Result selectedRc=accountGetPreselectedUser(&uid);
+        haveUser=R_SUCCEEDED(selectedRc)&&accountUidIsValid(&uid);
+    }
+    if(!haveUser) {
+        AccountUid users[8]{};
+        s32 actual=0;
+        const Result listRc=accountListAllUsers(users,8,&actual);
+        if(R_SUCCEEDED(listRc)) {
+            for(s32 i=0;i<std::min<s32>(actual,8);++i) {
+                if(accountUidIsValid(&users[i])) {
+                    uid=users[i];
+                    haveUser=true;
+                    break;
+                }
+            }
+        }
+    }
+    if(!haveUser) {
+        setStatus("NO NINTENDO ACCOUNT PROFILE",3000);
+        return;
+    }
+    if(R_FAILED(friendsLaShowMyProfile(uid)))
+        setStatus("PROFILE APPLET UNAVAILABLE",3000);
+}
 void activateAppSettings(int action) {
     appSettingsMenu=false;
     switch(action) {
@@ -1431,22 +1465,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             } else if(action==2) {
                 if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
             } else if(action==3) {
-                AccountUid uid{};
-                Result userRc=accountGetPreselectedUser(&uid);
-                if(R_FAILED(userRc)||!accountUidIsValid(&uid)) {
-                    AccountUid users[8]{};
-                    s32 actual=0;
-                    userRc=accountListAllUsers(users,8,&actual);
-                    bool found=false;
-                    if(R_SUCCEEDED(userRc)) {
-                        for(s32 i=0;i<std::min<s32>(actual,8);++i) {
-                            if(accountUidIsValid(&users[i])){uid=users[i];found=true;break;}
-                        }
-                    }
-                    if(!found){setStatus("NO NINTENDO ACCOUNT PROFILE",3000);return;}
-                }
-                if(R_FAILED(friendsLaShowMyProfile(uid)))
-                    setStatus("PROFILE APPLET UNAVAILABLE",3000);
+                openUserProfile();
             } else if(action==4) {
                 powerMenu=true;powerIndex=0;
             } else if(action==5) {
@@ -1646,22 +1665,7 @@ void touchInput(const SDL_Event&e) {
             } else if(systemMenuIndex==2) {
                 if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
             } else if(systemMenuIndex==3) {
-                AccountUid uid{};
-                Result userRc=accountGetPreselectedUser(&uid);
-                if(R_FAILED(userRc)||!accountUidIsValid(&uid)) {
-                    AccountUid users[8]{};
-                    s32 actual=0;
-                    userRc=accountListAllUsers(users,8,&actual);
-                    bool found=false;
-                    if(R_SUCCEEDED(userRc)) {
-                        for(s32 i=0;i<std::min<s32>(actual,8);++i) {
-                            if(accountUidIsValid(&users[i])){uid=users[i];found=true;break;}
-                        }
-                    }
-                    if(!found){setStatus("NO NINTENDO ACCOUNT PROFILE",3000);return;}
-                }
-                if(R_FAILED(friendsLaShowMyProfile(uid)))
-                    setStatus("PROFILE APPLET UNAVAILABLE",3000);
+                openUserProfile();
             } else if(systemMenuIndex==4) {
                 powerMenu=true;powerIndex=0;
             } else if(systemMenuIndex==5) {
