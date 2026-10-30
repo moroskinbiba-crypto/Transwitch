@@ -325,10 +325,10 @@ int main() {
     Workspace second{"Homebrew", {}};
     second.tiles.push_back(Tile{Kind::Nro,"Demo","sdmc:/switch/demo.nro",1,1,2,1,2});
     std::vector<Workspace> source{{"Games",{wide}},second};
-    const std::string v3 = desknx::layout::serialize(source,1);
-    assert(v3.rfind("DESKNX3\n",0) == 0);
+    const std::string v4 = desknx::layout::serialize(source,1);
+    assert(v4.rfind("DESKNX4\n",0) == 0);
     desknx::layout::LoadResult roundTrip{};
-    assert(desknx::layout::parse(v3, roundTrip));
+    assert(desknx::layout::parse(v4, roundTrip));
     assert(!roundTrip.needsMigration && roundTrip.activeWorkspace == 1);
     assert(roundTrip.workspaces.size() == 2);
     assert(roundTrip.workspaces[1].tiles[0].data == "sdmc:/switch/demo.nro");
