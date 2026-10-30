@@ -505,7 +505,7 @@ void applyMediaPickerSelection(int index) {
         Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         desk.backgroundPath=selected.path;
         layoutUserModified=true;
-        if(saveNow())setStatus("DESKTOP BACKGROUND APPLIED");
+        if(saveLayout())setStatus("DESKTOP BACKGROUND APPLIED");
         mediaPickerOpen=false;
         return;
     }
