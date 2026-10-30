@@ -83,6 +83,7 @@ uint64_t visibleCacheViewRevision = UINT64_MAX;
 uint64_t visibleCacheRecentRevision = UINT64_MAX;
 bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown = false;
 bool layoutSaveBlocked = false;
+bool layoutUserModified = false;
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
@@ -1279,6 +1280,7 @@ bool moveTile(int dx,int dy) {
             setStatus("MOVE BLOCKED: CELL OCCUPIED");
         return false;
     }
+    layoutUserModified=true;
     return true;
 }
 bool moveToDesk(int target) {
@@ -1289,6 +1291,7 @@ bool moveToDesk(int target) {
         setStatus("TARGET WORKSPACE IS FULL");
         return false;
     }
+    layoutUserModified=true;
     setStatus("MOVED TO "+targetName);
     return true;
 }
@@ -1304,6 +1307,7 @@ void resizeTile(bool bigger) {
                   "SELECT A TILE FIRST":"RESIZE BLOCKED OR SIZE LIMIT REACHED");
         return;
     }
+    layoutUserModified=true;
     saveNow();
 }
 void removeTile() {
@@ -1312,6 +1316,7 @@ void removeTile() {
     if(i<0){setStatus("EMPTY CELL");return;}
     const std::string name=d.tiles[static_cast<size_t>(i)].title;
     d.tiles.erase(d.tiles.begin()+i);
+    layoutUserModified=true;
     dragging=false;
     touchDragging=false;
     touchPressActive=false;
@@ -1342,6 +1347,7 @@ void addSelected() {
         return;
     }
     d.tiles.push_back(t);editing=true;
+    layoutUserModified=true;
     std::string addStatus;
     Tile placeholder{Kind::Game,"","",0,0,1,1,0};
     int freeX=0,freeY=0;
@@ -1420,6 +1426,7 @@ void newDesk() {
         for(const auto& desk:desks) if(desk.name==name){exists=true;break;}
     }
     desks.push_back(Workspace{name,{}});deskIndex=static_cast<int>(desks.size())-1;
+    layoutUserModified=true;
     selectedX=selectedY=0;editing=true;
     if(saveNow())setStatus("NEW WORKSPACE CREATED - PRESS Y TO ADD ITEMS");
 }
@@ -1459,6 +1466,7 @@ void renameDesk() {
     }
     if(desks[static_cast<size_t>(deskIndex)].name==name)return;
     desks[static_cast<size_t>(deskIndex)].name=name;
+    layoutUserModified=true;
     if(saveNow())setStatus("WORKSPACE RENAMED");
 }
 void deleteDesk() {
@@ -1730,6 +1738,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             deletePrompt=false;
             if(deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return;
             desks.erase(desks.begin()+deskIndex);
+            layoutUserModified=true;
             deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);
             selectedX=selectedY=0;
             dragging=false;touchDragging=false;touchPressActive=false;
@@ -2340,7 +2349,10 @@ int main(int,char**) {
                 frameDelta, ready ? 1 : 0, complete ? 1 : 0);
         }
         if(complete&&!layoutLoaded) {
-            defaultLayout();
+            // On first launch the default desks are populated only after the
+            // catalogue is ready. If the user edited them while scanning was
+            // in progress, preserve those changes instead of replacing them.
+            if(!layoutUserModified)defaultLayout();
             const bool saved=saveLayout();
             // Keep the generated layout in memory for this session even if
             // the SD card is read-only; do not rebuild it on every frame.
