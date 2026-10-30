@@ -24,8 +24,18 @@ public:
         customIconPackDir_=path;
     }
     SDL_Texture* get(const desknx::model::Tile& tile) {
+        if (!renderer_) return nullptr;
+        // Most calls come from the 60 FPS draw loop. Resolve resident textures
+        // by the lightweight tile identity before building any filesystem path
+        // or temporary lookup key.
+        for (auto& entry : entries_) {
+            if (entry.kind == tile.kind && entry.data == tile.data) {
+                entry.lastUse = ++clock_;
+                return entry.texture;
+            }
+        }
         const std::string defaultPath = desknx::model::iconCachePath(tile.kind, tile.data);
-        if (defaultPath.empty() || !renderer_) return nullptr;
+        if (defaultPath.empty()) return nullptr;
         const std::string lookupKey=desknx::model::typeCode(tile)+"\t"+tile.data;
         std::string path;
         const auto resolved=resolvedPaths_.find(lookupKey);
@@ -110,7 +120,7 @@ public:
             if (oldest->texture) SDL_DestroyTexture(oldest->texture);
             entries_.erase(oldest);
         }
-        entries_.push_back({path, texture, ++clock_});
+        entries_.push_back({tile.kind, tile.data, path, texture, ++clock_});
         return texture;
     }
     void shutdown() {
@@ -234,7 +244,13 @@ private:
         return false;
     }
 
-    struct Entry { std::string path; SDL_Texture* texture; unsigned long long lastUse; };
+    struct Entry {
+        desknx::model::Kind kind;
+        std::string data;
+        std::string path;
+        SDL_Texture* texture;
+        unsigned long long lastUse;
+    };
     static constexpr size_t MaxEntries = 64;
     SDL_Renderer* renderer_{nullptr};
     std::string customIconPackDir_;

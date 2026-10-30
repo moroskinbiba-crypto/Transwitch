@@ -345,6 +345,30 @@ bool saveLauncherSettings() {
     return true;
 }
 
+SDL_Surface* limitBackgroundSurface(SDL_Surface* source) {
+    if(!source)return nullptr;
+    constexpr int MaxBackgroundWidth=1600;
+    constexpr int MaxBackgroundHeight=900;
+    if(source->w<=MaxBackgroundWidth&&source->h<=MaxBackgroundHeight)
+        return source;
+    const double scale=std::min(
+        static_cast<double>(MaxBackgroundWidth)/source->w,
+        static_cast<double>(MaxBackgroundHeight)/source->h);
+    const int width=std::max(1,static_cast<int>(source->w*scale));
+    const int height=std::max(1,static_cast<int>(source->h*scale));
+    SDL_Surface* resized=SDL_CreateRGBSurfaceWithFormat(
+        0,width,height,32,SDL_PIXELFORMAT_RGBA32);
+    if(!resized)return source;
+    // Preserve the original alpha channel while resampling PNG backgrounds.
+    SDL_SetSurfaceBlendMode(source,SDL_BLENDMODE_NONE);
+    if(SDL_BlitScaled(source,nullptr,resized,nullptr)!=0) {
+        SDL_FreeSurface(resized);
+        return source;
+    }
+    SDL_FreeSurface(source);
+    return resized;
+}
+
 bool loadWallpaperTexture(const std::string& path) {
     if(path.empty()) {
         if(wallpaperTexture)SDL_DestroyTexture(wallpaperTexture);
@@ -360,6 +384,7 @@ bool loadWallpaperTexture(const std::string& path) {
     const bool sizeOk=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
         static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
     if(!sizeOk){SDL_FreeSurface(surface);return false;}
+    surface=limitBackgroundSurface(surface);
     SDL_Texture* next=SDL_CreateTextureFromSurface(renderer,surface);
     const int width=surface->w,height=surface->h;
     SDL_FreeSurface(surface);
@@ -397,6 +422,7 @@ SDL_Texture* getWorkspaceBackgroundTexture(const std::string& path,int& width,in
     const bool valid=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
         static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
     if(!valid){SDL_FreeSurface(surface);return nullptr;}
+    surface=limitBackgroundSurface(surface);
     SDL_Texture* texture=SDL_CreateTextureFromSurface(renderer,surface);
     const int imageWidth=surface->w,imageHeight=surface->h;
     SDL_FreeSurface(surface);
