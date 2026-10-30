@@ -33,6 +33,7 @@ struct Candidate {
     std::string title;
     std::string data;
     int w{1}, h{1}, color{0};
+    uint32_t viewFlags{0}; // NS live metadata; never used to hide installed titles
 };
 
 inline bool isTitleId(const std::string& value) {
