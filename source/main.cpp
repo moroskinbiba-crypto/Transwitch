@@ -183,7 +183,31 @@ void rect(int x,int y,int w,int h,Color c) {
     SDL_RenderFillRect(renderer,&r);
 }
 void outline(int x,int y,int w,int h,Color c) {
-    color(c); SDL_Rect r{x,y,w,h}; SDL_RenderDrawRect(renderer,&r);
+    if(w<=0||h<=0) return;
+    const int r=std::max(0,std::min(UiCornerRadius,std::min(w,h)/2));
+    color(c);
+    if(r==0) {
+        SDL_Rect bounds{x,y,w,h};
+        SDL_RenderDrawRect(renderer,&bounds);
+        return;
+    }
+    if(w>2*r) {
+        SDL_RenderDrawLine(renderer,x+r,y,x+w-r-1,y);
+        SDL_RenderDrawLine(renderer,x+r,y+h-1,x+w-r-1,y+h-1);
+    }
+    if(h>2*r) {
+        SDL_RenderDrawLine(renderer,x,y+r,x,y+h-r-1);
+        SDL_RenderDrawLine(renderer,x+w-1,y+r,x+w-1,y+h-r-1);
+    }
+    for(int row=0;row<r;++row) {
+        const double dy=static_cast<double>(r-row);
+        const int inset=static_cast<int>(std::ceil(r-std::sqrt(
+            std::max(0.0,static_cast<double>(r*r)-dy*dy))));
+        SDL_RenderDrawPoint(renderer,x+inset,y+row);
+        SDL_RenderDrawPoint(renderer,x+w-1-inset,y+row);
+        SDL_RenderDrawPoint(renderer,x+inset,y+h-1-row);
+        SDL_RenderDrawPoint(renderer,x+w-1-inset,y+h-1-row);
+    }
 }
 
 void applyThemePalette() {
