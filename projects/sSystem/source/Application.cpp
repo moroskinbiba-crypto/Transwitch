@@ -207,16 +207,41 @@ namespace desknx::system::app {
         // suspend and can remain signalled while the title is still alive.
         // Only use the PID service after its initialization succeeded.
         if (g_ProcessMonitorAvailable) {
-            auto alive = [] {
-                u64 pid = 0;
-                return R_SUCCEEDED(pmshellGetApplicationProcessIdForShell(&pid));
+            // Atmosphere's pm:shell returns pm::ResultProcessNotFound only
+            // when there is no application process. Other PM errors are not
+            // evidence of exit and must not cause us to discard the holder.
+            auto queryProcess = [](u64 *pid) {
+                return pmshellGetApplicationProcessIdForShell(pid);
+            };
+            auto isProcessMissing = [](Result rc) {
+                // pm module = 15, ResultProcessNotFound description = 1.
+                return R_MODULE(rc) == 15 && R_DESCRIPTION(rc) == 1;
             };
             const u64 hz = armGetSystemTickFreq();
+            bool processMissing = false;
             u64 deadline = armGetSystemTick() + hz * 15;
-            while (alive() && armGetSystemTick() < deadline)
-                svcSleepThread(50'000'000ULL);
 
-            if (alive()) {
+            while (armGetSystemTick() < deadline) {
+                u64 pid = 0;
+                const Result queryRc = queryProcess(&pid);
+                if (R_SUCCEEDED(queryRc)) {
+                    if (pid == 0) {
+                        DaemonLog("app: pm:shell returned an invalid zero PID; keeping application holder");
+                        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+                    }
+                    svcSleepThread(50'000'000ULL);
+                    continue;
+                }
+                if (isProcessMissing(queryRc)) {
+                    processMissing = true;
+                    break;
+                }
+                DaemonLog("app: pm:shell process query failed rc=0x%08X; keeping application holder",
+                          static_cast<unsigned int>(queryRc));
+                return queryRc;
+            }
+
+            if (!processMissing) {
                 DaemonLog("app: 0x%016lx ignored the exit request - terminating", g_AppId);
                 const Result terminateRc = appletApplicationTerminate(&g_AppHolder);
                 if (R_FAILED(terminateRc)) {
@@ -226,9 +251,26 @@ namespace desknx::system::app {
                 }
 
                 deadline = armGetSystemTick() + hz * 3;
-                while (alive() && armGetSystemTick() < deadline)
-                    svcSleepThread(50'000'000ULL);
-                if (alive()) {
+                while (armGetSystemTick() < deadline) {
+                    u64 pid = 0;
+                    const Result queryRc = queryProcess(&pid);
+                    if (R_SUCCEEDED(queryRc)) {
+                        if (pid == 0) {
+                            DaemonLog("app: pm:shell returned an invalid zero PID after termination; keeping holder");
+                            return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+                        }
+                        svcSleepThread(50'000'000ULL);
+                        continue;
+                    }
+                    if (isProcessMissing(queryRc)) {
+                        processMissing = true;
+                        break;
+                    }
+                    DaemonLog("app: pm:shell verification failed rc=0x%08X after termination; keeping holder",
+                              static_cast<unsigned int>(queryRc));
+                    return queryRc;
+                }
+                if (!processMissing) {
                     DaemonLog("app: process 0x%016lx is still reported alive after termination; keeping holder",
                               g_AppId);
                     return MAKERESULT(Module_Libnx, LibnxError_BadInput);

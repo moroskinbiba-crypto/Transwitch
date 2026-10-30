@@ -91,10 +91,12 @@ Before trying any system install:
 
 The backend treats `pmshell` as optional at startup, but it no longer treats
 a failed PID query as proof that a running title has exited. When the service
-is available, the backend waits for the application process to disappear and
-checks the result of forced termination. When `pmshell` initialization fails,
-it gives the title a short graceful-exit window and uses AM's direct
-application-termination command. If termination is not confirmed, the
+is available, the backend waits for the application process to disappear.
+Only Atmosphere PM's explicit `ProcessNotFound` result counts as confirmation;
+other PM query errors preserve the holder and abort a replacement launch. A
+zero PID is rejected. The backend checks the result of forced termination.
+When `pmshell` initialization fails, it gives the title a short graceful-exit
+window and uses AM's direct application-termination command. If termination is not confirmed, the
 application holder is kept open and a replacement title is not launched over it.
 This path still requires validation on a physical console and matching firmware.
 
