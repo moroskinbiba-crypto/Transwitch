@@ -1130,13 +1130,6 @@ size_t utf8Count(const std::string& value) {
     }
     return count;
 }
-const std::vector<std::string>& cachedTileTitleLines(const std::string& title,size_t maxChars) {
-    const std::string key=std::to_string(maxChars)+"\t"+title;
-    auto found=tileTitleWrapCache.find(key);
-    if(found!=tileTitleWrapCache.end())return found->second;
-    if(tileTitleWrapCache.size()>=512)tileTitleWrapCache.clear();
-    return tileTitleWrapCache.emplace(key,wrapTileTitle(title,maxChars)).first->second;
-}
 std::vector<std::string> wrapTileTitle(const std::string& title,size_t maxChars) {
     std::vector<std::string> words;
     for(size_t pos=0;pos<title.size();) {
@@ -1183,6 +1176,13 @@ std::vector<std::string> wrapTileTitle(const std::string& title,size_t maxChars)
     }
     if(lines.empty())lines.push_back(title.empty()?"APP":utf8Prefix(title,maxChars));
     return lines;
+}
+const std::vector<std::string>& cachedTileTitleLines(const std::string& title,size_t maxChars) {
+    const std::string key=std::to_string(maxChars)+"\t"+title;
+    auto found=tileTitleWrapCache.find(key);
+    if(found!=tileTitleWrapCache.end())return found->second;
+    if(tileTitleWrapCache.size()>=512)tileTitleWrapCache.clear();
+    return tileTitleWrapCache.emplace(key,wrapTileTitle(title,maxChars)).first->second;
 }
 void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
     SDL_Texture* texture=gIconCache.get(tile);
