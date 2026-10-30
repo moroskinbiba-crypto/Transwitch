@@ -48,6 +48,7 @@ struct Signatures {
 // lifetime, matching SLauncher's __appInit/__appExit lifecycle.
 bool gAccountServiceReady = false;
 bool gNsServiceReady = false;
+std::uint32_t gAccountServiceError = 0;
 std::uint32_t gNsServiceError = 0;
 
 uint64_t hashBytes(uint64_t hash, const void* data, size_t size) {
@@ -480,13 +481,21 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
 } // namespace
 
 bool InitializeServices(std::uint32_t& nsErrorCode) {
-    if (!gAccountServiceReady)
-        gAccountServiceReady = R_SUCCEEDED(accountInitialize(AccountServiceType_System));
+    if (!gAccountServiceReady) {
+        const Result rc = accountInitialize(AccountServiceType_System);
+        gAccountServiceReady = R_SUCCEEDED(rc);
+        gAccountServiceError = static_cast<std::uint32_t>(rc);
+    }
     if (!gNsServiceReady) {
         const Result rc = nsInitialize();
         gNsServiceReady = R_SUCCEEDED(rc);
         gNsServiceError = static_cast<std::uint32_t>(rc);
     }
+    LogDiagnostic("service_init account_ready=%d account_rc=0x%08X ns_ready=%d ns_rc=0x%08X",
+                  gAccountServiceReady ? 1 : 0,
+                  static_cast<unsigned int>(gAccountServiceError),
+                  gNsServiceReady ? 1 : 0,
+                  static_cast<unsigned int>(gNsServiceError));
     nsErrorCode = gNsServiceReady ? 0 : gNsServiceError;
     return gNsServiceReady;
 }
