@@ -897,10 +897,10 @@ void drawScreen() {
             text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+128,2,BLUE,mx+mw-20);
             text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+160,1,MUTED,mx+mw-20);
         } else if(catalogCompleteNow && available.empty()) {
-            if(!catalogueNsAvailable) {
+            if(!catalogueNsAvailableNow) {
                 char errorText[96]{};
                 std::snprintf(errorText,sizeof(errorText),"GAME SERVICE UNAVAILABLE  (0X%08X)",
-                              static_cast<unsigned int>(catalogueNsError));
+                              static_cast<unsigned int>(catalogueNsErrorNow));
                 text(errorText,mx+32,my+128,2,RED,mx+mw-20);
                 text("INSTALLED GAMES COULD NOT BE READ",mx+32,my+162,1,MUTED,mx+mw-20);
             } else {
@@ -1096,10 +1096,10 @@ void drawScreen() {
             std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE INITIALIZING");
         else if(!catalogueNsAvailableNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE OFFLINE  0X%08X",
-                          static_cast<unsigned int>(catalogueNsError));
+                          static_cast<unsigned int>(catalogueNsErrorNow));
         else if(catalogueNsErrorNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"NS RESPONSE ERROR  0X%08X",
-                          static_cast<unsigned int>(catalogueNsError));
+                          static_cast<unsigned int>(catalogueNsErrorNow));
         else
             std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE READY");
         text(nsInfo,384,270,1,catalogueNsAvailableNow?GREEN:RED,900);
