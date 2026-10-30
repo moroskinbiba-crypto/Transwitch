@@ -1332,7 +1332,6 @@ void addSelected() {
     }
     Tile t{c.kind,c.title,c.data,selectedX,selectedY,c.w,c.h,c.color};
     if(!placeable(d,t,t.x,t.y) && !firstFree(d,t,t.x,t.y)) {
-        listOpen=false;
         setStatus("WORKSPACE FULL - REMOVE A TILE BEFORE ADDING APPS",3500);
         return;
     }
@@ -1391,17 +1390,9 @@ void loadPlayStatsForSelection() {
         static_cast<unsigned int>(queryRc),availableStats?1:0);
 }
 void openList(){
-    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
-    if(itemAt(desk,selectedX,selectedY)>=0) {
-        Tile placeholder{Kind::Game,"","",0,0,1,1,0};
-        int freeX=0,freeY=0;
-        if(!firstFree(desk,placeholder,freeX,freeY)) {
-            setStatus("WORKSPACE FULL - REMOVE A TILE BEFORE ADDING APPS",3500);
-            return;
-        }
-        selectedX=freeX;
-        selectedY=freeY;
-    }
+    // Opening the catalogue is also useful when a workspace is full: the user
+    // can inspect/filter the library before deciding what to remove. addSelected
+    // performs the definitive capacity check when an app is actually added.
     listOpen=true;
     listIndex=0;
     listOffset=0;
