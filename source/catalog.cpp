@@ -77,7 +77,6 @@ void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) 
     while ((entry = readdir(dir)) && out.size() < MaxItems) {
         std::string name = entry->d_name;
         if (name == "." || name == ".." || (!name.empty() && name[0] == '.')) continue;
-        if (depth == 0 && name == "DeskNX") continue;
         const std::string path = root + "/" + name;
         struct stat st{};
         if (stat(path.c_str(), &st) != 0) continue;
