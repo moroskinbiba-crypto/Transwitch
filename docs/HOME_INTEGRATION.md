@@ -19,7 +19,7 @@ The standard CI builds the standalone NRO and the library applet. A separate wor
 - **Workspace storage** — the UI persists its layout to sdmc:/switch/DeskNX/layout.tsv.
 - **Logs** — backend log: sdmc:/switch/DeskNX/logs/daemon.log; ECS log: sdmc:/switch/DeskNX/logs/ecs.log.
 - **Installer/recovery** — guarded scripts require explicit risk acknowledgement, create a manifest, check ownership markers and compare current qlaunch files with stored SHA-256 checksums before uninstalling. Transaction stage/rollback paths include the process id to avoid collisions with stale files or parallel operations.
-- **Custom takeover slot** — an optional `switch/DeskNX/config/takeover.txt` may contain one known Shop or Offline Web applet program ID (for example, `0x0100000000001042`). DeskNX tries it first and then falls back to the built-in candidates. Invalid, unknown, and unsupported applet IDs are ignored.
+- **Custom takeover slot** — an optional `switch/DeskNX/config/takeover.txt` may contain one known Shop or Offline Web applet program ID (for example, `0x0100000000001042`). DeskNX tries it first and then falls back through every built-in candidate. A slot is not launched unless ECS registration succeeds for every program ID associated with that firmware-sensitive slot; partial registrations are rolled back and skipped. Invalid, unknown, and unsupported applet IDs are ignored.
 
 The upstream sLaunch repository contains significantly more functionality and years of firmware-specific hardening. DeskNX is not a drop-in replacement for sLaunch and is not yet at its reliability level.
 

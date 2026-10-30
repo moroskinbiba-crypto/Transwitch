@@ -435,15 +435,40 @@ const desknx::system::ecs::MenuSlot& CurrentMenuSlot() {
     return g_ActiveMenuSlots[index];
 }
 
-void RegisterCurrentSlot() {
+Result RegisterCurrentSlot() {
     const auto& slot = CurrentMenuSlot();
+    if (slot.program_id_count == 0 || slot.program_id_count > 2)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+
+    bool registered[2]{};
+    Result firstFailure = 0;
     for (u8 i = 0; i < slot.program_id_count; ++i) {
         const Result rc = ecs::RegisterExternalContent(slot.program_ids[i], ecs::MenuExefsDir);
+        registered[i] = R_SUCCEEDED(rc);
         DaemonLog("ecs register slot=%s program=0x%016llX rc=0x%08X",
                   slot.name,
                   static_cast<unsigned long long>(slot.program_ids[i]),
                   static_cast<unsigned int>(rc));
+        if (R_FAILED(rc) && R_SUCCEEDED(firstFailure))
+            firstFailure = rc;
     }
+
+    // A slot can resolve to either program ID depending on firmware. A partial
+    // registration is therefore not enough to prove that the program Horizon
+    // will launch is the one mapped to DeskNX. Roll back the partial set and
+    // let LaunchMenu try the next known-good slot instead of opening stock Shop.
+    if (R_FAILED(firstFailure)) {
+        for (u8 i = 0; i < slot.program_id_count; ++i) {
+            if (!registered[i]) continue;
+            const Result rollbackRc = ecs::UnregisterExternalContent(slot.program_ids[i]);
+            if (R_FAILED(rollbackRc))
+                DaemonLog("ecs rollback slot=%s program=0x%016llX rc=0x%08X",
+                          slot.name,
+                          static_cast<unsigned long long>(slot.program_ids[i]),
+                          static_cast<unsigned int>(rollbackRc));
+        }
+    }
+    return firstFailure;
 }
 
 // IPC-06: current backend state handed to the menu at every launch so the
@@ -478,37 +503,32 @@ bool LaunchMenu() {
     TransitionTo(BackendState::MenuStarting, "launch requested");
     g_MenuSlotExhausted = false;
     g_NextMenuRetryTick = 0;
-    const auto& slot = CurrentMenuSlot();
-    RegisterCurrentSlot();
+    Result rc = MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    // Try every candidate from the current index. A custom override may add a
+    // third slot; one failed slot must not prevent the built-in Offline Web
+    // fallback from being attempted.
+    for (size_t candidate = g_MenuSlotIndex;
+         candidate < g_ActiveMenuSlotCount; ++candidate) {
+        g_MenuSlotIndex = candidate;
+        const auto& slot = CurrentMenuSlot();
+        if (candidate != 0)
+            DaemonLog("menu: trying fallback slot=%s", slot.name);
 
-    // IPC-06: every fresh menu launch receives the current backend state as
-    // its initial storage, so the UI never acts on stale information.
-    const auto initial = BuildInitialState();
-    Result rc = 0;
-    for (int attempt = 0; attempt < kMenuStartAttempts; ++attempt) {
-        if (attempt != 0) svcSleepThread(kMenuStartRetryDelayNs);
-        rc = la::LaunchMenu(slot.applet_id, &initial, sizeof(initial));
-        DaemonLog("menu start slot=%s attempt=%d rc=0x%08X",
-                  slot.name, attempt + 1, static_cast<unsigned int>(rc));
-        if (R_SUCCEEDED(rc)) {
-            g_MenuReady = false;
-            g_MenuLaunchTick = armGetSystemTick();
-            ResetMenuHeartbeatTracking();
-            g_MenuSlotExhausted = false;
-            return true;
+        rc = RegisterCurrentSlot();
+        if (R_FAILED(rc)) {
+            DaemonLog("menu: skipping slot=%s because ECS registration failed rc=0x%08X",
+                      slot.name, static_cast<unsigned int>(rc));
+            continue;
         }
-    }
 
-    if (g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount) {
-        ++g_MenuSlotIndex;
-        DaemonLog("menu start failed; falling back to slot=%s",
-                  CurrentMenuSlot().name);
-        RegisterCurrentSlot();
+        // IPC-06: each candidate receives its actual slot index in the
+        // initial-state block; do not reuse state from the previous candidate.
+        const auto initial = BuildInitialState();
         for (int attempt = 0; attempt < kMenuStartAttempts; ++attempt) {
             if (attempt != 0) svcSleepThread(kMenuStartRetryDelayNs);
-            rc = la::LaunchMenu(CurrentMenuSlot().applet_id, &initial, sizeof(initial));
-            DaemonLog("menu fallback start slot=%s attempt=%d rc=0x%08X",
-                      CurrentMenuSlot().name, attempt + 1, static_cast<unsigned int>(rc));
+            rc = la::LaunchMenu(slot.applet_id, &initial, sizeof(initial));
+            DaemonLog("menu start slot=%s attempt=%d rc=0x%08X",
+                      slot.name, attempt + 1, static_cast<unsigned int>(rc));
             if (R_SUCCEEDED(rc)) {
                 g_MenuReady = false;
                 g_MenuLaunchTick = armGetSystemTick();
