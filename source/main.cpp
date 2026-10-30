@@ -1855,12 +1855,10 @@ bool touchSelect(int x,int y) {
         origin.x=std::max(0,std::min(COLS-moving.w,origin.x));
         origin.y=std::max(0,std::min(ROWS-moving.h,origin.y));
         const int dx=origin.x-selectedX,dy=origin.y-selectedY;
-        if(dx&&dy) {
-            moveTile(dx,0);
-            moveTile(0,dy);
-        } else if(dx||dy) {
-            moveTile(dx,dy);
-        }
+        // Place diagonally in one atomic occupancy check. Moving X and then Y
+        // could fail on an occupied intermediate cell even when the final
+        // diagonal destination is perfectly free, leaving the tile off-target.
+        if(dx||dy)moveTile(dx,dy);
         return true;
     }
     const int hit=desknx::workspace_ops::tileAtPoint(
