@@ -161,6 +161,16 @@ int main() {
     assert(iconCachePath(Kind::Nro, "sdmc:/switch/demo.nro") !=
            iconCachePath(Kind::Nro, "sdmc:/switch/other.nro"));
 
+    // Loading and saving share the same name validator; a layout that
+    // saves successfully must never become unreadable after a restart.
+    {
+        std::vector<Workspace> invalidName{{std::string(32,'A'),{}}};
+        assert(desknx::layout::serialize(invalidName,0).empty());
+        const std::string tooLongName="DESKNX3\nA\t0\nD\t"+std::string(32,'A')+"\n";
+        desknx::layout::LoadResult invalidNameResult{};
+        assert(!desknx::layout::parse(tooLongName,invalidNameResult));
+    }
+
     const std::string v1 =
         "DESKNX1\nD\tLegacy\nI\t0\tG\tExample\t0100\t0\t0\t1\t1\t0\n";
     desknx::layout::LoadResult parsedV1{};
