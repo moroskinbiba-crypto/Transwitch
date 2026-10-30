@@ -19,6 +19,10 @@ struct ScanResult {
 };
 
 using ProgressCallback = void (*)(const ScanResult& snapshot, void* context);
+// Initialize the system firmware version and NS/account services once during
+// process startup, before any catalogue worker thread is created.
+bool InitializeServices(std::uint32_t& nsErrorCode);
+void ShutdownServices();
 ScanResult Scan(ProgressCallback progress = nullptr, void* context = nullptr);
 
 } // namespace desknx::catalog
