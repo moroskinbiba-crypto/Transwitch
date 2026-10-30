@@ -31,6 +31,7 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -129,6 +130,12 @@ int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
 Uint32 lastStorageUpdate=0;
 bool storageStatsAvailable=false;
+std::unordered_map<std::string,uint64_t> nroSizeCache;
+bool widgetPickerMode=false;
+desknx::catalog_view::FilterMode widgetPickerPreviousFilter=desknx::catalog_view::FilterMode::All;
+desknx::catalog_view::SortMode widgetPickerPreviousSort=desknx::catalog_view::SortMode::Name;
+std::string widgetPickerPreviousQuery;
+SDL_FingerID catalogueTouchFingerId=0;
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
 SDL_FingerID touchPressFingerId=0;
@@ -647,6 +654,18 @@ int catalogueThreadMain(void* context) {
         result.truncated ? 1 : 0);
     return 0;
 }
+uint64_t cachedNroFileSize(const std::string& path) {
+    const auto cached=nroSizeCache.find(path);
+    if(cached!=nroSizeCache.end())return cached->second;
+    struct stat st{};
+    uint64_t bytes=0;
+    if(stat(path.c_str(),&st)==0&&S_ISREG(st.st_mode)&&st.st_size>=0)
+        bytes=static_cast<uint64_t>(st.st_size);
+    if(nroSizeCache.size()>=1024)nroSizeCache.clear();
+    nroSizeCache.emplace(path,bytes);
+    return bytes;
+}
+
 void restartCatalogueScan() {
     bool complete = false;
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
@@ -678,6 +697,7 @@ void restartCatalogueScan() {
     catalogueNroCount=0;
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
     catalogueWarningShown=false;
+    nroSizeCache.clear();
     listIndex=0;
     listOffset=0;
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue refresh",
@@ -1087,6 +1107,73 @@ void drawTileIcon(const Tile&t,int x,int y,int size) {
     std::string mark=initials(t.title);int s=size>=70?3:2;int w=static_cast<int>(mark.size())*6*s-s;
     text(mark,x+(size-w)/2,y+(size-7*s)/2,s,WHITE,x+size-2);
 }
+std::string utf8Prefix(const std::string& value,size_t maxChars) {
+    size_t pos=0,count=0;
+    while(pos<value.size()&&count<maxChars) {
+        const unsigned char lead=static_cast<unsigned char>(value[pos]);
+        size_t n=(lead<0x80)?1:((lead&0xE0)==0xC0)?2:((lead&0xF0)==0xE0)?3:((lead&0xF8)==0xF0)?4:1;
+        if(pos+n>value.size())n=1;
+        pos+=n;
+        ++count;
+    }
+    return value.substr(0,pos);
+}
+size_t utf8Count(const std::string& value) {
+    size_t count=0;
+    for(size_t pos=0;pos<value.size();++count) {
+        const unsigned char lead=static_cast<unsigned char>(value[pos]);
+        size_t n=(lead<0x80)?1:((lead&0xE0)==0xC0)?2:((lead&0xF0)==0xE0)?3:((lead&0xF8)==0xF0)?4:1;
+        pos+=(pos+n<=value.size())?n:1;
+    }
+    return count;
+}
+std::vector<std::string> wrapTileTitle(const std::string& title,size_t maxChars) {
+    std::vector<std::string> words;
+    for(size_t pos=0;pos<title.size();) {
+        while(pos<title.size()&&std::isspace(static_cast<unsigned char>(title[pos])))++pos;
+        if(pos>=title.size())break;
+        size_t end=pos;
+        while(end<title.size()&&!std::isspace(static_cast<unsigned char>(title[end]))) {
+            const unsigned char lead=static_cast<unsigned char>(title[end]);
+            size_t n=(lead<0x80)?1:((lead&0xE0)==0xC0)?2:((lead&0xF0)==0xE0)?3:((lead&0xF8)==0xF0)?4:1;
+            end+=(end+n<=title.size())?n:1;
+        }
+        words.push_back(title.substr(pos,end-pos));
+        pos=end;
+    }
+    std::vector<std::string> lines;
+    std::string line;
+    bool truncated=false;
+    for(const auto& word:words) {
+        const size_t wordChars=utf8Count(word);
+        if(line.empty()) {
+            if(wordChars<=maxChars)line=word;
+            else {
+                line=utf8Prefix(word,maxChars>3?maxChars-3:maxChars)+"...";
+                lines.push_back(line);truncated=true;break;
+            }
+        } else if(utf8Count(line)+1+wordChars<=maxChars) {
+            line+=" "+word;
+        } else {
+            lines.push_back(line);
+            if(lines.size()>=2){truncated=true;break;}
+            if(wordChars<=maxChars)line=word;
+            else {
+                line=utf8Prefix(word,maxChars>3?maxChars-3:maxChars)+"...";
+                lines.push_back(line);truncated=true;break;
+            }
+        }
+    }
+    if(!line.empty()&&lines.size()<2)lines.push_back(line);
+    if(truncated&&!lines.empty()) {
+        std::string& last=lines.back();
+        if(last.size()<3||last.substr(last.size()-3)!="...") {
+            last=utf8Prefix(last,maxChars>3?maxChars-3:maxChars)+"...";
+        }
+    }
+    if(lines.empty())lines.push_back(title.empty()?"APP":utf8Prefix(title,maxChars));
+    return lines;
+}
 void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
     SDL_Texture* texture=gIconCache.get(tile);
     if(texture) {
@@ -1124,13 +1211,22 @@ void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
              bounds.y+(bounds.h-7*scale)/2,scale,WHITE,bounds.x+bounds.w-8);
     }
 
-    // Keep the title attached to the cover itself, like a console home-screen tile.
-    const int stripHeight=std::max(27,std::min(38,bounds.h/3));
+    // Large, readable labels stay on the artwork. Long names wrap to two
+    // lines instead of being silently clipped at the right edge.
+    const size_t maxChars=static_cast<size_t>(std::max(10,(bounds.w-24)/9));
+    const auto titleLines=wrapTileTitle(tile.title,maxChars);
+    const int stripHeight=titleLines.size()>1?44:32;
     rect(bounds.x+1,bounds.y+bounds.h-stripHeight,
-         bounds.w-2,stripHeight,Color{5,9,16,190});
-    text(tile.title,bounds.x+10,
-         bounds.y+bounds.h-stripHeight+(stripHeight-7)/2,
-         1,WHITE,bounds.x+bounds.w-10);
+         bounds.w-2,stripHeight,Color{5,9,16,196});
+    if(titleLines.size()==1) {
+        text(titleLines[0],bounds.x+10,
+             bounds.y+bounds.h-stripHeight+8,2,WHITE,bounds.x+bounds.w-10);
+    } else {
+        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+3,
+             2,WHITE,bounds.x+bounds.w-10);
+        text(titleLines[1],bounds.x+10,bounds.y+bounds.h-stripHeight+22,
+             2,WHITE,bounds.x+bounds.w-10);
+    }
 }
 void drawTile(const Tile&t,bool selected) {
     SDL_Rect r=tileRect(t);
@@ -1138,10 +1234,10 @@ void drawTile(const Tile&t,bool selected) {
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
-    roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,r);
     } else if(t.kind==Kind::Clock) {
+        roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
         text(clockText(),r.x+18,r.y+18,5,WHITE,r.x+r.w-12);
         text(clockText(true).substr(6),r.x+20,r.y+74,2,MUTED,r.x+r.w-12);
         text("CLOCK",r.x+20,r.y+r.h-23,1,BLUE,r.x+r.w-12);
@@ -1260,7 +1356,7 @@ void drawScreen() {
         int idx=start+i;bool active=idx==deskIndex;
         roundRect(x,94,tabW,42,14,active?Color{39,76,119,255}:Color{23,31,45,230});
         if(active)roundRect(x+12,128,tabW-24,3,2,BLUE);
-        text(desks[static_cast<size_t>(idx)].name,x+14,109,1,
+        text(desks[static_cast<size_t>(idx)].name,x+14,103,2,
              active?WHITE:MUTED,x+tabW-10);
         x+=166;
     }
@@ -1329,7 +1425,7 @@ void drawScreen() {
         roundRect(center-19,634,38,38,13,
             item.active?Color{67,142,235,255}:Color{34,46,64,255});
         drawSystemIcon(item.icon,center-12,641,24,WHITE);
-        text(item.label,item.x+5,679,1,item.active?WHITE:MUTED,item.x+105);
+        text(item.label,item.x+5,677,2,item.active?WHITE:MUTED,item.x+105);
     }
     if(listOpen) {
         rect(0,0,SW,SH,Color{3,7,14,194});
@@ -1398,7 +1494,7 @@ void drawScreen() {
                 if(i==listIndex)roundRect(mx+27,yy,730,35,10,Color{35,58,88,255});
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                 drawTileIcon(iconTile,mx+38,yy+4,27);
-                text(candidate.title,mx+78,yy+9,1,
+                text(candidate.title,mx+78,yy+8,2,
                      i==listIndex?WHITE:MUTED,mx+592);
                 std::string appBadge=typeName(candidate.kind);
                 if(candidate.kind==Kind::Game) {
@@ -1464,9 +1560,8 @@ void drawScreen() {
                 text(fileName,mx+800,my+300,1,WHITE,mx+mw-30);
                 text("FOLDER",mx+800,my+326,1,MUTED,mx+mw-30);
                 text(folder,mx+800,my+344,1,WHITE,mx+mw-30);
-                struct stat appStat{};
-                if(stat(selected.data.c_str(),&appStat)==0&&S_ISREG(appStat.st_mode)&&appStat.st_size>=0) {
-                    const unsigned long long bytes=static_cast<unsigned long long>(appStat.st_size);
+                const uint64_t bytes=cachedNroFileSize(selected.data);
+                if(bytes>0) {
                     char sizeLabel[48]{};
                     if(bytes>=1024ULL*1024ULL)
                         std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu MB",bytes/(1024ULL*1024ULL));
@@ -1624,7 +1719,7 @@ void drawScreen() {
         for(int i=0;i<9;++i) {
             const int yy=216+i*38;
             if(i==appSettingsIndex)roundRect(340,yy,600,33,9,Color{35,61,93,255});
-            text(actions[i],362,yy+11,1,i==appSettingsIndex?WHITE:MUTED,918);
+            text(actions[i],362,yy+9,2,i==appSettingsIndex?WHITE:MUTED,918);
             if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/5",790,yy+11,1,BLUE,920);
         }
         char nsInfo[80]{};
@@ -1766,8 +1861,7 @@ void addSelected() {
             selectedX=existing.x;
             selectedY=existing.y;
             editing=true;
-            listOpen=false;
-            catalogueTouchActive=false;
+            closeList();
             lastCatalogueTap=-1;
             setStatus("ALREADY ON THIS WORKSPACE: "+c.title,2200);
             return;
@@ -1787,7 +1881,7 @@ void addSelected() {
         selectedX=freeX;selectedY=freeY;
         addStatus="ADDED: "+t.title+"  -  SELECT ANOTHER OR PRESS B";
     } else {
-        selectedX=t.x;selectedY=t.y;listOpen=false;
+        selectedX=t.x;selectedY=t.y;closeList();
         addStatus="DESKTOP FULL - ITEM ADDED";
     }
     if(saveNow())setStatus(addStatus,2600);
@@ -1883,6 +1977,21 @@ void openList(){
     listOffset=0;
     lastCatalogueTap=-1;
     loadPlayStatsForSelection();
+}
+void closeList() {
+    listOpen=false;
+    catalogueTouchActive=false;
+    catalogueTouchMoved=false;
+    catalogueTouchFingerId=0;
+    if(widgetPickerMode) {
+        catalogueFilter=widgetPickerPreviousFilter;
+        catalogueSort=widgetPickerPreviousSort;
+        catalogueQuery=widgetPickerPreviousQuery;
+        widgetPickerMode=false;
+        ++catalogueViewRevision;
+        listIndex=0;
+        listOffset=0;
+    }
 }
 void newDesk() {
     if(dragging || touchDragging) {
@@ -2030,6 +2139,10 @@ void activateAppSettings(int action) {
                 setStatus("THEME "+std::to_string(themeIndex+1)+" APPLIED");
             break;
         case 4:
+            widgetPickerPreviousFilter=catalogueFilter;
+            widgetPickerPreviousSort=catalogueSort;
+            widgetPickerPreviousQuery=catalogueQuery;
+            widgetPickerMode=true;
             editing=true;
             catalogueFilter=desknx::catalog_view::FilterMode::Widgets;
             catalogueQuery.clear();
@@ -2154,7 +2267,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     // A live touch gesture owns focus until its initiating finger is released.
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
-    if(touchPressActive)return;
+    if(touchPressActive||catalogueTouchActive)return;
     if(mediaPickerOpen) {
         if(keys&HidNpadButton_B){mediaPickerBack();return;}
         if(!mediaPickerEntries.empty()) {
@@ -2315,7 +2428,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(listOpen) {
         const auto& available=visibleCatalogueSnapshot();
-        if(keys&HidNpadButton_B){listOpen=false;return;}
+        if(keys&HidNpadButton_B){closeList();return;}
         if(keys&HidNpadButton_Y){searchCatalogue();return;}
         if(keys&HidNpadButton_X){cycleCatalogueSort();return;}
         if(keys&HidNpadButton_L){cycleCatalogueFilter(-1);return;}
@@ -2461,7 +2574,10 @@ void touchInput(const SDL_Event&e) {
     if(touchPressActive &&
        (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP) &&
        e.tfinger.fingerId!=touchPressFingerId)return;
-    if(e.type==SDL_FINGERDOWN && touchPressActive)return;
+    if(catalogueTouchActive &&
+       (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP) &&
+       e.tfinger.fingerId!=catalogueTouchFingerId)return;
+    if(e.type==SDL_FINGERDOWN && (touchPressActive||catalogueTouchActive))return;
     if(e.type==SDL_FINGERDOWN && dragging && !touchDragging) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
@@ -2614,7 +2730,7 @@ void touchInput(const SDL_Event&e) {
                 else if(x>=332&&x<444) cycleCatalogueFilter(1);
                 else if(x>=452&&x<534){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
                 else if(x>=542&&x<668) restartCatalogueScan();
-                else if(x>=676&&x<748) listOpen=false;
+                else if(x>=676&&x<748) closeList();
                 else if(x>=756&&x<828) addSelected();
                 return;
             }
@@ -2633,6 +2749,7 @@ void touchInput(const SDL_Event&e) {
                         addSelected();
                         lastCatalogueTap=-1;
                         catalogueTouchActive=false;
+                        catalogueTouchFingerId=0;
                         return;
                     } else {
                         listIndex=index;
@@ -2641,6 +2758,7 @@ void touchInput(const SDL_Event&e) {
                         loadPlayStatsForSelection();
                     }
                     catalogueTouchActive=true;
+                    catalogueTouchFingerId=e.tfinger.fingerId;
                     catalogueTouchMoved=false;
                     catalogueTouchStartY=y;
                     catalogueTouchRow=row;
@@ -2754,10 +2872,12 @@ void touchInput(const SDL_Event&e) {
                 catalogueTouchStartY=y;
             }
         }
-    } else if(e.type==SDL_FINGERUP&&listOpen&&catalogueTouchActive) {
+    } else if(e.type==SDL_FINGERUP&&listOpen&&catalogueTouchActive&&
+              e.tfinger.fingerId==catalogueTouchFingerId) {
         if(catalogueTouchMoved) lastCatalogueTap=-1;
         catalogueTouchActive=false;
         catalogueTouchMoved=false;
+        catalogueTouchFingerId=0;
     } else if(e.type==SDL_FINGERMOTION&&touchPressActive&&!touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(std::abs(x-touchPressStartX)+std::abs(y-touchPressStartY)>=12) {
@@ -2987,13 +3107,26 @@ int main(int,char**) {
         consumeInitialState(); // IPC-06: queued at backend launch, read once
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
-        padUpdate(&pad);const u64 keys=padGetButtonsDown(&pad);if(keys)keyInput(keys, false);
+        padUpdate(&pad);
+        const u64 buttonDown=padGetButtonsDown(&pad);
+        const HidAnalogStickState leftStick=padGetStickPos(&pad,0);
+        constexpr int StickThreshold=13500;
+        u64 stickDirections=0;
+        if(leftStick.x < -StickThreshold)stickDirections|=HidNpadButton_Left;
+        else if(leftStick.x > StickThreshold)stickDirections|=HidNpadButton_Right;
+        if(leftStick.y > StickThreshold)stickDirections|=HidNpadButton_Up;
+        else if(leftStick.y < -StickThreshold)stickDirections|=HidNpadButton_Down;
+        static u64 previousStickDirections=0;
+        const u64 newlyPressedStickDirections=stickDirections&~previousStickDirections;
+        previousStickDirections=stickDirections;
+        const u64 keys=buttonDown|newlyPressedStickDirections;
+        if(keys)keyInput(keys,false);
         // Holding a direction repeats navigation after a short, responsive delay.
         // Modal ownership remains centralized in keyInput().
         {
             static Uint32 holdStart = 0, lastRepeat = 0;
             static u64 lastHeldDirs = 0;
-            const u64 held = padGetButtons(&pad);
+            const u64 held = padGetButtons(&pad)|stickDirections;
             const u64 dirs = HidNpadButton_Left|HidNpadButton_Right|HidNpadButton_Up|HidNpadButton_Down;
             // Navigation modals handle directional input themselves; keep key
             // repeat active in the library, recent list and power menu. The

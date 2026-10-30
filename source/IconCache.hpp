@@ -19,6 +19,7 @@ public:
         if(path==customIconPackDir_)return;
         shutdown();
         resolvedPaths_.clear();
+        failedUntil_.clear();
         customIconPackDir_=path;
     }
     SDL_Texture* get(const desknx::model::Tile& tile) {
@@ -37,6 +38,16 @@ public:
             resolvedPaths_.emplace(lookupKey,path);
         }
         const bool isCustom=(path!=defaultPath);
+        const Uint32 now=SDL_GetTicks();
+        const auto failed=failedUntil_.find(path);
+        if(failed!=failedUntil_.end()) {
+            if(static_cast<Sint32>(now-failed->second)<0)return nullptr;
+            failedUntil_.erase(failed);
+        }
+        auto rememberFailure=[&]() {
+            if(failedUntil_.size()>=128)failedUntil_.erase(failedUntil_.begin());
+            failedUntil_[path]=now+5000;
+        };
         // Resolve a cached texture before touching the SD card. The old
         // order performed stat()+JPEG parsing for every visible icon on every
         // frame, even when its SDL texture was already resident. On a Switch
@@ -50,17 +61,22 @@ public:
         }
         struct stat st{};
         constexpr long long MaxCompressedIconBytes = 2LL * 1024 * 1024;
-        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return nullptr;
+        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+            rememberFailure();
+            return nullptr;
+        }
         if (st.st_size <= 0 || st.st_size > MaxCompressedIconBytes ||
             !imageDimensionsWithinLimit(path)) {
             // Never delete user-owned icon-pack files. Only the generated cache
             // may be removed so the next catalogue refresh can rebuild it.
             if(!isCustom)std::remove(path.c_str());
+            rememberFailure();
             return nullptr;
         }
         SDL_Surface* surface = IMG_Load(path.c_str());
         if (!surface) {
             if(!isCustom)std::remove(path.c_str());
+            rememberFailure();
             return nullptr;
         }
         constexpr int MaxIconDimension = 1024;
@@ -71,11 +87,16 @@ public:
         if (!dimensionsOk) {
             SDL_FreeSurface(surface);
             if(!isCustom)std::remove(path.c_str());
+            rememberFailure();
             return nullptr;
         }
         SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
         SDL_FreeSurface(surface);
-        if (!texture) return nullptr;
+        if (!texture) {
+            rememberFailure();
+            return nullptr;
+        }
+        failedUntil_.erase(path);
         SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
         if (entries_.size() >= MaxEntries) {
             auto oldest = entries_.begin();
@@ -203,6 +224,7 @@ private:
     SDL_Renderer* renderer_{nullptr};
     std::string customIconPackDir_;
     std::unordered_map<std::string,std::string> resolvedPaths_;
+    std::unordered_map<std::string,Uint32> failedUntil_;
     unsigned long long clock_{0};
     std::vector<Entry> entries_;
 };
