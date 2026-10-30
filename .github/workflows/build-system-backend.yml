@@ -144,7 +144,7 @@ jobs:
             cd dist
             while IFS= read -r -d '' file; do
               sha256sum "$file"
-            done < <(find . -type f ! -name BUILD-MANIFEST.txt ! -name SHA256SUMS -print0 | sort -z)
+            done < <(find . -type f ! -name SHA256SUMS -print0 | sort -z)
           ) > dist/SHA256SUMS
 
           cd dist

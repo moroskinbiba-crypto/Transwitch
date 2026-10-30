@@ -38,7 +38,7 @@ Standalone-сборка не нуждается в Atmosphère. Чтобы по�
 
 После успешной сборки откройте Actions → Build experimental DeskNX HOME backend и скачайте DeskNX-system-experimental. **Распакуйте архив на ПК**, в отдельную папку: внутри должны лежать папки SdOut, scripts и docs. Не распаковывайте этот пакет прямо в корень SD-карты — он содержит подготовленные компоненты, а не автоматически включаемую установку.
 
-В комплекте есть `BUILD-MANIFEST.txt` с точными commit/ref и версиями инструментов, `SHA256SUMS` для проверки всех файлов архива (`sha256sum -c SHA256SUMS` после распаковки), а также `DeskNX-system-experimental.zip.sha256` для проверки самого ZIP (`sha256sum -c DeskNX-system-experimental.zip.sha256`).\n\nТолько после проверки сборки и на восстанавливаемой консоли запустите из распакованной папки:
+В комплекте есть `BUILD-MANIFEST.txt` с точными commit/ref и версиями инструментов, `SHA256SUMS` для проверки всех распакованных файлов, включая build manifest (кроме самого списка checksum; `sha256sum -c SHA256SUMS`), а также `DeskNX-system-experimental.zip.sha256` для проверки самого ZIP (`sha256sum -c DeskNX-system-experimental.zip.sha256`).\n\nТолько после проверки сборки и на восстанавливаемой консоли запустите из распакованной папки:
 
     bash scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk
 
