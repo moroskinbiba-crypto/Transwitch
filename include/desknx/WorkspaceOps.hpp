@@ -109,8 +109,8 @@ inline bool resizeSelectedTile(model::Workspace& desk, int& selectedX,
                                int& selectedY, bool bigger) {
     const int index = model::itemAt(desk, selectedX, selectedY);
     if (index < 0) return false;
-    constexpr std::array<std::pair<int, int>, 4> sizes{{
-        {1, 1}, {2, 1}, {2, 2}, {3, 2}
+    constexpr std::array<std::pair<int, int>, 5> sizes{{
+        {1, 1}, {2, 1}, {3, 1}, {2, 2}, {3, 2}
     }};
     auto& tile = desk.tiles[static_cast<size_t>(index)];
     size_t current = 0;
