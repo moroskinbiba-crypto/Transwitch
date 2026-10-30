@@ -88,7 +88,7 @@ bool catalogueTouchActive=false, catalogueTouchMoved=false;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, workspaceMenu=false, deletePrompt=false, running=true;
-int recentIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
+int recentIndex=0, systemMenuIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -1003,8 +1003,10 @@ void drawScreen() {
             {542,382,5,"DESKTOP","RETURN TO WORKSPACE"},
             {776,382,6,"RECENT","RECENTLY LAUNCHED APPS"}
         };
-        for(const auto& item:tools) {
-            softCard(item.x,item.y,210,136,Color{43,46,54,255},Color{255,255,255,22});
+        for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
+            const auto& item=tools[toolIndex];
+            softCard(item.x,item.y,210,136,systemMenuIndex==static_cast<int>(toolIndex)?
+                Color{48,62,82,255}:Color{43,46,54,255},Color{255,255,255,22});
             roundRect(item.x+14,item.y+14,54,54,15,Color{61,70,86,255});
             drawSystemIcon(item.icon,item.x+25,item.y+25,32,WHITE);
             text(item.title,item.x+80,item.y+23,2,WHITE,item.x+202);
@@ -1209,7 +1211,7 @@ void launch(const Tile& t) {
         return;
     }
     if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
-    else if(t.kind==Kind::System)setStatus("PROTOTYPE ONLY - SYSTEM HOME REPLACEMENT IS INACTIVE",3500);
+    else if(t.kind==Kind::System){systemMenu=true;systemMenuIndex=0;}
     else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
     else if(t.kind==Kind::Recent) {
         if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
@@ -1219,27 +1221,29 @@ void launch(const Tile& t) {
 void keyInput(u64 keys, bool fromRepeat) {
     if(systemMenu) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
+        if(keys&HidNpadButton_Left)systemMenuIndex=(systemMenuIndex+5)%6;
+        if(keys&HidNpadButton_Right)systemMenuIndex=(systemMenuIndex+1)%6;
+        if(keys&HidNpadButton_Up)systemMenuIndex=(systemMenuIndex+3)%6;
+        if(keys&HidNpadButton_Down)systemMenuIndex=(systemMenuIndex+3)%6;
         if(keys&HidNpadButton_A) {
+            const int action=systemMenuIndex;
             systemMenu=false;
-            if(selectedX<2) {
-                // System Settings is the console's built-in system application.
+            if(action==0) {
                 const Result rc=appletRequestLaunchApplication(0x0100000000001000ULL,nullptr);
                 if(R_FAILED(rc))setStatus("COULD NOT OPEN SYSTEM SETTINGS",3000);
-            } else if(selectedX<4) {
-                HidLaControllerSupportArg arg{};
-                hidLaCreateControllerSupportArg(&arg);
+            } else if(action==1) {
+                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
                 HidLaControllerSupportResultInfo result{};
-                const Result rc=hidLaShowControllerSupport(&result,&arg);
-                if(R_FAILED(rc))setStatus("CONTROLLER MENU UNAVAILABLE",3000);
-            } else if(selectedX==4) {
-                const Result rc=albumLaShowAllAlbumFiles();
-                if(R_FAILED(rc))setStatus("ALBUM UNAVAILABLE",3000);
-            } else if(selectedX==6) {
-                recentIndex=0;recentOpen=true;
-            } else if(selectedX==5) {
-                setStatus("WORKSPACE READY");
-            } else {
+                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
+                    setStatus("CONTROLLER MENU UNAVAILABLE",3000);
+            } else if(action==2) {
+                if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
+            } else if(action==3) {
                 powerMenu=true;powerIndex=0;
+            } else if(action==4) {
+                setStatus("WORKSPACE READY");
+            } else if(action==5) {
+                recentIndex=0;recentOpen=true;
             }
         }
         return;
@@ -1391,22 +1395,32 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=890&&x<=972&&y>=136&&y<=170){systemMenu=false;return;}
         if(y>=218&&y<354) {
+            if(x>=308&&x<518)systemMenuIndex=0;
+            else if(x>=542&&x<752)systemMenuIndex=1;
+            else if(x>=776&&x<986)systemMenuIndex=2;
+        } else if(y>=382&&y<518) {
+            if(x>=308&&x<518)systemMenuIndex=3;
+            else if(x>=542&&x<752)systemMenuIndex=4;
+            else if(x>=776&&x<986)systemMenuIndex=5;
+        }
+        if((y>=218&&y<354)||(y>=382&&y<518)) {
             systemMenu=false;
-            if(x>=308&&x<518) {
+            if(systemMenuIndex==0) {
                 const Result rc=appletRequestLaunchApplication(0x0100000000001000ULL,nullptr);
                 if(R_FAILED(rc))setStatus("COULD NOT OPEN SYSTEM SETTINGS",3000);
-            } else if(x>=542&&x<752) {
+            } else if(systemMenuIndex==1) {
                 HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
                 HidLaControllerSupportResultInfo result{};
                 if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))setStatus("CONTROLLER MENU UNAVAILABLE",3000);
-            } else if(x>=776&&x<986) {
+            } else if(systemMenuIndex==2) {
                 if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
+            } else if(systemMenuIndex==3) {
+                powerMenu=true;powerIndex=0;
+            } else if(systemMenuIndex==4) {
+                setStatus("WORKSPACE READY");
+            } else if(systemMenuIndex==5) {
+                recentIndex=0;recentOpen=true;
             }
-        } else if(y>=382&&y<518) {
-            systemMenu=false;
-            if(x>=308&&x<518){powerMenu=true;powerIndex=0;}
-            else if(x>=542&&x<752)setStatus("WORKSPACE READY");
-            else if(x>=776&&x<986){recentIndex=0;recentOpen=true;}
         }
         return;
     }
@@ -1546,7 +1560,7 @@ void touchInput(const SDL_Event&e) {
         if(y>=632&&y<=700) {
             if(x>=302&&x<412) {openList();return;}
             if(x>=412&&x<522) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
-            if(x>=522&&x<632) {systemMenu=true;selectedX=0;selectedY=0;return;}
+            if(x>=522&&x<632) {systemMenu=true;systemMenuIndex=0;return;}
             if(x>=632&&x<742) {
                 HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
                 HidLaControllerSupportResultInfo result{};
