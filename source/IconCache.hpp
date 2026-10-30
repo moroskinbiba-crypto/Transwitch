@@ -9,6 +9,7 @@
 #include <fstream>
 #include <string>
 #include <sys/stat.h>
+#include <unordered_map>
 #include <vector>
 
 class IconCache {
@@ -17,14 +18,25 @@ public:
     void setCustomIconPackDir(const std::string& path) {
         if(path==customIconPackDir_)return;
         shutdown();
+        resolvedPaths_.clear();
         customIconPackDir_=path;
     }
     SDL_Texture* get(const desknx::model::Tile& tile) {
         const std::string defaultPath = desknx::model::iconCachePath(tile.kind, tile.data);
         if (defaultPath.empty() || !renderer_) return nullptr;
-        std::string path=customPathFor(tile);
-        bool isCustom=!path.empty();
-        if(path.empty())path=defaultPath;
+        const std::string lookupKey=desknx::model::typeCode(tile)+"\t"+tile.data;
+        std::string path;
+        const auto resolved=resolvedPaths_.find(lookupKey);
+        if(resolved!=resolvedPaths_.end()) {
+            path=resolved->second;
+        } else {
+            path=customPathFor(tile);
+            if(path.empty())path=defaultPath;
+            // The path resolution checks up to three SD paths. Remember both
+            // hits and misses so this work never happens on every redraw.
+            resolvedPaths_.emplace(lookupKey,path);
+        }
+        const bool isCustom=(path!=defaultPath);
         // Resolve a cached texture before touching the SD card. The old
         // order performed stat()+JPEG parsing for every visible icon on every
         // frame, even when its SDL texture was already resident. On a Switch
@@ -88,17 +100,37 @@ private:
             stem=tile.data;
             for(char& ch:stem)if(ch>='a'&&ch<='f')ch=static_cast<char>(ch-'a'+'A');
         } else if(tile.kind==desknx::model::Kind::Nro) {
+            const size_t slash=tile.data.find_last_of('/');
+            const size_t dot=tile.data.find_last_of('.');
+            if(slash!=std::string::npos) {
+                const size_t nameStart=slash+1;
+                const size_t nameEnd=(dot!=std::string::npos&&dot>nameStart)?dot:tile.data.size();
+                stem=tile.data.substr(nameStart,nameEnd-nameStart);
+            }
+            if(stem.empty()) {
+                char key[32]{};
+                std::snprintf(key,sizeof(key),"nro-%016llX",
+                    static_cast<unsigned long long>(desknx::model::stableHash(tile.data)));
+                stem=key;
+            }
+        } else return {};
+        static const char* const exts[]={".jpg",".png",".jpeg"};
+        auto findFile=[&](const std::string& base)->std::string {
+            for(const char* ext:exts) {
+                const std::string candidate=customIconPackDir_+"/"+base+ext;
+                struct stat st{};
+                if(stat(candidate.c_str(),&st)==0&&S_ISREG(st.st_mode)&&st.st_size>0)
+                    return candidate;
+            }
+            return {};
+        };
+        std::string found=findFile(stem);
+        if(!found.empty())return found;
+        if(tile.kind==desknx::model::Kind::Nro&&stem.rfind("nro-",0)!=0) {
             char key[32]{};
             std::snprintf(key,sizeof(key),"nro-%016llX",
                 static_cast<unsigned long long>(desknx::model::stableHash(tile.data)));
-            stem=key;
-        } else return {};
-        static const char* const exts[]={".jpg",".png",".jpeg"};
-        for(const char* ext:exts) {
-            const std::string candidate=customIconPackDir_+"/"+stem+ext;
-            struct stat st{};
-            if(stat(candidate.c_str(),&st)==0&&S_ISREG(st.st_mode)&&st.st_size>0)
-                return candidate;
+            return findFile(key);
         }
         return {};
     }
@@ -170,6 +202,7 @@ private:
     static constexpr size_t MaxEntries = 64;
     SDL_Renderer* renderer_{nullptr};
     std::string customIconPackDir_;
+    std::unordered_map<std::string,std::string> resolvedPaths_;
     unsigned long long clock_{0};
     std::vector<Entry> entries_;
 };

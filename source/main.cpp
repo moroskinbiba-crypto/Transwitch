@@ -126,6 +126,9 @@ std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
+uint64_t sdFreeBytes=0, sdTotalBytes=0;
+Uint32 lastStorageUpdate=0;
+bool storageStatsAvailable=false;
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
 SDL_FingerID touchPressFingerId=0;
@@ -975,6 +978,22 @@ void refreshBattery() {
     if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
     if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
 }
+void refreshStorageStats() {
+    const Uint32 now=SDL_GetTicks();
+    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
+    lastStorageUpdate=now;
+    struct statvfs fs{};
+    if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
+        const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
+        sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
+        sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
+        storageStatsAvailable=sdTotalBytes>0;
+    } else {
+        sdTotalBytes=0;
+        sdFreeBytes=0;
+        storageStatsAvailable=false;
+    }
+}
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
     // through, multibyte sequences contribute their lead byte which yields
@@ -1155,16 +1174,14 @@ void drawTile(const Tile&t,bool selected) {
         }
         text("HISTORY ON THIS CONSOLE",r.x+18,r.y+r.h-18,1,BLUE,r.x+r.w-12);
     } else if(t.kind==Kind::Storage) {
-        struct statvfs fs{};
         text("SD CARD STORAGE",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
-        if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
-            const uint64_t total=static_cast<uint64_t>(fs.f_blocks)*fs.f_frsize;
-            const uint64_t free=static_cast<uint64_t>(fs.f_bavail)*fs.f_frsize;
-            const uint64_t used=total>free?total-free:0;
-            const int percent=total?static_cast<int>(std::min<uint64_t>(100,used*100/total)):0;
+        if(storageStatsAvailable) {
+            const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
+            const int percent=static_cast<int>(std::min<uint64_t>(
+                100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)));
             char sizeText[64]{};
             std::snprintf(sizeText,sizeof(sizeText),"%.1f GB FREE",
-                static_cast<double>(free)/(1024.0*1024.0*1024.0));
+                static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
             text(sizeText,r.x+18,r.y+37,3,WHITE,r.x+r.w-14);
             roundRect(r.x+18,r.y+r.h-29,r.w-36,9,5,Color{48,62,79,255});
             roundRect(r.x+18,r.y+r.h-29,std::max(3,(r.w-36)*percent/100),9,5,GREEN);
@@ -1214,6 +1231,7 @@ void drawScreen() {
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
     refreshBattery();
+    refreshStorageStats();
     rect(0,0,SW,SH,BG);
     for(int band=0;band<24;++band) {
         const double t=static_cast<double>(band)/23.0;
