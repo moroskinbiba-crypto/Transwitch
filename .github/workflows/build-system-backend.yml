@@ -137,16 +137,15 @@ jobs:
             echo "python=$(python3 --version)"
             echo "elf2nso_path=$(command -v elf2nso || true)"
             echo "npdmtool_path=$(command -v npdmtool || true)"
-            echo
-            echo "[sha256 of packaged files; paths relative to extracted bundle]"
+            echo "file_checksums=SHA256SUMS (relative paths; verify with sha256sum -c SHA256SUMS)"
           } > dist/BUILD-MANIFEST.txt
 
           (
             cd dist
             while IFS= read -r -d '' file; do
               sha256sum "$file"
-            done < <(find . -type f ! -name BUILD-MANIFEST.txt -print0 | sort -z)
-          ) >> dist/BUILD-MANIFEST.txt
+            done < <(find . -type f ! -name BUILD-MANIFEST.txt ! -name SHA256SUMS -print0 | sort -z)
+          ) > dist/SHA256SUMS
 
           cd dist
           python3 -c 'import pathlib, zipfile; root=pathlib.Path("."); z=zipfile.ZipFile("../DeskNX-system-experimental.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.as_posix()) for p in root.rglob("*") if p.is_file()]; z.close()'
