@@ -96,16 +96,20 @@ Only Atmosphere PM's explicit `ProcessNotFound` result counts as confirmation;
 other PM query errors preserve the holder and abort a replacement launch. A
 zero PID is rejected. The backend checks the result of forced termination.
 When `pmshell` initialization fails, it gives the title a short graceful-exit
-window and uses AM's direct application-termination command. If termination is
-not confirmed, the application holder is kept open and a replacement title is
-not launched over it.
+window and uses AM's direct application-termination command. After a successful
+termination request, it joins the AM application accessor before closing it;
+the command being accepted is not treated as proof that teardown is complete.
+If AM does not publish the final result, the join remains blocked rather than
+launching over a possibly live title.
 
 Natural game exit detection also uses the explicit PM `ProcessNotFound`
 result. The application state-change event is not sufficient because it can
 also be signalled by focus/suspend transitions. If `pmshell` is unavailable,
 the backend deliberately retains the holder instead of guessing that a
-suspended game has exited; automatic return-to-menu then requires the PM
-service to be available. This path still requires validation on a physical
+suspended game has exited. It retries service initialization every five
+seconds, so a transient startup failure does not permanently disable
+automatic return-to-menu. If PM remains unavailable, natural-exit detection
+remains unavailable too. This path still requires validation on a physical
 console and matching firmware.
 
 ### Library-applet teardown safety

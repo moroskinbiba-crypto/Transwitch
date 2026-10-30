@@ -141,6 +141,7 @@ namespace desknx::system::app {
 
     Result Launch(u64 app_id, AccountUid user, u64 flags) {
         if (g_AppRunning) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        g_ExitAppId = 0;
 
         // Touch the app (marks as recently used in NS)
         nsTouchApplication(app_id);
@@ -201,6 +202,7 @@ namespace desknx::system::app {
 
     Result Terminate() {
         if (!g_AppRunning) return 0;
+        g_ExitAppId = 0;
 
         appletApplicationTerminateAllLibraryApplets(&g_AppHolder);
         const Result requestRc = appletApplicationRequestExit(&g_AppHolder);
@@ -293,6 +295,14 @@ namespace desknx::system::app {
             }
         }
 
+        // RequestExit/Terminate only asks AM to stop the title. Join consumes
+        // the application's final result and waits until AM has completed the
+        // exit handshake before the accessor is released. This is particularly
+        // important when pmshell is unavailable and there is no PID to poll.
+        DaemonLog("app: waiting for AM application-exit result");
+        appletApplicationJoin(&g_AppHolder);
+        DaemonLog("app: AM application-exit result received");
+
         appletApplicationClose(&g_AppHolder);
         memset(&g_AppHolder, 0, sizeof(g_AppHolder));
         g_AppId       = 0;
@@ -346,9 +356,10 @@ namespace desknx::system::app {
             return false;
         }
 
-        // The application process is confirmed gone. Publish the id before
-        // clearing state so the backend can name it in the AppExited event.
+        // The PM service has confirmed that the process is gone. Join the
+        // AM accessor as well so its final result is consumed before close.
         g_ExitAppId = g_AppId;
+        appletApplicationJoin(&g_AppHolder);
         appletApplicationClose(&g_AppHolder);
         memset(&g_AppHolder, 0, sizeof(g_AppHolder));
         g_AppId       = 0;

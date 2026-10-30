@@ -86,9 +86,13 @@ bool g_HasPendingPowerAction = false;
 u32 g_LastLaunchRc = 0;
 u64 g_LastLaunchTitle = 0;
 bool g_SdMountedForBackend = true;  // REC-05: drives the degraded flag
+bool g_PmshellInitialized = false;
+u64 g_NextPmshellRetryTick = 0;
 u64 g_DroppedLogLastTick = 0;       // IPC-01 suppressed-log summary window
 u64 g_LastMenuLogTick = 0;
 u32 g_DroppedMenuLogCount = 0;
+
+void RetryPmshellInitialization();
 
 void ResetMenuHeartbeatTracking() {
     g_MenuLiveness.Reset();
@@ -1205,6 +1209,7 @@ void RunMainLoop() {
     LaunchMenu();
 
     while (true) {
+        RetryPmshellInitialization();
         const u64 loopNow = armGetSystemTick();
         const auto busyTick = g_MenuLiveness.UpdateBusyPause(
             loopNow, armGetSystemTickFreq(), g_MenuReady);
@@ -1418,12 +1423,30 @@ struct InitStep {
 };
 InitStep g_InitSteps[16]{};
 size_t g_InitStepCount = 0;
-bool g_PmshellInitialized = false;
-
 Result RecordInit(const char* name, Result rc, bool critical) {
     if (g_InitStepCount < sizeof(g_InitSteps) / sizeof(g_InitSteps[0]))
         g_InitSteps[g_InitStepCount++] = {name, rc, critical};
     return rc;
+}
+
+// pmshell can be temporarily unavailable while Horizon/Atmosphere services
+// are coming up. Keep the backend functional, but retry initialization so a
+// transient startup race does not permanently disable natural-exit detection.
+void RetryPmshellInitialization() {
+    if (g_PmshellInitialized) return;
+
+    const u64 now = armGetSystemTick();
+    if (g_NextPmshellRetryTick != 0 && now < g_NextPmshellRetryTick)
+        return;
+
+    const u64 frequency = armGetSystemTickFreq();
+    g_NextPmshellRetryTick = now + frequency * 5;
+    const Result rc = pmshellInitialize();
+    if (R_FAILED(rc)) return;
+
+    g_PmshellInitialized = true;
+    desknx::system::app::SetProcessMonitorAvailable(true);
+    DaemonLog("service pmshell: initialization succeeded after retry");
 }
 
 } // namespace
@@ -1466,6 +1489,8 @@ void InitializeSystemModule() {
     const Result pmshellRc = RecordInit("pmshell", pmshellInitialize(), false);
     g_PmshellInitialized = R_SUCCEEDED(pmshellRc);
     desknx::system::app::SetProcessMonitorAvailable(g_PmshellInitialized);
+    g_NextPmshellRetryTick = g_PmshellInitialized ? 0 :
+        armGetSystemTick() + armGetSystemTickFreq() * 5;
 
     // The SD card must be mounted before diagnostics can be persisted.
     R_ABORT_UNLESS(fsdevMountSdmc());
@@ -1493,6 +1518,7 @@ void FinalizeSystemModule() {
     if (g_PmshellInitialized) {
         pmshellExit();
         g_PmshellInitialized = false;
+        desknx::system::app::SetProcessMonitorAvailable(false);
     }
     ldrShellExit();
     setExit();
