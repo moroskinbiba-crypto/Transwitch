@@ -168,8 +168,7 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
     for (size_t i = 0; i < installed.size(); ++i) {
         u32 flags = 0;
         if (i < views.size()) {
-            const auto* bytes = reinterpret_cast<const u8*>(&views[i]);
-            std::memcpy(&flags, bytes + 0x0C, sizeof(flags));
+            flags = views[i].flags;
         }
         records.push_back({installed[i].application_id,
                            installed[i].last_updated, flags});
