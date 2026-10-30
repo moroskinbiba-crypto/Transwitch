@@ -92,7 +92,7 @@ void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) 
     }
     closedir(dir);
 }
-std::vector<GameRecord> ReadGameRecords(bool nsReady) {
+std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) {
     std::vector<GameRecord> records;
     if (!nsReady) return records;
     std::array<NsApplicationRecord, ApplicationPageCapacity> page{};
@@ -105,9 +105,15 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady) {
         s32 count = request.capacity;
         const Result rc = nsListApplicationRecord(page.data(), request.capacity,
                                                    request.offset, &count);
-        if (R_FAILED(rc) || !IsValidApplicationPageCount(request.capacity, count) ||
-            count == 0)
+        if (R_FAILED(rc)) {
+            errorCode = static_cast<std::uint32_t>(rc);
             break;
+        }
+        if (!IsValidApplicationPageCount(request.capacity, count)) {
+            errorCode = 0xD35C0001u; // invalid count returned by NS/libnx
+            break;
+        }
+        if (count == 0) break;
         for (s32 i = 0; i < count && records.size() < 4096; ++i)
             records.push_back({page[static_cast<size_t>(i)].application_id,
                                page[static_cast<size_t>(i)].last_updated});
@@ -328,15 +334,21 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if (progress) progress(result, context);
     };
     EnsureCacheDirectories();
-    const bool nsReady = R_SUCCEEDED(nsInitialize());
-    const std::vector<GameRecord> games = ReadGameRecords(nsReady);
+    const Result nsRc = nsInitialize();
+    const bool nsReady = R_SUCCEEDED(nsRc);
+    result.nsAvailable = nsReady;
+    result.nsErrorCode = nsReady ? 0u : static_cast<std::uint32_t>(nsRc);
+    const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
+    result.gameCount = games.size();
     std::vector<NroFile> nros;
     CollectNros("sdmc:/switch", 0, nros);
+    result.nroCount = nros.size();
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
         return a.path < b.path;
     });
     const Signatures sig = MakeSignatures(games, nros);
-    if (ReadCache(sig, result)) {
+    // Never reuse a cache after NS failed or returned a partial application list.
+    if (nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
         result.complete = true;
         if (nsReady) nsExit();
         report(true);

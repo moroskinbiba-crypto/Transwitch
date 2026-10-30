@@ -63,6 +63,9 @@ SDL_atomic_t heartbeatRunning{};
 SDL_atomic_t heartbeatError{};
 #endif
 bool catalogueReady = false, catalogueScanComplete = false, catalogueTruncated = false;
+bool catalogueNsAvailable = false;
+Uint32 catalogueNsError = 0;
+size_t catalogueGameCount = 0, catalogueNroCount = 0;
 bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown = false;
 bool layoutSaveBlocked = false;
 FontRenderer gFontRenderer;
@@ -229,6 +232,10 @@ void publishCatalogue(const desknx::catalog::ScanResult& result) {
     catalogueTruncated=result.truncated;
     catalogueReady=!catalogue.empty()||result.complete;
     catalogueScanComplete=result.complete;
+    catalogueNsAvailable=result.nsAvailable;
+    catalogueNsError=result.nsErrorCode;
+    catalogueGameCount=result.gameCount;
+    catalogueNroCount=result.nroCount;
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
 void readCatalogueState(bool& ready,bool& complete,bool& truncated) {
@@ -642,9 +649,21 @@ void drawScreen() {
         if(!catalogCompleteNow) viewLabel+="  / SCANNING";
         text(viewLabel,mx+28,my+77,1,BLUE,mx+mw-20);
         int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
-        if(!catalogCompleteNow && available.empty())
+        if(!catalogCompleteNow && available.empty()) {
             text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+118,2,BLUE,mx+mw-20);
-        else {
+            text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+150,1,MUTED,mx+mw-20);
+        } else if(catalogCompleteNow && available.empty()) {
+            if(!catalogueNsAvailable) {
+                char errorText[96]{};
+                std::snprintf(errorText,sizeof(errorText),"GAME SERVICE UNAVAILABLE  (0X%08X)",
+                              static_cast<unsigned int>(catalogueNsError));
+                text(errorText,mx+32,my+118,2,RED,mx+mw-20);
+                text("INSTALLED GAMES COULD NOT BE READ",mx+32,my+152,1,MUTED,mx+mw-20);
+            } else {
+                text("NO MATCHING APPS",mx+32,my+118,2,WHITE,mx+mw-20);
+                text("TRY ANOTHER FILTER OR CLEAR SEARCH",mx+32,my+152,1,MUTED,mx+mw-20);
+            }
+        } else {
             for(int row=0;row<vis;++row) {
                 int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+92+row*43;
                 if(i==listIndex)rect(mx+22,yy,mw-44,38,Color{45,61,82,255});
@@ -656,8 +675,10 @@ void drawScreen() {
             }
         }
         const size_t totalItems=catalogueSnapshot().size();
-        text(std::to_string(available.size())+" SHOWN / "+std::to_string(totalItems)+" TOTAL ITEMS",
-             mx+28,my+mh-26,1,MUTED,mx+mw-18);
+        const std::string counts=std::to_string(catalogueGameCount)+" GAMES  /  "+
+            std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
+            std::to_string(available.size())+" SHOWN";
+        text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-18);
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{0,0,0,185});rect(360,250,560,200,Color{25,30,42,255});outline(360,250,560,200,RED);
