@@ -23,6 +23,7 @@ using ProgressCallback = void (*)(const ScanResult& snapshot, void* context);
 // process startup, before any catalogue worker thread is created.
 bool InitializeServices(std::uint32_t& nsErrorCode);
 void ShutdownServices();
-ScanResult Scan(ProgressCallback progress = nullptr, void* context = nullptr);
+ScanResult Scan(ProgressCallback progress = nullptr, void* context = nullptr,
+                bool forceRefresh = false);
 
 } // namespace desknx::catalog
