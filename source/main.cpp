@@ -1847,6 +1847,7 @@ void removeTile() {
     touchDragOffsetX=touchDragOffsetY=0;
     if(saveNow())setStatus("REMOVED: "+name);
 }
+void closeList();
 void addSelected() {
     const auto& available=visibleCatalogueSnapshot();bool ready=false,complete=false,truncated=false;
     readCatalogueState(ready,complete,truncated);
