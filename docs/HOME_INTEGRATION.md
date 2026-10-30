@@ -87,6 +87,18 @@ Before trying any system install:
 - Controller setup, selected-user behavior, suspended-title lifecycle, service initialization, failure recovery and qlaunch NPDM need an expert code review before release.
 - The installer is conservative, but it cannot guarantee recovery if the SD contents are corrupted or the console has unrelated boot problems.
 
+### Foreground handoff safety
+
+The backend checks the result of `appletUnlockForeground()` before starting a
+title and checks the subsequent application-foreground request. A failed
+handoff is rolled back through the normal verified application teardown path;
+it is not reported as a successful game launch. Focus bookkeeping changes
+only after successful AM requests. If returning from HOME to a suspended game
+fails on the first attempt, the system backend retries at a bounded 500 ms
+cadence while it remains in the game-running state. A failed request to bring
+the system forward aborts the HOME takeover instead of opening a second
+foreground applet over an unchanged title.
+
 ### Process termination safety
 
 The backend treats `pmshell` as optional at startup, but it no longer treats

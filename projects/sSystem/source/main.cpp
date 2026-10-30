@@ -88,6 +88,8 @@ u64 g_LastLaunchTitle = 0;
 bool g_SdMountedForBackend = true;  // REC-05: drives the degraded flag
 bool g_PmshellInitialized = false;
 u64 g_NextPmshellRetryTick = 0;
+u64 g_NextGameFocusRetryTick = 0;
+u64 g_LastGameFocusRetryLogTick = 0;
 u64 g_DroppedLogLastTick = 0;       // IPC-01 suppressed-log summary window
 u64 g_LastMenuLogTick = 0;
 u32 g_DroppedMenuLogCount = 0;
@@ -163,6 +165,39 @@ Result StopMenuSafely(const char* reason) {
         g_MenuStopFailureLogged = false;
     }
     return rc;
+}
+
+// A successful HOME-menu close should return control to the suspended title.
+// If AM rejects the first foreground request, retry with a bounded cadence;
+// never claim that the game has focus just because the request was issued.
+void RetryGameForegroundIfNeeded() {
+    if (g_BackendState != BackendState::GameRunning ||
+        !app::g_AppRunning || app::g_AppHasFocus) {
+        g_NextGameFocusRetryTick = 0;
+        g_LastGameFocusRetryLogTick = 0;
+        return;
+    }
+
+    const u64 now = armGetSystemTick();
+    if (g_NextGameFocusRetryTick != 0 && now < g_NextGameFocusRetryTick)
+        return;
+
+    const u64 frequency = armGetSystemTickFreq();
+    g_NextGameFocusRetryTick = now + frequency / 2;
+    const Result rc = app::FocusApplication();
+    if (R_SUCCEEDED(rc)) {
+        g_NextGameFocusRetryTick = 0;
+        g_LastGameFocusRetryLogTick = 0;
+        DaemonLog("app: foreground restored by retry");
+        return;
+    }
+
+    if (g_LastGameFocusRetryLogTick == 0 ||
+        now - g_LastGameFocusRetryLogTick >= frequency * 5) {
+        DaemonLog("app: foreground retry failed rc=0x%08X",
+                  static_cast<unsigned int>(rc));
+        g_LastGameFocusRetryLogTick = now;
+    }
 }
 
 void TransitionTo(BackendState next, const char* reason) {
@@ -830,6 +865,11 @@ void OpenMenuForHomePress() {
         const Result rc = app::FocusSystem();
         DaemonLog("home: bringing system foreground rc=0x%08X",
                   static_cast<unsigned int>(rc));
+        if (R_FAILED(rc)) {
+            TransitionTo(BackendState::GameRunning,
+                         "system foreground request failed; preserve title");
+            return;
+        }
     }
     LaunchMenu();
 }
@@ -1296,6 +1336,8 @@ void RunMainLoop() {
 
         if (la::g_MenuRunning && !la::IsMenuAlive())
             HandleMenuClosed();
+
+        RetryGameForegroundIfNeeded();
 
         switch (g_BackendState) {
             case BackendState::Booting:

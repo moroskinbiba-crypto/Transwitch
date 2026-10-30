@@ -161,9 +161,11 @@ namespace desknx::system::app {
 
         rc = wants_user ? PushUserParam(user) : 0;
         if (rc == 0) {
-            // Release foreground so the app can acquire it
-            appletUnlockForeground();
-            rc = appletApplicationStart(&g_AppHolder);
+            // Release foreground so the app can acquire it. Do not start
+            // the title if AM refused the handoff.
+            rc = appletUnlockForeground();
+            if (R_SUCCEEDED(rc))
+                rc = appletApplicationStart(&g_AppHolder);
         }
         // Otherwise the failed app's holder stays open: am keeps it as the
         // application, and the next launch is refused.
@@ -174,12 +176,32 @@ namespace desknx::system::app {
             return rc;
         }
 
-        appletApplicationRequestForApplicationToGetForeground(&g_AppHolder);
-
+        // Publish the live holder before requesting foreground so a failed
+        // handoff can be rolled back through the same verified termination
+        // path used when the user selects a different title.
         g_AppId       = app_id;
         g_AppRunning  = true;
-        g_AppHasFocus = true;
+        g_AppHasFocus = false;
         g_LaunchTick  = armGetSystemTick();
+
+        rc = appletApplicationRequestForApplicationToGetForeground(&g_AppHolder);
+        if (R_FAILED(rc)) {
+            DaemonLog("app: foreground request failed after launch rc=0x%08X",
+                      static_cast<unsigned int>(rc));
+            const Result terminateRc = Terminate();
+            if (R_FAILED(terminateRc)) {
+                const Result systemRc = FocusSystem();
+                DaemonLog("app: launch rollback incomplete (focus=0x%08X terminate=0x%08X system=0x%08X); retaining holder",
+                          static_cast<unsigned int>(rc),
+                          static_cast<unsigned int>(terminateRc),
+                          static_cast<unsigned int>(systemRc));
+                return terminateRc;
+            }
+            DaemonLog("app: launch rolled back after foreground handoff failure");
+            return rc;
+        }
+
+        g_AppHasFocus = true;
         return 0;
     }
 
@@ -377,13 +399,15 @@ namespace desknx::system::app {
 
     Result FocusApplication() {
         if (!g_AppRunning) return MAKERESULT(Module_Libnx, LibnxError_NotFound);
-        g_AppHasFocus = true;
-        return appletApplicationRequestForApplicationToGetForeground(&g_AppHolder);
+        const Result rc = appletApplicationRequestForApplicationToGetForeground(&g_AppHolder);
+        if (R_SUCCEEDED(rc)) g_AppHasFocus = true;
+        return rc;
     }
 
     Result FocusSystem() {
-        g_AppHasFocus = false;
-        return appletRequestToGetForeground();
+        const Result rc = appletRequestToGetForeground();
+        if (R_SUCCEEDED(rc)) g_AppHasFocus = false;
+        return rc;
     }
 
 } // namespace desknx::system::app
