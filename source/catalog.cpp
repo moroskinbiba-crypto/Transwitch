@@ -340,7 +340,7 @@ GameNameCache ReadGameNameCache() {
             continue;
         char* end = nullptr;
         const unsigned long long id = std::strtoull(fields[0].c_str(), &end, 16);
-        if (!end || *end != '\\0' || id == 0) continue;
+        if (!end || *end != '\0' || id == 0) continue;
         names[static_cast<u64>(id)] = fields[1];
     }
     if (input.bad()) return {};
@@ -355,7 +355,7 @@ bool WriteGameNameCache(const GameNameCache& names) {
         char id[32]{};
         std::snprintf(id, sizeof(id), "%016llX",
                       static_cast<unsigned long long>(entry.first));
-        output << id << '\\t' << desknx::model::safeField(entry.second) << '\\n';
+        output << id << '\t' << desknx::model::safeField(entry.second) << '\n';
     }
     output.flush();
     const bool good = output.good();
