@@ -1,4 +1,5 @@
 #include "catalog.hpp"
+#include "../include/desknx/Diagnostics.hpp"
 #include "slaunch_applications.hpp"
 #include "../include/desknx/StrictParse.hpp"
 #include "../include/desknx/CatalogPagination.hpp"
@@ -70,6 +71,14 @@ void EnsureCacheDirectories() {
 
 void LogDiagnostic(const char* format, ...) {
     EnsureCacheDirectories();
+    char message[1024]{};
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    desknx::diag::Write("catalogue", "trace", "%s", message);
+
+    // Keep the original focused log for backwards compatibility.
     constexpr const char* LogFile = "sdmc:/switch/DeskNX/catalogue.log";
     struct stat st{};
     if (stat(LogFile, &st) == 0 && st.st_size > 128 * 1024) {
@@ -78,12 +87,7 @@ void LogDiagnostic(const char* format, ...) {
     }
     FILE* file = std::fopen(LogFile, "a");
     if (!file) return;
-    std::fprintf(file, "[%lld] ", static_cast<long long>(std::time(nullptr)));
-    va_list args;
-    va_start(args, format);
-    std::vfprintf(file, format, args);
-    va_end(args);
-    std::fputc('\n', file);
+    std::fprintf(file, "[%lld] %s\n", static_cast<long long>(std::time(nullptr)), message);
     std::fclose(file);
 }
 std::string fileTitle(const std::string& path) {
@@ -139,7 +143,10 @@ void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) 
 }
 std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) {
     std::vector<GameRecord> records;
-    if (!nsReady) return records;
+    if (!nsReady) {
+        LogDiagnostic("games_skip reason=ns_unavailable");
+        return records;
+    }
 
     // SLaunch sequence: enumerate every installed record, then query the
     // matching live views. View flags are presentation metadata, never filters.
@@ -182,18 +189,27 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
                   static_cast<unsigned int>(pdmRc), records.size());
     if (R_SUCCEEDED(pdmRc)) {
         size_t statsOk = 0;
+        size_t statsFailed = 0;
+        std::uint32_t firstStatsError = 0;
         for (auto& record : records) {
             PdmPlayStatistics stats{};
-            if (R_SUCCEEDED(pdmqryQueryPlayStatisticsByApplicationId(
-                    record.id, false, &stats))) {
+            const Result statsRc = pdmqryQueryPlayStatisticsByApplicationId(
+                record.id, false, &stats);
+            if (R_SUCCEEDED(statsRc)) {
                 record.playtimeSeconds = stats.playtime / 1000000000ULL;
                 record.lastPlayed = stats.last_timestamp_user;
                 record.launchCount = stats.total_launches;
                 ++statsOk;
+            } else {
+                ++statsFailed;
+                if (firstStatsError == 0)
+                    firstStatsError = static_cast<std::uint32_t>(statsRc);
             }
         }
         pdmqryExit();
-        LogDiagnostic("pdm_done successful=%zu total=%zu", statsOk, records.size());
+        LogDiagnostic("pdm_done successful=%zu failed=%zu first_error=0x%08X total=%zu",
+                      statsOk, statsFailed, static_cast<unsigned int>(firstStatsError),
+                      records.size());
     }
     return records;
 }
@@ -501,6 +517,8 @@ bool InitializeServices(std::uint32_t& nsErrorCode) {
 }
 
 void ShutdownServices() {
+    LogDiagnostic("service_shutdown ns_ready=%d account_ready=%d",
+                  gNsServiceReady ? 1 : 0, gAccountServiceReady ? 1 : 0);
     if (gNsServiceReady) { nsExit(); gNsServiceReady = false; }
     if (gAccountServiceReady) { accountExit(); gAccountServiceReady = false; }
 }
@@ -522,10 +540,14 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     result.nsAvailable = nsReady;
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
     if (result.nsErrorCode != 0) result.nsAvailable = false;
+    LogDiagnostic("games_collected count=%zu ns_available=%d ns_error=0x%08X",
+                  games.size(), result.nsAvailable ? 1 : 0,
+                  static_cast<unsigned int>(result.nsErrorCode));
     result.gameCount = games.size();
     std::vector<NroFile> nros;
     CollectNros("sdmc:/switch", 0, nros);
     result.nroCount = nros.size();
+    LogDiagnostic("nro_scan root=switch depth_limit=3 count=%zu", nros.size());
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
         return a.path < b.path;
     });
@@ -561,6 +583,8 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     GameNameCache freshNameCache;
     freshNameCache.reserve(games.size());
     bool fetchedControlData = false;
+    size_t controlDataOk = 0, controlDataFailed = 0;
+    std::uint32_t firstControlDataError = 0;
     size_t colorIndex = 0;
     for (size_t i = 0; i < games.size(); ++i) {
         if (result.items.size() >= gameLimit) { result.truncated = true; break; }
@@ -577,15 +601,23 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
-            if (nsReady && R_SUCCEEDED(desknx::slaunch::ReadControlData(
-                    id, control, actual))) {
+            const Result controlRc = nsReady
+                ? desknx::slaunch::ReadControlData(id, control, actual)
+                : MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+            if (nsReady && R_SUCCEEDED(controlRc)) {
+                ++controlDataOk;
                 title = desknx::slaunch::ResolveTitleName(control.nacp);
                 if (title.empty() && cachedName != nameCache.end())
                     title = cachedName->second;
                 if (!iconCached) CacheGameIcon(id, control, actual);
                 fetchedControlData = true;
-            } else if (cachedName != nameCache.end()) {
-                title = cachedName->second;
+            } else {
+                ++controlDataFailed;
+                if (firstControlDataError == 0)
+                    firstControlDataError = static_cast<std::uint32_t>(controlRc);
+                if (cachedName != nameCache.end()) {
+                    title = cachedName->second;
+                }
             }
         }
 
@@ -604,9 +636,15 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     }
     // Keep the per-title cache in sync with the installed set. If the only
     // change was an install/uninstall, existing names/icons are reused.
+    LogDiagnostic("control_data successful=%zu failed=%zu first_error=0x%08X cached_names=%zu",
+                  controlDataOk, controlDataFailed,
+                  static_cast<unsigned int>(firstControlDataError), nameCache.size());
     if (nsReady && result.nsErrorCode == 0 &&
-        (fetchedControlData || freshNameCache.size() != nameCache.size()))
-        WriteGameNameCache(freshNameCache);
+        (fetchedControlData || freshNameCache.size() != nameCache.size())) {
+        const bool namesSaved = WriteGameNameCache(freshNameCache);
+        LogDiagnostic("name_cache_write ok=%d entries=%zu", namesSaved ? 1 : 0,
+                      freshNameCache.size());
+    }
     report(false); // expose the installed-game part before scanning NRO assets
 
     for (const auto& nro : nros) {
