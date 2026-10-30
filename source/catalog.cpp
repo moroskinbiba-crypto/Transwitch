@@ -37,7 +37,7 @@ constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
 constexpr const char* CacheTemp = "sdmc:/switch/DeskNX/cache/catalogue.tmp";
 constexpr size_t MaxNroAssetBytes = 2 * 1024 * 1024;
 
-struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; u64 playtimeSeconds; u64 lastPlayed; u32 launchCount; };
+struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; };
 struct NroFile { std::string path; u64 size; u64 mtime; };
 struct Signatures {
     size_t gameCount{0};
@@ -172,39 +172,10 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
             std::memcpy(&flags, bytes + 0x0C, sizeof(flags));
         }
         records.push_back({installed[i].application_id,
-                           installed[i].last_updated,
-                           flags, 0, 0, 0});
+                           installed[i].last_updated, flags});
     }
 
-    // SLaunch parity: query play statistics once per catalogue refresh, not
-    // from the render loop. A missing PDM record is a normal never-played game.
-    const Result pdmRc = pdmqryInitialize();
-    LogDiagnostic("pdm_init rc=0x%08X titles=%zu",
-                  static_cast<unsigned int>(pdmRc), records.size());
-    if (R_SUCCEEDED(pdmRc)) {
-        size_t statsOk = 0;
-        size_t statsFailed = 0;
-        std::uint32_t firstStatsError = 0;
-        for (auto& record : records) {
-            PdmPlayStatistics stats{};
-            const Result statsRc = pdmqryQueryPlayStatisticsByApplicationId(
-                record.id, false, &stats);
-            if (R_SUCCEEDED(statsRc)) {
-                record.playtimeSeconds = stats.playtime / 1000000000ULL;
-                record.lastPlayed = stats.last_timestamp_user;
-                record.launchCount = stats.total_launches;
-                ++statsOk;
-            } else {
-                ++statsFailed;
-                if (firstStatsError == 0)
-                    firstStatsError = static_cast<std::uint32_t>(statsRc);
-            }
-        }
-        pdmqryExit();
-        LogDiagnostic("pdm_done successful=%zu failed=%zu first_error=0x%08X total=%zu",
-                      statsOk, statsFailed, static_cast<unsigned int>(firstStatsError),
-                      records.size());
-    }
+    // Play statistics are loaded lazily for the selected library entry.
     return records;
 }
 Signatures MakeSignatures(const std::vector<GameRecord>& games, const std::vector<NroFile>& nros) {
@@ -548,21 +519,8 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     const Signatures sig = MakeSignatures(games, nros);
     // Never reuse a cache after NS failed or returned a partial application list.
     if (nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
-        // The catalogue cache intentionally excludes volatile play statistics.
-        // Reattach them from the single PDM query above on every refresh.
-        for (auto& item : result.items) {
-            if (item.kind != Kind::Game) continue;
-            char* end = nullptr;
-            const unsigned long long id = std::strtoull(item.data.c_str(), &end, 16);
-            if (!end || *end != '\0') continue;
-            const auto found = std::find_if(games.begin(), games.end(),
-                [id](const GameRecord& game) { return game.id == static_cast<u64>(id); });
-            if (found == games.end()) continue;
-            item.playtimeSeconds = found->playtimeSeconds;
-            item.lastPlayed = found->lastPlayed;
-            item.launchCount = found->launchCount;
-        }
-                result.complete = true;
+        // Volatile play statistics are fetched only for the selected game.
+        result.complete = true;
         LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu elapsed=%llds",
                       result.gameCount, result.nroCount, result.items.size(),
                       static_cast<long long>(std::time(nullptr) - scanStarted));
@@ -622,9 +580,6 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         freshNameCache.emplace(id, title);
         Candidate game{Kind::Game, title, hex, 1, 1,
                        static_cast<int>(colorIndex++ % 8), games[i].viewFlags};
-        game.playtimeSeconds = games[i].playtimeSeconds;
-        game.lastPlayed = games[i].lastPlayed;
-        game.launchCount = games[i].launchCount;
         result.items.push_back(std::move(game));
         if ((i + 1) % 12 == 0) report(false);
     }
