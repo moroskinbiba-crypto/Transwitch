@@ -56,7 +56,9 @@ int main() {
         assert(cell.x==0 && cell.y==0);
         assert(!cellFromPoint(122,200,100,200,20,15,5,5,false,cell));
         assert(cellFromPoint(122,217,100,200,20,15,5,5,true,cell));
-        assert(cell.x==0 && cell.y==0);
+        assert(cell.x==1 && cell.y==1);
+        const CellPoint grab=tileOriginForPointer(cell,1,1);
+        assert(grab.x==0 && grab.y==0);
         assert(cellFromPoint(150,200,100,200,20,15,5,5,false,cell));
         assert(cell.x==2 && cell.y==0);
         assert(!cellFromPoint(245,200,100,200,20,15,5,5,true,cell));
