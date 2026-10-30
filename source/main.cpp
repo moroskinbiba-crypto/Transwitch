@@ -717,6 +717,12 @@ void drawScreen() {
     }
     text("L / R SWITCH DESK",930,110,1,MUTED,1105);
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    if(d.tiles.empty()) {
+        softCard(390,292,500,132,Color{27,30,37,238},Color{255,255,255,24});
+        text("EMPTY WORKSPACE",430,318,3,WHITE,850);
+        text("PRESS Y TO ADD GAMES, HOMEBREW AND WIDGETS",432,365,1,BLUE,850);
+        text("PRESS + TO CREATE ANOTHER DESKTOP",432,390,1,MUTED,850);
+    }
     if(editing)for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
         int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
         if(x==selectedX&&y==selectedY){outline(px+2,py+2,CW-4,CH-4,BLUE);text("+",px+CW/2-4,py+CH/2-10,2,MUTED,px+CW-3);}
@@ -770,7 +776,18 @@ void drawScreen() {
             viewLabel+=nsError;
         }
         text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-20);
-        int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
+        text("UP / DOWN SELECT     A ADD     B CLOSE",mx+28,my+96,1,MUTED,mx+mw-20);
+        constexpr int vis=10;
+        if(available.empty()) {
+            listIndex=0;
+            listOffset=0;
+        } else {
+            listIndex=std::max(0,std::min(listIndex,static_cast<int>(available.size())-1));
+            const int maxOffset=std::max(0,static_cast<int>(available.size())-vis);
+            listOffset=std::max(0,std::min(listOffset,maxOffset));
+            if(listIndex<listOffset)listOffset=listIndex;
+            if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
+        }
         if(!catalogCompleteNow && available.empty()) {
             text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+128,2,BLUE,mx+mw-20);
             text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+160,1,MUTED,mx+mw-20);
@@ -947,8 +964,17 @@ void openList(){
 }
 void newDesk() {
     if(desks.size()>=MAX_DESKS){setStatus("MAXIMUM OF 12 WORKSPACES");return;}
-    desks.push_back(Workspace{"Workspace "+std::to_string(desks.size()+1),{}});deskIndex=static_cast<int>(desks.size())-1;selectedX=selectedY=0;editing=true;saveNow();
-    setStatus("NEW WORKSPACE CREATED");
+    int suffix=1;
+    std::string name;
+    bool exists=true;
+    while(exists) {
+        name="Workspace "+std::to_string(suffix++);
+        exists=false;
+        for(const auto& desk:desks) if(desk.name==name){exists=true;break;}
+    }
+    desks.push_back(Workspace{name,{}});deskIndex=static_cast<int>(desks.size())-1;
+    selectedX=selectedY=0;editing=true;saveNow();
+    setStatus("NEW WORKSPACE CREATED - PRESS Y TO ADD ITEMS");
 }
 void renameDesk() {
     SwkbdConfig kbd{};if(R_FAILED(swkbdCreate(&kbd,0))){setStatus("KEYBOARD UNAVAILABLE");return;}
