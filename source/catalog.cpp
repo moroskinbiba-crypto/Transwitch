@@ -448,12 +448,14 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if (progress) progress(result, context);
     };
     EnsureCacheDirectories();
-    // Match SLaunch's library-applet path: libnx initializes NS as part of
-    // applet startup. Do not open/close a second NS session inside the scanner;
-    // use the real enumeration result as the availability check.
-    const bool nsReady = true;
-    result.nsAvailable = true;
-    result.nsErrorCode = 0;
+    // SLaunch explicitly initializes NS before its background catalogue
+    // worker starts. libnx's default homebrew startup does not guarantee that
+    // the NS service is open, so never assume it is ready merely because the
+    // applet is running. Each scan owns one NS session; this also makes manual
+    // catalogue refreshes safe and keeps service lifetime out of the renderer.
+    result.nsErrorCode = static_cast<std::uint32_t>(nsInitialize());
+    const bool nsReady = result.nsErrorCode == 0;
+    result.nsAvailable = nsReady;
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
     if (result.nsErrorCode != 0) result.nsAvailable = false;
     result.gameCount = games.size();
@@ -480,6 +482,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             item.lastPlayed = found->lastPlayed;
             item.launchCount = found->launchCount;
         }
+        if (nsReady) nsExit();
         result.complete = true;
         report(true);
         return result;
@@ -555,6 +558,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     result.items.push_back({Kind::Recent, "Recent launch widget", "", 3, 1, 6});
     // Preserve the last known-good catalogue if NS enumeration failed.
     if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
+    if (nsReady) nsExit();
     report(true);
     return result;
 }
