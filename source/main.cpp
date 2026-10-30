@@ -50,12 +50,12 @@ constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
 
 struct Color { Uint8 r, g, b, a; };
-constexpr Color BG{17,18,22,255}, PANEL{34,36,42,255}, EDGE{66,69,77,255};
-constexpr Color WHITE{250,250,252,255}, MUTED{164,168,178,255}, BLUE{10,132,255,255};
-constexpr Color GREEN{48,209,88,255}, RED{255,69,58,255};
+constexpr Color BG{10,14,22,255}, PANEL{24,31,44,255}, EDGE{62,76,98,255};
+constexpr Color WHITE{246,248,252,255}, MUTED{145,158,180,255}, BLUE{83,157,255,255};
+constexpr Color GREEN{52,211,153,255}, RED{255,99,112,255};
 constexpr std::array<Color,8> COLORS{{
-    {78,117,188,255},{45,139,123,255},{151,91,185,255},{187,116,66,255},
-    {177,77,99,255},{67,135,177,255},{115,128,74,255},{89,99,119,255}
+    {91,145,226,255},{53,169,151,255},{155,116,226,255},{222,151,83,255},
+    {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255}
 }};
 
 SDL_Window* window = nullptr;
@@ -143,10 +143,10 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
         SDL_RenderDrawLine(renderer,x+inset,y+row,x+w-inset-1,y+row);
     }
 }
-void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,18}) {
-    roundRect(x,y+4,w,h,18,Color{0,0,0,45});
-    roundRect(x,y,w,h,18,fill);
-    roundRect(x+1,y+1,w-2,h-2,17,edge);
+void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
+    roundRect(x,y+5,w,h,20,Color{0,0,0,54});
+    roundRect(x,y,w,h,20,fill);
+    roundRect(x+1,y+1,w-2,h-2,19,edge);
 }
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
@@ -738,46 +738,52 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
 }
 void drawTileIcon(const Tile&t,int x,int y,int size) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
+    roundRect(x,y,size,size,std::max(8,size/5),Color{255,255,255,12});
     if(SDL_Texture* texture=gIconCache.get(t)) {
         int width=0,height=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)==0) {
-            const int inset=std::max(2,size/24),inner=std::max(1,size-inset*2);
+            const int inset=std::max(3,size/24),inner=std::max(1,size-inset*2);
             const float factor=std::min(static_cast<float>(inner)/std::max(1,width),static_cast<float>(inner)/std::max(1,height));
             const int dw=std::max(1,static_cast<int>(width*factor)),dh=std::max(1,static_cast<int>(height*factor));
             SDL_Rect dst{x+(size-dw)/2,y+(size-dh)/2,dw,dh};SDL_RenderCopy(renderer,texture,nullptr,&dst);
-            outline(x,y,size,size,Color{255,255,255,55});return;
+            outline(x,y,size,size,Color{255,255,255,64});return;
         }
     }
-    rect(x,y,size,size,c);outline(x,y,size,size,Color{255,255,255,55});
+    roundRect(x,y,size,size,std::max(8,size/5),c);
+    roundRect(x+1,y+1,size-2,size-2,std::max(7,size/5-1),Color{255,255,255,18});
     std::string mark=initials(t.title);int s=size>=70?3:2;int w=static_cast<int>(mark.size())*6*s-s;
     text(mark,x+(size-w)/2,y+(size-7*s)/2,s,WHITE,x+size-2);
 }
 void drawTile(const Tile&t,bool selected) {
-    SDL_Rect r=tileRect(t);Color accent=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
-    softCard(r.x,r.y,r.w,r.h,PANEL,selected?Color{10,132,255,180}:Color{255,255,255,22});
-    roundRect(r.x+10,r.y+7,r.w-20,3,2,accent);
+    SDL_Rect r=tileRect(t);
+    const Color accent=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
+    const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
+    softCard(r.x,r.y,r.w,r.h,fill,
+             selected?Color{92,164,255,210}:Color{255,255,255,18});
+    roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
     if(t.kind==Kind::Clock) {
-        text(clockText(),r.x+16,r.y+18,5,WHITE,r.x+r.w-10);
-        text(clockText(true).substr(6),r.x+18,r.y+74,2,MUTED,r.x+r.w-10);
-        text("CLOCK",r.x+18,r.y+r.h-23,1,accent,r.x+r.w-10);
+        text(clockText(),r.x+18,r.y+18,5,WHITE,r.x+r.w-12);
+        text(clockText(true).substr(6),r.x+20,r.y+74,2,MUTED,r.x+r.w-12);
+        text("CLOCK",r.x+20,r.y+r.h-23,1,BLUE,r.x+r.w-12);
     } else if(t.kind==Kind::Battery) {
-        text("BATTERY",r.x+18,r.y+14,2,MUTED,r.x+r.w-10);
-        text(battery>=0?std::to_string(battery)+"%":"N/A",r.x+18,r.y+41,4,WHITE,r.x+r.w-10);
-        int maxW=std::max(1,r.w-42),value=battery>=0?maxW*battery/100:4;
-        rect(r.x+20,r.y+r.h-24,std::max(4,value),7,battery>=20?GREEN:RED);outline(r.x+18,r.y+r.h-26,maxW+4,11,EDGE);
+        text("BATTERY",r.x+20,r.y+14,1,MUTED,r.x+r.w-12);
+        text(battery>=0?std::to_string(battery)+"%":"N/A",r.x+20,r.y+38,4,WHITE,r.x+r.w-12);
+        int maxW=std::max(1,r.w-48),value=battery>=0?maxW*battery/100:4;
+        roundRect(r.x+20,r.y+r.h-25,maxW,7,4,Color{54,66,84,255});
+        roundRect(r.x+20,r.y+r.h-25,std::max(4,value),7,4,battery>=20?GREEN:RED);
     } else if(t.kind==Kind::System) {
-        roundRect(r.x+18,r.y+18,70,70,20,Color{55,65,82,255});
+        roundRect(r.x+18,r.y+18,70,70,20,Color{37,61,91,255});
         drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
-        text("SYSTEM TOOLS",r.x+104,r.y+28,2,WHITE,r.x+r.w-10);
-        text("DESKNX SETTINGS  /  GAMEPAD",r.x+104,r.y+54,1,MUTED,r.x+r.w-10);
-        text("ALBUM  /  PROFILE  /  MORE",r.x+104,r.y+73,1,accent,r.x+r.w-10);
+        text("SYSTEM TOOLS",r.x+104,r.y+27,2,WHITE,r.x+r.w-12);
+        text("SETTINGS  /  CONTROLLERS",r.x+104,r.y+54,1,MUTED,r.x+r.w-12);
+        text("ALBUM  /  PROFILE  /  POWER",r.x+104,r.y+73,1,BLUE,r.x+r.w-12);
     } else if(t.kind==Kind::Unsupported) {
-        rect(r.x+3,r.y+3,r.w-6,r.h-6,Color{52,55,61,255});
-        text("UNSUPPORTED TILE",r.x+12,r.y+18,2,WHITE,r.x+r.w-10);
-        text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,r.x+12,r.y+52,2,MUTED,r.x+r.w-10);
+        roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
+        text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,r.x+r.w-12);
+        text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,r.x+14,r.y+52,2,MUTED,r.x+r.w-12);
     } else if(t.kind==Kind::Recent) {
-        text("RECENT LAUNCHES",r.x+18,r.y+10,2,MUTED,r.x+r.w-10);
-        if(recentLaunches.empty())text("NOTHING LAUNCHED YET",r.x+18,r.y+44,2,WHITE,r.x+r.w-10);
+        text("RECENTLY OPENED",r.x+18,r.y+12,1,MUTED,r.x+r.w-12);
+        if(recentLaunches.empty())text("NOTHING HERE YET",r.x+18,r.y+44,2,WHITE,r.x+r.w-12);
         else {
             const size_t visible=std::min<size_t>(2,recentLaunches.size());
             for(size_t i=0;i<visible;++i) {
@@ -786,16 +792,18 @@ void drawTile(const Tile&t,bool selected) {
                 text(e.title,r.x+48,iy+5,1,WHITE,r.x+r.w-12);
             }
         }
-        text("HISTORY STORED ON SD",r.x+18,r.y+r.h-18,1,accent,r.x+r.w-10);
+        text("HISTORY ON THIS CONSOLE",r.x+18,r.y+r.h-18,1,BLUE,r.x+r.w-12);
     } else if(t.w==1&&t.h==1) {
-        drawTileIcon(t,r.x+(r.w-56)/2,r.y+10,56);text(t.title,r.x+9,r.y+r.h-22,1,WHITE,r.x+r.w-6);
-        if(t.kind==Kind::Nro)rect(r.x+7,r.y+7,5,5,GREEN);
+        drawTileIcon(t,r.x+(r.w-60)/2,r.y+9,60);
+        text(t.title,r.x+9,r.y+r.h-21,1,WHITE,r.x+r.w-8);
+        if(t.kind==Kind::Nro)roundRect(r.x+8,r.y+8,6,6,3,GREEN);
     } else {
-        int is=t.h>1?86:64;drawTileIcon(t,r.x+16,r.y+(r.h-is)/2,is);
-        text(t.title,r.x+is+30,r.y+r.h/2-12,2,WHITE,r.x+r.w-9);
-        text(t.kind==Kind::Nro?"HOMEBREW":"GAME",r.x+is+30,r.y+r.h/2+12,1,MUTED,r.x+r.w-9);
+        const int is=t.h>1?86:66;
+        drawTileIcon(t,r.x+17,r.y+(r.h-is)/2,is);
+        text(t.title,r.x+is+31,r.y+r.h/2-13,2,WHITE,r.x+r.w-12);
+        text(t.kind==Kind::Nro?"HOMEBREW":"GAME",r.x+is+31,r.y+r.h/2+13,1,MUTED,r.x+r.w-12);
     }
-    if(selected)rect(r.x+r.w-16,r.y+9,7,7,BLUE);
+    if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
 }
 void drawDotted(int x,int y,int w,int h) {
     for(int xx=x;xx<x+w;xx+=12){rect(xx,y,6,2,Color{67,79,98,180});rect(xx,y+h-2,6,2,Color{67,79,98,180});}
@@ -814,90 +822,114 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
-    refreshBattery();rect(0,0,SW,SH,BG);
-    for(int y=0;y<SH;y+=28)rect(0,y,SW,1,Color{255,255,255,static_cast<Uint8>(y%3==0?7:3)});
-    rect(0,0,SW,76,Color{24,25,30,245});rect(0,74,SW,1,Color{255,255,255,18});
-    text("DESKNX",30,21,4,WHITE,260);text("PERSONAL HOME WORKSPACE",34,50,1,MUTED,420);
-    text("DESKTOP "+std::to_string(deskIndex+1)+" OF "+std::to_string(desks.size()),470,28,1,MUTED,690);
-    text(clockText(),1124,20,3,WHITE,1260);text(battery>=0?std::to_string(battery)+"%":"BAT --",1130,50,1,MUTED,1260);
+    refreshBattery();
+    rect(0,0,SW,SH,BG);
+    for(int band=0;band<30;++band) {
+        const Uint8 lift=static_cast<Uint8>(18-band/2);
+        rect(0,band*24,SW,25,Color{static_cast<Uint8>(10+lift/3),
+            static_cast<Uint8>(15+lift/2),static_cast<Uint8>(25+lift),255});
+    }
+    rect(0,0,SW,76,Color{11,16,26,242});
+    rect(0,75,SW,1,Color{255,255,255,13});
+    roundRect(28,16,44,44,14,Color{48,119,211,255});
+    drawSystemIcon(5,40,28,20,WHITE);
+    text("DESKNX",86,17,3,WHITE,300);
+    text("PERSONAL WORKSPACE",88,46,1,MUTED,340);
+    text(desks[static_cast<size_t>(deskIndex)].name,430,25,2,WHITE,790);
+    roundRect(1034,17,222,44,20,Color{27,36,51,255});
+    text(clockText(),1052,30,2,WHITE,1138);
+    rect(1145,27,1,24,Color{255,255,255,24});
+    text(battery>=0?std::to_string(battery)+"%":"BAT --",1160,32,1,
+         battery>=20?GREEN:RED,1242);
     int start=visibleStart(),tabW=156,x=28;
     for(int i=0;i<7&&start+i<static_cast<int>(desks.size());++i) {
         int idx=start+i;bool active=idx==deskIndex;
-        roundRect(x,94,tabW,42,14,active?Color{54,58,68,255}:Color{32,34,40,210});
-        if(active) roundRect(x+10,132,tabW-20,2,1,BLUE);
-        text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
+        roundRect(x,94,tabW,42,14,active?Color{39,76,119,255}:Color{23,31,45,230});
+        if(active)roundRect(x+12,128,tabW-24,3,2,BLUE);
+        text(desks[static_cast<size_t>(idx)].name,x+14,109,1,
+             active?WHITE:MUTED,x+tabW-10);
         x+=166;
     }
-    roundRect(1188,94,34,42,11,desks.size()<static_cast<size_t>(MAX_DESKS)?Color{45,49,59,255}:Color{34,36,42,255});
+    roundRect(1188,94,34,42,12,
+        desks.size()<static_cast<size_t>(MAX_DESKS)?Color{30,55,83,255}:Color{23,31,45,255});
     text("+",1199,105,2,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,1218);
-    roundRect(1226,94,34,42,11,Color{45,49,59,255});
-    text("...",1230,111,1,WHITE,1257);
-    Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    roundRect(1226,94,34,42,12,Color{23,31,45,255});
+    text("...",1230,111,1,WHITE,1257);    Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(d.tiles.empty()) {
-        softCard(390,292,500,132,Color{27,30,37,238},Color{255,255,255,24});
-        text("EMPTY WORKSPACE",430,318,3,WHITE,850);
-        text("PRESS Y TO ADD GAMES, HOMEBREW AND WIDGETS",432,365,1,BLUE,850);
-        text("PRESS + TO CREATE ANOTHER DESKTOP",432,390,1,MUTED,850);
+        softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
+        roundRect(390,302,46,46,14,Color{38,76,119,255});
+        drawSystemIcon(4,402,314,22,WHITE);
+        text("A FRESH WORKSPACE",454,302,2,WHITE,880);
+        text("Your apps and tools will live here.",454,337,1,MUTED,880);
+        roundRect(454,370,176,38,12,Color{43,111,190,255});
+        text("Y  ADD APPS",493,383,1,WHITE,620);
+        text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
     }
     if(editing)for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
         int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
-        if(x==selectedX&&y==selectedY){outline(px+2,py+2,CW-4,CH-4,BLUE);text("+",px+CW/2-4,py+CH/2-10,2,MUTED,px+CW-3);}
+        if(x==selectedX&&y==selectedY) {
+            roundRect(px+2,py+2,CW-4,CH-4,16,Color{34,63,99,100});
+            outline(px+2,py+2,CW-4,CH-4,BLUE);
+            text("+",px+CW/2-4,py+CH/2-10,2,WHITE,px+CW-3);
+        }
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h);
     if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
-    // Floating Dock: quick access to the library, edit mode and adjacent desktops.
-    rect(0,628,SW,92,Color{23,24,29,250});rect(0,628,SW,1,Color{255,255,255,18});
-    softCard(302,634,676,58,Color{48,50,58,245},Color{255,255,255,28});
-    struct DockItem { int x; int icon; const char* label; bool active; };
-    const DockItem dock[]={{312,4,"LIBRARY",listOpen},{422,5,"EDIT",editing},
-        {532,0,"SETTINGS",false},{642,1,"GAMEPAD",false},
-        {752,6,"RECENT",recentOpen},{862,3,"POWER",powerMenu}};
-    for(const auto& item:dock) {
-        const Color tileFill=item.active?Color{10,132,255,255}:Color{67,70,79,255};
-        roundRect(item.x,640,42,42,12,tileFill);
-        drawSystemIcon(item.icon,item.x+8,648,26,WHITE);
-        text(item.label,item.x+48,655,1,item.active?BLUE:WHITE,item.x+106);
-    }
+    softCard(28,558,1224,56,Color{18,26,39,238},Color{255,255,255,16});
+    const bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
+    roundRect(48,576,7,7,4,show?BLUE:GREEN);
+    text(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
+         68,575,1,show?WHITE:MUTED,620);
     struct Hint { const char* key; const char* action; };
-    const Hint leftHints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},
-                            {"Y","ADD"},{"ZL/ZR",editing?"SIZE":""}};
-    const Hint rightHints[]={{"-",editing?"REMOVE":"POWER"},{"L/R","DESK"},{"+","NEW DESK"},
-                             {"RSTICK",editing?"DEL DESK":"OPTIONS"}};
+    const Hint hints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L/R","SPACES"}};
     for(int i=0;i<4;++i) {
-        const int lx=18+i*92,rx=900+i*92;
-        // Keep control hints in the free strip above the dock. Previously
-        // they were drawn at y=650/670 on top of the dock labels, making the
-        // footer visibly garbled and hard to read.
-        text(leftHints[i].key,lx,548,1,BLUE,lx+48);
-        text(leftHints[i].action,lx,568,1,MUTED,lx+86);
-        text(rightHints[i].key,rx,548,1,BLUE,rx+48);
-        text(rightHints[i].action,rx,568,1,MUTED,rx+86);
+        const int hx=660+i*142;
+        roundRect(hx,571,34,28,8,Color{34,45,63,255});
+        text(hints[i].key,hx+7,581,1,BLUE,hx+30);
+        text(hints[i].action,hx+43,581,1,MUTED,hx+132);
     }
-    bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
-    text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,598,1,show?BLUE:MUTED,1230);
+    softCard(300,624,680,82,Color{18,26,39,246},Color{255,255,255,24});
+    struct DockItem { int x; int icon; const char* label; bool active; };
+    const DockItem dock[]={{302,4,"LIBRARY",listOpen},{412,5,"EDIT",editing},
+        {522,0,"SETTINGS",false},{632,1,"CONTROLLERS",false},
+        {742,6,"RECENT",recentOpen},{852,3,"POWER",powerMenu}};
+    for(const auto& item:dock) {
+        const int center=item.x+55;
+        if(item.active)roundRect(item.x+16,629,78,71,16,Color{34,67,107,255});
+        roundRect(center-19,634,38,38,13,
+            item.active?Color{67,142,235,255}:Color{34,46,64,255});
+        drawSystemIcon(item.icon,center-12,641,24,WHITE);
+        text(item.label,item.x+5,679,1,item.active?WHITE:MUTED,item.x+105);
+    }
     if(listOpen) {
-        rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;softCard(mx,my,mw,mh,Color{31,33,39,252},Color{255,255,255,30});
-        text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);
+        rect(0,0,SW,SH,Color{3,7,14,194});
+        const int mx=110,my=70,mw=1060,mh=570;
+        softCard(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
+        text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
+        text("Installed games, homebrew and system widgets",
+             mx+30,my+43,1,MUTED,mx+mw-24);
         struct DrawerChip { int x; int w; const char* label; };
-        const DrawerChip chips[]={{mx+28,96,"Y SEARCH"},{mx+132,82,"X SORT"},
-            {mx+222,112,"L/R FILTER"},{mx+342,82,"- CLEAR"},
-            {mx+432,126,"RSTICK RESCAN"},{mx+566,72,"B BACK"},
-            {mx+646,72,"A ADD"}};
+        const DrawerChip chips[]={{mx+28,96,"Y  SEARCH"},{mx+132,82,"X  SORT"},
+            {mx+222,112,"L/R  FILTER"},{mx+342,82,"-  CLEAR"},
+            {mx+432,126,"R  RESCAN"},{mx+566,72,"B  CLOSE"},
+            {mx+646,72,"A  ADD"}};
         for(const auto& chip:chips) {
-            roundRect(chip.x,my+52,chip.w,25,8,Color{49,52,61,255});
-            text(chip.label,chip.x+6,my+61,1,WHITE,chip.x+chip.w-4);
+            roundRect(chip.x,my+52,chip.w,25,9,Color{31,43,61,255});
+            text(chip.label,chip.x+7,my+61,1,WHITE,chip.x+chip.w-5);
         }
-        std::string viewLabel=std::string("FILTER: ")+desknx::catalog_view::FilterName(catalogueFilter)+
-            "  SORT: "+desknx::catalog_view::SortName(catalogueSort);
-        if(!catalogueQuery.empty()) viewLabel+="  QUERY: "+catalogueQuery;
-        if(!catalogCompleteNow) viewLabel+="  / SCANNING";
+        std::string viewLabel=std::string("FILTER  ")+
+            desknx::catalog_view::FilterName(catalogueFilter)+"     SORT  "+
+            desknx::catalog_view::SortName(catalogueSort);
+        if(!catalogueQuery.empty())viewLabel+="     SEARCH  "+catalogueQuery;
+        if(!catalogCompleteNow)viewLabel+="     /  UPDATING";
         if(catalogueNsErrorNow!=0) {
             char nsError[40]{};
-            std::snprintf(nsError,sizeof(nsError),"  / NS ERROR 0X%08X",static_cast<unsigned int>(catalogueNsErrorNow));
+            std::snprintf(nsError,sizeof(nsError),"     /  NS  0X%08X",
+                static_cast<unsigned int>(catalogueNsErrorNow));
             viewLabel+=nsError;
         }
-        text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-20);
-        text("UP / DOWN SELECT     A ADD     B CLOSE",mx+28,my+96,1,MUTED,mx+mw-20);
+        text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-22);
+        text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
         constexpr int vis=10;
         if(available.empty()) {
             listIndex=0;
@@ -909,80 +941,88 @@ void drawScreen() {
             if(listIndex<listOffset)listOffset=listIndex;
             if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
         }
-        if(!catalogCompleteNow && available.empty()) {
-            text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+128,2,BLUE,mx+mw-20);
-            text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+160,1,MUTED,mx+mw-20);
-        } else if(catalogCompleteNow && available.empty()) {
+        roundRect(mx+20,my+110,744,410,16,Color{13,19,29,255});
+        if(!catalogCompleteNow&&available.empty()) {
+            text("PREPARING YOUR LIBRARY",mx+42,my+150,2,WHITE,mx+720);
+            text("The first scan reads installed apps and SD-card homebrew.",
+                 mx+42,my+184,1,MUTED,mx+720);
+        } else if(catalogCompleteNow&&available.empty()) {
             if(!catalogueNsAvailableNow) {
                 char errorText[96]{};
-                std::snprintf(errorText,sizeof(errorText),"GAME SERVICE UNAVAILABLE  (0X%08X)",
-                              static_cast<unsigned int>(catalogueNsErrorNow));
-                text(errorText,mx+32,my+128,2,RED,mx+mw-20);
-                text("INSTALLED GAMES COULD NOT BE READ",mx+32,my+162,1,MUTED,mx+mw-20);
+                std::snprintf(errorText,sizeof(errorText),"GAME SERVICE UNAVAILABLE  0X%08X",
+                    static_cast<unsigned int>(catalogueNsErrorNow));
+                text(errorText,mx+42,my+150,1,RED,mx+720);
+                text("A saved library will appear here when a valid cache is available.",
+                     mx+42,my+180,1,MUTED,mx+720);
             } else {
-                text("NO MATCHING APPS",mx+32,my+128,2,WHITE,mx+mw-20);
-                text("TRY ANOTHER FILTER OR CLEAR SEARCH",mx+32,my+162,1,MUTED,mx+mw-20);
+                text("NO MATCHING APPS",mx+42,my+150,2,WHITE,mx+720);
+                text("Change the filter or clear your search.",
+                     mx+42,my+184,1,MUTED,mx+720);
             }
         } else {
-            // The list occupies the left side; the persistent inspector keeps
-            // the selected item's metadata visible without another modal.
             for(int row=0;row<vis;++row) {
-                int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+110+row*40;
-                if(i==listIndex)roundRect(mx+22,yy,mx+604,36,9,Color{45,61,82,255});
+                const int i=listOffset+row;
+                if(i>=static_cast<int>(available.size()))break;
+                const int yy=my+110+row*40;
                 const Candidate& candidate=available[static_cast<size_t>(i)];
+                if(i==listIndex)roundRect(mx+27,yy,730,35,10,Color{35,58,88,255});
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                drawTileIcon(iconTile,mx+30,yy+5,26);
-                text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+475);
-                std::string appBadge = typeName(candidate.kind);
-                if (candidate.kind == Kind::Game) {
-                    if (candidate.viewFlags & NsViewFlagNeedsUpdate) appBadge = "UPDATE";
-                    else if (candidate.viewFlags & NsViewFlagIsGameCard) appBadge = "GAMECARD";
+                drawTileIcon(iconTile,mx+38,yy+4,27);
+                text(candidate.title,mx+78,yy+9,1,
+                     i==listIndex?WHITE:MUTED,mx+592);
+                std::string appBadge=typeName(candidate.kind);
+                if(candidate.kind==Kind::Game) {
+                    if(candidate.viewFlags&NsViewFlagNeedsUpdate)appBadge="UPDATE";
+                    else if(candidate.viewFlags&NsViewFlagIsGameCard)appBadge="GAME CARD";
                 }
-                text(appBadge,mx+486,yy+11,1,
-                     (candidate.viewFlags & NsViewFlagNeedsUpdate) ? Color{255,159,10,255} :
-                     (i==listIndex?BLUE:MUTED),mx+620);
+                text(appBadge,mx+615,yy+11,1,
+                    (candidate.viewFlags&NsViewFlagNeedsUpdate)?Color{255,177,74,255}:
+                    (i==listIndex?BLUE:MUTED),mx+750);
             }
-            roundRect(mx+640,my+110,192,410,15,Color{25,27,33,255});
-            outline(mx+640,my+110,192,410,Color{255,255,255,20});
-            const Candidate& selected = available[static_cast<size_t>(
+        }
+        roundRect(mx+780,my+110,252,410,16,Color{22,31,45,255});
+        if(!available.empty()) {
+            const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
             Tile preview{selected.kind,selected.title,selected.data,0,0,1,1,selected.color};
-            drawTileIcon(preview,mx+694,my+128,84);
-            text(selected.title,mx+654,my+224,2,WHITE,mx+818);
-            std::string detailType = typeName(selected.kind);
-            if(selected.kind==Kind::Game && (selected.viewFlags&NsViewFlagNeedsUpdate)) detailType="UPDATE AVAILABLE";
-            else if(selected.kind==Kind::Game && (selected.viewFlags&NsViewFlagIsGameCard)) detailType="GAME CARD";
-            text(detailType,mx+654,my+266,1,BLUE,mx+818);
+            drawTileIcon(preview,mx+866,my+128,78);
+            text(selected.title,mx+798,my+218,2,WHITE,mx+mw-30);
+            std::string detailType=typeName(selected.kind);
+            if(selected.kind==Kind::Game&&(selected.viewFlags&NsViewFlagNeedsUpdate))
+                detailType="UPDATE AVAILABLE";
+            else if(selected.kind==Kind::Game&&(selected.viewFlags&NsViewFlagIsGameCard))
+                detailType="GAME CARD";
+            text(detailType,mx+800,my+252,1,BLUE,mx+mw-30);
             if(selected.kind==Kind::Game) {
-                text("TITLE ID",mx+654,my+296,1,MUTED,mx+818);
-                text(selected.data,mx+654,my+314,1,WHITE,mx+818);
-                if (!selected.playStatsQueried) {
-                    text("PLAY STATS NOT LOADED",mx+654,my+340,1,MUTED,mx+818);
-                } else if (!selected.playStatsAvailable) {
-                    text("PLAY STATS UNAVAILABLE",mx+654,my+340,1,RED,mx+818);
+                text("TITLE ID",mx+800,my+282,1,MUTED,mx+mw-30);
+                text(selected.data,mx+800,my+300,1,WHITE,mx+mw-30);
+                if(!selected.playStatsQueried) {
+                    text("PLAY STATS NOT LOADED",mx+800,my+332,1,MUTED,mx+mw-30);
+                } else if(!selected.playStatsAvailable) {
+                    text("PLAY STATS UNAVAILABLE",mx+800,my+332,1,RED,mx+mw-30);
                 } else {
                     char playLabel[48]{};
-                    const unsigned long long minutes =
-                        static_cast<unsigned long long>(selected.playtimeSeconds / 60);
-                    if (minutes < 60)
-                        std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %llu MIN", minutes);
+                    const unsigned long long minutes=
+                        static_cast<unsigned long long>(selected.playtimeSeconds/60);
+                    if(minutes<60)
+                        std::snprintf(playLabel,sizeof(playLabel),"PLAY TIME  %llu MIN",minutes);
                     else
-                        std::snprintf(playLabel, sizeof(playLabel), "PLAY TIME  %lluH %02lluM",
-                                      minutes / 60, minutes % 60);
-                    text(playLabel,mx+654,my+340,1,MUTED,mx+818);
+                        std::snprintf(playLabel,sizeof(playLabel),"PLAY TIME  %lluH %02lluM",
+                                      minutes/60,minutes%60);
+                    text(playLabel,mx+800,my+332,1,MUTED,mx+mw-30);
                     char launchLabel[48]{};
-                    std::snprintf(launchLabel, sizeof(launchLabel), "LAUNCHES  %u",
+                    std::snprintf(launchLabel,sizeof(launchLabel),"LAUNCHES  %u",
                                   selected.launchCount);
-                    text(launchLabel,mx+654,my+362,1,MUTED,mx+818);
-                    if (selected.lastPlayed != 0) {
-                        const std::time_t stamp = static_cast<std::time_t>(selected.lastPlayed);
+                    text(launchLabel,mx+800,my+354,1,MUTED,mx+mw-30);
+                    if(selected.lastPlayed!=0) {
+                        const std::time_t stamp=static_cast<std::time_t>(selected.lastPlayed);
                         std::tm local{};
                         char dateLabel[48]{};
-                        if (localtime_r(&stamp, &local) &&
-                            std::strftime(dateLabel, sizeof(dateLabel), "LAST PLAYED  %d.%m.%Y", &local))
-                            text(dateLabel,mx+654,my+384,1,MUTED,mx+818);
+                        if(localtime_r(&stamp,&local)&&
+                           std::strftime(dateLabel,sizeof(dateLabel),"LAST PLAYED  %d.%m.%Y",&local))
+                            text(dateLabel,mx+800,my+376,1,MUTED,mx+mw-30);
                     } else {
-                        text("NOT PLAYED YET",mx+654,my+384,1,MUTED,mx+818);
+                        text("NOT PLAYED YET",mx+800,my+376,1,MUTED,mx+mw-30);
                     }
                 }
             } else if(selected.kind==Kind::Nro) {
@@ -990,37 +1030,38 @@ void drawScreen() {
                 const size_t slash=fileName.find_last_of('/');
                 const std::string folder=slash==std::string::npos?std::string{}:fileName.substr(0,slash);
                 if(slash!=std::string::npos)fileName=fileName.substr(slash+1);
-                text("FILE",mx+654,my+296,1,MUTED,mx+818);
-                text(fileName,mx+654,my+314,1,WHITE,mx+818);
-                text("FOLDER",mx+654,my+338,1,MUTED,mx+818);
-                text(folder,mx+654,my+356,1,WHITE,mx+818);
+                text("FILE",mx+800,my+282,1,MUTED,mx+mw-30);
+                text(fileName,mx+800,my+300,1,WHITE,mx+mw-30);
+                text("FOLDER",mx+800,my+326,1,MUTED,mx+mw-30);
+                text(folder,mx+800,my+344,1,WHITE,mx+mw-30);
                 struct stat appStat{};
-                if(stat(selected.data.c_str(),&appStat)==0 && S_ISREG(appStat.st_mode) && appStat.st_size>=0) {
+                if(stat(selected.data.c_str(),&appStat)==0&&S_ISREG(appStat.st_mode)&&appStat.st_size>=0) {
                     const unsigned long long bytes=static_cast<unsigned long long>(appStat.st_size);
                     char sizeLabel[48]{};
                     if(bytes>=1024ULL*1024ULL)
                         std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu MB",bytes/(1024ULL*1024ULL));
                     else
                         std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu KB",bytes/1024ULL);
-                    text(sizeLabel,mx+654,my+382,1,MUTED,mx+818);
+                    text(sizeLabel,mx+800,my+370,1,MUTED,mx+mw-30);
                 }
             } else {
-                text("DESKTOP WIDGET",mx+654,my+296,1,MUTED,mx+818);
-                text("ADDS LIVE INFORMATION",mx+654,my+314,1,WHITE,mx+818);
+                text("SYSTEM WIDGET",mx+800,my+282,1,MUTED,mx+mw-30);
+                text("Adds live information to your desktop.",mx+800,my+302,1,WHITE,mx+mw-30);
             }
-            text(std::to_string(listIndex+1)+" / "+std::to_string(available.size()),
-                 mx+654,my+472,1,MUTED,mx+818);
-            text("A  ADD TO WORKSPACE",mx+654,my+490,1,BLUE,mx+818);
+            text(std::to_string(listIndex+1)+" OF "+std::to_string(available.size()),
+                 mx+800,my+438,1,MUTED,mx+mw-30);
+            roundRect(mx+792,my+462,228,42,12,Color{49,119,199,255});
+            text("A  ADD TO WORKSPACE",mx+823,my+477,1,WHITE,mx+mw-30);
         }
         const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
-        text(counts,mx+28,my+mh-26,1,MUTED,mx+620);
+        text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
     if(workspaceMenu) {
-        rect(0,0,SW,SH,Color{0,0,0,190});
-        softCard(400,220,480,280,Color{31,33,39,255},Color{255,255,255,30});
-        text("WORKSPACE OPTIONS",438,244,3,WHITE,840);
+        rect(0,0,SW,SH,Color{3,7,14,190});
+        softCard(390,210,500,300,Color{18,25,37,255},Color{255,255,255,26});
+        text("WORKSPACE OPTIONS",430,238,3,WHITE,850);
         const char* actions[]={"RENAME WORKSPACE","DELETE WORKSPACE"};
         for(int i=0;i<2;++i) {
             const int yy=302+i*58;
@@ -1032,9 +1073,9 @@ void drawScreen() {
         text("UP / DOWN SELECT     A OPEN     B CLOSE",438,482,1,MUTED,840);
     }
     if(deletePrompt) {
-        rect(0,0,SW,SH,Color{0,0,0,190});
-        softCard(360,250,560,200,Color{31,33,39,255},Color{255,69,58,100});
-        text("DELETE WORKSPACE?",405,278,3,WHITE,890);
+        rect(0,0,SW,SH,Color{3,7,14,194});
+        softCard(360,242,560,216,Color{24,27,38,255},Color{255,99,112,100});
+        text("DELETE WORKSPACE?",405,274,3,WHITE,890);
         text(desks[static_cast<size_t>(deskIndex)].name,405,320,2,MUTED,890);
         roundRect(405,366,210,48,12,Color{112,38,42,255});
         outline(405,366,210,48,Color{255,69,58,130});
@@ -1045,9 +1086,9 @@ void drawScreen() {
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(recentOpen) {
-        rect(0,0,SW,SH,Color{0,0,0,185});
-        softCard(250,88,780,544,Color{31,33,39,252},Color{255,255,255,30});
-        text("RECENT LAUNCHES",282,112,3,WHITE,850);
+        rect(0,0,SW,SH,Color{3,7,14,190});
+        softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+        text("RECENTLY OPENED",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
         text("B BACK",850,118,1,WHITE,912);
         roundRect(924,108,88,30,9,Color{10,132,255,255});
@@ -1073,10 +1114,11 @@ void drawScreen() {
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
     }
     if(systemMenu) {
-        rect(0,0,SW,SH,Color{0,0,0,190});
-        softCard(110,112,1060,496,Color{31,33,39,252},Color{255,255,255,30});
-        text("SYSTEM TOOLS",146,136,3,WHITE,1020);
-        text("QUICK ACCESS TO CONSOLE AND DESKNX FEATURES",148,174,1,MUTED,1020);
+        rect(0,0,SW,SH,Color{3,7,14,190});
+        softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
+        text("SYSTEM TOOLS",146,130,3,WHITE,1020);
+        text("Your console shortcuts, collected in one place.",
+             148,168,1,MUTED,1020);
         struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
             {154,218,0,"SETTINGS","DESKNX OPTIONS"},
@@ -1090,8 +1132,12 @@ void drawScreen() {
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
             softCard(item.x,item.y,210,136,systemMenuIndex==static_cast<int>(toolIndex)?
-                Color{48,62,82,255}:Color{43,46,54,255},Color{255,255,255,22});
-            roundRect(item.x+14,item.y+14,54,54,15,Color{61,70,86,255});
+                Color{34,63,98,255}:Color{23,32,46,255},
+                systemMenuIndex==static_cast<int>(toolIndex)?
+                Color{91,157,238,115}:Color{255,255,255,18});
+            roundRect(item.x+14,item.y+14,54,54,16,
+                systemMenuIndex==static_cast<int>(toolIndex)?
+                Color{54,108,171,255}:Color{38,51,71,255});
             drawSystemIcon(item.icon,item.x+25,item.y+25,32,WHITE);
             text(item.title,item.x+80,item.y+23,2,WHITE,item.x+202);
             text(item.subtitle,item.x+16,item.y+91,1,MUTED,item.x+202);
@@ -1101,10 +1147,11 @@ void drawScreen() {
         text("A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(appSettingsMenu) {
-        rect(0,0,SW,SH,Color{0,0,0,192});
-        softCard(340,184,600,370,Color{31,33,39,255},Color{255,255,255,30});
-        text("DESKNX SETTINGS",382,208,3,WHITE,860);
-        text("WORKSPACE AND LIBRARY MAINTENANCE",384,246,1,MUTED,860);
+        rect(0,0,SW,SH,Color{3,7,14,194});
+        softCard(320,174,640,390,Color{17,24,36,255},Color{255,255,255,25});
+        text("DESKNX SETTINGS",364,198,3,WHITE,900);
+        text("Library health and workspace preferences",
+             366,236,1,MUTED,900);
         roundRect(840,202,70,30,9,Color{54,57,66,255});
         text("B BACK",852,212,1,WHITE,904);
         char nsInfo[80]{};
@@ -1129,16 +1176,16 @@ void drawScreen() {
                                "TOGGLE EDIT / ARRANGE MODE"};
         for(int i=0;i<4;++i) {
             const int yy=306+i*52;
-            if(i==appSettingsIndex)roundRect(378,yy,524,45,10,Color{45,61,82,255});
-            text(actions[i],400,yy+15,2,i==appSettingsIndex?WHITE:MUTED,882);
+            if(i==appSettingsIndex)roundRect(358,yy,564,45,12,Color{35,61,93,255});
+            text(actions[i],382,yy+15,1,i==appSettingsIndex?WHITE:MUTED,900);
         }
         text("UP / DOWN SELECT     A APPLY     B CLOSE",382,520,1,BLUE,900);
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
-        rect(0,0,SW,SH,Color{0,0,0,190});
-        softCard(420,220,440,280,Color{31,33,39,255},Color{255,255,255,28});
-        text("POWER",460,242,3,WHITE,810);
+        rect(0,0,SW,SH,Color{3,7,14,194});
+        softCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
+        text("POWER",454,238,3,WHITE,820);
         roundRect(780,238,52,30,9,Color{54,57,66,255});
         text("B",798,247,1,WHITE,828);
         for(int i=0;i<3;++i){
@@ -1763,20 +1810,20 @@ void touchInput(const SDL_Event&e) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(listOpen) {
             if(y>=122&&y<=151) {
-                if(x>=238&&x<334) searchCatalogue();
-                else if(x>=342&&x<424) cycleCatalogueSort();
-                else if(x>=432&&x<544) cycleCatalogueFilter(1);
-                else if(x>=552&&x<634){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
-                else if(x>=642&&x<768) restartCatalogueScan();
-                else if(x>=776&&x<848) listOpen=false;
-                else if(x>=856&&x<928) addSelected();
+                if(x>=138&&x<234) searchCatalogue();
+                else if(x>=242&&x<324) cycleCatalogueSort();
+                else if(x>=332&&x<444) cycleCatalogueFilter(1);
+                else if(x>=452&&x<534){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
+                else if(x>=542&&x<668) restartCatalogueScan();
+                else if(x>=676&&x<748) listOpen=false;
+                else if(x>=756&&x<828) addSelected();
                 return;
             }
-            if(y>=550&&y<=584&&x>=850&&x<=1042) {
+            if(y>=532&&y<=576&&x>=900&&x<=1150) {
                 addSelected();
                 return;
             }
-            if(y>=180&&y<580&&x<830) {
+            if(y>=180&&y<580&&x>=130&&x<890) {
                 const int row=(y-180)/40;
                 const auto& available=visibleCatalogueSnapshot();
                 const int index=listOffset+row;
