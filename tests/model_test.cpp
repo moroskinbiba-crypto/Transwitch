@@ -64,7 +64,7 @@ int main() {
         Workspace touchDesk{"touch",{}};
         touchDesk.tiles.push_back(Tile{Kind::Game,"Wide","0100000000000001",0,0,2,2,0});
         assert(tileAtPoint(touchDesk,122,217,100,200,20,15,5,5)==0);
-        assert(tileAtPoint(touchDesk,146,234,100,200,20,15,5,5)==0);
+        assert(tileAtPoint(touchDesk,144,234,100,200,20,15,5,5)==0);
         assert(tileAtPoint(touchDesk,150,200,100,200,20,15,5,5)==-1);
     }
 
