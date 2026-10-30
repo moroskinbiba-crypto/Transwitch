@@ -5,6 +5,7 @@
 #include <array>
 #include <cerrno>
 #include <cstdlib>
+#include <sstream>
 #include <utility>
 #include <vector>
 
