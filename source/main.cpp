@@ -1335,16 +1335,17 @@ void addSelected() {
         return;
     }
     d.tiles.push_back(t);editing=true;
+    std::string addStatus;
     Tile placeholder{Kind::Game,"","",0,0,1,1,0};
     int freeX=0,freeY=0;
     if(firstFree(d,placeholder,freeX,freeY)) {
         selectedX=freeX;selectedY=freeY;
-        setStatus("ADDED: "+t.title+"  -  SELECT ANOTHER OR PRESS B",2600);
+        addStatus="ADDED: "+t.title+"  -  SELECT ANOTHER OR PRESS B";
     } else {
         selectedX=t.x;selectedY=t.y;listOpen=false;
-        setStatus("DESKTOP FULL - ITEM ADDED",2600);
+        addStatus="DESKTOP FULL - ITEM ADDED";
     }
-    saveNow();
+    if(saveNow())setStatus(addStatus,2600);
 }
 void loadPlayStatsForSelection() {
     const auto& available=visibleCatalogueSnapshot();
