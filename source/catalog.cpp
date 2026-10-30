@@ -219,7 +219,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
         errno = 0;
         const unsigned long parsedFlags = std::strtoul(fields[7].c_str(), &flagsEnd, 10);
         if (errno != 0 || flagsEnd == fields[7].c_str() || !flagsEnd ||
-            *flagsEnd != '\\0' || parsedFlags > 0xFFFFFFFFul)
+            *flagsEnd != '\0' || parsedFlags > 0xFFFFFFFFul)
             return false;
         item.viewFlags = static_cast<uint32_t>(parsedFlags);
         if (!desknx::strict::parseInt32(fields[4], item.w) ||
