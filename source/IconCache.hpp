@@ -15,6 +15,7 @@
 class IconCache {
 public:
     void setRenderer(SDL_Renderer* renderer) { renderer_ = renderer; }
+    void beginFrame() { loadBudget_ = 1; }
     void setCustomIconPackDir(const std::string& path) {
         if(path==customIconPackDir_)return;
         shutdown();
@@ -59,6 +60,10 @@ public:
                 return entry.texture;
             }
         }
+        // Decode at most one uncached image per frame. Placeholders keep the
+        // grid interactive while the rest of the visible artwork fills in.
+        if(loadBudget_==0)return nullptr;
+        --loadBudget_;
         struct stat st{};
         constexpr long long MaxCompressedIconBytes = 2LL * 1024 * 1024;
         if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -236,5 +241,6 @@ private:
     std::unordered_map<std::string,std::string> resolvedPaths_;
     std::unordered_map<std::string,Uint32> failedUntil_;
     unsigned long long clock_{0};
+    size_t loadBudget_{1};
     std::vector<Entry> entries_;
 };

@@ -78,6 +78,8 @@ int themeIndex=1;
 std::string wallpaperPath, fontPath, iconPackPath;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
+SDL_Texture* roundedCornerMaskTexture=nullptr;
+int roundedCornerMaskRadius=0;
 
 enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground };
 struct MediaEntry { std::string name, path; bool directory{false}; };
@@ -122,6 +124,9 @@ bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown =
 bool layoutSaveBlocked = false;
 bool layoutUserModified = false;
 bool defaultLayoutPending = false;
+uint64_t persistedLayoutShapeHash = 0;
+bool persistedLayoutShapeKnown = false;
+bool layoutPrimaryNeedsRewrite = true;
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
@@ -1071,9 +1076,25 @@ bool saveLayout() {
         setStatus("SAVE BLOCKED: PRESERVE LAYOUT BACKUP", 4500);
         return false;
     }
-    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     const std::string serialized=desknx::layout::serialize(desks,deskIndex);
-    if(serialized.empty()){setStatus("LAYOUT INVALID; SAVE REFUSED",3500);return false;}
+    const std::string shape=desknx::layout::serialize(desks,0);
+    if(serialized.empty()||shape.empty()) {
+        setStatus("LAYOUT INVALID; SAVE REFUSED",3500);
+        return false;
+    }
+    const uint64_t shapeHash=desknx::model::stableHash(shape);
+    const bool mustRewritePrimary=layoutPrimaryNeedsRewrite||
+        !persistedLayoutShapeKnown||persistedLayoutShapeHash!=shapeHash||
+        layoutNeedsMigration;
+
+    // The active desk has its own validated, atomic marker. When only deskIndex
+    // changed, do not rewrite every tile or rotate the full-layout backup.
+    if(!mustRewritePrimary && saveActiveWorkspaceState()) {
+        layoutLoaded=true;
+        return true;
+    }
+
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
     if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return false;}
     f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
@@ -1091,15 +1112,17 @@ bool saveLayout() {
         }
         return false;
     }
-    // The main layout stores the active index too; this independently stored,
-    // shape-validated marker protects the user's last workspace across restarts.
+    persistedLayoutShapeHash=shapeHash;
+    persistedLayoutShapeKnown=true;
+    layoutPrimaryNeedsRewrite=false;
+    layoutNeedsMigration=false;
+    // If the marker cannot be published, the main layout already carries the
+    // current index. Remove the stale marker rather than restoring an old desk.
     if(!saveActiveWorkspaceState()) {
         desknx::diag::Write("layout","active_workspace_marker_write_failed",
                             "index=%d",deskIndex);
-        // Never leave a previous marker that could point to an older selection.
         (void)std::remove(ACTIVE_WORKSPACE_FILE);
     }
-    // Keep layout.bak as the last known-good version after successful replacement.
     layoutLoaded=true;
     setStatus("LAYOUT SAVED",1600);
     return true;
@@ -1120,6 +1143,13 @@ bool loadLayoutFrom(const char* path) {
     layoutNeedsMigration = loaded.needsMigration;
     layoutRecoveredTiles = loaded.recoveredTiles;
     layoutDroppedTiles = loaded.droppedTiles;
+    const std::string shape=desknx::layout::serialize(desks,0);
+    persistedLayoutShapeKnown=!shape.empty();
+    persistedLayoutShapeHash=persistedLayoutShapeKnown?
+        desknx::model::stableHash(shape):0;
+    // A backup restore or legacy format must be published back to layout.tsv,
+    // even when the restored workspace contents themselves have not changed.
+    layoutPrimaryNeedsRewrite=(std::string(path)!=CFG_FILE)||layoutNeedsMigration;
     selectedX = selectedY = 0;
     return true;
 }
@@ -1326,24 +1356,61 @@ const std::vector<std::string>& cachedTileTitleLines(const std::string& title,si
     if(tileTitleWrapCache.size()>=512)tileTitleWrapCache.clear();
     return tileTitleWrapCache.emplace(key,wrapTileTitle(title,maxChars)).first->second;
 }
+SDL_Texture* getRoundedCornerMask(int radius) {
+    if(!renderer||radius<=0)return nullptr;
+    if(roundedCornerMaskTexture&&roundedCornerMaskRadius==radius)
+        return roundedCornerMaskTexture;
+    if(roundedCornerMaskTexture) {
+        SDL_DestroyTexture(roundedCornerMaskTexture);
+        roundedCornerMaskTexture=nullptr;
+        roundedCornerMaskRadius=0;
+    }
+    SDL_Surface* surface=SDL_CreateRGBSurfaceWithFormat(
+        0,radius,radius,32,SDL_PIXELFORMAT_RGBA32);
+    if(!surface)return nullptr;
+    if(SDL_MUSTLOCK(surface)&&SDL_LockSurface(surface)!=0) {
+        SDL_FreeSurface(surface);
+        return nullptr;
+    }
+    for(int y=0;y<radius;++y) {
+        Uint32* row=reinterpret_cast<Uint32*>(
+            static_cast<Uint8*>(surface->pixels)+y*surface->pitch);
+        for(int x=0;x<radius;++x) {
+            const double dx=radius-(x+0.5),dy=radius-(y+0.5);
+            const bool outside=(dx*dx+dy*dy)>
+                static_cast<double>(radius)*radius;
+            row[x]=SDL_MapRGBA(surface->format,255,255,255,outside?255:0);
+        }
+    }
+    if(SDL_MUSTLOCK(surface))SDL_UnlockSurface(surface);
+    roundedCornerMaskTexture=SDL_CreateTextureFromSurface(renderer,surface);
+    SDL_FreeSurface(surface);
+    if(!roundedCornerMaskTexture)return nullptr;
+    SDL_SetTextureBlendMode(roundedCornerMaskTexture,SDL_BLENDMODE_BLEND);
+    roundedCornerMaskRadius=radius;
+    return roundedCornerMaskTexture;
+}
+
 void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
     const int r=std::max(0,std::min(radius,std::min(bounds.w,bounds.h)/2));
-    if(r==0)return;
-    color(fill);
-    for(int row=0;row<r;++row) {
-        const double dy=static_cast<double>(r-row);
-        const int inset=static_cast<int>(std::ceil(r-std::sqrt(
-            std::max(0.0,static_cast<double>(r*r)-dy*dy))));
-        if(inset<=0)continue;
-        SDL_RenderDrawLine(renderer,bounds.x,bounds.y+row,
-                           bounds.x+inset-1,bounds.y+row);
-        SDL_RenderDrawLine(renderer,bounds.x+bounds.w-inset,bounds.y+row,
-                           bounds.x+bounds.w-1,bounds.y+row);
-        SDL_RenderDrawLine(renderer,bounds.x,bounds.y+bounds.h-1-row,
-                           bounds.x+inset-1,bounds.y+bounds.h-1-row);
-        SDL_RenderDrawLine(renderer,bounds.x+bounds.w-inset,bounds.y+bounds.h-1-row,
-                           bounds.x+bounds.w-1,bounds.y+bounds.h-1-row);
-    }
+    SDL_Texture* mask=getRoundedCornerMask(r);
+    if(!mask)return;
+    SDL_SetTextureColorMod(mask,fill.r,fill.g,fill.b);
+    SDL_SetTextureAlphaMod(mask,fill.a);
+    const SDL_Rect corners[]={
+        {bounds.x,bounds.y,r,r},
+        {bounds.x+bounds.w-r,bounds.y,r,r},
+        {bounds.x,bounds.y+bounds.h-r,r,r},
+        {bounds.x+bounds.w-r,bounds.y+bounds.h-r,r,r}
+    };
+    const SDL_RendererFlip flips[]={
+        SDL_FLIP_NONE,SDL_FLIP_HORIZONTAL,SDL_FLIP_VERTICAL,
+        static_cast<SDL_RendererFlip>(SDL_FLIP_HORIZONTAL|SDL_FLIP_VERTICAL)
+    };
+    for(int i=0;i<4;++i)
+        SDL_RenderCopyEx(renderer,mask,nullptr,&corners[i],0.0,nullptr,flips[i]);
+    SDL_SetTextureColorMod(mask,255,255,255);
+    SDL_SetTextureAlphaMod(mask,255);
 }
 
 void drawTileCover(const Tile& tile,const Workspace& workspace,
@@ -1502,6 +1569,7 @@ int visibleStart() {
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
 void drawScreen() {
+    gIconCache.beginFrame();
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     bool catalogueNsAvailableNow=false;
@@ -3473,6 +3541,7 @@ int main(int,char**) {
     for(auto& entry:workspaceBackgroundTextures)
         if(entry.texture)SDL_DestroyTexture(entry.texture);
     workspaceBackgroundTextures.clear();
+    if(roundedCornerMaskTexture){SDL_DestroyTexture(roundedCornerMaskTexture);roundedCornerMaskTexture=nullptr;}
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
     playStatsPending=false;
