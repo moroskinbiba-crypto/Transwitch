@@ -50,7 +50,7 @@ constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
 
 struct Color { Uint8 r, g, b, a; };
-constexpr Color BG{10,14,22,255}, PANEL{24,31,44,255}, EDGE{62,76,98,255};
+constexpr Color BG{10,14,22,255};
 constexpr Color WHITE{246,248,252,255}, MUTED{145,158,180,255}, BLUE{83,157,255,255};
 constexpr Color GREEN{52,211,153,255}, RED{255,99,112,255};
 constexpr std::array<Color,8> COLORS{{
@@ -854,7 +854,8 @@ void drawScreen() {
         desks.size()<static_cast<size_t>(MAX_DESKS)?Color{30,55,83,255}:Color{23,31,45,255});
     text("+",1199,105,2,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,1218);
     roundRect(1226,94,34,42,12,Color{23,31,45,255});
-    text("...",1230,111,1,WHITE,1257);    Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    text("...",1230,111,1,WHITE,1257);
+    Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(d.tiles.empty()) {
         softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
         roundRect(390,302,46,46,14,Color{38,76,119,255});
@@ -911,7 +912,7 @@ void drawScreen() {
         struct DrawerChip { int x; int w; const char* label; };
         const DrawerChip chips[]={{mx+28,96,"Y  SEARCH"},{mx+132,82,"X  SORT"},
             {mx+222,112,"L/R  FILTER"},{mx+342,82,"-  CLEAR"},
-            {mx+432,126,"R  RESCAN"},{mx+566,72,"B  CLOSE"},
+            {mx+432,126,"R STICK RESCAN"},{mx+566,72,"B  CLOSE"},
             {mx+646,72,"A  ADD"}};
         for(const auto& chip:chips) {
             roundRect(chip.x,my+52,chip.w,25,9,Color{31,43,61,255});
