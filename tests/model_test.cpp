@@ -4,6 +4,7 @@
 #include <desknx/StrictParse.hpp>
 #include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
+#include <desknx/Artwork.hpp>
 #include "../source/catalog_view.hpp"
 
 #include <cassert>
@@ -241,6 +242,45 @@ int main() {
         malformed.tiles.push_back(Tile{Kind::Game,"Invalid","0100000000000009",0,0,3,3,0});
         assert(desknx::layout::serialize({malformed},0).empty());
         assert(!isSupportedTileSize(3,3));
+    }
+
+    // Regression tests for full-tile Cover and no-crop Contain rendering.
+    {
+        using desknx::artwork::coverDestination;
+        using desknx::artwork::containDestination;
+        const auto wide = coverDestination(100,200,152,110,400,200);
+        assert(wide.x < 100 && wide.y == 200 && wide.w >= 152 && wide.h == 110);
+        const auto tall = coverDestination(100,200,152,110,300,400);
+        assert(tall.x == 100 && tall.y < 200 && tall.w == 152 && tall.h >= 110);
+        const auto fit = containDestination(100,200,152,110,400,200);
+        assert(fit.w == 152 && fit.h < 110 && fit.y > 200);
+        const auto invalid = coverDestination(0,0,0,100,100,100);
+        assert(invalid.w == 0 && invalid.h == 0);
+    }
+
+    // Every desktop owns its visual settings; v3 layout files migrate safely.
+    {
+        Workspace custom{"Custom",{}};
+        custom.backgroundPath="sdmc:/switch/DeskNX/media/backgrounds/night.jpg";
+        custom.backgroundFit=1; custom.artworkMode=2;
+        custom.labelOpacity=128; custom.accentColor=5;
+        const std::string saved=desknx::layout::serialize({custom},0);
+        assert(saved.find("DESKNX4\n")==0);
+        desknx::layout::LoadResult loaded{};
+        assert(desknx::layout::parse(saved,loaded));
+        const Workspace& restored=loaded.workspaces[0];
+        assert(restored.backgroundPath==custom.backgroundPath);
+        assert(restored.backgroundFit==1 && restored.artworkMode==2);
+        assert(restored.labelOpacity==128 && restored.accentColor==5);
+        assert(!loaded.needsMigration);
+        desknx::layout::LoadResult legacy{};
+        assert(desknx::layout::parse("DESKNX3\nA\t0\nD\tLegacy\n",legacy));
+        assert(legacy.needsMigration && legacy.workspaces[0].backgroundPath.empty());
+        assert(legacy.workspaces[0].artworkMode==0 && legacy.workspaces[0].labelOpacity==196);
+        custom.backgroundPath="sdmc:/switch/elsewhere/background.jpg";
+        assert(desknx::layout::serialize({custom},0).empty());
+        custom.backgroundPath.clear(); custom.artworkMode=99;
+        assert(desknx::layout::serialize({custom},0).empty());
     }
 
     assert(typeCode(parseKind("N")) == "N");

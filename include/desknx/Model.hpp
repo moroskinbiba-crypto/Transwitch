@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -26,6 +27,11 @@ struct Tile {
 struct Workspace {
     std::string name;
     std::vector<Tile> tiles;
+    std::string backgroundPath{};
+    int backgroundFit{0};   // 0 = cover, 1 = contain, 2 = stretch
+    int artworkMode{0};    // 0 = cover, 1 = contain, 2 = stretch
+    int labelOpacity{196}; // 0..255
+    int accentColor{-1};   // -1 = tile default, 0..7 = palette entry
 };
 
 struct Candidate {
@@ -103,6 +109,31 @@ inline std::string safeField(std::string value) {
         if (c == '\t' || c == '\n' || c == '\r') c = ' ';
     }
     return value;
+}
+
+inline bool isValidWorkspaceBackgroundPath(const std::string& path) {
+    if (path.empty()) return true;
+    constexpr char prefix[] = "sdmc:/switch/DeskNX/media/";
+    if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
+        path.size() > 240 || path.find("..") != std::string::npos ||
+        path.find('\0') != std::string::npos ||
+        path.find('\t') != std::string::npos ||
+        path.find('\n') != std::string::npos ||
+        path.find('\r') != std::string::npos)
+        return false;
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot);
+    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".png";
+}
+
+inline bool isValidWorkspaceAppearance(const Workspace& workspace) {
+    return isValidWorkspaceBackgroundPath(workspace.backgroundPath) &&
+           workspace.backgroundFit >= 0 && workspace.backgroundFit <= 2 &&
+           workspace.artworkMode >= 0 && workspace.artworkMode <= 2 &&
+           workspace.labelOpacity >= 0 && workspace.labelOpacity <= 255 &&
+           workspace.accentColor >= -1 && workspace.accentColor <= 7;
 }
 
 inline bool isSupportedTileSize(int w, int h) {

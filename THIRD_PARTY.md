@@ -20,3 +20,8 @@ The standalone DeskNX NRO build is separate from the system backend and does not
 ## nx-hbloader
 
 The target-aware Homebrew loader under `projects/hbloader/` is derived from the sLaunch fork of [switchbrew/nx-hbloader](https://github.com/switchbrew/nx-hbloader), which is distributed under the ISC License. The applicable upstream license text is preserved in `projects/hbloader/LICENSE.md`. DeskNX changes its one-shot target and log paths to `sdmc:/switch/DeskNX/` and intentionally disables donor-slot/application-mode chainloading until that lifecycle can be implemented and tested safely.
+
+
+## uLaunch visual reference
+
+uLaunch (https://github.com/XorTroll/uLaunch) is used as a design and behavior reference for grid navigation, themeable desktops, overlays and icon presentation. No uLaunch source files or theme assets are copied into Transwitch; the corresponding UI behavior is implemented independently. This avoids mixing GPL-2.0-only uLaunch code with GPL-3.0-or-later sLaunch-derived components already present in this repository.

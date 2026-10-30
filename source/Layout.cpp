@@ -109,6 +109,7 @@ bool parse(const std::string& input, LoadResult& result) {
     size_t lineStart = 0;
     size_t lineNumber = 0;
     bool sawHeader = false;
+    bool hasWorkspaceAppearance = false;
     bool sawActive = false;
     bool hasActiveField = false;
     bool structuralError = false;
@@ -127,11 +128,13 @@ bool parse(const std::string& input, LoadResult& result) {
         }
 
         if (!sawHeader) {
-            if (line != "DESKNX1" && line != "DESKNX2" && line != "DESKNX3")
+            if (line != "DESKNX1" && line != "DESKNX2" &&
+                line != "DESKNX3" && line != "DESKNX4")
                 return false;
             sawHeader = true;
             hasActiveField = line != "DESKNX1";
-            parsed.needsMigration = line != "DESKNX3";
+            hasWorkspaceAppearance = line == "DESKNX4";
+            parsed.needsMigration = line != "DESKNX4";
             continue;
         }
 
@@ -146,13 +149,28 @@ bool parse(const std::string& input, LoadResult& result) {
             }
             sawActive = true;
         } else if (fields[0] == "D") {
-            if (fields.size() != 2 ||
+            if ((fields.size() != 2 && fields.size() != 7) ||
+                (fields.size() == 7 && !hasWorkspaceAppearance) ||
                 !desknx::workspace_ops::isValidWorkspaceName(fields[1]) ||
                 parsed.workspaces.size() >= static_cast<size_t>(model::MaxDesks)) {
                 structuralError = true;
                 break;
             }
-            parsed.workspaces.push_back({model::safeField(fields[1]), {}});
+            model::Workspace workspace{};
+            workspace.name = model::safeField(fields[1]);
+            if (fields.size() == 7) {
+                if (!model::isValidWorkspaceBackgroundPath(fields[2]) ||
+                    !parseInteger(fields[3], workspace.backgroundFit) ||
+                    !parseInteger(fields[4], workspace.artworkMode) ||
+                    !parseInteger(fields[5], workspace.labelOpacity) ||
+                    !parseInteger(fields[6], workspace.accentColor) ||
+                    !model::isValidWorkspaceAppearance(workspace)) {
+                    structuralError = true;
+                    break;
+                }
+                workspace.backgroundPath = fields[2];
+            }
+            parsed.workspaces.push_back(std::move(workspace));
         } else if (fields[0] == "I") {
             if (fields.size() != 10) {
                 structuralError = true;
@@ -234,9 +252,17 @@ std::string serialize(const std::vector<model::Workspace>& workspaces, int activ
     for (const auto& workspace : workspaces)
         if (!desknx::workspace_ops::isValidWorkspaceName(workspace.name)) return {};
     activeWorkspace = std::max(0, std::min(activeWorkspace, static_cast<int>(workspaces.size()) - 1));
-    std::string output = "DESKNX3\nA\t" + std::to_string(activeWorkspace) + "\n";
     for (const auto& workspace : workspaces)
-        output += "D\t" + model::safeField(workspace.name) + "\n";
+        if (!model::isValidWorkspaceAppearance(workspace)) return {};
+    std::string output = "DESKNX4\nA\t" + std::to_string(activeWorkspace) + "\n";
+    for (const auto& workspace : workspaces) {
+        output += "D\t" + model::safeField(workspace.name) + "\t" +
+                  model::safeField(workspace.backgroundPath) + "\t" +
+                  std::to_string(workspace.backgroundFit) + "\t" +
+                  std::to_string(workspace.artworkMode) + "\t" +
+                  std::to_string(workspace.labelOpacity) + "\t" +
+                  std::to_string(workspace.accentColor) + "\n";
+    }
     for (size_t desk = 0; desk < workspaces.size(); ++desk) {
         const auto& workspace = workspaces[desk];
         for (size_t tileIndex = 0; tileIndex < workspace.tiles.size(); ++tileIndex) {

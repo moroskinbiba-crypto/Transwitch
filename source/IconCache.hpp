@@ -145,6 +145,16 @@ private:
             }
             return {};
         };
+        if (tile.kind == desknx::model::Kind::Game) {
+            // Prefer real landscape box art over the square NACP system icon.
+            const std::string coverBases[] = {
+                "cover-" + stem, stem + "-cover", stem + "_cover", "covers/" + stem
+            };
+            for (const auto& coverBase : coverBases) {
+                const std::string cover = findFile(coverBase);
+                if (!cover.empty()) return cover;
+            }
+        }
         std::string found=findFile(stem);
         if(!found.empty())return found;
         if(tile.kind==desknx::model::Kind::Nro&&stem.rfind("nro-",0)!=0) {

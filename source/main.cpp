@@ -12,6 +12,7 @@
 #include "catalog.hpp"
 #include "../include/desknx/Diagnostics.hpp"
 #include "catalog_view.hpp"
+#include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
 
@@ -78,10 +79,18 @@ std::string wallpaperPath, fontPath, iconPackPath;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
 
-enum class MediaPickerType { Wallpaper, Font, IconPack };
+enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground };
 struct MediaEntry { std::string name, path; bool directory{false}; };
 bool mediaPickerOpen=false;
 MediaPickerType mediaPickerType=MediaPickerType::Wallpaper;
+struct WorkspaceBackgroundTexture {
+    std::string path;
+    SDL_Texture* texture{nullptr};
+    int width{0}, height{0};
+    unsigned long long lastUse{0};
+};
+std::vector<WorkspaceBackgroundTexture> workspaceBackgroundTextures;
+unsigned long long workspaceBackgroundClock=0;
 std::string mediaPickerDirectory;
 std::vector<MediaEntry> mediaPickerEntries;
 int mediaPickerIndex=0, mediaPickerOffset=0;
@@ -151,8 +160,8 @@ int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
-int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
+int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -358,20 +367,60 @@ bool loadWallpaperTexture(const std::string& path) {
 
 void drawWallpaper() {
     if(!wallpaperTexture||wallpaperWidth<=0||wallpaperHeight<=0)return;
-    SDL_Rect src{0,0,wallpaperWidth,wallpaperHeight};
-    const double sourceAspect=static_cast<double>(wallpaperWidth)/wallpaperHeight;
-    const double targetAspect=static_cast<double>(SW)/SH;
-    if(sourceAspect>targetAspect) {
-        src.w=std::max(1,std::min(wallpaperWidth,static_cast<int>(wallpaperHeight*targetAspect)));
-        src.x=(wallpaperWidth-src.w)/2;
-    } else if(sourceAspect<targetAspect) {
-        src.h=std::max(1,std::min(wallpaperHeight,static_cast<int>(wallpaperWidth/targetAspect)));
-        src.y=(wallpaperHeight-src.h)/2;
-    }
-    SDL_Rect dst{0,0,SW,SH};
-    SDL_RenderCopy(renderer,wallpaperTexture,&src,&dst);
+    const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,wallpaperWidth,wallpaperHeight);
+    SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
+    SDL_RenderSetClipRect(renderer,&viewport);
+    SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
+    SDL_RenderSetClipRect(renderer,nullptr);
     SDL_SetRenderDrawColor(renderer,3,7,14,92);
-    SDL_RenderFillRect(renderer,&dst);
+    SDL_RenderFillRect(renderer,&viewport);
+}
+
+SDL_Texture* getWorkspaceBackgroundTexture(const std::string& path,int& width,int& height) {
+    if(path.empty()||!isAllowedMediaPath(path,MediaPickerType::WorkspaceBackground))return nullptr;
+    for(auto& entry:workspaceBackgroundTextures) {
+        if(entry.path==path) {
+            entry.lastUse=++workspaceBackgroundClock;
+            width=entry.width;height=entry.height;return entry.texture;
+        }
+    }
+    struct stat st{};
+    if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
+       st.st_size>24LL*1024*1024)return nullptr;
+    SDL_Surface* surface=IMG_Load(path.c_str());
+    if(!surface)return nullptr;
+    const bool valid=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
+        static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
+    if(!valid){SDL_FreeSurface(surface);return nullptr;}
+    SDL_Texture* texture=SDL_CreateTextureFromSurface(renderer,surface);
+    const int imageWidth=surface->w,imageHeight=surface->h;
+    SDL_FreeSurface(surface);
+    if(!texture)return nullptr;
+    SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_NONE);
+    if(workspaceBackgroundTextures.size()>=3) {
+        auto oldest=workspaceBackgroundTextures.begin();
+        for(auto it=workspaceBackgroundTextures.begin();it!=workspaceBackgroundTextures.end();++it)
+            if(it->lastUse<oldest->lastUse)oldest=it;
+        if(oldest->texture)SDL_DestroyTexture(oldest->texture);
+        workspaceBackgroundTextures.erase(oldest);
+    }
+    workspaceBackgroundTextures.push_back({path,texture,imageWidth,imageHeight,++workspaceBackgroundClock});
+    width=imageWidth;height=imageHeight;return texture;
+}
+
+void drawWorkspaceBackground(const Workspace& desk) {
+    if(desk.backgroundPath.empty()){drawWallpaper();return;}
+    int width=0,height=0;
+    SDL_Texture* texture=getWorkspaceBackgroundTexture(desk.backgroundPath,width,height);
+    if(!texture||width<=0||height<=0){drawWallpaper();return;}
+    const auto fit=desknx::artwork::destination(0,0,SW,SH,width,height,
+        static_cast<desknx::artwork::FitMode>(desk.backgroundFit));
+    SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
+    SDL_RenderSetClipRect(renderer,&viewport);
+    SDL_RenderCopy(renderer,texture,nullptr,&dst);
+    SDL_RenderSetClipRect(renderer,nullptr);
+    SDL_SetRenderDrawColor(renderer,3,7,14,92);
+    SDL_RenderFillRect(renderer,&viewport);
 }
 
 void refreshMediaPicker() {
@@ -447,6 +496,17 @@ void applyMediaPickerSelection(int index) {
     }
     if(mediaPickerType==MediaPickerType::IconPack) {
         setStatus("CHOOSE A FOLDER TO APPLY AN ICON PACK",2500);
+        return;
+    }
+    if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
+        if (!isAllowedMediaPath(selected.path,MediaPickerType::WorkspaceBackground)) {
+            setStatus("INVALID DESKTOP BACKGROUND",3000); return;
+        }
+        Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+        desk.backgroundPath=selected.path;
+        layoutUserModified=true;
+        if(saveNow())setStatus("DESKTOP BACKGROUND APPLIED");
+        mediaPickerOpen=false;
         return;
     }
     if(mediaPickerType==MediaPickerType::Wallpaper) {
@@ -1264,36 +1324,35 @@ const std::vector<std::string>& cachedTileTitleLines(const std::string& title,si
     if(tileTitleWrapCache.size()>=512)tileTitleWrapCache.clear();
     return tileTitleWrapCache.emplace(key,wrapTileTitle(title,maxChars)).first->second;
 }
-void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
+void drawTileCover(const Tile& tile,const Workspace& workspace,const SDL_Rect& bounds) {
+    const Color fallback=workspace.accentColor>=0
+        ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
+        :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
+    const SDL_Rect viewport{bounds.x+1,bounds.y+1,
+        std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
+    roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
+
     SDL_Texture* texture=gIconCache.get(tile);
     if(texture) {
         int sourceWidth=0,sourceHeight=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&sourceWidth,&sourceHeight)==0 &&
            sourceWidth>0 && sourceHeight>0) {
-            // Fill the entire tile while preserving the artwork's aspect ratio.
-            // Crop the longer source dimension around its centre (cover, not contain).
-            SDL_Rect source{0,0,sourceWidth,sourceHeight};
-            const double sourceAspect=static_cast<double>(sourceWidth)/sourceHeight;
-            const double targetAspect=static_cast<double>(bounds.w)/std::max(1,bounds.h);
-            if(sourceAspect>targetAspect) {
-                source.w=std::max(1,std::min(sourceWidth,
-                    static_cast<int>(sourceHeight*targetAspect)));
-                source.x=(sourceWidth-source.w)/2;
-            } else if(sourceAspect<targetAspect) {
-                source.h=std::max(1,std::min(sourceHeight,
-                    static_cast<int>(sourceWidth/targetAspect)));
-                source.y=(sourceHeight-source.h)/2;
-            }
-            SDL_Rect target{bounds.x+1,bounds.y+1,
-                            std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
-            SDL_RenderCopy(renderer,texture,&source,&target);
+            const auto mode=static_cast<desknx::artwork::FitMode>(workspace.artworkMode);
+            const auto fit=desknx::artwork::destination(
+                viewport.x,viewport.y,viewport.w,viewport.h,sourceWidth,sourceHeight,mode);
+            if(mode==desknx::artwork::FitMode::Contain)
+                roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,
+                          Color{fallback.r/3,fallback.g/3,fallback.b/3,255});
+            SDL_Rect clip=viewport,target{fit.x,fit.y,fit.w,fit.h};
+            // Cover scales the entire image beyond the tile and clips it to
+            // the tile viewport. This avoids source-rect rounding gaps.
+            SDL_RenderSetClipRect(renderer,&clip);
+            SDL_RenderCopy(renderer,texture,nullptr,&target);
+            SDL_RenderSetClipRect(renderer,nullptr);
         } else {
-            roundRect(bounds.x+1,bounds.y+1,bounds.w-2,bounds.h-2,
-                      12,COLORS[static_cast<size_t>(tile.color)%COLORS.size()]);
+            roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
         }
     } else {
-        const Color base=COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
-        roundRect(bounds.x+1,bounds.y+1,bounds.w-2,bounds.h-2,12,base);
         const std::string mark=initials(tile.title);
         const int scale=std::max(2,std::min(5,bounds.h/24));
         const int width=static_cast<int>(mark.size())*6*scale-scale;
@@ -1301,16 +1360,16 @@ void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
              bounds.y+(bounds.h-7*scale)/2,scale,WHITE,bounds.x+bounds.w-8);
     }
 
-    // Large, readable labels stay on the artwork. Long names wrap to two
-    // lines instead of being silently clipped at the right edge.
     const size_t maxChars=static_cast<size_t>(std::max(8,(bounds.w-20)/12));
     const auto& titleLines=cachedTileTitleLines(tile.title,maxChars);
     const int stripHeight=titleLines.size()>1?44:32;
-    rect(bounds.x+1,bounds.y+bounds.h-stripHeight,
-         bounds.w-2,stripHeight,Color{5,9,16,196});
+    const int overlay=std::max(0,std::min(255,workspace.labelOpacity));
+    if(overlay>0)
+        rect(viewport.x,viewport.y+viewport.h-stripHeight,viewport.w,stripHeight,
+             Color{5,9,16,static_cast<Uint8>(overlay)});
     if(titleLines.size()==1) {
-        text(titleLines[0],bounds.x+10,
-             bounds.y+bounds.h-stripHeight+8,2,WHITE,bounds.x+bounds.w-10);
+        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+8,
+             2,WHITE,bounds.x+bounds.w-10);
     } else {
         text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+3,
              2,WHITE,bounds.x+bounds.w-10);
@@ -1318,14 +1377,16 @@ void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
              2,WHITE,bounds.x+bounds.w-10);
     }
 }
-void drawTile(const Tile&t,bool selected) {
+void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     SDL_Rect r=tileRect(t);
-    const Color accent=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
+    const Color accent=workspace.accentColor>=0
+        ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
+        :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
-        drawTileCover(t,r);
+        drawTileCover(t,workspace,r);
         if(selected) {
             outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
             outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
@@ -1434,7 +1495,11 @@ void drawScreen() {
         rect(0,band*30,SW,31,Color{blend(THEME_TOP.r,THEME_BOTTOM.r),
             blend(THEME_TOP.g,THEME_BOTTOM.g),blend(THEME_TOP.b,THEME_BOTTOM.b),255});
     }
-    drawWallpaper();
+    if(!desks.empty())
+        drawWorkspaceBackground(desks[static_cast<size_t>(std::max(0,
+            std::min(deskIndex,static_cast<int>(desks.size())-1)))]);
+    else
+        drawWallpaper();
 
     // Compact, labelled system toolbar. Each control has a generous touch
     // target and a visible name; the same tools are available from the gamepad.
@@ -1485,7 +1550,7 @@ void drawScreen() {
             text("+",px+CW/2-4,py+CH/2-10,2,WHITE,px+CW-3);
         }
     }
-    for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h);
+    for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h,d);
     if(editing&&dragging)text("MOVING",1040,118,1,BLUE,1260);
     softCard(28,558,1224,56,Color{18,26,39,238},Color{255,255,255,16});
     const bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
@@ -1699,19 +1764,47 @@ void drawScreen() {
     if(workspaceMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
-        text("WORKSPACE OPTIONS",390,204,3,WHITE,900);
+        text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
-        const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE",
+        const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE","CUSTOMIZE DESKTOP",
                                "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
-        for(int i=0;i<5;++i) {
-            const int yy=252+i*50;
-            if(i==workspaceMenuIndex)roundRect(390,yy,500,42,10,Color{45,61,82,255});
+        for(int i=0;i<6;++i) {
+            const int yy=238+i*44;
+            if(i==workspaceMenuIndex)roundRect(390,yy,500,38,10,Color{45,61,82,255});
             const Color labelColor=(i==1&&!canMoveTile)?Color{91,101,118,255}:
                                    (i==workspaceMenuIndex?WHITE:MUTED);
-            text(actions[i],412,yy+13,1,labelColor,875);
+            text(actions[i],412,yy+12,1,labelColor,875);
         }
-        text("ALL WORKSPACES ARE AVAILABLE HERE",390,512,1,MUTED,900);
+        text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
+    }
+    if(workspaceSettingsMenu) {
+        rect(0,0,SW,SH,Color{3,7,14,198});
+        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+        const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+        text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
+        text(desk.name+"  /  PERSONAL APPEARANCE",346,168,1,MUTED,930);
+        roundRect(842,132,92,32,10,Color{54,57,66,255});
+        text("B  BACK",856,143,1,WHITE,926);
+        const char* fitNames[]={"COVER","CONTAIN","STRETCH"};
+        const char* labels[]={"CHOOSE DESKTOP BACKGROUND","BACKGROUND FIT","GAME ART FIT",
+                              "TITLE OVERLAY","ACCENT COLOR","RESET DESKTOP STYLE","DONE"};
+        const std::string values[]={
+            desk.backgroundPath.empty()?"GLOBAL WALLPAPER":"CUSTOM IMAGE",
+            fitNames[std::max(0,std::min(2,desk.backgroundFit))],
+            fitNames[std::max(0,std::min(2,desk.artworkMode))],
+            std::to_string(desk.labelOpacity)+" / 255",
+            desk.accentColor<0?"AUTO / TILE COLORS":"PALETTE "+std::to_string(desk.accentColor+1),
+            "RESTORE DEFAULTS","CLOSE THIS MENU"
+        };
+        for(int i=0;i<7;++i) {
+            const int yy=216+i*48;
+            if(i==workspaceSettingsIndex)roundRect(340,yy,600,40,10,Color{35,61,93,255});
+            text(labels[i],360,yy+8,1,i==workspaceSettingsIndex?WHITE:MUTED,700);
+            text(values[i],710,yy+8,1,i==workspaceSettingsIndex?BLUE:MUTED,920);
+        }
+        text("COVER FILLS THE TILE; CONTAIN SHOWS THE WHOLE IMAGE",346,568,1,MUTED,930);
+        text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
     }
     if(workspacePicker) {
         rect(0,0,SW,SH,Color{3,7,14,194});
@@ -1851,6 +1944,7 @@ void drawScreen() {
         rect(0,0,SW,SH,Color{3,7,14,205});
         softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
         text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
+             mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
              mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
              264,88,3,WHITE,1000);
         text(mediaPickerDirectory,266,128,1,MUTED,1000);
@@ -2241,6 +2335,31 @@ void openUserProfile() {
     if(R_FAILED(friendsLaShowMyProfile(uid)))
         setStatus("PROFILE APPLET UNAVAILABLE",3000);
 }
+void activateWorkspaceAppearance(int action) {
+    if(deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return;
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    switch(action) {
+        case 0: openMediaPicker(MediaPickerType::WorkspaceBackground); return;
+        case 1: desk.backgroundFit=(desk.backgroundFit+1)%3; break;
+        case 2: desk.artworkMode=(desk.artworkMode+1)%3; break;
+        case 3: {
+            static const int steps[]={0,96,160,196,232};
+            int next=0;
+            for(int i=0;i<5;++i)if(steps[i]==desk.labelOpacity)next=(i+1)%5;
+            desk.labelOpacity=steps[next];
+            break;
+        }
+        case 4: desk.accentColor=desk.accentColor>=7?-1:desk.accentColor+1; break;
+        case 5:
+            desk.backgroundPath.clear();desk.backgroundFit=0;desk.artworkMode=0;
+            desk.labelOpacity=196;desk.accentColor=-1;break;
+        case 6: workspaceSettingsMenu=false;return;
+        default:return;
+    }
+    layoutUserModified=true;
+    if(saveNow())setStatus("DESKTOP APPEARANCE SAVED");
+}
+
 void activateAppSettings(int action) {
     appSettingsMenu=false;
     switch(action) {
@@ -2406,6 +2525,13 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
+    if(workspaceSettingsMenu) {
+        if(keys&HidNpadButton_B){workspaceSettingsMenu=false;return;}
+        if(keys&HidNpadButton_Up)workspaceSettingsIndex=(workspaceSettingsIndex+6)%7;
+        if(keys&HidNpadButton_Down)workspaceSettingsIndex=(workspaceSettingsIndex+1)%7;
+        if(keys&HidNpadButton_A)activateWorkspaceAppearance(workspaceSettingsIndex);
+        return;
+    }
     if(systemMenu) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
         if(systemMenuIndex<0||systemMenuIndex>6)systemMenuIndex=0;
@@ -2469,16 +2595,17 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(workspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
         if(keys&HidNpadButton_Up)
-            workspaceMenuIndex=(workspaceMenuIndex+4)%5;
+            workspaceMenuIndex=(workspaceMenuIndex+5)%6;
         if(keys&HidNpadButton_Down)
-            workspaceMenuIndex=(workspaceMenuIndex+1)%5;
+            workspaceMenuIndex=(workspaceMenuIndex+1)%6;
         if(keys&HidNpadButton_A) {
             const int action=workspaceMenuIndex;
             workspaceMenu=false;
             if(action==0)openWorkspacePicker(false);
             else if(action==1)openWorkspacePicker(true);
-            else if(action==2)renameDesk();
-            else if(action==3)deleteDesk();
+            else if(action==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
+            else if(action==3)renameDesk();
+            else if(action==4)deleteDesk();
         }
         return;
     }
@@ -2718,6 +2845,15 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(e.type==SDL_FINGERDOWN && workspaceSettingsMenu) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=842&&x<=934&&y>=132&&y<=164)workspaceSettingsMenu=false;
+        else if(x>=340&&x<=940&&y>=216&&y<552) {
+            const int row=(y-216)/48;
+            if(row>=0&&row<7){workspaceSettingsIndex=row;activateWorkspaceAppearance(row);}
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && systemMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=1058&&x<=1140&&y>=136&&y<=170){systemMenu=false;return;}
@@ -2771,21 +2907,15 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && workspaceMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=390&&x<=890) {
-            if(y>=252&&y<294) {
+        if(x>=390&&x<=890&&y>=238&&y<502) {
+            const int row=(y-238)/44;
+            if(row>=0&&row<6) {
                 workspaceMenu=false;
-                openWorkspacePicker(false);
-            } else if(y>=302&&y<344) {
-                workspaceMenu=false;
-                openWorkspacePicker(true);
-            } else if(y>=352&&y<394) {
-                workspaceMenu=false;
-                renameDesk();
-            } else if(y>=402&&y<444) {
-                workspaceMenu=false;
-                deleteDesk();
-            } else if(y>=452&&y<494) {
-                workspaceMenu=false;
+                if(row==0)openWorkspacePicker(false);
+                else if(row==1)openWorkspacePicker(true);
+                else if(row==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
+                else if(row==3)renameDesk();
+                else if(row==4)deleteDesk();
             }
         }
         return;
@@ -3313,6 +3443,9 @@ int main(int,char**) {
 #endif
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
         (void)saveLayout();
+    for(auto& entry:workspaceBackgroundTextures)
+        if(entry.texture)SDL_DestroyTexture(entry.texture);
+    workspaceBackgroundTextures.clear();
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
     playStatsPending=false;
