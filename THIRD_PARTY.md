@@ -7,6 +7,7 @@ DeskNX's original standalone UI/model code is licensed under the repository's MI
 The experimental HOME/system-backend components under `projects/sSystem/` include adaptations from **sLaunch** by etonedemid, upstream repository: https://github.com/etonedemid/slaunch . The upstream project is distributed under GNU GPL version 3 or later; the upstream license notice is preserved in `projects/sSystem/COPYING.sLaunch`.
 
 Adapted areas currently include:
+- Installed application enumeration, live application-view queries, control-data retrieval and NACP title resolution in `source/slaunch_applications.cpp` / `source/slaunch_applications.hpp` (ported from `libs/sCommon/source/sl/os/Applications.cpp` and its public header).
 - Installed-title launch lifecycle and save-data preparation in `projects/sSystem/source/Application.cpp` and `projects/sSystem/include/desknx/system/Application.hpp`.
 - Atmosphère External Content Storage (ECS) filesystem registration/serving in `projects/sSystem/source/ExternalContent.cpp` and `projects/sSystem/include/desknx/system/ExternalContent.hpp`.
 - The initial applet-slot NPDM configurations under `projects/sSystem/DeskNXSystem.json` and `projects/DeskNXMenu/DeskNXMenu.json`, based on upstream sLaunch configurations.
