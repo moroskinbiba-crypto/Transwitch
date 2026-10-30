@@ -183,6 +183,9 @@ Signatures MakeSignatures(const std::vector<GameRecord>& games, const std::vecto
     for (const auto& game : games) {
         sig.gameHash = hashBytes(sig.gameHash, &game.id, sizeof(game.id));
         sig.gameHash = hashBytes(sig.gameHash, &game.last_updated, sizeof(game.last_updated));
+        // View flags are cached metadata too (update/game-card badges), and
+        // can change independently of the installed record timestamp.
+        sig.gameHash = hashBytes(sig.gameHash, &game.viewFlags, sizeof(game.viewFlags));
     }
     for (const auto& nro : nros) {
         sig.sdHash = hashText(sig.sdHash, nro.path);
