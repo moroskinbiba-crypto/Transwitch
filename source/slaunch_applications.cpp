@@ -4,8 +4,29 @@
 #include "slaunch_applications.hpp"
 #include <cstring>
 #include <limits>
+#include <type_traits>
+#include <utility>
 
 namespace desknx::slaunch {
+namespace {
+
+template <typename T, typename = void>
+struct HasLangData : std::false_type {};
+
+template <typename T>
+struct HasLangData<T, std::void_t<decltype(std::declval<const T&>().lang_data.lang)>>
+    : std::true_type {};
+
+template <typename T>
+const NacpLanguageEntry* LanguageEntries(const T& nacp) {
+    if constexpr (HasLangData<T>::value) {
+        return nacp.lang_data.lang;
+    } else {
+        return nacp.lang;
+    }
+}
+
+} // namespace
 
 Result EnumerateInstalled(std::vector<NsApplicationRecord>& records) {
     records.clear();
@@ -46,11 +67,9 @@ Result ReadControlData(u64 titleId, NsApplicationControlData& data,
 }
 
 std::string ResolveTitleName(const NacpStruct& nacp) {
-#ifdef SL_LIBNX_MASTER
-    const NacpLanguageEntry* locales = nacp.lang_data.lang;
-#else
-    const NacpLanguageEntry* locales = nacp.lang;
-#endif
+    // libnx renamed NacpStruct::lang to lang_data.lang. Detect the layout at
+    // compile time so this adapter builds with both packaged and upstream SDKs.
+    const NacpLanguageEntry* locales = LanguageEntries(nacp);
     // SLaunch's title policy: English first; otherwise use the first locale
     // that actually contains a title. Do not reject records lacking a title.
     const NacpLanguageEntry* chosen = nullptr;
