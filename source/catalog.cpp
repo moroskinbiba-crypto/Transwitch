@@ -1,5 +1,6 @@
 #include "catalog.hpp"
 #include "../include/desknx/StrictParse.hpp"
+#include "../include/desknx/CatalogPagination.hpp"
 #include <desknx/SafeReplace.hpp>
 
 #include <switch.h>
@@ -94,19 +95,24 @@ void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) 
 std::vector<GameRecord> ReadGameRecords(bool nsReady) {
     std::vector<GameRecord> records;
     if (!nsReady) return records;
-    constexpr s32 PageSize = 128;
-    std::array<NsApplicationRecord, PageSize> page{};
+    std::array<NsApplicationRecord, ApplicationPageCapacity> page{};
     s32 offset = 0;
     while (records.size() < 4096) {
-        s32 count = 0;
-        const Result rc = nsListApplicationRecord(page.data(), PageSize, offset, &count);
-        if (R_FAILED(rc) || count <= 0) break;
-        const s32 bounded = std::max<s32>(0, std::min<s32>(count, PageSize));
-        for (s32 i = 0; i < bounded && records.size() < 4096; ++i)
+        const ApplicationPageRequest request = MakeApplicationPageRequest(offset);
+        // libnx treats this argument as both requested capacity and returned
+        // count. Passing zero here asks NS for zero records: the old code then
+        // silently built an empty games catalogue on every console.
+        s32 count = request.capacity;
+        const Result rc = nsListApplicationRecord(page.data(), request.capacity,
+                                                   request.offset, &count);
+        if (R_FAILED(rc) || !IsValidApplicationPageCount(request.capacity, count) ||
+            count == 0)
+            break;
+        for (s32 i = 0; i < count && records.size() < 4096; ++i)
             records.push_back({page[static_cast<size_t>(i)].application_id,
                                page[static_cast<size_t>(i)].last_updated});
-        offset += bounded;
-        if (bounded < PageSize) break;
+        offset = NextApplicationPageOffset(request.offset, count);
+        if (count < request.capacity) break;
     }
     std::sort(records.begin(), records.end(), [](const GameRecord& a, const GameRecord& b) {
         return a.id < b.id;

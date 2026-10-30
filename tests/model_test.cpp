@@ -1,4 +1,5 @@
 #include <desknx/Model.hpp>
+#include <desknx/CatalogPagination.hpp>
 #include <desknx/StrictParse.hpp>
 #include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
@@ -201,6 +202,23 @@ int main() {
         std::remove(firstTemp.c_str());
         std::remove(firstBackup.c_str());
         rmdir(root.c_str());
+    }
+
+    // NS application-record pagination: count is an in/out parameter and
+    // must start at the output buffer capacity, not zero.
+    {
+        using namespace desknx::catalog;
+        const auto firstPage = MakeApplicationPageRequest(0);
+        assert(firstPage.offset == 0);
+        assert(firstPage.capacity == 128);
+        assert(IsValidApplicationPageCount(firstPage.capacity, 128));
+        assert(NextApplicationPageOffset(firstPage.offset, 128) == 128);
+        const auto secondPage = MakeApplicationPageRequest(128);
+        assert(secondPage.capacity == 128);
+        assert(IsValidApplicationPageCount(secondPage.capacity, 37));
+        assert(NextApplicationPageOffset(secondPage.offset, 37) == 165);
+        assert(!IsValidApplicationPageCount(secondPage.capacity, 129));
+        assert(!IsValidApplicationPageCount(secondPage.capacity, -1));
     }
 
     return 0;
