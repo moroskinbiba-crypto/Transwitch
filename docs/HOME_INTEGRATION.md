@@ -108,6 +108,16 @@ suspended game has exited; automatic return-to-menu then requires the PM
 service to be available. This path still requires validation on a physical
 console and matching firmware.
 
+### Library-applet teardown safety
+
+DeskNX retains the library-applet holder until its state-change event confirms
+completion. libnx's `appletHolderRequestExitOrTerminate()` can return after a
+forced-terminate command is accepted, without waiting for process exit. The
+backend therefore performs a separate bounded wait before releasing the
+accessor or changing ECS mappings. Failed waits keep the holder, suppress
+duplicate stop commands during a short retry window, and prevent a second
+library applet from being launched over a possibly live one.
+
 ## Licensing
 
 System-layer code adapted from sLaunch is covered by its upstream GPL-3.0-or-later terms; see projects/sSystem/COPYING.sLaunch and THIRD_PARTY.md. The ECS implementation in upstream sLaunch also credits uLaunch as an upstream source. Review these notices before redistributing a combined build.

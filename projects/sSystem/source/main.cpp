@@ -56,6 +56,7 @@ u64 g_PendingTitle = 0;
 bool g_PendingReturnToGame = false;
 bool g_PendingHomebrew = false;
 bool g_HomebrewLoaderRunning = false;
+bool g_MenuStopFailureLogged = false;
 char g_PendingHomebrewPath[desknx::ipc::MaxHomebrewPath]{};
 char g_PendingHomebrewArgv[desknx::ipc::MaxHomebrewArgv]{};
 bool g_MenuReady = false;
@@ -145,6 +146,21 @@ const char* BackendStateName(BackendState state) {
     }
     return "unknown";
 }
+
+Result StopMenuSafely(const char* reason) {
+    const Result rc = la::StopMenu();
+    if (R_FAILED(rc)) {
+        if (!g_MenuStopFailureLogged) {
+            DaemonLog("menu: stop not confirmed (%s), rc=0x%08X; retaining holder",
+                      reason ? reason : "unspecified", static_cast<unsigned int>(rc));
+            g_MenuStopFailureLogged = true;
+        }
+    } else {
+        g_MenuStopFailureLogged = false;
+    }
+    return rc;
+}
+
 void TransitionTo(BackendState next, const char* reason) {
     if (g_BackendState == next) return;
     DaemonLog("state: %s -> %s (%s)", BackendStateName(g_BackendState),
@@ -781,7 +797,7 @@ void OpenMenuForHomePress() {
             // A Homebrew NRO shares the hbloader library-applet process. HOME
             // returns to DeskNX by ending that session and restoring the real
             // Album slot immediately.
-            la::StopMenu();
+            if (R_FAILED(StopMenuSafely("HOME closes Homebrew"))) return;
             g_HomebrewLoaderRunning = false;
             ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
             remove(kHbTargetPath);
@@ -793,7 +809,7 @@ void OpenMenuForHomePress() {
         // HOME while the launcher is already visible dismisses it back to the
         // suspended title, matching the stock HOME toggle where possible.
         if (app::g_AppRunning) {
-            la::StopMenu();
+            if (R_FAILED(StopMenuSafely("HOME dismisses menu"))) return;
             app::FocusApplication();
             TransitionTo(BackendState::GameRunning, "HOME dismissed menu");
             DaemonLog("home: dismissed DeskNX, returned to title=0x%016llX",
@@ -818,8 +834,8 @@ void HandleSleepMessage() {
     g_AppWasRunningBeforeSleep = app::g_AppRunning;
     g_ReopenMenuAfterSleep = la::IsMenuAlive();
     if (g_ReopenMenuAfterSleep) {
-        la::StopMenu();
-        if (g_HomebrewLoaderRunning) {
+        const Result stopRc = StopMenuSafely("sleep transition");
+        if (R_SUCCEEDED(stopRc) && g_HomebrewLoaderRunning) {
             g_HomebrewLoaderRunning = false;
             ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
             remove(kHbTargetPath);
@@ -903,8 +919,11 @@ void PumpAppletMessages() {
                         DaemonLog("ipc: SdRemoved notify rc=0x%08X",
                                   static_cast<unsigned int>(eventRc));
                 }
-                if (la::IsMenuAlive()) la::StopMenu();
-                if (g_HomebrewLoaderRunning) {
+                if (la::IsMenuAlive()) {
+                    const Result stopRc = StopMenuSafely("SD card removed");
+                    if (R_FAILED(stopRc)) break;
+                }
+                if (g_HomebrewLoaderRunning && !la::g_MenuRunning) {
                     g_HomebrewLoaderRunning = false;
                     ecs::UnregisterExternalContent(ecs::HbloaderProgramId);
                     remove(kHbTargetPath);
@@ -923,7 +942,7 @@ void HandleMenuClosed() {
     DrainMenuCommands();
     const bool didHandshake = g_MenuReady;
     const u64 launchTick = g_MenuLaunchTick;
-    la::StopMenu();
+    if (R_FAILED(StopMenuSafely("menu closed"))) return;
     g_MenuReady = false;
     ResetMenuHeartbeatTracking();
 
@@ -1223,7 +1242,7 @@ void RunMainLoop() {
             const u64 elapsed = armGetSystemTick() - g_MenuLaunchTick;
             if (elapsed >= armGetSystemTickFreq() * kMenuReadyTimeoutSeconds) {
                 DaemonLog("menu: ready timeout; slot=%s", CurrentMenuSlot().name);
-                la::StopMenu();
+                if (R_FAILED(StopMenuSafely("menu ready timeout"))) continue;
                 g_MenuReady = false;
                 ResetMenuHeartbeatTracking();
                 if (app::g_AppRunning) {
@@ -1249,7 +1268,7 @@ void RunMainLoop() {
             const u64 heartbeatNow = armGetSystemTick();
             if (g_MenuLiveness.HeartbeatTimedOut(heartbeatNow, g_MenuReady)) {
                 DaemonLog("menu: heartbeat timeout; slot=%s", CurrentMenuSlot().name);
-                la::StopMenu();
+                if (R_FAILED(StopMenuSafely("menu heartbeat timeout"))) continue;
                 g_MenuReady = false;
                 ResetMenuHeartbeatTracking();
                 if (app::g_AppRunning) {

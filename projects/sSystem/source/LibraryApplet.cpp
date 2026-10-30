@@ -6,6 +6,8 @@ namespace desknx::system::la {
 
 AppletHolder g_MenuHolder{};
 bool g_MenuRunning = false;
+static bool g_StopRequested = false;
+static u64 g_StopRetryAfterTick = 0;
 
 Result LaunchMenu(AppletId applet_id, const void* initial_data, size_t initial_size) {
     if (g_MenuRunning)
@@ -36,15 +38,60 @@ Result LaunchMenu(AppletId applet_id, const void* initial_data, size_t initial_s
     return 0;
 }
 
-void StopMenu() {
-    if (!g_MenuRunning)
-        return;
+Result StopMenu() {
+    if (!g_MenuRunning) {
+        g_StopRequested = false;
+        g_StopRetryAfterTick = 0;
+        return 0;
+    }
 
-    // Try a graceful close first; libnx terminates the applet if it doesn't exit.
-    appletHolderRequestExitOrTerminate(&g_MenuHolder, 5'000'000'000ULL);
+    // The applet's state event is the completion barrier. The helper below
+    // checks it first so an applet that exited between retries can be retired
+    // immediately without issuing another command to a stale accessor.
+    if (appletHolderCheckFinished(&g_MenuHolder)) {
+        appletHolderJoin(&g_MenuHolder);
+        appletHolderClose(&g_MenuHolder);
+        std::memset(&g_MenuHolder, 0, sizeof(g_MenuHolder));
+        g_MenuRunning = false;
+        g_StopRequested = false;
+        g_StopRetryAfterTick = 0;
+        return 0;
+    }
+
+    const u64 now = armGetSystemTick();
+    const u64 frequency = armGetSystemTickFreq();
+    if (g_StopRetryAfterTick != 0 && now < g_StopRetryAfterTick)
+        return KERNELRESULT(TimedOut);
+    g_StopRetryAfterTick = 0;
+
+    if (!g_StopRequested) {
+        // libnx waits for RequestExit, but if that times out it only sends the
+        // Terminate IPC command and returns when the command is accepted.
+        const Result requestRc =
+            appletHolderRequestExitOrTerminate(&g_MenuHolder, 5'000'000'000ULL);
+        if (R_FAILED(requestRc) && !appletHolderCheckFinished(&g_MenuHolder)) {
+            g_StopRetryAfterTick = now + frequency * 2;
+            return requestRc;
+        }
+        g_StopRequested = true;
+    }
+
+    // Wait for actual state completion after either graceful exit or the
+    // forced-terminate command. Never drop the holder while the applet may
+    // still be running; a caller can safely retry this bounded wait.
+    const Result waitRc = eventWait(&g_MenuHolder.StateChangedEvent, 5'000'000'000ULL);
+    if (R_FAILED(waitRc)) {
+        g_StopRetryAfterTick = armGetSystemTick() + frequency * 2;
+        return waitRc;
+    }
+
+    appletHolderJoin(&g_MenuHolder);
     appletHolderClose(&g_MenuHolder);
     std::memset(&g_MenuHolder, 0, sizeof(g_MenuHolder));
     g_MenuRunning = false;
+    g_StopRequested = false;
+    g_StopRetryAfterTick = 0;
+    return 0;
 }
 
 bool IsMenuAlive() {

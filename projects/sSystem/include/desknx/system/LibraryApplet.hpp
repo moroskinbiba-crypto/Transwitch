@@ -8,7 +8,7 @@ extern AppletHolder g_MenuHolder;
 extern bool g_MenuRunning;
 
 Result LaunchMenu(AppletId applet_id, const void* initial_data = nullptr, size_t initial_size = 0);
-void StopMenu();
+Result StopMenu();
 bool IsMenuAlive();
 Result PopOutData(AppletStorage* storage);
 
