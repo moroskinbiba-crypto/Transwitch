@@ -82,7 +82,7 @@ void LogDiagnostic(const char* format, ...) {
     va_start(args, format);
     std::vfprintf(file, format, args);
     va_end(args);
-    std::fputc('\\n', file);
+    std::fputc('\n', file);
     std::fclose(file);
 }
 std::string fileTitle(const std::string& path) {
