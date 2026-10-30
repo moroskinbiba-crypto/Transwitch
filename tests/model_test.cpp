@@ -197,6 +197,37 @@ int main() {
                resizeDesk.tiles[0].w==1 && sx==Columns-1);
     }
 
+    // The Recent widget is intentionally 3x1. It must survive a
+    // save/load cycle unchanged and remain resizable like every other tile.
+    {
+        Tile recent{Kind::Recent,"Recent launches","",0,0,3,1,6};
+        Workspace widgets{"Widgets",{recent}};
+        assert(isSupportedTileSize(3,1));
+        assert(placeable(widgets,recent,0,0,0));
+        const std::string saved=desknx::layout::serialize({widgets},0);
+        assert(!saved.empty());
+        desknx::layout::LoadResult loaded{};
+        assert(desknx::layout::parse(saved,loaded));
+        const Tile& restored=loaded.workspaces[0].tiles[0];
+        assert(restored.w==3 && restored.h==1);
+
+        int sx=0,sy=0;
+        assert(desknx::workspace_ops::resizeSelectedTile(
+            loaded.workspaces[0],sx,sy,false));
+        assert(loaded.workspaces[0].tiles[0].w==2 &&
+               loaded.workspaces[0].tiles[0].h==1);
+        assert(sx==0 && sy==0);
+    }
+
+    // Unsupported footprints cannot be written successfully and then silently
+    // normalized into a different footprint on the next launch.
+    {
+        Workspace malformed{"Malformed",{}};
+        malformed.tiles.push_back(Tile{Kind::Game,"Invalid","0100000000000009",0,0,3,3,0});
+        assert(!desknx::layout::serialize({malformed},0).empty()==false);
+        assert(!isSupportedTileSize(3,3));
+    }
+
     assert(typeCode(parseKind("N")) == "N");
     assert(typeCode(parseKind("C")) == "C");
     assert(parseKind("unknown") == Kind::Unsupported);
