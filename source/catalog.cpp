@@ -125,6 +125,10 @@ void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) 
         struct stat st{};
         if (stat(path.c_str(), &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
+            // This directory belongs to DeskNX itself. It contains the persistent
+            // catalogue, hundreds of cached icons and diagnostics, not user NROs.
+            // Walking it on every launch adds avoidable SD-card I/O.
+            if (depth == 0 && name == "DeskNX") continue;
             CollectNros(path, depth + 1, out);
         } else if (S_ISREG(st.st_mode) && name.size() > 4) {
             std::string ext = name.substr(name.size() - 4);
@@ -594,12 +598,53 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                   nsReady ? 1 : 0, static_cast<unsigned int>(gNsServiceError));
     result.nsErrorCode = nsReady ? 0 : gNsServiceError;
     result.nsAvailable = nsReady;
+
+    // Warm-start from the last known-good catalogue before touching NS or
+    // recursively enumerating the SD card. This makes saved Title IDs and NRO
+    // paths immediately available while the live refresh continues in the
+    // background. Stale NRO paths are filtered by ReadCache's allowStale mode.
+    ScanResult warmCache;
+    const bool warmCacheAvailable = ReadCache(Signatures{}, warmCache, true);
+    if (warmCacheAvailable) {
+        result.items = std::move(warmCache.items);
+        result.fromCache = true;
+        result.gameCount = static_cast<size_t>(std::count_if(
+            result.items.begin(), result.items.end(),
+            [](const Candidate& item) { return item.kind == Kind::Game; }));
+        result.nroCount = static_cast<size_t>(std::count_if(
+            result.items.begin(), result.items.end(),
+            [](const Candidate& item) { return item.kind == Kind::Nro; }));
+        LogDiagnostic("scan_warm_cache games=%zu nros=%zu items=%zu force_refresh=%d",
+                      result.gameCount, result.nroCount, result.items.size(),
+                      forceRefresh ? 1 : 0);
+        report(false);
+    }
+
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
     if (result.nsErrorCode != 0) result.nsAvailable = false;
     LogDiagnostic("games_collected count=%zu ns_available=%d ns_error=0x%08X",
                   games.size(), result.nsAvailable ? 1 : 0,
                   static_cast<unsigned int>(result.nsErrorCode));
     result.gameCount = games.size();
+
+    // If NS is unavailable, the already-published last-known-good catalogue is
+    // sufficient for this session. Do not make the user wait for another SD
+    // traversal just to rediscover the same cached NRO paths.
+    if ((!nsReady || result.nsErrorCode != 0) && warmCacheAvailable) {
+        result.gameCount = static_cast<size_t>(std::count_if(
+            result.items.begin(), result.items.end(),
+            [](const Candidate& item) { return item.kind == Kind::Game; }));
+        result.nroCount = static_cast<size_t>(std::count_if(
+            result.items.begin(), result.items.end(),
+            [](const Candidate& item) { return item.kind == Kind::Nro; }));
+        result.complete = true;
+        LogDiagnostic("scan_offline_warm_cache games=%zu nros=%zu ns_error=0x%08X",
+                      result.gameCount, result.nroCount,
+                      static_cast<unsigned int>(result.nsErrorCode));
+        report(true);
+        return result;
+    }
+
     std::vector<NroFile> nros;
     CollectNros("sdmc:/switch", 0, nros);
     result.nroCount = nros.size();
@@ -636,6 +681,9 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         return result;
     }
 
+    result.items.clear();
+    result.fromCache = false;
+    result.truncated = false;
     result.items.reserve(MaxItems);
     const size_t gameLimit = MaxItems - GameReserve;
     static NsApplicationControlData control{};
@@ -655,9 +703,10 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         const auto cachedName = nameCache.find(id);
         const bool iconCached = HasCachedGameIcon(id);
         std::string title;
-        if (!forceRefresh && cachedName != nameCache.end() && iconCached) {
-            // SLauncher fast path: a resolved title with its icon needs no
-            // synchronous NS control-data request on this scan.
+        if (!forceRefresh && cachedName != nameCache.end()) {
+            // The title cache is independent of the icon cache. An app may
+            // legitimately have no icon; do not turn that into a repeated
+            // synchronous NS request for already-resolved metadata.
             title = cachedName->second;
         } else {
             u64 actual = 0;
