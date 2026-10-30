@@ -812,7 +812,7 @@ void drawScreen() {
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                 drawTileIcon(iconTile,mx+30,yy+5,26);
                 text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+475);
-                const char* appBadge = typeName(candidate.kind);
+                std::string appBadge = typeName(candidate.kind);
                 if (candidate.kind == Kind::Game) {
                     if (candidate.viewFlags & BIT(4)) appBadge = "UPDATE";
                     else if (candidate.viewFlags & BIT(2)) appBadge = "GAMECARD";
@@ -828,7 +828,7 @@ void drawScreen() {
             Tile preview{selected.kind,selected.title,selected.data,0,0,1,1,selected.color};
             drawTileIcon(preview,mx+694,my+128,84);
             text(selected.title,mx+654,my+224,2,WHITE,mx+818);
-            const char* detailType = typeName(selected.kind);
+            std::string detailType = typeName(selected.kind);
             if(selected.kind==Kind::Game && (selected.viewFlags&BIT(4))) detailType="UPDATE AVAILABLE";
             else if(selected.kind==Kind::Game && (selected.viewFlags&BIT(2))) detailType="GAME CARD";
             text(detailType,mx+654,my+266,1,BLUE,mx+818);
