@@ -1655,15 +1655,27 @@ int main(int,char**) {
     // unknown/default HOS version can make NS calls fail or stall on firmware
     // newer than the build SDK.
     const bool setsysReady = R_SUCCEEDED(setsysInitialize());
-    if (setsysReady) {
-        SetSysFirmwareVersion firmware{};
-        if (R_SUCCEEDED(setsysGetFirmwareVersion(&firmware))) {
-            hosversionSet(MAKEHOSVERSION(firmware.major, firmware.minor,
-                                         firmware.micro) | BIT(31));
-        }
+    SetSysFirmwareVersion firmware{};
+    const bool firmwareRead = setsysReady &&
+        R_SUCCEEDED(setsysGetFirmwareVersion(&firmware));
+    if (firmwareRead) {
+        hosversionSet(MAKEHOSVERSION(firmware.major, firmware.minor,
+                                     firmware.micro) | BIT(31));
     }
     std::uint32_t nsInitError = 0;
     const bool nsServicesReady = desknx::catalog::InitializeServices(nsInitError);
+    if (sdMounted) {
+        mkdir("sdmc:/switch", 0777);
+        mkdir("sdmc:/switch/DeskNX", 0777);
+        if (FILE* log = std::fopen("sdmc:/switch/DeskNX/catalogue.log", "a")) {
+            std::fprintf(log,
+                "[%lld] startup setsys_ready=%d firmware_read=%d firmware=%u.%u.%u ns_ready=%d ns_error=0x%08X\\n",
+                static_cast<long long>(std::time(nullptr)), setsysReady ? 1 : 0,
+                firmwareRead ? 1 : 0, firmware.major, firmware.minor, firmware.micro,
+                nsServicesReady ? 1 : 0, static_cast<unsigned int>(nsInitError));
+            std::fclose(log);
+        }
+    }
 
     loadHistory();
     struct stat layoutStat{}, backupStat{};
