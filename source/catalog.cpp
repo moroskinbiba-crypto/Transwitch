@@ -212,6 +212,8 @@ bool isCachedNroPath(const std::string& path) {
     return extension == ".nro" && IsRegularFile(path);
 }
 
+bool IsUsableCachedJpeg(const std::string& path);
+
 bool ReadCache(const Signatures& sig, ScanResult& result) {
     // The cache is stored on removable media and can be truncated or edited.
     // Bound the file before getline() so a corrupt single line cannot exhaust
@@ -266,7 +268,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
 
         if (item.kind == Kind::Game) {
             if (!isHexTitleId(item.data) ||
-                !IsRegularFile(desknx::model::iconCachePath(item.kind, item.data)))
+                !IsUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
                 return false;
         } else if (item.kind == Kind::Nro) {
             if (!isCachedNroPath(item.data)) return false;
@@ -290,7 +292,7 @@ size_t jpegSize(const u8* data, size_t length) {
 bool IsUsableCachedJpeg(const std::string& path) {
     struct stat st{};
     constexpr size_t MaxIconBytes = 2 * 1024 * 1024;
-    constexpr size_t HeaderBytes = 64 * 1024;
+    constexpr size_t HeaderBytes = 8 * 1024;
     if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
         st.st_size < 4 || static_cast<uint64_t>(st.st_size) > MaxIconBytes)
         return false;
