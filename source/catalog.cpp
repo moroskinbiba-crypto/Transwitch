@@ -426,11 +426,14 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if (progress) progress(result, context);
     };
     EnsureCacheDirectories();
-    const Result nsRc = nsInitialize();
-    const bool nsReady = R_SUCCEEDED(nsRc);
-    result.nsAvailable = nsReady;
-    result.nsErrorCode = nsReady ? 0u : static_cast<std::uint32_t>(nsRc);
+    // Match SLaunch's library-applet path: libnx initializes NS as part of
+    // applet startup. Do not open/close a second NS session inside the scanner;
+    // use the real enumeration result as the availability check.
+    const bool nsReady = true;
+    result.nsAvailable = true;
+    result.nsErrorCode = 0;
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
+    if (result.nsErrorCode != 0) result.nsAvailable = false;
     result.gameCount = games.size();
     std::vector<NroFile> nros;
     CollectNros("sdmc:/switch", 0, nros);
@@ -442,7 +445,6 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     // Never reuse a cache after NS failed or returned a partial application list.
     if (nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
         result.complete = true;
-        if (nsReady) nsExit();
         report(true);
         return result;
     }
@@ -497,7 +499,6 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         (fetchedControlData || freshNameCache.size() != nameCache.size()))
         WriteGameNameCache(freshNameCache);
     report(false); // expose the installed-game part before scanning NRO assets
-    if (nsReady) nsExit();
 
     for (const auto& nro : nros) {
         if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
