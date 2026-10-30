@@ -1,4 +1,6 @@
 #include <switch.h>
+#include <switch/applets/hid_la.h>
+#include <switch/applets/album_la.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
@@ -85,7 +87,7 @@ int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, workspaceMenu=false, deletePrompt=false, running=true;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, workspaceMenu=false, deletePrompt=false, running=true;
 int recentIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
@@ -635,6 +637,62 @@ std::string initials(const std::string& name) {
 SDL_Rect tileRect(const Tile&t) {
     return SDL_Rect{LEFT+t.x*(CW+GX),TOP+t.y*(CH+GY),t.w*CW+(t.w-1)*GX,t.h*CH+(t.h-1)*GY};
 }
+
+void drawSystemIcon(int kind,int x,int y,int size,Color c) {
+    color(c);
+    const int cx=x+size/2,cy=y+size/2;
+    auto line=[&](int x1,int y1,int x2,int y2){SDL_RenderDrawLine(renderer,x1,y1,x2,y2);};
+    auto circle=[&](int radius,bool filled) {
+        for(int dy=-radius;dy<=radius;++dy) {
+            const int dx=static_cast<int>(std::sqrt(std::max(0,radius*radius-dy*dy)));
+            if(filled)line(cx-dx,cy+dy,cx+dx,cy+dy);
+            else {line(cx-dx,cy+dy,cx-dx+2,cy+dy);line(cx+dx-2,cy+dy,cx+dx,cy+dy);}
+        }
+    };
+    if(kind==0) { // Settings: gear and hub
+        circle(size/3,false);circle(std::max(2,size/9),true);
+        for(int a=0;a<8;++a) {
+            const double angle=a*0.78539816339;
+            const int x1=cx+static_cast<int>(std::cos(angle)*(size/3-1));
+            const int y1=cy+static_cast<int>(std::sin(angle)*(size/3-1));
+            const int x2=cx+static_cast<int>(std::cos(angle)*(size/2-2));
+            const int y2=cy+static_cast<int>(std::sin(angle)*(size/2-2));
+            line(x1,y1,x2,y2);
+        }
+    } else if(kind==1) { // Controller
+        roundRect(x+3,y+size/3,size-6,size/2,8,Color{0,0,0,0});
+        outline(x+3,y+size/3,size-6,size/2,c);
+        line(x+size/4,y+size/2-4,x+size/4,y+size/2+5);
+        line(x+size/4-5,y+size/2,x+size/4+5,y+size/2);
+        circle(std::max(2,size/13),true);
+        const int bx=x+size*3/4,by=y+size/2;
+        color(c);SDL_Rect dot{bx-2,by-2,4,4};SDL_RenderFillRect(renderer,&dot);
+        SDL_Rect dot2{bx+5,by-7,4,4};SDL_RenderFillRect(renderer,&dot2);
+    } else if(kind==2) { // Album / photos
+        outline(x+4,y+6,size-8,size-12,c);
+        circle(std::max(2,size/14),true);
+        line(x+8,y+size-10,x+size/3,y+size/2);
+        line(x+size/3,y+size/2,x+size/2,y+size*2/3);
+        line(x+size/2,y+size*2/3,x+size*3/4,y+size/3);
+        line(x+size*3/4,y+size/3,x+size-8,y+size-10);
+    } else if(kind==3) { // Power
+        circle(size/3,false);
+        line(cx, y+2, cx, cy+2);
+        line(cx-size/5,y+size/4,cx-size/3,y+size/3);
+        line(cx+size/5,y+size/4,cx+size/3,y+size/3);
+    } else if(kind==4) { // Library
+        for(int i=0;i<3;++i) {
+            roundRect(x+5+i*(size-14)/3,y+6, std::max(5,(size-20)/3),size-12,3,c);
+        }
+    } else if(kind==5) { // Home / desktop
+        line(x+4,cy,x+size/2,y+4);line(x+size/2,y+4,x+size-4,cy);
+        outline(x+9,cy,size-18,size/2-5,c);
+        outline(cx-5,cy+size/7,10,size/4,c);
+    } else if(kind==6) { // Recent / history
+        circle(size/3,false);line(cx,cy,cx,cy-size/5);line(cx,cy,cx+size/5,cy+size/8);
+        line(x+3,y+size/4,x+3,y+size/2);line(x+3,y+size/4,x+size/5,y+size/4);
+    }
+}
 void drawTileIcon(const Tile&t,int x,int y,int size) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     if(SDL_Texture* texture=gIconCache.get(t)) {
@@ -738,16 +796,16 @@ void drawScreen() {
     if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
     // Floating Dock: quick access to the library, edit mode and adjacent desktops.
     rect(0,628,SW,92,Color{23,24,29,250});rect(0,628,SW,1,Color{255,255,255,18});
-    softCard(380,636,520,54,Color{48,50,58,245},Color{255,255,255,28});
-    struct DockItem { int x; const char* glyph; const char* label; bool active; };
-    const DockItem dock[]={{388,"APP","LIBRARY",listOpen},{490,"EDIT","LAYOUT",editing},
-        {592,"LEFT","PREV",false},{694,"RIGHT","NEXT",false},
-        {796,"HIST","RECENT",recentOpen}};
+    softCard(302,634,676,58,Color{48,50,58,245},Color{255,255,255,28});
+    struct DockItem { int x; int icon; const char* label; bool active; };
+    const DockItem dock[]={{312,4,"LIBRARY",listOpen},{422,5,"DESKTOP",editing},
+        {532,0,"SETTINGS",false},{642,1,"GAMEPAD",false},
+        {752,6,"RECENT",recentOpen},{862,3,"POWER",powerMenu}};
     for(const auto& item:dock) {
         const Color tileFill=item.active?Color{10,132,255,255}:Color{67,70,79,255};
-        roundRect(item.x,642,44,40,12,tileFill);
-        text(item.glyph,item.x+5,650,1,WHITE,item.x+40);
-        text(item.label,item.x+50,657,1,item.active?BLUE:WHITE,item.x+104);
+        roundRect(item.x,640,42,42,12,tileFill);
+        drawSystemIcon(item.icon,item.x+8,648,26,WHITE);
+        text(item.label,item.x+48,655,1,item.active?BLUE:WHITE,item.x+106);
     }
     struct Hint { const char* key; const char* action; };
     const Hint leftHints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},
@@ -930,6 +988,31 @@ void drawScreen() {
             }
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
+    }
+    if(systemMenu) {
+        rect(0,0,SW,SH,Color{0,0,0,190});
+        softCard(270,112,740,496,Color{31,33,39,252},Color{255,255,255,30});
+        text("SYSTEM TOOLS",306,136,3,WHITE,960);
+        text("QUICK ACCESS TO NINTENDO SWITCH FEATURES",308,174,1,MUTED,960);
+        struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
+        const SystemTool tools[]={
+            {308,218,0,"SETTINGS","OPEN SYSTEM SETTINGS"},
+            {542,218,1,"CONTROLLERS","PAIR / CHANGE CONTROLLERS"},
+            {776,218,2,"ALBUM","SCREENSHOTS AND VIDEOS"},
+            {308,382,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
+            {542,382,5,"DESKTOP","RETURN TO WORKSPACE"},
+            {776,382,6,"RECENT","RECENTLY LAUNCHED APPS"}
+        };
+        for(const auto& item:tools) {
+            softCard(item.x,item.y,210,136,Color{43,46,54,255},Color{255,255,255,22});
+            roundRect(item.x+14,item.y+14,54,54,15,Color{61,70,86,255});
+            drawSystemIcon(item.icon,item.x+25,item.y+25,32,WHITE);
+            text(item.title,item.x+80,item.y+23,2,WHITE,item.x+202);
+            text(item.subtitle,item.x+16,item.y+91,1,MUTED,item.x+202);
+        }
+        roundRect(890,136,82,34,10,Color{54,57,66,255});
+        text("B BACK",906,147,1,WHITE,962);
+        text("A SELECT     TOUCH ANY CARD",308,568,1,BLUE,960);
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
@@ -1134,6 +1217,33 @@ void launch(const Tile& t) {
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    if(systemMenu) {
+        if(keys&HidNpadButton_B){systemMenu=false;return;}
+        if(keys&HidNpadButton_A) {
+            systemMenu=false;
+            if(selectedX<2) {
+                // System Settings is the console's built-in system application.
+                const Result rc=appletRequestLaunchApplication(0x0100000000001000ULL,nullptr);
+                if(R_FAILED(rc))setStatus("COULD NOT OPEN SYSTEM SETTINGS",3000);
+            } else if(selectedX<4) {
+                HidLaControllerSupportArg arg{};
+                hidLaCreateControllerSupportArg(&arg);
+                HidLaControllerSupportResultInfo result{};
+                const Result rc=hidLaShowControllerSupport(&result,&arg);
+                if(R_FAILED(rc))setStatus("CONTROLLER MENU UNAVAILABLE",3000);
+            } else if(selectedX==4) {
+                const Result rc=albumLaShowAllAlbumFiles();
+                if(R_FAILED(rc))setStatus("ALBUM UNAVAILABLE",3000);
+            } else if(selectedX==6) {
+                recentIndex=0;recentOpen=true;
+            } else if(selectedX==5) {
+                setStatus("WORKSPACE READY");
+            } else {
+                powerMenu=true;powerIndex=0;
+            }
+        }
+        return;
+    }
     if(workspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
         if(keys&HidNpadButton_Up)workspaceMenuIndex=0;
@@ -1277,6 +1387,29 @@ int tabStart(){
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
 void touchInput(const SDL_Event&e) {
+    if(e.type==SDL_FINGERDOWN && systemMenu) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=890&&x<=972&&y>=136&&y<=170){systemMenu=false;return;}
+        if(y>=218&&y<354) {
+            systemMenu=false;
+            if(x>=308&&x<518) {
+                const Result rc=appletRequestLaunchApplication(0x0100000000001000ULL,nullptr);
+                if(R_FAILED(rc))setStatus("COULD NOT OPEN SYSTEM SETTINGS",3000);
+            } else if(x>=542&&x<752) {
+                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
+                HidLaControllerSupportResultInfo result{};
+                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))setStatus("CONTROLLER MENU UNAVAILABLE",3000);
+            } else if(x>=776&&x<986) {
+                if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
+            }
+        } else if(y>=382&&y<518) {
+            systemMenu=false;
+            if(x>=308&&x<518){powerMenu=true;powerIndex=0;}
+            else if(x>=542&&x<752)setStatus("WORKSPACE READY");
+            else if(x>=776&&x<986){recentIndex=0;recentOpen=true;}
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && workspaceMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=430&&x<=850&&y>=302&&y<350) {
@@ -1411,11 +1544,17 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(y>=632&&y<=700) {
-            if(x>=380&&x<490) {openList();return;}
-            if(x>=490&&x<590) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
-            if(x>=590&&x<690) {deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
-            if(x>=690&&x<790) {deskIndex=(deskIndex+1)%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
-            if(x>=790&&x<900) {recentIndex=0;recentOpen=true;return;}
+            if(x>=302&&x<412) {openList();return;}
+            if(x>=412&&x<522) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
+            if(x>=522&&x<632) {systemMenu=true;selectedX=0;selectedY=0;return;}
+            if(x>=632&&x<742) {
+                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
+                HidLaControllerSupportResultInfo result{};
+                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))setStatus("CONTROLLER MENU UNAVAILABLE",3000);
+                return;
+            }
+            if(x>=742&&x<852) {recentIndex=0;recentOpen=true;return;}
+            if(x>=852&&x<978) {powerMenu=true;powerIndex=0;return;}
         }
     } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
         const int y=static_cast<int>(e.tfinger.y*SH);
