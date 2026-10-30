@@ -49,7 +49,52 @@ bool hasRecoveredWorkspace(const std::vector<model::Workspace>& workspaces, size
     return false;
 }
 
+
 } // namespace
+
+std::string serializeActiveWorkspaceState(
+    const std::vector<model::Workspace>& workspaces, int activeWorkspace) {
+    if (workspaces.empty() ||
+        workspaces.size() > static_cast<size_t>(model::MaxDesks) ||
+        activeWorkspace < 0 ||
+        activeWorkspace >= static_cast<int>(workspaces.size())) return {};
+    const std::string shape = serialize(workspaces, 0);
+    if (shape.empty()) return {};
+    return "DESKNX-ACTIVE1\\n" + std::to_string(activeWorkspace) + "\\n" +
+           std::to_string(workspaces.size()) + "\\n" +
+           std::to_string(model::stableHash(shape)) + "\\n" +
+           model::safeField(workspaces[static_cast<size_t>(activeWorkspace)].name) + "\\n";
+}
+
+bool parseActiveWorkspaceState(const std::string& input,
+                               const std::vector<model::Workspace>& workspaces,
+                               int& activeWorkspace) {
+    if (input.empty() || input.size() > 512 || workspaces.empty()) return false;
+    std::istringstream stream(input);
+    std::string magic, indexText, countText, signatureText, name, extra;
+    if (!std::getline(stream, magic) || !std::getline(stream, indexText) ||
+        !std::getline(stream, countText) || !std::getline(stream, signatureText) ||
+        !std::getline(stream, name) || std::getline(stream, extra)) return false;
+    if (magic != "DESKNX-ACTIVE1") return false;
+
+    int index = -1, count = -1;
+    if (!parseInteger(indexText, index) || !parseInteger(countText, count) ||
+        index < 0 || count != static_cast<int>(workspaces.size()) ||
+        index >= count) return false;
+
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long signature = std::strtoull(signatureText.c_str(), &end, 10);
+    if (errno != 0 || end == signatureText.c_str() || !end || *end != '\\0')
+        return false;
+
+    const std::string shape = serialize(workspaces, 0);
+    if (shape.empty() || signature != model::stableHash(shape)) return false;
+    if (name != workspaces[static_cast<size_t>(index)].name) return false;
+
+    activeWorkspace = index;
+    return true;
+}
 
 bool parse(const std::string& input, LoadResult& result) {
     constexpr size_t MaxInputBytes = 1024 * 1024;
