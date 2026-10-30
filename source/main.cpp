@@ -884,9 +884,10 @@ void launch(const Tile& t) {
         appletRequestExitToSelf();
         running=false;
 #else
-        if(R_FAILED(nsInitialize())){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
+        // NS is initialized once during startup after the real HOS version
+        // is published; do not reopen/close it around each launch request.
+        if(!desknx::catalog::InitializeServices()){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
         const Result rc=appletRequestLaunchApplication(id,nullptr);
-        nsExit();
         if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"GAME LAUNCH FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
         else {recordRecentLaunch(t);setStatus("LAUNCH REQUEST SENT");}
 #endif
