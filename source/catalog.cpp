@@ -410,7 +410,8 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
         output << "C\t" << desknx::model::typeCode(item.kind) << '\t'
                << desknx::model::safeField(item.title) << '\t'
                << desknx::model::safeField(item.data) << '\t'
-               << item.w << '\t' << item.h << '\t' << item.color << '\n';
+               << item.w << '\t' << item.h << '\t' << item.color << '\t'
+               << item.viewFlags << '\n';
     }
     output.flush();
     const bool good = output.good();
