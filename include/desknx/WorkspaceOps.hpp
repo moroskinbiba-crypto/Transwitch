@@ -33,14 +33,21 @@ inline bool cellFromPoint(int px, int py, int left, int top,
     if (relativeX < 0 || relativeY < 0 ||
         relativeX >= totalWidth || relativeY >= totalHeight)
         return false;
-    const int column = relativeX / strideX;
-    const int row = relativeY / strideY;
+    int column = relativeX / strideX;
+    int row = relativeY / strideY;
+    const int offsetX = relativeX % strideX;
+    const int offsetY = relativeY % strideY;
+    if (!allowGaps &&
+        (offsetX >= cellWidth || offsetY >= cellHeight))
+        return false;
+    // During a drag, map the gap to the next cell. This keeps the grab point
+    // stable when a finger starts on a spanning tile's internal gutter.
+    if (allowGaps && offsetX >= cellWidth && column < model::Columns - 1)
+        ++column;
+    if (allowGaps && offsetY >= cellHeight && row < model::Rows - 1)
+        ++row;
     if (column < 0 || column >= model::Columns ||
         row < 0 || row >= model::Rows)
-        return false;
-    if (!allowGaps &&
-        (relativeX % strideX >= cellWidth ||
-         relativeY % strideY >= cellHeight))
         return false;
     point = {column, row};
     return true;
@@ -61,6 +68,11 @@ inline int tileAtPoint(const model::Workspace& desk, int px, int py,
             return static_cast<int>(i);
     }
     return -1;
+}
+
+inline CellPoint tileOriginForPointer(CellPoint pointerCell,
+                                         int grabOffsetX, int grabOffsetY) {
+    return {pointerCell.x - grabOffsetX, pointerCell.y - grabOffsetY};
 }
 
 inline bool moveSelectedTile(model::Workspace& desk, int& selectedX,
