@@ -85,7 +85,8 @@ int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=true;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, deletePrompt=false, running=true;
+int recentIndex=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
 // action is delegated to the backend (PWR-03); in standalone we honour it
 // locally through the applet power APIs, which are available to NROs too.
@@ -867,6 +868,32 @@ void drawScreen() {
         text("A CONFIRM   /   B CANCEL",405,394,2,BLUE,890);
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
+    if(recentOpen) {
+        rect(0,0,SW,SH,Color{0,0,0,185});
+        softCard(250,88,780,544,Color{31,33,39,252},Color{255,255,255,30});
+        text("RECENT LAUNCHES",282,112,3,WHITE,850);
+        roundRect(918,108,84,30,9,Color{49,52,61,255});
+        text("B BACK",933,118,1,WHITE,995);
+        text("UP / DOWN SELECT     A LAUNCH",282,153,1,MUTED,850);
+        if(recentLaunches.empty()) {
+            text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
+            text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
+        } else {
+            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+            const int visible=std::min(10,static_cast<int>(recentLaunches.size()));
+            for(int row=0;row<visible;++row) {
+                const auto& entry=recentLaunches[static_cast<size_t>(row)];
+                const int yy=190+row*39;
+                if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%8};
+                drawTileIcon(iconTile,290,yy+4,27);
+                text(entry.title,330,yy+8,2,row==recentIndex?WHITE:MUTED,850);
+                text(entry.kind==Kind::Game?"GAME":"HOMEBREW",870,yy+11,1,
+                     row==recentIndex?BLUE:MUTED,990);
+            }
+        }
+        text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
+    }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
         rect(0,0,SW,SH,Color{0,0,0,185});rect(420,220,440,280,Color{25,30,42,255});outline(420,220,440,280,BLUE);
@@ -1046,9 +1073,27 @@ void launch(const Tile& t) {
     if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
     else if(t.kind==Kind::System)setStatus("PROTOTYPE ONLY - SYSTEM HOME REPLACEMENT IS INACTIVE",3500);
     else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
-    else setStatus(lastLaunched);
+    else if(t.kind==Kind::Recent) {
+        if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
+        else {recentIndex=0;recentOpen=true;}
+    } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    if(recentOpen) {
+        if(keys&HidNpadButton_B){recentOpen=false;return;}
+        if(recentLaunches.empty())return;
+        recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+        if(keys&HidNpadButton_Up)
+            recentIndex=(recentIndex-1+static_cast<int>(recentLaunches.size()))%static_cast<int>(recentLaunches.size());
+        if(keys&HidNpadButton_Down)
+            recentIndex=(recentIndex+1)%static_cast<int>(recentLaunches.size());
+        if(keys&HidNpadButton_A) {
+            const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
+            recentOpen=false;
+            launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
+        }
+        return;
+    }
     if(powerMenu) {
         if(keys&HidNpadButton_B){powerMenu=false;return;}
         if(keys&HidNpadButton_Up)powerIndex=(powerIndex+2)%3;
@@ -1159,6 +1204,22 @@ void touchSelect(int x,int y) {
 }
 int tabStart(){return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));}
 void touchInput(const SDL_Event&e) {
+    if(recentOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=910&&x<=1010&&y>=104&&y<=150) {
+                recentOpen=false;
+            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
+                const int index=(y-190)/39;
+                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size()) {
+                    const HistoryEntry entry=recentLaunches[static_cast<size_t>(index)];
+                    recentOpen=false;
+                    launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
+                }
+            }
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(listOpen) {
@@ -1326,7 +1387,7 @@ int main(int,char**) {
             static u64 lastHeldDirs = 0;
             const u64 held = padGetButtons(&pad);
             const u64 dirs = HidNpadButton_Left|HidNpadButton_Right|HidNpadButton_Up|HidNpadButton_Down;
-            const bool modal = listOpen||deletePrompt||powerMenu;
+            const bool modal = listOpen||recentOpen||deletePrompt||powerMenu;
             if(!modal && (held&dirs) && !dragging) {
                 const Uint32 now = SDL_GetTicks();
                 if((held&dirs) != lastHeldDirs) { holdStart=now; lastRepeat=now; lastHeldDirs=held&dirs; }
