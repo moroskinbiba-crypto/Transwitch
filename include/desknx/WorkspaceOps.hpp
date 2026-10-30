@@ -168,7 +168,8 @@ inline bool moveSelectedTileToWorkspace(std::vector<model::Workspace>& workspace
     // the existing destination tile instead of creating a duplicate.
     const auto duplicate = std::find_if(destination.tiles.begin(), destination.tiles.end(),
         [&](const model::Tile& existing) {
-            return existing.kind == tile.kind && existing.data == tile.data;
+            return model::typeCode(existing) == model::typeCode(tile) &&
+                   existing.data == tile.data;
         });
     if (duplicate != destination.tiles.end()) {
         const int existingX = duplicate->x;
