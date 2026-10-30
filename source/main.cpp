@@ -1121,8 +1121,8 @@ void launch(const Tile& t) {
 void keyInput(u64 keys, bool fromRepeat) {
     if(workspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
-        if(keys&HidNpadButton_Up||keys&HidNpadButton_Down)
-            workspaceMenuIndex=1-workspaceMenuIndex;
+        if(keys&HidNpadButton_Up)workspaceMenuIndex=0;
+        if(keys&HidNpadButton_Down)workspaceMenuIndex=1;
         if(keys&HidNpadButton_A) {
             const int action=workspaceMenuIndex;
             workspaceMenu=false;
