@@ -3407,8 +3407,6 @@ int main(int,char**) {
         layoutLoaded = true;
         restoredFromBackup = true;
         setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
-        if (!layoutSaveBlocked)
-            saveLayout();
     } else if (layoutExists && !layoutLoaded) {
         if (!backupBrokenLayout())
             layoutSaveBlocked = true;
@@ -3421,8 +3419,14 @@ int main(int,char**) {
     if(layoutLoaded && loadActiveWorkspaceState()) {
         setStatus("RESTORED: "+desks[static_cast<size_t>(deskIndex)].name,2500);
     } else if(layoutLoaded) {
-        // Migrate existing DESKNX3 layouts to the separate active-workspace marker.
+        // Migrate existing layouts to the separate active-workspace marker.
         (void)saveActiveWorkspaceState();
+    }
+    // Restore the user's last desk before publishing a recovered backup.
+    // Saving the backup first would overwrite the valid marker with its older
+    // active index and could silently forget the desk selected before shutdown.
+    if(restoredFromBackup&&!layoutSaveBlocked) {
+        if(saveLayout())setStatus("LAYOUT RESTORED FROM BACKUP",5000);
     }
 
     if (layoutRecoveredTiles > 0 || layoutDroppedTiles > 0) {
