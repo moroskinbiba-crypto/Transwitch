@@ -317,6 +317,14 @@ namespace desknx::system::app {
         if (!g_ProcessMonitorAvailable)
             return false;
 
+        // Let AM/PM finish publishing the newly started application before
+        // interpreting ProcessNotFound as a natural exit. This matches the
+        // HOME-suspend stabilization window used by CanSuspend().
+        const u64 now = armGetSystemTick();
+        const u64 launchSettleTicks = armGetSystemTickFreq() * 3 / 2;
+        if (now - g_LaunchTick < launchSettleTicks)
+            return false;
+
         u64 pid = 0;
         const Result queryRc = pmshellGetApplicationProcessIdForShell(&pid);
         if (R_SUCCEEDED(queryRc)) {
