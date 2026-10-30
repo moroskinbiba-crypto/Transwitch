@@ -1109,7 +1109,9 @@ bool saveLayout() {
         return false;
     }
     const uint64_t shapeHash=desknx::model::stableHash(shape);
-    const bool mustRewritePrimary=layoutPrimaryNeedsRewrite||
+    struct stat primaryStat{};
+    const bool primaryExists=stat(CFG_FILE,&primaryStat)==0&&S_ISREG(primaryStat.st_mode);
+    const bool mustRewritePrimary=layoutPrimaryNeedsRewrite||!primaryExists||
         !persistedLayoutShapeKnown||persistedLayoutShapeHash!=shapeHash||
         layoutNeedsMigration;
 
