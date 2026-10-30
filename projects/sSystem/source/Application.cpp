@@ -26,6 +26,28 @@ namespace desknx::system::app {
         return R_MODULE(rc) == 15 && R_DESCRIPTION(rc) == 1;
     }
 
+    // IApplicationAccessor's state-change event also fires on focus/suspend
+    // transitions. Query its explicit IsCompleted command (AM cmd 1) before
+    // Join/GetResult so a stale event can never be mistaken for app exit.
+    static Result WaitForApplicationCompleted(u64 timeout_ns) {
+        const u64 start = armGetSystemTick();
+        const u64 frequency = armGetSystemTickFreq();
+        const u64 timeout_ticks = (timeout_ns / 1'000'000'000ULL) * frequency +
+            ((timeout_ns % 1'000'000'000ULL) * frequency) / 1'000'000'000ULL;
+        const u64 deadline = start + timeout_ticks;
+
+        do {
+            u8 completed = 0;
+            const Result rc = serviceDispatchOut(&g_AppHolder.s, 1, completed);
+            if (R_FAILED(rc)) return rc;
+            if (completed != 0) return 0;
+            if (armGetSystemTick() >= deadline) break;
+            svcSleepThread(50'000'000ULL);
+        } while (true);
+
+        return KERNELRESULT(TimedOut);
+    }
+
     // Build the 0x88-byte preselected-user launch parameter expected by games.
     // Layout (from qlaunch / uLaunch): magic(4) + is_user_selected(1) + pad(3) +
     // uid(16) + padding. The is_user_selected byte MUST be 1 -- leaving it 0
@@ -341,11 +363,16 @@ namespace desknx::system::app {
             }
         }
 
-        // RequestExit/Terminate only asks AM to stop the title. Join consumes
-        // the application's final result and waits until AM has completed the
-        // exit handshake before the accessor is released. This is particularly
-        // important when pmshell is unavailable and there is no PID to poll.
-        DaemonLog("app: waiting for AM application-exit result");
+        // RequestExit/Terminate only asks AM to stop the title. The state
+        // event may already be signalled by a focus transition, so verify the
+        // explicit IsCompleted result before Join consumes GetResult.
+        DaemonLog("app: waiting for AM application completion");
+        const Result completedRc = WaitForApplicationCompleted(5'000'000'000ULL);
+        if (R_FAILED(completedRc)) {
+            DaemonLog("app: AM did not confirm completion rc=0x%08X; keeping holder",
+                      static_cast<unsigned int>(completedRc));
+            return completedRc;
+        }
         appletApplicationJoin(&g_AppHolder);
         DaemonLog("app: AM application-exit result received");
 
@@ -402,8 +429,23 @@ namespace desknx::system::app {
             return false;
         }
 
-        // The PM service has confirmed that the process is gone. Join the
-        // AM accessor as well so its final result is consumed before close.
+        // PM confirms that the process is gone, but wait for AM's own
+        // IsCompleted state before consuming GetResult and releasing the
+        // accessor. If AM is still finalizing, retain the holder and retry on
+        // the next backend poll instead of blocking the qlaunch event loop.
+        const Result completedRc = WaitForApplicationCompleted(5'000'000'000ULL);
+        if (R_FAILED(completedRc)) {
+            static u64 lastAmWaitLogTick = 0;
+            const u64 now = armGetSystemTick();
+            const u64 logInterval = armGetSystemTickFreq() * 5;
+            if (lastAmWaitLogTick == 0 || now - lastAmWaitLogTick >= logInterval) {
+                DaemonLog("app: PM reports process gone but AM completion is pending rc=0x%08X; retaining holder",
+                          static_cast<unsigned int>(completedRc));
+                lastAmWaitLogTick = now;
+            }
+            return false;
+        }
+
         g_ExitAppId = g_AppId;
         appletApplicationJoin(&g_AppHolder);
         appletApplicationClose(&g_AppHolder);
