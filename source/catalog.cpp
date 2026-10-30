@@ -286,6 +286,55 @@ size_t jpegSize(const u8* data, size_t length) {
         if (data[i] == 0xFF && data[i + 1] == 0xD9) return i + 2;
     return 0;
 }
+
+bool IsUsableCachedJpeg(const std::string& path) {
+    struct stat st{};
+    constexpr size_t MaxIconBytes = 2 * 1024 * 1024;
+    constexpr size_t HeaderBytes = 64 * 1024;
+    if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_size < 4 || static_cast<uint64_t>(st.st_size) > MaxIconBytes)
+        return false;
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    std::vector<u8> bytes(std::min<size_t>(
+        static_cast<size_t>(st.st_size), HeaderBytes));
+    input.read(reinterpret_cast<char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    const size_t length = static_cast<size_t>(input.gcount());
+    if (length < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8) return false;
+
+    // Validate the JPEG frame header before trusting a cached icon. This is
+    // intentionally bounded: the scanner does not decode every icon on SD.
+    size_t pos = 2;
+    for (int segments = 0; segments < 256 && pos + 1 < length; ++segments) {
+        while (pos < length && bytes[pos] != 0xFF) ++pos;
+        while (pos < length && bytes[pos] == 0xFF) ++pos;
+        if (pos >= length) return false;
+        const u8 marker = bytes[pos++];
+        if (marker == 0xD9 || marker == 0xDA) return false;
+        if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) continue;
+        if (pos + 2 > length) return false;
+        const size_t segmentLength =
+            (static_cast<size_t>(bytes[pos]) << 8) | bytes[pos + 1];
+        if (segmentLength < 2 || segmentLength > length - pos) return false;
+        const bool isSof = marker == 0xC0 || marker == 0xC1 || marker == 0xC2 ||
+            marker == 0xC3 || marker == 0xC5 || marker == 0xC6 || marker == 0xC7 ||
+            marker == 0xC9 || marker == 0xCA || marker == 0xCB || marker == 0xCD ||
+            marker == 0xCE || marker == 0xCF;
+        if (isSof) {
+            if (segmentLength < 7) return false;
+            const size_t height =
+                (static_cast<size_t>(bytes[pos + 3]) << 8) | bytes[pos + 4];
+            const size_t width =
+                (static_cast<size_t>(bytes[pos + 5]) << 8) | bytes[pos + 6];
+            return width > 0 && height > 0 && width <= 1024 && height <= 1024 &&
+                   width * height <= 1024u * 1024u;
+        }
+        pos += segmentLength;
+    }
+    return false;
+}
 bool SaveBytes(const std::string& path, const unsigned char* data, size_t length) {
     if (!data || length == 0) return false;
     EnsureCacheDirectories();
@@ -314,7 +363,9 @@ bool CacheJpegIcon(const std::string& path, const u8* data, size_t length, bool 
 
 void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate) {
     const std::string iconPath = desknx::model::iconCachePath(Kind::Nro, nro.path);
-    const bool needIcon = !IsRegularFile(iconPath);
+    const bool iconValid = IsUsableCachedJpeg(iconPath);
+    if (!iconValid && IsRegularFile(iconPath)) std::remove(iconPath.c_str());
+    const bool needIcon = !iconValid;
     std::ifstream file(nro.path, std::ios::binary);
     if (!file) return;
     NroStart start{};
@@ -356,10 +407,14 @@ void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate) {
 bool HasCachedGameIcon(u64 id) {
     char hex[32]{};
     std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
-    struct stat st{};
     const std::string path = desknx::model::iconCachePath(Kind::Game, hex);
-    return !path.empty() && stat(path.c_str(), &st) == 0 &&
-           S_ISREG(st.st_mode) && st.st_size > 4;
+    if (path.empty()) return false;
+    if (IsUsableCachedJpeg(path)) return true;
+    if (IsRegularFile(path)) {
+        std::remove(path.c_str());
+        LogDiagnostic("icon_cache invalid_jpeg title_id=%s removed=1", hex);
+    }
+    return false;
 }
 
 void CacheGameIcon(u64 id, const NsApplicationControlData& data, u64 controlSize) {
