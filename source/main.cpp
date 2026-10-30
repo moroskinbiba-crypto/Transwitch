@@ -36,6 +36,9 @@ using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 170;
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
+// NsApplicationView flag bits follow SLaunch's documented mapping.
+constexpr u32 NsViewFlagIsGameCard = BIT(6);
+constexpr u32 NsViewFlagNeedsUpdate = BIT(9);
 constexpr const char* CFG_DIR = "sdmc:/switch/DeskNX";
 constexpr const char* CFG_FILE = "sdmc:/switch/DeskNX/layout.tsv";
 constexpr const char* CFG_TMP = "sdmc:/switch/DeskNX/layout.tmp";
@@ -903,11 +906,11 @@ void drawScreen() {
                 text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+475);
                 std::string appBadge = typeName(candidate.kind);
                 if (candidate.kind == Kind::Game) {
-                    if (candidate.viewFlags & BIT(4)) appBadge = "UPDATE";
-                    else if (candidate.viewFlags & BIT(2)) appBadge = "GAMECARD";
+                    if (candidate.viewFlags & NsViewFlagNeedsUpdate) appBadge = "UPDATE";
+                    else if (candidate.viewFlags & NsViewFlagIsGameCard) appBadge = "GAMECARD";
                 }
                 text(appBadge,mx+486,yy+11,1,
-                     (candidate.viewFlags & BIT(4)) ? Color{255,159,10,255} :
+                     (candidate.viewFlags & NsViewFlagNeedsUpdate) ? Color{255,159,10,255} :
                      (i==listIndex?BLUE:MUTED),mx+620);
             }
             roundRect(mx+640,my+110,192,410,15,Color{25,27,33,255});
@@ -918,8 +921,8 @@ void drawScreen() {
             drawTileIcon(preview,mx+694,my+128,84);
             text(selected.title,mx+654,my+224,2,WHITE,mx+818);
             std::string detailType = typeName(selected.kind);
-            if(selected.kind==Kind::Game && (selected.viewFlags&BIT(4))) detailType="UPDATE AVAILABLE";
-            else if(selected.kind==Kind::Game && (selected.viewFlags&BIT(2))) detailType="GAME CARD";
+            if(selected.kind==Kind::Game && (selected.viewFlags&NsViewFlagNeedsUpdate)) detailType="UPDATE AVAILABLE";
+            else if(selected.kind==Kind::Game && (selected.viewFlags&NsViewFlagIsGameCard)) detailType="GAME CARD";
             text(detailType,mx+654,my+266,1,BLUE,mx+818);
             if(selected.kind==Kind::Game) {
                 text("TITLE ID",mx+654,my+296,1,MUTED,mx+818);
