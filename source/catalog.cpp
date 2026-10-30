@@ -34,7 +34,7 @@ constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
 constexpr const char* CacheTemp = "sdmc:/switch/DeskNX/cache/catalogue.tmp";
 constexpr size_t MaxNroAssetBytes = 2 * 1024 * 1024;
 
-struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; u8 recordType; };
+struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; };
 struct NroFile { std::string path; u64 size; u64 mtime; };
 struct Signatures {
     size_t gameCount{0};
@@ -139,8 +139,7 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
         }
         records.push_back({installed[i].application_id,
                            installed[i].last_updated,
-                           flags,
-                           installed[i].type});
+                           flags});
     }
     return records;
 }
