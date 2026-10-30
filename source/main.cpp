@@ -1078,16 +1078,30 @@ void drawScreen() {
         text("WORKSPACE AND LIBRARY MAINTENANCE",384,246,1,MUTED,860);
         roundRect(840,202,70,30,9,Color{54,57,66,255});
         text("B BACK",852,212,1,WHITE,904);
+        char nsInfo[80]{};
+        if(!catalogueNsAvailable)
+            std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE OFFLINE  0X%08X",
+                          static_cast<unsigned int>(catalogueNsError));
+        else if(catalogueNsError)
+            std::snprintf(nsInfo,sizeof(nsInfo),"NS RESPONSE ERROR  0X%08X",
+                          static_cast<unsigned int>(catalogueNsError));
+        else
+            std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE READY");
+        text(nsInfo,384,270,1,catalogueNsAvailable?GREEN:RED,900);
+        const std::string scanInfo=std::to_string(catalogueGameCount)+" GAMES  /  "+
+            std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
+            (catalogueScanComplete?"SCAN COMPLETE":"SCANNING");
+        text(scanInfo,384,286,1,MUTED,900);
         const char* actions[]={"RESCAN GAME AND HOMEBREW LIBRARY",
                                "RENAME CURRENT WORKSPACE",
                                "WORKSPACE MANAGEMENT",
                                "TOGGLE EDIT / ARRANGE MODE"};
         for(int i=0;i<4;++i) {
-            const int yy=278+i*59;
-            if(i==appSettingsIndex)roundRect(378,yy,524,49,10,Color{45,61,82,255});
-            text(actions[i],400,yy+16,2,i==appSettingsIndex?WHITE:MUTED,882);
+            const int yy=306+i*52;
+            if(i==appSettingsIndex)roundRect(378,yy,524,45,10,Color{45,61,82,255});
+            text(actions[i],400,yy+15,2,i==appSettingsIndex?WHITE:MUTED,882);
         }
-        text("UP / DOWN SELECT     A APPLY     B CLOSE",382,518,1,BLUE,900);
+        text("UP / DOWN SELECT     A APPLY     B CLOSE",382,520,1,BLUE,900);
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
@@ -1598,8 +1612,8 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=840&&x<=910&&y>=202&&y<=232) {
             appSettingsMenu=false;
-        } else if(x>=378&&x<=902&&y>=278&&y<514) {
-            const int row=(y-278)/59;
+        } else if(x>=378&&x<=902&&y>=306&&y<514) {
+            const int row=(y-306)/52;
             if(row>=0&&row<4)activateAppSettings(row);
         }
         return;
