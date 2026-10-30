@@ -5,6 +5,7 @@
 #include <SDL2/SDL_image.h>
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <string>
 #include <sys/stat.h>
@@ -29,11 +30,18 @@ public:
         }
         struct stat st{};
         constexpr long long MaxCompressedIconBytes = 2LL * 1024 * 1024;
-        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
-            st.st_size <= 0 || st.st_size > MaxCompressedIconBytes ||
-            !jpegDimensionsWithinLimit(path)) return nullptr;
+        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return nullptr;
+        if (st.st_size <= 0 || st.st_size > MaxCompressedIconBytes ||
+            !jpegDimensionsWithinLimit(path)) {
+            // Let the next catalogue refresh fetch this icon again from NS/NRO.
+            std::remove(path.c_str());
+            return nullptr;
+        }
         SDL_Surface* surface = IMG_Load(path.c_str());
-        if (!surface) return nullptr;
+        if (!surface) {
+            std::remove(path.c_str());
+            return nullptr;
+        }
         constexpr int MaxIconDimension = 1024;
         const bool dimensionsOk = surface->w > 0 && surface->h > 0 &&
             surface->w <= MaxIconDimension && surface->h <= MaxIconDimension &&
@@ -41,6 +49,7 @@ public:
                 static_cast<std::uint64_t>(MaxIconDimension) * MaxIconDimension;
         if (!dimensionsOk) {
             SDL_FreeSurface(surface);
+            std::remove(path.c_str());
             return nullptr;
         }
         SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
