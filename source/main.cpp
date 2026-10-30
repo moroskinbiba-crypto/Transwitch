@@ -88,8 +88,8 @@ int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, workspaceMenu=false, deletePrompt=false, running=true;
-int recentIndex=0, systemMenuIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, deletePrompt=false, running=true;
+int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -733,7 +733,7 @@ void drawTile(const Tile&t,bool selected) {
         roundRect(r.x+18,r.y+18,70,70,20,Color{55,65,82,255});
         drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
         text("SYSTEM TOOLS",r.x+104,r.y+28,2,WHITE,r.x+r.w-10);
-        text("SETTINGS  /  GAMEPAD",r.x+104,r.y+54,1,MUTED,r.x+r.w-10);
+        text("DESKNX SETTINGS  /  GAMEPAD",r.x+104,r.y+54,1,MUTED,r.x+r.w-10);
         text("ALBUM  /  POWER  /  MORE",r.x+104,r.y+73,1,accent,r.x+r.w-10);
     } else if(t.kind==Kind::Unsupported) {
         rect(r.x+3,r.y+3,r.w-6,r.h-6,Color{52,55,61,255});
@@ -808,7 +808,7 @@ void drawScreen() {
     rect(0,628,SW,92,Color{23,24,29,250});rect(0,628,SW,1,Color{255,255,255,18});
     softCard(302,634,676,58,Color{48,50,58,245},Color{255,255,255,28});
     struct DockItem { int x; int icon; const char* label; bool active; };
-    const DockItem dock[]={{312,4,"LIBRARY",listOpen},{422,5,"DESKTOP",editing},
+    const DockItem dock[]={{312,4,"LIBRARY",listOpen},{422,5,"EDIT",editing},
         {532,0,"SETTINGS",false},{642,1,"GAMEPAD",false},
         {752,6,"RECENT",recentOpen},{862,3,"POWER",powerMenu}};
     for(const auto& item:dock) {
@@ -1033,11 +1033,11 @@ void drawScreen() {
         text("QUICK ACCESS TO NINTENDO SWITCH FEATURES",308,174,1,MUTED,960);
         struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
-            {308,218,0,"SETTINGS","OPEN SYSTEM SETTINGS"},
+            {308,218,0,"SETTINGS","APP OPTIONS AND MAINTENANCE"},
             {542,218,1,"CONTROLLERS","PAIR / CHANGE CONTROLLERS"},
             {776,218,2,"ALBUM","SCREENSHOTS AND VIDEOS"},
             {308,382,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
-            {542,382,5,"DESKTOP","RETURN TO WORKSPACE"},
+            {542,382,5,"EDIT MODE","MOVE AND RESIZE TILES"},
             {776,382,6,"RECENT","RECENTLY LAUNCHED APPS"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
@@ -1052,6 +1052,24 @@ void drawScreen() {
         roundRect(890,136,82,34,10,Color{54,57,66,255});
         text("B BACK",906,147,1,WHITE,962);
         text("A SELECT     TOUCH ANY CARD",308,568,1,BLUE,960);
+    }
+    if(appSettingsMenu) {
+        rect(0,0,SW,SH,Color{0,0,0,192});
+        softCard(340,184,600,370,Color{31,33,39,255},Color{255,255,255,30});
+        text("DESKNX SETTINGS",382,208,3,WHITE,860);
+        text("WORKSPACE AND LIBRARY MAINTENANCE",384,246,1,MUTED,860);
+        roundRect(840,202,70,30,9,Color{54,57,66,255});
+        text("B BACK",852,212,1,WHITE,904);
+        const char* actions[]={"RESCAN GAME AND HOMEBREW LIBRARY",
+                               "RENAME CURRENT WORKSPACE",
+                               "WORKSPACE MANAGEMENT",
+                               "TOGGLE EDIT / ARRANGE MODE"};
+        for(int i=0;i<4;++i) {
+            const int yy=278+i*59;
+            if(i==appSettingsIndex)roundRect(378,yy,524,49,10,Color{45,61,82,255});
+            text(actions[i],400,yy+16,2,i==appSettingsIndex?WHITE:MUTED,882);
+        }
+        text("UP / DOWN SELECT     A APPLY     B CLOSE",382,518,1,BLUE,900);
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
@@ -1190,6 +1208,23 @@ void deleteDesk() {
     if(desks.size()<=1){setStatus("AT LEAST ONE WORKSPACE IS REQUIRED");return;}
     deletePrompt=true;
 }
+void activateAppSettings(int action) {
+    appSettingsMenu=false;
+    switch(action) {
+        case 0: restartCatalogueScan(); break;
+        case 1: renameDesk(); break;
+        case 2:
+            workspaceMenu=true;
+            workspaceMenuIndex=0;
+            break;
+        case 3:
+            editing=!editing;
+            if(!editing&&dragging){dragging=false;saveNow();}
+            setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
+            break;
+        default: break;
+    }
+}
 void launch(const Tile& t) {
     desknx::diag::Write("launch", "requested", "kind=%s",
         t.kind == Kind::Game ? "game" : t.kind == Kind::Nro ? "homebrew" : "widget");
@@ -1278,6 +1313,13 @@ void launch(const Tile& t) {
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    if(appSettingsMenu) {
+        if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+3)%4;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%4;
+        if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
+        return;
+    }
     if(systemMenu) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
         if(keys&HidNpadButton_Left)systemMenuIndex=(systemMenuIndex+5)%6;
@@ -1288,8 +1330,10 @@ void keyInput(u64 keys, bool fromRepeat) {
             const int action=systemMenuIndex;
             systemMenu=false;
             if(action==0) {
-                const Result rc=appletRequestLaunchApplication(0x0100000000001000ULL,nullptr);
-                if(R_FAILED(rc))setStatus("COULD NOT OPEN SYSTEM SETTINGS",3000);
+                // Retail System Settings are a scene inside qlaunch, not a
+                // launchable title. Requesting qlaunch here would relaunch HOME.
+                appSettingsMenu=true;
+                appSettingsIndex=0;
             } else if(action==1) {
                 HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
                 HidLaControllerSupportResultInfo result{};
@@ -1300,7 +1344,9 @@ void keyInput(u64 keys, bool fromRepeat) {
             } else if(action==3) {
                 powerMenu=true;powerIndex=0;
             } else if(action==4) {
-                setStatus("WORKSPACE READY");
+                editing=!editing;
+                if(!editing&&dragging){dragging=false;saveNow();}
+                setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             } else if(action==5) {
                 recentIndex=0;recentOpen=true;
             }
