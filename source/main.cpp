@@ -50,15 +50,33 @@ size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
+constexpr const char* SETTINGS_FILE = "sdmc:/switch/DeskNX/settings.ini";
+constexpr const char* SETTINGS_TMP = "sdmc:/switch/DeskNX/settings.tmp";
+constexpr const char* SETTINGS_BAK = "sdmc:/switch/DeskNX/settings.bak";
+constexpr const char* MEDIA_ROOT = "sdmc:/switch/DeskNX/media";
 
 struct Color { Uint8 r, g, b, a; };
-constexpr Color BG{10,14,22,255};
-constexpr Color WHITE{246,248,252,255}, MUTED{145,158,180,255}, BLUE{83,157,255,255};
-constexpr Color GREEN{52,211,153,255}, RED{255,99,112,255};
-constexpr std::array<Color,8> COLORS{{
+Color BG{10,14,22,255};
+constexpr Color WHITE{246,248,252,255};
+Color MUTED{145,158,180,255}, BLUE{83,157,255,255};
+Color GREEN{52,211,153,255}, RED{255,99,112,255};
+Color THEME_TOP{16,27,44,255}, THEME_BOTTOM{9,17,31,255};
+std::array<Color,8> COLORS{{
     {91,145,226,255},{53,169,151,255},{155,116,226,255},{222,151,83,255},
     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255}
 }};
+int themeIndex=0;
+std::string wallpaperPath, fontPath;
+SDL_Texture* wallpaperTexture=nullptr;
+int wallpaperWidth=0, wallpaperHeight=0;
+
+enum class MediaPickerType { Wallpaper, Font };
+struct MediaEntry { std::string name, path; bool directory{false}; };
+bool mediaPickerOpen=false;
+MediaPickerType mediaPickerType=MediaPickerType::Wallpaper;
+std::string mediaPickerDirectory;
+std::vector<MediaEntry> mediaPickerEntries;
+int mediaPickerIndex=0, mediaPickerOffset=0;
 
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
