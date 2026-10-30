@@ -84,6 +84,7 @@ uint64_t visibleCacheRecentRevision = UINT64_MAX;
 bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown = false;
 bool layoutSaveBlocked = false;
 bool layoutUserModified = false;
+bool defaultLayoutPending = false;
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
@@ -2292,8 +2293,10 @@ int main(int,char**) {
         if (!backupBrokenLayout())
             layoutSaveBlocked = true;
         defaultLayout();
+        defaultLayoutPending=true;
     } else if (!layoutLoaded) {
         defaultLayout();
+        defaultLayoutPending=true;
     }
     if (layoutRecoveredTiles > 0 || layoutDroppedTiles > 0) {
         char message[96]{};
@@ -2348,15 +2351,16 @@ int main(int,char**) {
                 "delta_ms=%u catalogue_ready=%d scan_complete=%d",
                 frameDelta, ready ? 1 : 0, complete ? 1 : 0);
         }
-        if(complete&&!layoutLoaded) {
+        if(complete&&defaultLayoutPending) {
             // On first launch the default desks are populated only after the
-            // catalogue is ready. If the user edited them while scanning was
-            // in progress, preserve those changes instead of replacing them.
+            // catalogue is ready. Saving an active workspace switch must not
+            // cancel this population; actual content edits must be preserved.
             if(!layoutUserModified)defaultLayout();
             const bool saved=saveLayout();
-            // Keep the generated layout in memory for this session even if
-            // the SD card is read-only; do not rebuild it on every frame.
+            // Finalize the first-run decision even if SD is read-only. Keep the
+            // in-memory desks intact and do not rebuild them every frame.
             layoutLoaded=true;
+            defaultLayoutPending=false;
             if(saved)setStatus("DESKNX READY - Y ADD  X EDIT",4000);
         }
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
