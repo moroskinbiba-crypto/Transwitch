@@ -1496,6 +1496,16 @@ int tabStart(){
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
 void touchInput(const SDL_Event&e) {
+    if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=840&&x<=910&&y>=202&&y<=232) {
+            appSettingsMenu=false;
+        } else if(x>=378&&x<=902&&y>=278&&y<514) {
+            const int row=(y-278)/59;
+            if(row>=0&&row<4)activateAppSettings(row);
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && systemMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=890&&x<=972&&y>=136&&y<=170){systemMenu=false;return;}
@@ -1512,8 +1522,10 @@ void touchInput(const SDL_Event&e) {
         if(cardHit) {
             systemMenu=false;
             if(systemMenuIndex==0) {
-                const Result rc=appletRequestLaunchApplication(0x0100000000001000ULL,nullptr);
-                if(R_FAILED(rc))setStatus("COULD NOT OPEN SYSTEM SETTINGS",3000);
+                // System Settings are a qlaunch scene on retail consoles.
+                // Open the real DeskNX settings panel instead of relaunching HOME.
+                appSettingsMenu=true;
+                appSettingsIndex=0;
             } else if(systemMenuIndex==1) {
                 HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
                 HidLaControllerSupportResultInfo result{};
@@ -1523,7 +1535,9 @@ void touchInput(const SDL_Event&e) {
             } else if(systemMenuIndex==3) {
                 powerMenu=true;powerIndex=0;
             } else if(systemMenuIndex==4) {
-                setStatus("WORKSPACE READY");
+                editing=!editing;
+                if(!editing&&dragging){dragging=false;saveNow();}
+                setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             } else if(systemMenuIndex==5) {
                 recentIndex=0;recentOpen=true;
             }
