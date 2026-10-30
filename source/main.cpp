@@ -94,6 +94,7 @@ int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
 int touchPressStartX=0, touchPressStartY=0;
+int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, deletePrompt=false, running=true;
@@ -1255,6 +1256,7 @@ void finishTileDrag(const char* message="POSITION SAVED") {
     dragging=false;
     touchDragging=false;
     touchPressActive=false;
+    touchDragOffsetX=touchDragOffsetY=0;
     touchDragTabStart=-1;
     saveNow();
     if(message&&*message)setStatus(message);
@@ -1304,8 +1306,9 @@ void removeTile() {
     touchDragging=false;
     touchPressActive=false;
     touchDragTabStart=-1;
-    setStatus("REMOVED: "+name);
+    touchDragOffsetX=touchDragOffsetY=0;
     saveNow();
+    setStatus("REMOVED: "+name);
 }
 void addSelected() {
     const auto& available=visibleCatalogueSnapshot();bool ready=false,complete=false,truncated=false;
@@ -1834,7 +1837,15 @@ bool touchSelect(int x,int y) {
         if(!desknx::workspace_ops::cellFromPoint(
                x,y,LEFT,TOP,CW,CH,GX,GY,true,cell))
             return false;
-        const int dx=cell.x-selectedX,dy=cell.y-selectedY;
+        const int index=itemAt(desk,selectedX,selectedY);
+        if(index<0)return false;
+        const Tile& moving=desk.tiles[static_cast<size_t>(index)];
+        desknx::workspace_ops::CellPoint origin=
+            desknx::workspace_ops::tileOriginForPointer(
+                cell,touchDragOffsetX,touchDragOffsetY);
+        origin.x=std::max(0,std::min(COLS-moving.w,origin.x));
+        origin.y=std::max(0,std::min(ROWS-moving.h,origin.y));
+        const int dx=origin.x-selectedX,dy=origin.y-selectedY;
         if(dx&&dy) {
             moveTile(dx,0);
             moveTile(0,dy);
@@ -2063,6 +2074,14 @@ void touchInput(const SDL_Event&e) {
                     touchPressActive=true;
                     touchPressStartX=x;
                     touchPressStartY=y;
+                    desknx::workspace_ops::CellPoint grab{};
+                    if(desknx::workspace_ops::cellFromPoint(
+                           x,y,LEFT,TOP,CW,CH,GX,GY,true,grab)) {
+                        touchDragOffsetX=grab.x-selectedX;
+                        touchDragOffsetY=grab.y-selectedY;
+                    } else {
+                        touchDragOffsetX=touchDragOffsetY=0;
+                    }
                     if(oldX==selectedX&&oldY==selectedY) {
                         dragging=true;
                         touchDragging=true;
@@ -2115,7 +2134,16 @@ void touchInput(const SDL_Event&e) {
             dragging=true;
             touchDragging=true;
             touchDragTabStart=tabStart();
-            (void)touchSelect(x,y);
+            if(y>=92&&y<=140&&x>=28) {
+                const int start=tabStart();
+                const int target=start+(x-28)/166;
+                const int tabX=28+(target-start)*166;
+                if(x>=tabX&&x<tabX+156&&target>=0&&
+                   target<static_cast<int>(desks.size())&&target<start+7)
+                    moveToDesk(target);
+            } else {
+                (void)touchSelect(x,y);
+            }
         }
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
@@ -2133,6 +2161,7 @@ void touchInput(const SDL_Event&e) {
         const bool moved=touchDragging;
         touchPressActive=false;
         touchDragging=false;
+        touchDragOffsetX=touchDragOffsetY=0;
         touchDragTabStart=-1;
         if(moved) {
             dragging=false;
