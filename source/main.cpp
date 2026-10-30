@@ -349,6 +349,13 @@ void restartCatalogueScan() {
         SDL_WaitThread(catalogueThread,nullptr);
         catalogueThread=nullptr;
     }
+    // A manual retry must reopen NS/account after an earlier transient
+    // initialization or IPC failure; otherwise every rescan repeats the
+    // same dead session and can never recover without relaunching DeskNX.
+    desknx::catalog::ShutdownServices();
+    std::uint32_t retryServiceError=0;
+    const bool retryServicesReady =
+        desknx::catalog::InitializeServices(retryServiceError);
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
     catalogue.clear();
     catalogueReady=false;
@@ -367,6 +374,11 @@ void restartCatalogueScan() {
     if(!catalogueThread) {
         setStatus("BACKGROUND RESCAN UNAVAILABLE",3000);
         publishCatalogue(desknx::catalog::Scan(nullptr,nullptr,true));
+    } else if(!retryServicesReady) {
+        char message[72]{};
+        std::snprintf(message,sizeof(message),"NS RETRY FAILED  0X%08X",
+                      static_cast<unsigned int>(retryServiceError));
+        setStatus(message,5000);
     } else {
         setStatus("RESCANNING INSTALLED GAMES AND HOMEBREW",3500);
     }
@@ -1111,7 +1123,7 @@ void drawScreen() {
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
             (catalogCompleteNow?"SCAN COMPLETE":"SCANNING");
         text(scanInfo,384,286,1,MUTED,900);
-        const char* actions[]={"RESCAN GAME AND HOMEBREW LIBRARY",
+        const char* actions[]={"RETRY NS / RESCAN LIBRARY",
                                "RENAME CURRENT WORKSPACE",
                                "WORKSPACE MANAGEMENT",
                                "TOGGLE EDIT / ARRANGE MODE"};
