@@ -65,6 +65,7 @@ std::vector<Candidate> catalogue;
 SDL_mutex* catalogueMutex = nullptr;
 SDL_mutex* ipcMutex = nullptr;
 SDL_Thread* catalogueThread = nullptr;
+int catalogueForceRefreshToken = 1;
 #ifdef DESKNX_SYSTEM_APPLET
 SDL_Thread* heartbeatThread = nullptr;
 SDL_atomic_t heartbeatRunning{};
@@ -323,9 +324,11 @@ void readCatalogueState(bool& ready,bool& complete,bool& truncated,
 void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
     publishCatalogue(snapshot);
 }
-int catalogueThreadMain(void*) {
-    desknx::diag::Write("catalogue", "thread_begin", "background scan started");
-    const auto result = desknx::catalog::Scan(catalogueProgress,nullptr);
+int catalogueThreadMain(void* context) {
+    const bool forceRefresh = context != nullptr;
+    desknx::diag::Write("catalogue", "thread_begin",
+        "background scan started force_refresh=%d", forceRefresh ? 1 : 0);
+    const auto result = desknx::catalog::Scan(catalogueProgress,nullptr,forceRefresh);
     desknx::diag::Write("catalogue", "thread_end",
         "complete=%d games=%zu nros=%zu items=%zu ns_available=%d ns_error=0x%08X truncated=%d",
         result.complete ? 1 : 0, result.gameCount, result.nroCount, result.items.size(),
@@ -359,10 +362,11 @@ void restartCatalogueScan() {
     catalogueWarningShown=false;
     listIndex=0;
     listOffset=0;
-    catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue refresh",nullptr);
+    catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue refresh",
+                                     &catalogueForceRefreshToken);
     if(!catalogueThread) {
         setStatus("BACKGROUND RESCAN UNAVAILABLE",3000);
-        publishCatalogue(desknx::catalog::Scan());
+        publishCatalogue(desknx::catalog::Scan(nullptr,nullptr,true));
     } else {
         setStatus("RESCANNING INSTALLED GAMES AND HOMEBREW",3500);
     }
