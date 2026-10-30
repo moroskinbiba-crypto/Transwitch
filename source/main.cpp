@@ -1529,6 +1529,9 @@ void launch(const Tile& t) {
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
         if(id==0){setStatus("INVALID TITLE ID");return;}
 #ifdef DESKNX_SYSTEM_APPLET
+        // Persist the user's workspace before sending a launch request that
+        // closes this HOME applet. Never discard unsaved edits on the way out.
+        if(!saveLayout())return;
         // LNC-02/LNC-03: pass the selected user only when we actually have a
         // valid uid; zero uid means "backend decides" (kept v1-compatible).
         // HasUser forces the preselection even if NACP would skip it.
@@ -1546,7 +1549,6 @@ void launch(const Tile& t) {
             return;
         }
         recordRecentLaunch(t);
-        saveLayout();
         appletRequestExitToSelf();
         running=false;
 #else
@@ -1568,6 +1570,8 @@ void launch(const Tile& t) {
     if(t.kind==Kind::Nro) {
         if(!isSafeNroPath(t.data)){setStatus("INVALID OR MISSING NRO PATH",3500);return;}
 #ifdef DESKNX_SYSTEM_APPLET
+        // Persist workspace changes before leaving HOME for the backend loader.
+        if(!saveLayout())return;
         desknx::diag::Write("launch", "homebrew_ipc_begin", "path_valid=1");
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchHomebrew(t.data.c_str(),"");});
         desknx::diag::Write("launch", "homebrew_ipc_end", "rc=0x%08X",
@@ -1579,7 +1583,6 @@ void launch(const Tile& t) {
             return;
         }
         recordRecentLaunch(t);
-        saveLayout();
         appletRequestExitToSelf();
         running=false;
 #else
