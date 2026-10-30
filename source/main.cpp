@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <ctime>
 #include <dirent.h>
 #include <fstream>
@@ -42,9 +43,9 @@ constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
 
 struct Color { Uint8 r, g, b, a; };
-constexpr Color BG{14,17,25,255}, PANEL{24,29,40,255}, EDGE{55,66,83,255};
-constexpr Color WHITE{242,246,252,255}, MUTED{147,160,181,255}, BLUE{92,166,255,255};
-constexpr Color GREEN{97,214,174,255}, RED{246,105,119,255};
+constexpr Color BG{17,18,22,255}, PANEL{34,36,42,255}, EDGE{66,69,77,255};
+constexpr Color WHITE{250,250,252,255}, MUTED{164,168,178,255}, BLUE{10,132,255,255};
+constexpr Color GREEN{48,209,88,255}, RED{255,69,58,255};
 constexpr std::array<Color,8> COLORS{{
     {78,117,188,255},{45,139,123,255},{151,91,185,255},{187,116,66,255},
     {177,77,99,255},{67,135,177,255},{115,128,74,255},{89,99,119,255}
@@ -76,6 +77,9 @@ std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
+bool catalogueTouchActive=false, catalogueTouchMoved=false;
+int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
+Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=true;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
 // action is delegated to the backend (PWR-03); in standalone we honour it
@@ -106,6 +110,27 @@ void rect(int x,int y,int w,int h,Color c) {
 }
 void outline(int x,int y,int w,int h,Color c) {
     color(c); SDL_Rect r{x,y,w,h}; SDL_RenderDrawRect(renderer,&r);
+}
+void roundRect(int x,int y,int w,int h,int radius,Color c) {
+    if(w<=0||h<=0) return;
+    const int r=std::max(0,std::min(radius,std::min(w,h)/2));
+    color(c);
+    for(int row=0;row<h;++row) {
+        int inset=0;
+        if(row<r) {
+            const double dy=static_cast<double>(r-row);
+            inset=static_cast<int>(std::ceil(r-std::sqrt(std::max(0.0,static_cast<double>(r*r)-dy*dy))));
+        } else if(row>=h-r) {
+            const double dy=static_cast<double>(row-(h-r-1));
+            inset=static_cast<int>(std::ceil(r-std::sqrt(std::max(0.0,static_cast<double>(r*r)-dy*dy))));
+        }
+        SDL_RenderDrawLine(renderer,x+inset,y+row,x+w-inset-1,y+row);
+    }
+}
+void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,18}) {
+    roundRect(x,y+4,w,h,18,Color{0,0,0,45});
+    roundRect(x,y,w,h,18,fill);
+    roundRect(x+1,y+1,w-2,h-2,17,edge);
 }
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
@@ -249,6 +274,40 @@ void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
 int catalogueThreadMain(void*) {
     (void)desknx::catalog::Scan(catalogueProgress,nullptr);
     return 0;
+}
+void restartCatalogueScan() {
+    bool complete = false;
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    complete = catalogueScanComplete;
+    if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
+    if(!complete) {
+        setStatus("LIBRARY SCAN IS ALREADY RUNNING",2500);
+        return;
+    }
+    if(catalogueThread) {
+        SDL_WaitThread(catalogueThread,nullptr);
+        catalogueThread=nullptr;
+    }
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    catalogue.clear();
+    catalogueReady=false;
+    catalogueScanComplete=false;
+    catalogueTruncated=false;
+    catalogueNsAvailable=false;
+    catalogueNsError=0;
+    catalogueGameCount=0;
+    catalogueNroCount=0;
+    if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
+    catalogueWarningShown=false;
+    listIndex=0;
+    listOffset=0;
+    catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue refresh",nullptr);
+    if(!catalogueThread) {
+        setStatus("BACKGROUND RESCAN UNAVAILABLE",3000);
+        publishCatalogue(desknx::catalog::Scan());
+    } else {
+        setStatus("RESCANNING INSTALLED GAMES AND HOMEBREW",3500);
+    }
 }
 #ifdef DESKNX_SYSTEM_APPLET
 template<typename Sender>
@@ -556,7 +615,8 @@ void drawTileIcon(const Tile&t,int x,int y,int size) {
 }
 void drawTile(const Tile&t,bool selected) {
     SDL_Rect r=tileRect(t);Color accent=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
-    rect(r.x,r.y,r.w,r.h,PANEL);rect(r.x,r.y,r.w,3,accent);outline(r.x,r.y,r.w,r.h,selected?BLUE:EDGE);
+    softCard(r.x,r.y,r.w,r.h,PANEL,selected?Color{10,132,255,180}:Color{255,255,255,22});
+    roundRect(r.x+10,r.y+7,r.w-20,3,2,accent);
     if(t.kind==Kind::Clock) {
         text(clockText(),r.x+16,r.y+18,5,WHITE,r.x+r.w-10);
         text(clockText(true).substr(6),r.x+18,r.y+74,2,MUTED,r.x+r.w-10);
@@ -608,14 +668,15 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow);
     refreshBattery();rect(0,0,SW,SH,BG);
     for(int y=0;y<SH;y+=28)rect(0,y,SW,1,Color{255,255,255,static_cast<Uint8>(y%3==0?7:3)});
-    rect(0,0,SW,76,Color{19,23,33,255});rect(0,74,SW,2,Color{43,53,69,255});
+    rect(0,0,SW,76,Color{24,25,30,245});rect(0,74,SW,1,Color{255,255,255,18});
     text("DESKNX",30,21,4,WHITE,260);text("PERSONAL HOME WORKSPACE",34,50,1,MUTED,420);
     text(clockText(),1124,20,3,WHITE,1260);text(battery>=0?std::to_string(battery)+"%":"BAT --",1130,50,1,MUTED,1260);
     int start=visibleStart(),tabW=156,x=28;
     for(int i=0;i<7&&start+i<static_cast<int>(desks.size());++i) {
-        int idx=start+i;bool active=idx==deskIndex;rect(x,94,tabW,42,active?Color{42,61,86,255}:Color{24,29,40,255});
-        outline(x,94,tabW,42,active?BLUE:EDGE);text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
-        if(active) rect(x+10,132,tabW-20,2,BLUE);
+        int idx=start+i;bool active=idx==deskIndex;
+        roundRect(x,94,tabW,42,14,active?Color{54,58,68,255}:Color{32,34,40,210});
+        if(active) roundRect(x+10,132,tabW-20,2,1,BLUE);
+        text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
         x+=166;
     }
     text("L / R SWITCH DESK",930,110,1,MUTED,1105);
@@ -626,13 +687,13 @@ void drawScreen() {
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h);
     if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
-    rect(0,628,SW,92,Color{18,22,31,255});rect(0,628,SW,2,EDGE);
+    rect(0,628,SW,92,Color{23,24,29,250});rect(0,628,SW,1,Color{255,255,255,18});
     struct Hint{const char*k;const char*v;};
     const Hint hints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},{"Y","ADD"},{"ZL/ZR","SIZE"},{"-","REMOVE"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
     const int hintCount=static_cast<int>(sizeof(hints)/sizeof(hints[0]));
     const int hintStep=(SW-36)/hintCount;
     int hx=18;for(const auto& h:hints){
-        rect(hx,650,50,28,Color{37,45,59,255});outline(hx,650,50,28,EDGE);
+        roundRect(hx,650,50,28,9,Color{48,50,58,255});
         text(h.k,hx+5,659,1,WHITE,hx+47);
         text(h.v,hx+56,659,1,MUTED,std::min(hx+hintStep-4,SW-18));
         hx+=hintStep;
@@ -640,41 +701,53 @@ void drawScreen() {
     bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
     text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,694,1,show?BLUE:MUTED,850);
     if(listOpen) {
-        rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;rect(mx,my,mw,mh,Color{22,27,38,250});outline(mx,my,mw,mh,BLUE);
+        rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;softCard(mx,my,mw,mh,Color{31,33,39,252},Color{255,255,255,30});
         text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);
-        text("A ADD  B BACK  Y SEARCH  X SORT  L/R FILTER  - CLEAR",mx+28,my+59,1,MUTED,mx+mw-20);
+        struct DrawerChip { int x; int w; const char* label; };
+        const DrawerChip chips[]={{mx+28,96,"Y SEARCH"},{mx+132,82,"X SORT"},
+            {mx+222,112,"L/R FILTER"},{mx+342,82,"- CLEAR"},
+            {mx+432,126,"RSTICK RESCAN"},{mx+566,72,"B BACK"},
+            {mx+646,72,"A ADD"}};
+        for(const auto& chip:chips) {
+            roundRect(chip.x,my+52,chip.w,25,8,Color{49,52,61,255});
+            text(chip.label,chip.x+6,my+61,1,WHITE,chip.x+chip.w-4);
+        }
         std::string viewLabel=std::string("FILTER: ")+desknx::catalog_view::FilterName(catalogueFilter)+
             "  SORT: "+desknx::catalog_view::SortName(catalogueSort);
         if(!catalogueQuery.empty()) viewLabel+="  QUERY: "+catalogueQuery;
         if(!catalogCompleteNow) viewLabel+="  / SCANNING";
-        text(viewLabel,mx+28,my+77,1,BLUE,mx+mw-20);
+        if(catalogueNsError!=0) {
+            char nsError[40]{};
+            std::snprintf(nsError,sizeof(nsError),"  / NS ERROR 0X%08X",static_cast<unsigned int>(catalogueNsError));
+            viewLabel+=nsError;
+        }
+        text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-20);
         int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
         if(!catalogCompleteNow && available.empty()) {
-            text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+118,2,BLUE,mx+mw-20);
-            text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+150,1,MUTED,mx+mw-20);
+            text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+128,2,BLUE,mx+mw-20);
+            text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+160,1,MUTED,mx+mw-20);
         } else if(catalogCompleteNow && available.empty()) {
             if(!catalogueNsAvailable) {
                 char errorText[96]{};
                 std::snprintf(errorText,sizeof(errorText),"GAME SERVICE UNAVAILABLE  (0X%08X)",
                               static_cast<unsigned int>(catalogueNsError));
-                text(errorText,mx+32,my+118,2,RED,mx+mw-20);
-                text("INSTALLED GAMES COULD NOT BE READ",mx+32,my+152,1,MUTED,mx+mw-20);
+                text(errorText,mx+32,my+128,2,RED,mx+mw-20);
+                text("INSTALLED GAMES COULD NOT BE READ",mx+32,my+162,1,MUTED,mx+mw-20);
             } else {
-                text("NO MATCHING APPS",mx+32,my+118,2,WHITE,mx+mw-20);
-                text("TRY ANOTHER FILTER OR CLEAR SEARCH",mx+32,my+152,1,MUTED,mx+mw-20);
+                text("NO MATCHING APPS",mx+32,my+128,2,WHITE,mx+mw-20);
+                text("TRY ANOTHER FILTER OR CLEAR SEARCH",mx+32,my+162,1,MUTED,mx+mw-20);
             }
         } else {
             for(int row=0;row<vis;++row) {
-                int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+92+row*43;
-                if(i==listIndex)rect(mx+22,yy,mw-44,38,Color{45,61,82,255});
+                int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+110+row*40;
+                if(i==listIndex)rect(mx+22,yy,mw-44,36,Color{45,61,82,255});
                 const Candidate& candidate=available[static_cast<size_t>(i)];
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                drawTileIcon(iconTile,mx+30,yy+6,26);
-                text(candidate.title,mx+66,yy+8,2,i==listIndex?WHITE:MUTED,mx+575);
-                text(typeName(candidate.kind),mx+595,yy+12,1,i==listIndex?BLUE:MUTED,mx+mw-18);
+                drawTileIcon(iconTile,mx+30,yy+5,26);
+                text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+575);
+                text(typeName(candidate.kind),mx+595,yy+11,1,i==listIndex?BLUE:MUTED,mx+mw-18);
             }
         }
-        const size_t totalItems=catalogueSnapshot().size();
         const std::string counts=std::to_string(catalogueGameCount)+" GAMES  /  "+
             std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
@@ -740,7 +813,23 @@ void addSelected() {
     if(!placeable(d,t,t.x,t.y)){listOpen=false;setStatus("ITEM NEEDS MORE SPACE");return;}
     d.tiles.push_back(t);selectedX=t.x;selectedY=t.y;listOpen=false;editing=true;setStatus("ADDED: "+t.title);saveNow();
 }
-void openList(){listOpen=true;listIndex=0;listOffset=0;}
+void openList(){
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    if(itemAt(desk,selectedX,selectedY)>=0) {
+        Tile placeholder{Kind::Game,"","",0,0,1,1,0};
+        int freeX=0,freeY=0;
+        if(firstFree(desk,placeholder,freeX,freeY)) {
+            selectedX=freeX;
+            selectedY=freeY;
+        } else {
+            setStatus("WORKSPACE FULL - REMOVE A TILE BEFORE ADDING APPS",3500);
+        }
+    }
+    listOpen=true;
+    listIndex=0;
+    listOffset=0;
+    lastCatalogueTap=-1;
+}
 void newDesk() {
     if(desks.size()>=MAX_DESKS){setStatus("MAXIMUM OF 12 WORKSPACES");return;}
     desks.push_back(Workspace{"Workspace "+std::to_string(desks.size()+1),{}});deskIndex=static_cast<int>(desks.size())-1;selectedX=selectedY=0;editing=true;saveNow();
@@ -857,6 +946,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_L){cycleCatalogueFilter(-1);return;}
         if(keys&HidNpadButton_R){cycleCatalogueFilter(1);return;}
         if(keys&HidNpadButton_Minus){catalogueQuery.clear();listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);return;}
+        if(keys&HidNpadButton_StickR){restartCatalogueScan();return;}
         if(available.empty())return;
         if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
         if(keys&HidNpadButton_Up)listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
@@ -929,7 +1019,45 @@ void touchSelect(int x,int y) {
 int tabStart(){return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));}
 void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN) {
-        int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);if(listOpen||deletePrompt)return;
+        int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(listOpen) {
+            if(y>=122&&y<=151) {
+                if(x>=238&&x<334) searchCatalogue();
+                else if(x>=342&&x<424) cycleCatalogueSort();
+                else if(x>=432&&x<544) cycleCatalogueFilter(1);
+                else if(x>=552&&x<634){catalogueQuery.clear();listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
+                else if(x>=642&&x<768) restartCatalogueScan();
+                else if(x>=776&&x<848) listOpen=false;
+                else if(x>=856&&x<928) addSelected();
+                return;
+            }
+            if(y>=180&&y<584) {
+                const int row=(y-180)/40;
+                const auto available=visibleCatalogueSnapshot();
+                const int index=listOffset+row;
+                if(index>=0&&static_cast<size_t>(index)<available.size()) {
+                    const Uint32 now=SDL_GetTicks();
+                    if(lastCatalogueTap==index&&now-lastCatalogueTapTick<=500) {
+                        listIndex=index;
+                        addSelected();
+                        lastCatalogueTap=-1;
+                        catalogueTouchActive=false;
+                        return;
+                    } else {
+                        listIndex=index;
+                        lastCatalogueTap=index;
+                        lastCatalogueTapTick=now;
+                    }
+                    catalogueTouchActive=true;
+                    catalogueTouchMoved=false;
+                    catalogueTouchStartY=y;
+                    catalogueTouchRow=row;
+                }
+                return;
+            }
+            return;
+        }
+        if(deletePrompt)return;
         if(y>=92&&y<=140){
             int idx=tabStart()+(x-28)/166;
             if(x>=28&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7&&idx!=deskIndex){
@@ -946,6 +1074,24 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(y>=628){if(x<210){editing=true;openList();}else if(x<385){editing=!editing;setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");}}
+    } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
+        const int y=static_cast<int>(e.tfinger.y*SH);
+        if(std::abs(y-catalogueTouchStartY)>=10) catalogueTouchMoved=true;
+        if(catalogueTouchMoved) {
+            const int delta=(catalogueTouchStartY-y)/40;
+            if(delta!=0) {
+                const auto available=visibleCatalogueSnapshot();
+                const int maxOffset=std::max(0,static_cast<int>(available.size())-10);
+                listOffset=std::max(0,std::min(maxOffset,listOffset+delta));
+                listIndex=std::max(0,std::min(static_cast<int>(available.size())-1,
+                                              listOffset+catalogueTouchRow));
+                catalogueTouchStartY=y;
+            }
+        }
+    } else if(e.type==SDL_FINGERUP&&listOpen&&catalogueTouchActive) {
+        if(catalogueTouchMoved) lastCatalogueTap=-1;
+        catalogueTouchActive=false;
+        catalogueTouchMoved=false;
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         touchSelect(static_cast<int>(e.tfinger.x*SW),static_cast<int>(e.tfinger.y*SH));
     } else if(e.type==SDL_FINGERUP&&touchDragging) {
