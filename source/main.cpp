@@ -1376,9 +1376,14 @@ void addSelected() {
     const Candidate& c=available[static_cast<size_t>(listIndex)];
     for(const auto& existing:d.tiles) {
         if(existing.kind==c.kind && existing.data==c.data) {
-            Tile placeholder{Kind::Game,"","",0,0,1,1,0};
-            int freeX=0,freeY=0;
-            if(firstFree(d,placeholder,freeX,freeY)){selectedX=freeX;selectedY=freeY;}
+            // Focus the existing shortcut instead of jumping to an unrelated
+            // empty cell. Close the library so the user can immediately see it.
+            selectedX=existing.x;
+            selectedY=existing.y;
+            editing=true;
+            listOpen=false;
+            catalogueTouchActive=false;
+            lastCatalogueTap=-1;
             setStatus("ALREADY ON THIS WORKSPACE: "+c.title,2200);
             return;
         }
@@ -1900,8 +1905,10 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_Plus)newDesk();
     if(keys&HidNpadButton_StickL)renameDesk();
     if(keys&HidNpadButton_StickR) {
-        if(editing)deleteDesk();
-        else {workspaceMenu=true;workspaceMenuIndex=0;}
+        // The right stick opens workspace actions in every mode. Destructive
+        // operations must always be selected explicitly from the menu.
+        workspaceMenu=true;
+        workspaceMenuIndex=0;
     }
     if(keys&HidNpadButton_X){editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"EDIT MODE CLOSED");}
     if(keys&HidNpadButton_Y){editing=true;openList();}
