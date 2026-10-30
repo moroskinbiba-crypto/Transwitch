@@ -289,13 +289,22 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
             return false;
 
         if (item.kind == Kind::Game) {
-            if (!isHexTitleId(item.data) ||
-                !IsMissingOrUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
-                return false;
+            if (!isHexTitleId(item.data)) return false;
+            const std::string iconPath=desknx::model::iconCachePath(item.kind,item.data);
+            if (!IsMissingOrUsableCachedJpeg(iconPath)) {
+                if (!allowStale) return false;
+                std::remove(iconPath.c_str());
+            }
         } else if (item.kind == Kind::Nro) {
-            if (!isCachedNroPath(item.data) ||
-                !IsMissingOrUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
+            if (!isCachedNroPath(item.data)) {
+                if (allowStale) continue; // stale homebrew entry was removed from SD
                 return false;
+            }
+            const std::string iconPath=desknx::model::iconCachePath(item.kind,item.data);
+            if (!IsMissingOrUsableCachedJpeg(iconPath)) {
+                if (!allowStale) return false;
+                std::remove(iconPath.c_str());
+            }
         } else if (!item.data.empty()) {
             return false;
         }
