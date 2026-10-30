@@ -54,8 +54,11 @@ int main() {
         assert(isValidWorkspaceName("Games"));
         assert(isValidWorkspaceName(std::string(31,'A')));
         assert(!isValidWorkspaceName(std::string(32,'A')));
-        assert(isValidWorkspaceName(std::string(31,'я'))); // 62 UTF-8 bytes
-        assert(!isValidWorkspaceName(std::string(32,'я'))); // 64 bytes / 32 codepoints
+        std::string cyrillic31, cyrillic32;
+        for(int i=0;i<31;++i)cyrillic31+="я";
+        cyrillic32=cyrillic31+"я";
+        assert(isValidWorkspaceName(cyrillic31)); // 62 UTF-8 bytes
+        assert(!isValidWorkspaceName(cyrillic32)); // 64 bytes / 32 codepoints
         assert(!isValidWorkspaceName(""));
         assert(!isValidWorkspaceName(std::string("bad\tname")));
     }
