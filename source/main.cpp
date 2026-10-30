@@ -37,7 +37,8 @@
 namespace {
 using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
-constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 170;
+constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
+constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
 constexpr u32 NsViewFlagIsGameCard = BIT(6);
@@ -1315,7 +1316,7 @@ void drawDotted(int x,int y,int w,int h) {
 }
 int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
-    return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
+    return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
 void drawScreen() {
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -1339,32 +1340,29 @@ void drawScreen() {
             blend(THEME_TOP.g,THEME_BOTTOM.g),blend(THEME_TOP.b,THEME_BOTTOM.b),255});
     }
     drawWallpaper();
-    rect(0,0,SW,76,Color{11,16,26,224});
-    rect(0,75,SW,1,Color{255,255,255,13});
-    roundRect(28,16,44,44,14,Color{48,119,211,255});
-    drawSystemIcon(5,40,28,20,WHITE);
-    text("DESKNX",86,17,3,WHITE,300);
-    text("PERSONAL WORKSPACE",88,46,1,MUTED,340);
-    text(desks[static_cast<size_t>(deskIndex)].name,430,25,2,WHITE,790);
-    roundRect(1034,17,222,44,20,Color{27,36,51,255});
-    text(clockText(),1052,30,2,WHITE,1138);
-    rect(1145,27,1,24,Color{255,255,255,24});
-    text(battery>=0?std::to_string(battery)+"%":"BAT --",1160,32,1,
-         battery>=20?GREEN:RED,1242);
-    int start=visibleStart(),tabW=156,x=28;
-    for(int i=0;i<7&&start+i<static_cast<int>(desks.size());++i) {
-        int idx=start+i;bool active=idx==deskIndex;
-        roundRect(x,94,tabW,42,14,active?Color{39,76,119,255}:Color{23,31,45,230});
-        if(active)roundRect(x+12,128,tabW-24,3,2,BLUE);
-        text(desks[static_cast<size_t>(idx)].name,x+14,103,2,
-             active?WHITE:MUTED,x+tabW-10);
-        x+=166;
+
+    // Compact system bar: common actions remain one touch away, while the
+    // desktop canvas no longer has a second row of competing workspace tabs.
+    softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
+    struct HeaderTool { int x,icon; bool active; };
+    const HeaderTool headerTools[]={
+        {72,4,listOpen},{132,0,appSettingsMenu},{192,1,false},
+        {252,2,false},{312,3,powerMenu},{372,6,recentOpen}
+    };
+    for(const auto& item:headerTools) {
+        roundRect(item.x,24,50,48,14,item.active?Color{53,94,145,255}:Color{39,48,62,230});
+        drawSystemIcon(item.icon,item.x+13,36,24,item.active?WHITE:MUTED);
     }
-    roundRect(1188,94,34,42,12,
-        desks.size()<static_cast<size_t>(MAX_DESKS)?Color{30,55,83,255}:Color{23,31,45,255});
-    text("+",1199,105,2,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,1218);
-    roundRect(1226,94,34,42,12,Color{23,31,45,255});
-    text("...",1230,111,1,WHITE,1257);
+    text("DESKNX",470,32,3,WHITE,760);
+    text("PERSONAL WORKSPACE",472,58,1,MUTED,760);
+    roundRect(1022,24,180,48,18,Color{32,43,59,235});
+    text(clockText(),1040,37,3,WHITE,1136);
+    rect(1148,34,1,26,Color{255,255,255,30});
+    text(battery>=0?std::to_string(battery)+"%":"BAT --",1165,39,2,
+         battery>=20?GREEN:RED,1190);
+
+    // Single desktop surface under the tiles and widgets.
+    softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(d.tiles.empty()) {
         softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
@@ -1385,7 +1383,7 @@ void drawScreen() {
         }
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h);
-    if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
+    if(editing&&dragging)text("MOVING",1040,118,1,BLUE,1260);
     softCard(28,558,1224,56,Color{18,26,39,238},Color{255,255,255,16});
     const bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
     roundRect(48,576,7,7,4,show?BLUE:GREEN);
@@ -1414,19 +1412,31 @@ void drawScreen() {
             text(hints[i].action,hx+56,581,1,MUTED,hx+144);
         }
     }
-    softCard(300,624,680,82,Color{18,26,39,246},Color{255,255,255,24});
-    struct DockItem { int x; int icon; const char* label; bool active; };
-    const DockItem dock[]={{302,4,"LIBRARY",listOpen},{412,5,"EDIT",editing},
-        {522,0,"SETTINGS",false},{632,1,"CONTROLLERS",false},
-        {742,6,"RECENT",recentOpen},{852,3,"POWER",powerMenu}};
-    for(const auto& item:dock) {
-        const int center=item.x+55;
-        if(item.active)roundRect(item.x+16,629,78,71,16,Color{34,67,107,255});
-        roundRect(center-19,634,38,38,13,
-            item.active?Color{67,142,235,255}:Color{34,46,64,255});
-        drawSystemIcon(item.icon,center-12,641,24,WHITE);
-        text(item.label,item.x+5,677,2,item.active?WHITE:MUTED,item.x+105);
+    // Workspace switcher anchors the lower edge, matching a familiar
+    // console desktop rather than duplicating navigation in a second dock.
+    softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    const int deskStart=visibleStart();
+    for(int i=0;i<VisibleDeskTabs&&deskStart+i<static_cast<int>(desks.size());++i) {
+        const int index=deskStart+i;
+        const int x=DeskTabX+i*DeskTabStep;
+        const bool active=index==deskIndex;
+        roundRect(x,641,DeskTabWidth,48,14,
+            active?Color{53,91,139,255}:Color{34,43,58,235});
+        if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
+        text(desks[static_cast<size_t>(index)].name,x+12,656,2,
+             active?WHITE:MUTED,x+DeskTabWidth-8);
     }
+    roundRect(770,641,52,48,14,desks.size()<static_cast<size_t>(MAX_DESKS)?
+        Color{35,70,105,255}:Color{34,43,58,235});
+    text("+",787,652,3,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,812);
+    roundRect(832,641,52,48,14,Color{34,43,58,235});
+    text("...",842,660,2,WHITE,876);
+    text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
+         916,658,1,MUTED,1040);
+    roundRect(1096,638,128,54,16,
+        editing?Color{53,100,156,255}:Color{34,46,64,255});
+    drawSystemIcon(5,1108,650,30,WHITE);
+    text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
     if(listOpen) {
         rect(0,0,SW,SH,Color{3,7,14,194});
         const int mx=110,my=70,mw=1060,mh=570;
@@ -2567,7 +2577,8 @@ bool touchSelect(int x,int y) {
 }
 int tabStart(){
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
-    return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
+    return std::max(0,std::min(deskIndex-2,
+        static_cast<int>(desks.size())-VisibleDeskTabs));
 }
 void touchInput(const SDL_Event&e) {
     // A second pointer must not steal the workspace interaction from an
@@ -2769,36 +2780,62 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(deletePrompt)return;
-        if(y>=92&&y<=140&&x>=1188&&x<1222) {
-            newDesk();
-            return;
-        }
-        if(y>=92&&y<=140&&x>=1226&&x<1260) {
-            workspaceMenu=true;
-            workspaceMenuIndex=0;
-            return;
-        }
-        if(y>=92&&y<=140){
-            int idx=tabStart()+(x-28)/166;
-            const int tabX=28+(idx-tabStart())*166;
-            if(x>=tabX&&x<tabX+156&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7){
-                const Uint32 now=SDL_GetTicks();
-                if(idx==deskIndex && lastWorkspaceTabTap==idx &&
-                   now-lastWorkspaceTabTapTick<=500) {
-                    lastWorkspaceTabTap=-1;
-                    renameDesk();
-                } else {
-                    if(idx!=deskIndex) {
-                        deskIndex=idx;
-                        if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
-                    }
-                    lastWorkspaceTabTap=idx;
-                    lastWorkspaceTabTapTick=now;
-                }
-            } else {
-                lastWorkspaceTabTap=-1;
+        // System shortcuts in the top bar.
+        if(y>=16&&y<=82) {
+            if(x>=72&&x<122) {openList();return;}
+            if(x>=132&&x<182) {appSettingsMenu=true;appSettingsIndex=0;return;}
+            if(x>=192&&x<242) {
+                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
+                HidLaControllerSupportResultInfo result{};
+                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
+                    setStatus("CONTROLLER MENU UNAVAILABLE",3000);
+                return;
             }
+            if(x>=252&&x<302) {
+                if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
+                return;
+            }
+            if(x>=312&&x<362) {powerMenu=true;powerIndex=0;return;}
+            if(x>=372&&x<422) {recentIndex=0;recentOpen=true;return;}
             return;
+        }
+        // Workspace tabs and their controls live at the bottom of the screen.
+        if(y>=638&&y<=694) {
+            if(x>=DeskTabX&&x<DeskTabX+VisibleDeskTabs*DeskTabStep) {
+                const int offset=x-DeskTabX;
+                const int slot=offset/DeskTabStep;
+                const int tabX=DeskTabX+slot*DeskTabStep;
+                const int target=tabStart()+slot;
+                if(x>=tabX&&x<tabX+DeskTabWidth&&target>=0&&
+                   target<static_cast<int>(desks.size())&&target<tabStart()+VisibleDeskTabs) {
+                    const Uint32 now=SDL_GetTicks();
+                    if(target==deskIndex&&lastWorkspaceTabTap==target&&
+                       now-lastWorkspaceTabTapTick<=500) {
+                        lastWorkspaceTabTap=-1;
+                        renameDesk();
+                    } else {
+                        if(target!=deskIndex) {
+                            deskIndex=target;
+                            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
+                        }
+                        lastWorkspaceTabTap=target;
+                        lastWorkspaceTabTapTick=now;
+                    }
+                } else lastWorkspaceTabTap=-1;
+                return;
+            }
+            if(x>=770&&x<822) {newDesk();return;}
+            if(x>=832&&x<884) {
+                workspaceMenu=true;
+                workspaceMenuIndex=0;
+                return;
+            }
+            if(x>=1096&&x<1224) {
+                editing=!editing;
+                if(!editing&&dragging){dragging=false;saveNow();}
+                setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
+                return;
+            }
         }
         if(desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
            y>=370&&y<=408) {
@@ -2885,12 +2922,13 @@ void touchInput(const SDL_Event&e) {
             dragging=true;
             touchDragging=true;
             touchDragTabStart=tabStart();
-            if(y>=92&&y<=140&&x>=28) {
+            if(y>=638&&y<=694&&x>=DeskTabX) {
                 const int start=tabStart();
-                const int target=start+(x-28)/166;
-                const int tabX=28+(target-start)*166;
-                if(x>=tabX&&x<tabX+156&&target>=0&&
-                   target<static_cast<int>(desks.size())&&target<start+7)
+                const int slot=(x-DeskTabX)/DeskTabStep;
+                const int target=start+slot;
+                const int tabX=DeskTabX+slot*DeskTabStep;
+                if(slot>=0&&slot<VisibleDeskTabs&&x<tabX+DeskTabWidth&&
+                   target>=0&&target<static_cast<int>(desks.size()))
                     moveToDesk(target);
             } else {
                 (void)touchSelect(x,y);
@@ -2898,12 +2936,13 @@ void touchInput(const SDL_Event&e) {
         }
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=92&&y<=140&&x>=28) {
+        if(y>=638&&y<=694&&x>=DeskTabX) {
             const int start=tabStart();
-            const int target=start+(x-28)/166;
-            const int tabX=28+(target-start)*166;
-            if(x>=tabX&&x<tabX+156&&target>=0&&
-               target<static_cast<int>(desks.size())&&target<start+7)
+            const int slot=(x-DeskTabX)/DeskTabStep;
+            const int target=start+slot;
+            const int tabX=DeskTabX+slot*DeskTabStep;
+            if(slot>=0&&slot<VisibleDeskTabs&&x<tabX+DeskTabWidth&&
+               target>=0&&target<static_cast<int>(desks.size()))
                 moveToDesk(target);
         } else {
             touchSelect(x,y);
