@@ -403,6 +403,10 @@ void applyMediaPickerSelection(int index) {
         refreshMediaPicker();
         return;
     }
+    if(mediaPickerType==MediaPickerType::IconPack) {
+        setStatus("CHOOSE A FOLDER TO APPLY AN ICON PACK",2500);
+        return;
+    }
     if(mediaPickerType==MediaPickerType::Wallpaper) {
         if(!loadWallpaperTexture(selected.path)) {
             setStatus("IMAGE LOAD FAILED - USE JPG OR PNG",3500);
@@ -1613,20 +1617,24 @@ void drawScreen() {
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
         text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("MEDIA: /switch/DeskNX/media  •  IMAGE / FONT / ICON PACK",346,592,1,MUTED,930);
+        text("MEDIA: /switch/DeskNX/media  •  ICONS: iconpacks/<folder>/<TITLEID>.jpg/png",
+             346,592,1,MUTED,930);
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
     }
     if(mediaPickerOpen) {
         rect(0,0,SW,SH,Color{3,7,14,205});
         softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
-        text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":"CHOOSE FONT",
+        text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
+             mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
              264,88,3,WHITE,1000);
         text(mediaPickerDirectory,266,128,1,MUTED,1000);
         roundRect(930,86,92,34,10,Color{54,57,66,255});
         text("B  BACK",944,98,1,WHITE,1012);
         if(mediaPickerEntries.empty()) {
             text("NO SUPPORTED FILES FOUND",286,220,2,WHITE,980);
-            text("COPY JPG / PNG OR TTF / OTF FILES INTO THIS FOLDER",
+            text(mediaPickerType==MediaPickerType::IconPack
+                 ?"CREATE A FOLDER HERE FOR YOUR ICON PACK"
+                 :"COPY JPG / PNG OR TTF / OTF FILES INTO THIS FOLDER",
                  286,256,1,MUTED,1000);
         }
         for(int row=0;row<12;++row) {
