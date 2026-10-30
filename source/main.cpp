@@ -887,9 +887,11 @@ void drawScreen() {
         rect(0,0,SW,SH,Color{0,0,0,185});
         softCard(250,88,780,544,Color{31,33,39,252},Color{255,255,255,30});
         text("RECENT LAUNCHES",282,112,3,WHITE,850);
-        roundRect(918,108,84,30,9,Color{49,52,61,255});
-        text("B BACK",933,118,1,WHITE,995);
-        text("UP / DOWN SELECT     A LAUNCH",282,153,1,MUTED,850);
+        roundRect(838,108,78,30,9,Color{49,52,61,255});
+        text("B BACK",850,118,1,WHITE,912);
+        roundRect(924,108,88,30,9,Color{10,132,255,255});
+        text("LAUNCH",936,118,1,WHITE,1006);
+        text("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,1,MUTED,850);
         if(recentLaunches.empty()) {
             text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
             text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
@@ -1244,15 +1246,19 @@ void touchInput(const SDL_Event&e) {
     if(recentOpen) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-            if(x>=910&&x<=1010&&y>=104&&y<=150) {
+            if(x>=838&&x<=916&&y>=104&&y<=150) {
                 recentOpen=false;
-            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
-                const int index=(y-190)/39;
-                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size()) {
-                    const HistoryEntry entry=recentLaunches[static_cast<size_t>(index)];
+            } else if(x>=924&&x<=1012&&y>=104&&y<=150) {
+                if(!recentLaunches.empty()) {
+                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+                    const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
                     recentOpen=false;
                     launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
                 }
+            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
+                const int index=(y-190)/39;
+                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size())
+                    recentIndex=index;
             }
         }
         return;
