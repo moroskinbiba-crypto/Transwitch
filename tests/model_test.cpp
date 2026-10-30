@@ -224,7 +224,7 @@ int main() {
     {
         Workspace malformed{"Malformed",{}};
         malformed.tiles.push_back(Tile{Kind::Game,"Invalid","0100000000000009",0,0,3,3,0});
-        assert(!desknx::layout::serialize({malformed},0).empty()==false);
+        assert(desknx::layout::serialize({malformed},0).empty());
         assert(!isSupportedTileSize(3,3));
     }
 
