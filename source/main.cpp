@@ -86,7 +86,8 @@ bool catalogueTouchActive=false, catalogueTouchMoved=false;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, recentOpen=false, deletePrompt=false, running=true;
-int recentIndex=0;
+int recentIndex=0, lastWorkspaceTabTap=-1;
+Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
 // action is delegated to the backend (PWR-03); in standalone we honour it
 // locally through the applet power APIs, which are available to NROs too.
@@ -716,7 +717,6 @@ void drawScreen() {
         text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
         x+=166;
     }
-    text("L / R SWITCH DESK",930,110,1,MUTED,1105);
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(d.tiles.empty()) {
         softCard(390,292,500,132,Color{27,30,37,238},Color{255,255,255,24});
@@ -746,7 +746,8 @@ void drawScreen() {
     struct Hint { const char* key; const char* action; };
     const Hint leftHints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},
                             {"Y","ADD"},{"ZL/ZR",editing?"SIZE":""}};
-    const Hint rightHints[]={{"-",editing?"REMOVE":"POWER"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
+    const Hint rightHints[]={{"-",editing?"REMOVE":"POWER"},{"L/R","DESK"},{"+","NEW DESK"},
+                             {editing?"RSTICK":"LSTICK",editing?"DEL DESK":"RENAME"}};
     for(int i=0;i<4;++i) {
         const int lx=18+i*92,rx=900+i*92;
         text(leftHints[i].key,lx,650,1,BLUE,lx+48);
@@ -1303,10 +1304,23 @@ void touchInput(const SDL_Event&e) {
         if(y>=92&&y<=140){
             int idx=tabStart()+(x-28)/166;
             const int tabX=28+(idx-tabStart())*166;
-            if(x>=tabX&&x<tabX+156&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7&&idx!=deskIndex){
-                deskIndex=idx;
-                saveNow();
-                setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            if(x>=tabX&&x<tabX+156&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7){
+                const Uint32 now=SDL_GetTicks();
+                if(idx==deskIndex && lastWorkspaceTabTap==idx &&
+                   now-lastWorkspaceTabTapTick<=500) {
+                    lastWorkspaceTabTap=-1;
+                    renameDesk();
+                } else {
+                    if(idx!=deskIndex) {
+                        deskIndex=idx;
+                        saveNow();
+                        setStatus(desks[static_cast<size_t>(deskIndex)].name);
+                    }
+                    lastWorkspaceTabTap=idx;
+                    lastWorkspaceTabTapTick=now;
+                }
+            } else {
+                lastWorkspaceTabTap=-1;
             }
             return;
         }
