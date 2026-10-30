@@ -90,6 +90,19 @@ FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
+struct PdmQuerySnapshot {
+    char titleId[17]{};
+    bool available{false};
+    uint64_t playtimeSeconds{0}, lastPlayed{0};
+    uint32_t launchCount{0}, initRc{0}, queryRc{0};
+};
+SDL_Thread* playStatsThread=nullptr;
+SDL_mutex* playStatsMutex=nullptr;
+SDL_atomic_t playStatsDone{};
+PdmQuerySnapshot playStatsResult{};
+std::string pendingPlayStatsTitle;
+Uint32 pendingPlayStatsDue=0;
+bool playStatsPending=false;
 std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
@@ -1450,46 +1463,87 @@ void addSelected() {
     }
     if(saveNow())setStatus(addStatus,2600);
 }
-void loadPlayStatsForSelection() {
-    const auto& available=visibleCatalogueSnapshot();
-    if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())return;
-    const Candidate selected=available[static_cast<size_t>(listIndex)];
-    if(selected.kind!=Kind::Game||selected.playStatsQueried||
-       !desknx::model::isTitleId(selected.data))return;
-
-    const u64 titleId=std::strtoull(selected.data.c_str(),nullptr,16);
-    if(titleId==0)return;
+int playStatsThreadMain(void* context) {
+    const char* title=static_cast<const char*>(context);
+    PdmQuerySnapshot snapshot{};
+    if(title)std::snprintf(snapshot.titleId,sizeof(snapshot.titleId),"%s",title);
+    const u64 titleId=title?std::strtoull(title,nullptr,16):0;
+    std::free(context);
     PdmPlayStatistics stats{};
     const Result initRc=pdmqryInitialize();
     Result queryRc=initRc;
-    if(R_SUCCEEDED(initRc)) {
+    if(titleId!=0&&R_SUCCEEDED(initRc)) {
         queryRc=pdmqryQueryPlayStatisticsByApplicationId(titleId,false,&stats);
         pdmqryExit();
     }
-    const bool availableStats=R_SUCCEEDED(queryRc);
-    if(availableStats) {
-        stats.playtime /= 1000000000ULL;
+    snapshot.initRc=static_cast<uint32_t>(initRc);
+    snapshot.queryRc=static_cast<uint32_t>(queryRc);
+    snapshot.available=titleId!=0&&R_SUCCEEDED(queryRc);
+    if(snapshot.available) {
+        snapshot.playtimeSeconds=stats.playtime/1000000000ULL;
+        snapshot.lastPlayed=stats.last_timestamp_user;
+        snapshot.launchCount=stats.total_launches;
     }
+    if(playStatsMutex)SDL_LockMutex(playStatsMutex);
+    playStatsResult=snapshot;
+    if(playStatsMutex)SDL_UnlockMutex(playStatsMutex);
+    SDL_AtomicSet(&playStatsDone,1);
+    return 0;
+}
+void applyPlayStatsResult(const PdmQuerySnapshot& snapshot) {
+    const std::string id=snapshot.titleId;
+    if(id.empty())return;
     if(catalogueMutex)SDL_LockMutex(catalogueMutex);
     auto update=[&](Candidate& item) {
-        if(item.kind!=Kind::Game||item.data!=selected.data)return;
+        if(item.kind!=Kind::Game||item.data!=id)return;
         item.playStatsQueried=true;
-        item.playStatsAvailable=availableStats;
-        if(availableStats) {
-            item.playtimeSeconds=stats.playtime;
-            item.lastPlayed=stats.last_timestamp_user;
-            item.launchCount=stats.total_launches;
+        item.playStatsAvailable=snapshot.available;
+        if(snapshot.available) {
+            item.playtimeSeconds=snapshot.playtimeSeconds;
+            item.lastPlayed=snapshot.lastPlayed;
+            item.launchCount=snapshot.launchCount;
         }
     };
     for(auto& item:catalogue)update(item);
     if(catalogueMutex)SDL_UnlockMutex(catalogueMutex);
-    // The filtered/sorted inspector is owned by the UI thread, so updating
-    // this snapshot does not race the catalogue worker.
     for(auto& item:visibleCatalogueCache)update(item);
     desknx::diag::Write("catalogue","play_stats",
-        "title_id=%016llX init_rc=0x%08X query_rc=0x%08X available=%d",
-        static_cast<unsigned long long>(titleId),static_cast<unsigned int>(initRc),
-        static_cast<unsigned int>(queryRc),availableStats?1:0);
+        "title_id=%s init_rc=0x%08X query_rc=0x%08X available=%d",
+        snapshot.titleId,snapshot.initRc,snapshot.queryRc,snapshot.available?1:0);
+}
+void loadPlayStatsForSelection() {
+    const auto& available=visibleCatalogueSnapshot();
+    if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())return;
+    const Candidate& selected=available[static_cast<size_t>(listIndex)];
+    if(selected.kind!=Kind::Game||selected.playStatsQueried||
+       !desknx::model::isTitleId(selected.data))return;
+    // Debounce selection; the UI never waits for PDM IPC during navigation.
+    pendingPlayStatsTitle=selected.data;
+    pendingPlayStatsDue=SDL_GetTicks()+300;
+    playStatsPending=true;
+}
+void pumpPlayStatsQuery() {
+    if(playStatsThread&&SDL_AtomicGet(&playStatsDone)) {
+        SDL_WaitThread(playStatsThread,nullptr);
+        playStatsThread=nullptr;
+        PdmQuerySnapshot result{};
+        if(playStatsMutex)SDL_LockMutex(playStatsMutex);
+        result=playStatsResult;
+        if(playStatsMutex)SDL_UnlockMutex(playStatsMutex);
+        applyPlayStatsResult(result);
+    }
+    if(playStatsThread||!playStatsPending||
+       SDL_GetTicks()<pendingPlayStatsDue||pendingPlayStatsTitle.empty())return;
+    char* request=static_cast<char*>(std::malloc(17));
+    if(!request) {playStatsPending=false;return;}
+    std::snprintf(request,17,"%s",pendingPlayStatsTitle.c_str());
+    playStatsPending=false;
+    SDL_AtomicSet(&playStatsDone,0);
+    playStatsThread=SDL_CreateThread(playStatsThreadMain,"DeskNX play statistics",request);
+    if(!playStatsThread) {
+        std::free(request);
+        setStatus("PLAY STATISTICS UNAVAILABLE",1800);
+    }
 }
 void openList(){
     // Opening the catalogue is also useful when a workspace is full: the user
@@ -2408,6 +2462,7 @@ int main(int,char**) {
         static_cast<unsigned int>(rendererInfo.flags),rendererVsync?1:0);
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
+    playStatsMutex=SDL_CreateMutex();
 
     // Match SLauncher's startup order: query the real firmware version and
     // publish it to libnx BEFORE initializing version-gated NS services.
@@ -2568,6 +2623,7 @@ int main(int,char**) {
                 lastHeldDirs = 0;
             }
         }
+        pumpPlayStatsQuery();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         const Uint32 renderStarted=SDL_GetTicks();
         drawScreen();
@@ -2583,11 +2639,17 @@ int main(int,char**) {
 #endif
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
+    playStatsPending=false;
+    if(playStatsThread) {
+        SDL_WaitThread(playStatsThread,nullptr);
+        playStatsThread=nullptr;
+    }
     if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
     desknx::catalog::ShutdownServices();
     if (setsysReady) setsysExit();
     gIconCache.shutdown();gFontRenderer.shutdown();IMG_Quit();
     if(psmReady)psmExit();
+    if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
     if (renderer) SDL_DestroyRenderer(renderer);
