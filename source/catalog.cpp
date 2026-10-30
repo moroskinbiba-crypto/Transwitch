@@ -601,9 +601,9 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
-            const Result controlRc = nsReady
-                ? desknx::slaunch::ReadControlData(id, control, actual)
-                : MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+            Result controlRc = 0;
+            if (nsReady)
+                controlRc = desknx::slaunch::ReadControlData(id, control, actual);
             if (nsReady && R_SUCCEEDED(controlRc)) {
                 ++controlDataOk;
                 title = desknx::slaunch::ResolveTitleName(control.nacp);
