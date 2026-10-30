@@ -76,6 +76,9 @@ std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
+bool catalogueTouchActive=false, catalogueTouchMoved=false;
+int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
+Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, deletePrompt=false, running=true;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
 // action is delegated to the backend (PWR-03); in standalone we honour it
@@ -249,6 +252,40 @@ void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
 int catalogueThreadMain(void*) {
     (void)desknx::catalog::Scan(catalogueProgress,nullptr);
     return 0;
+}
+void restartCatalogueScan() {
+    bool complete = false;
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    complete = catalogueScanComplete;
+    if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
+    if(!complete) {
+        setStatus("LIBRARY SCAN IS ALREADY RUNNING",2500);
+        return;
+    }
+    if(catalogueThread) {
+        SDL_WaitThread(catalogueThread,nullptr);
+        catalogueThread=nullptr;
+    }
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    catalogue.clear();
+    catalogueReady=false;
+    catalogueScanComplete=false;
+    catalogueTruncated=false;
+    catalogueNsAvailable=false;
+    catalogueNsError=0;
+    catalogueGameCount=0;
+    catalogueNroCount=0;
+    if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
+    catalogueWarningShown=false;
+    listIndex=0;
+    listOffset=0;
+    catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue refresh",nullptr);
+    if(!catalogueThread) {
+        setStatus("BACKGROUND RESCAN UNAVAILABLE",3000);
+        publishCatalogue(desknx::catalog::Scan());
+    } else {
+        setStatus("RESCANNING INSTALLED GAMES AND HOMEBREW",3500);
+    }
 }
 #ifdef DESKNX_SYSTEM_APPLET
 template<typename Sender>
@@ -642,36 +679,45 @@ void drawScreen() {
     if(listOpen) {
         rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;rect(mx,my,mw,mh,Color{22,27,38,250});outline(mx,my,mw,mh,BLUE);
         text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);
-        text("A ADD  B BACK  Y SEARCH  X SORT  L/R FILTER  - CLEAR",mx+28,my+59,1,MUTED,mx+mw-20);
+        struct DrawerChip { int x; int w; const char* label; };
+        const DrawerChip chips[]={{mx+28,96,"Y SEARCH"},{mx+132,82,"X SORT"},
+            {mx+222,112,"L/R FILTER"},{mx+342,82,"- CLEAR"},
+            {mx+432,126,"RSTICK RESCAN"},{mx+566,72,"B BACK"},
+            {mx+646,72,"A ADD"}};
+        for(const auto& chip:chips) {
+            rect(chip.x,my+52,chip.w,25,Color{37,45,59,255});
+            outline(chip.x,my+52,chip.w,25,EDGE);
+            text(chip.label,chip.x+6,my+61,1,WHITE,chip.x+chip.w-4);
+        }
         std::string viewLabel=std::string("FILTER: ")+desknx::catalog_view::FilterName(catalogueFilter)+
             "  SORT: "+desknx::catalog_view::SortName(catalogueSort);
         if(!catalogueQuery.empty()) viewLabel+="  QUERY: "+catalogueQuery;
         if(!catalogCompleteNow) viewLabel+="  / SCANNING";
-        text(viewLabel,mx+28,my+77,1,BLUE,mx+mw-20);
+        text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-20);
         int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
         if(!catalogCompleteNow && available.empty()) {
-            text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+118,2,BLUE,mx+mw-20);
-            text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+150,1,MUTED,mx+mw-20);
+            text("SCANNING GAME AND HOMEBREW LIBRARY...",mx+32,my+128,2,BLUE,mx+mw-20);
+            text("PLEASE WAIT - FIRST SCAN MAY TAKE A MOMENT",mx+32,my+160,1,MUTED,mx+mw-20);
         } else if(catalogCompleteNow && available.empty()) {
             if(!catalogueNsAvailable) {
                 char errorText[96]{};
                 std::snprintf(errorText,sizeof(errorText),"GAME SERVICE UNAVAILABLE  (0X%08X)",
                               static_cast<unsigned int>(catalogueNsError));
-                text(errorText,mx+32,my+118,2,RED,mx+mw-20);
-                text("INSTALLED GAMES COULD NOT BE READ",mx+32,my+152,1,MUTED,mx+mw-20);
+                text(errorText,mx+32,my+128,2,RED,mx+mw-20);
+                text("INSTALLED GAMES COULD NOT BE READ",mx+32,my+162,1,MUTED,mx+mw-20);
             } else {
-                text("NO MATCHING APPS",mx+32,my+118,2,WHITE,mx+mw-20);
-                text("TRY ANOTHER FILTER OR CLEAR SEARCH",mx+32,my+152,1,MUTED,mx+mw-20);
+                text("NO MATCHING APPS",mx+32,my+128,2,WHITE,mx+mw-20);
+                text("TRY ANOTHER FILTER OR CLEAR SEARCH",mx+32,my+162,1,MUTED,mx+mw-20);
             }
         } else {
             for(int row=0;row<vis;++row) {
-                int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+92+row*43;
-                if(i==listIndex)rect(mx+22,yy,mw-44,38,Color{45,61,82,255});
+                int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+110+row*40;
+                if(i==listIndex)rect(mx+22,yy,mw-44,36,Color{45,61,82,255});
                 const Candidate& candidate=available[static_cast<size_t>(i)];
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                drawTileIcon(iconTile,mx+30,yy+6,26);
-                text(candidate.title,mx+66,yy+8,2,i==listIndex?WHITE:MUTED,mx+575);
-                text(typeName(candidate.kind),mx+595,yy+12,1,i==listIndex?BLUE:MUTED,mx+mw-18);
+                drawTileIcon(iconTile,mx+30,yy+5,26);
+                text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+575);
+                text(typeName(candidate.kind),mx+595,yy+11,1,i==listIndex?BLUE:MUTED,mx+mw-18);
             }
         }
         const size_t totalItems=catalogueSnapshot().size();
@@ -857,6 +903,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_L){cycleCatalogueFilter(-1);return;}
         if(keys&HidNpadButton_R){cycleCatalogueFilter(1);return;}
         if(keys&HidNpadButton_Minus){catalogueQuery.clear();listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);return;}
+        if(keys&HidNpadButton_StickR){restartCatalogueScan();return;}
         if(available.empty())return;
         if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
         if(keys&HidNpadButton_Up)listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
@@ -929,7 +976,43 @@ void touchSelect(int x,int y) {
 int tabStart(){return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));}
 void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN) {
-        int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);if(listOpen||deletePrompt)return;
+        int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(listOpen) {
+            if(y>=122&&y<=151) {
+                if(x>=238&&x<334) searchCatalogue();
+                else if(x>=342&&x<424) cycleCatalogueSort();
+                else if(x>=432&&x<544) cycleCatalogueFilter(1);
+                else if(x>=552&&x<634){catalogueQuery.clear();listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
+                else if(x>=642&&x<768) restartCatalogueScan();
+                else if(x>=776&&x<848) listOpen=false;
+                else if(x>=856&&x<928) addSelected();
+                return;
+            }
+            if(y>=180&&y<584) {
+                const int row=(y-180)/40;
+                const auto available=visibleCatalogueSnapshot();
+                const int index=listOffset+row;
+                if(index>=0&&static_cast<size_t>(index)<available.size()) {
+                    const Uint32 now=SDL_GetTicks();
+                    if(lastCatalogueTap==index&&now-lastCatalogueTapTick<=500) {
+                        listIndex=index;
+                        addSelected();
+                        lastCatalogueTap=-1;
+                    } else {
+                        listIndex=index;
+                        lastCatalogueTap=index;
+                        lastCatalogueTapTick=now;
+                    }
+                    catalogueTouchActive=true;
+                    catalogueTouchMoved=false;
+                    catalogueTouchStartY=y;
+                    catalogueTouchRow=row;
+                }
+                return;
+            }
+            return;
+        }
+        if(deletePrompt)return;
         if(y>=92&&y<=140){
             int idx=tabStart()+(x-28)/166;
             if(x>=28&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7&&idx!=deskIndex){
@@ -946,6 +1029,24 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(y>=628){if(x<210){editing=true;openList();}else if(x<385){editing=!editing;setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");}}
+    } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
+        const int y=static_cast<int>(e.tfinger.y*SH);
+        if(std::abs(y-catalogueTouchStartY)>=10) catalogueTouchMoved=true;
+        if(catalogueTouchMoved) {
+            const int delta=(catalogueTouchStartY-y)/40;
+            if(delta!=0) {
+                const auto available=visibleCatalogueSnapshot();
+                const int maxOffset=std::max(0,static_cast<int>(available.size())-10);
+                listOffset=std::max(0,std::min(maxOffset,listOffset+delta));
+                listIndex=std::max(0,std::min(static_cast<int>(available.size())-1,
+                                              listOffset+catalogueTouchRow));
+                catalogueTouchStartY=y;
+            }
+        }
+    } else if(e.type==SDL_FINGERUP&&listOpen&&catalogueTouchActive) {
+        if(catalogueTouchMoved) lastCatalogueTap=-1;
+        catalogueTouchActive=false;
+        catalogueTouchMoved=false;
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         touchSelect(static_cast<int>(e.tfinger.x*SW),static_cast<int>(e.tfinger.y*SH));
     } else if(e.type==SDL_FINGERUP&&touchDragging) {
