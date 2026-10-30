@@ -687,19 +687,31 @@ void drawScreen() {
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h);
     if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
+    // Floating Dock: quick access to the library, edit mode and adjacent desktops.
     rect(0,628,SW,92,Color{23,24,29,250});rect(0,628,SW,1,Color{255,255,255,18});
-    struct Hint{const char*k;const char*v;};
-    const Hint hints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},{"Y","ADD"},{"ZL/ZR","SIZE"},{"-","REMOVE"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
-    const int hintCount=static_cast<int>(sizeof(hints)/sizeof(hints[0]));
-    const int hintStep=(SW-36)/hintCount;
-    int hx=18;for(const auto& h:hints){
-        roundRect(hx,650,50,28,9,Color{48,50,58,255});
-        text(h.k,hx+5,659,1,WHITE,hx+47);
-        text(h.v,hx+56,659,1,MUTED,std::min(hx+hintStep-4,SW-18));
-        hx+=hintStep;
+    softCard(416,636,448,54,Color{48,50,58,245},Color{255,255,255,28});
+    struct DockItem { int x; const char* glyph; const char* label; bool active; };
+    const DockItem dock[]={{428,"APP","LIBRARY",listOpen},{536,"EDIT","LAYOUT",editing},
+        {644,"LEFT","PREV",false},{752,"RIGHT","NEXT",false}};
+    for(const auto& item:dock) {
+        const Color tileFill=item.active?Color{10,132,255,255}:Color{67,70,79,255};
+        roundRect(item.x,642,44,40,12,tileFill);
+        text(item.glyph,item.x+5,650,1,WHITE,item.x+40);
+        text(item.label,item.x+50,657,1,item.active?BLUE:WHITE,item.x+104);
+    }
+    struct Hint { const char* key; const char* action; };
+    const Hint leftHints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},
+                            {"Y","ADD"},{"ZL/ZR","SIZE"}};
+    const Hint rightHints[]={{"-","POWER"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
+    for(int i=0;i<4;++i) {
+        const int lx=18+i*92,rx=900+i*92;
+        text(leftHints[i].key,lx,650,1,BLUE,lx+48);
+        text(leftHints[i].action,lx,670,1,MUTED,lx+86);
+        text(rightHints[i].key,rx,650,1,BLUE,rx+48);
+        text(rightHints[i].action,rx,670,1,MUTED,rx+86);
     }
     bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
-    text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,694,1,show?BLUE:MUTED,850);
+    text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,699,1,show?BLUE:MUTED,1230);
     if(listOpen) {
         rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;softCard(mx,my,mw,mh,Color{31,33,39,252},Color{255,255,255,30});
         text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);
@@ -1073,7 +1085,12 @@ void touchInput(const SDL_Event&e) {
             else if(i>=0)launch(d.tiles[static_cast<size_t>(i)]);
             return;
         }
-        if(y>=628){if(x<210){editing=true;openList();}else if(x<385){editing=!editing;setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");}}
+        if(y>=632&&y<=700) {
+            if(x>=416&&x<524) {openList();return;}
+            if(x>=524&&x<632) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
+            if(x>=632&&x<740) {deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
+            if(x>=740&&x<848) {deskIndex=(deskIndex+1)%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
+        }
     } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
         const int y=static_cast<int>(e.tfinger.y*SH);
         if(std::abs(y-catalogueTouchStartY)>=10) catalogueTouchMoved=true;
