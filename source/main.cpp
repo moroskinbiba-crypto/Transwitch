@@ -93,6 +93,7 @@ desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Nam
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
+SDL_FingerID touchPressFingerId=0;
 int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
@@ -1263,6 +1264,7 @@ bool finishTileDrag(const char* message="POSITION SAVED") {
     dragging=false;
     touchDragging=false;
     touchPressActive=false;
+    touchPressFingerId=0;
     touchDragOffsetX=touchDragOffsetY=0;
     touchDragTabStart=-1;
     const bool saved=saveNow();
@@ -1313,6 +1315,7 @@ void removeTile() {
     dragging=false;
     touchDragging=false;
     touchPressActive=false;
+    touchPressFingerId=0;
     touchDragTabStart=-1;
     touchDragOffsetX=touchDragOffsetY=0;
     if(saveNow())setStatus("REMOVED: "+name);
@@ -1726,6 +1729,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);
             selectedX=selectedY=0;
             dragging=false;touchDragging=false;touchPressActive=false;
+            touchPressFingerId=0;
             touchDragOffsetX=touchDragOffsetY=0;
             touchDragTabStart=-1;
             if(saveNow())setStatus("WORKSPACE DELETED");
@@ -1877,6 +1881,9 @@ int tabStart(){
 void touchInput(const SDL_Event&e) {
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
+    if(touchPressActive &&
+       (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP) &&
+       e.tfinger.fingerId!=touchPressFingerId)return;
     if(e.type==SDL_FINGERDOWN && touchPressActive)return;
     if(e.type==SDL_FINGERDOWN && dragging && !touchDragging) {
         setStatus("FINISH MOVING THE TILE FIRST");
@@ -2079,6 +2086,7 @@ void touchInput(const SDL_Event&e) {
             if(editing) {
                 if(i>=0) {
                     touchPressActive=true;
+                    touchPressFingerId=e.tfinger.fingerId;
                     touchPressStartX=x;
                     touchPressStartY=y;
                     desknx::workspace_ops::CellPoint grab{};
@@ -2167,6 +2175,7 @@ void touchInput(const SDL_Event&e) {
     } else if(e.type==SDL_FINGERUP&&touchPressActive) {
         const bool moved=touchDragging;
         touchPressActive=false;
+        touchPressFingerId=0;
         touchDragging=false;
         touchDragOffsetX=touchDragOffsetY=0;
         touchDragTabStart=-1;
