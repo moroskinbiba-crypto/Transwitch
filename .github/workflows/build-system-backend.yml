@@ -113,13 +113,53 @@ jobs:
           cp -f projects/hbloader/LICENSE.md projects/sSystem/COPYING.sLaunch dist/
           cp -f docs/HOME_INTEGRATION.md dist/docs/
           bash -n dist/scripts/install-system.sh dist/scripts/uninstall-system.sh
+
+          # Record exact source/dependency commits and the tools used. Also hash
+          # every packaged input so the extracted SD tree can be verified.
+          {
+            echo "format=DeskNX-Build-Manifest-v1"
+            echo "repository=https://github.com/${GITHUB_REPOSITORY}"
+            echo "source_commit=${GITHUB_SHA}"
+            echo "workflow=${GITHUB_WORKFLOW}"
+            echo "workflow_run_id=${GITHUB_RUN_ID}"
+            echo "workflow_run_number=${GITHUB_RUN_NUMBER}"
+            echo "git_ref=${GITHUB_REF}"
+            echo "container_tag=devkitpro/devkita64:latest (mutable tag; digest not exposed by this job)"
+            echo "atmosphere_requested_ref=${ATMOSPHERE_REF}"
+            echo "atmosphere_commit=$(git -C "$ATMOSPHERE_DIR" rev-parse HEAD)"
+            echo "libnx_requested_ref=${LIBNX_REF}"
+            echo "libnx_commit=$(git -C /tmp/libnx-master rev-parse HEAD)"
+            echo "target_console_firmware=not detected; validate against the console before install"
+            echo "host_cxx=$(c++ --version | head -n 1)"
+            echo "aarch64_gcc=$(aarch64-none-elf-gcc --version | head -n 1)"
+            echo "aarch64_gxx=$(aarch64-none-elf-g++ --version | head -n 1)"
+            echo "make=$(make --version | head -n 1)"
+            echo "python=$(python3 --version)"
+            echo "elf2nso_path=$(command -v elf2nso || true)"
+            echo "npdmtool_path=$(command -v npdmtool || true)"
+            echo
+            echo "[sha256 of packaged files; paths relative to extracted bundle]"
+          } > dist/BUILD-MANIFEST.txt
+
+          (
+            cd dist
+            while IFS= read -r -d '' file; do
+              sha256sum "$file"
+            done < <(find . -type f ! -name BUILD-MANIFEST.txt -print0 | sort -z)
+          ) >> dist/BUILD-MANIFEST.txt
+
           cd dist
           python3 -c 'import pathlib, zipfile; root=pathlib.Path("."); z=zipfile.ZipFile("../DeskNX-system-experimental.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.as_posix()) for p in root.rglob("*") if p.is_file()]; z.close()'
+          cd ..
+          sha256sum DeskNX-system-experimental.zip > DeskNX-system-experimental.zip.sha256
+          unzip -t DeskNX-system-experimental.zip
 
       - name: Upload experimental system bundle
         uses: actions/upload-artifact@v4
         with:
           name: DeskNX-system-experimental
-          path: DeskNX-system-experimental.zip
+          path: |
+            DeskNX-system-experimental.zip
+            DeskNX-system-experimental.zip.sha256
           if-no-files-found: error
           retention-days: 14
