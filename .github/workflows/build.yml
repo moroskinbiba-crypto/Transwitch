@@ -31,6 +31,9 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Inventory NPDM source capabilities
+        run: python3 scripts/audit_npdm_capabilities.py --output /tmp/desknx-npdm-capabilities.md
+
       - name: Test IPC protocol validation boundaries
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
