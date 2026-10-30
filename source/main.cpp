@@ -751,7 +751,7 @@ void drawScreen() {
     const Hint leftHints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},
                             {"Y","ADD"},{"ZL/ZR",editing?"SIZE":""}};
     const Hint rightHints[]={{"-",editing?"REMOVE":"POWER"},{"L/R","DESK"},{"+","NEW DESK"},
-                             {editing?"RSTICK":"LSTICK",editing?"DEL DESK":"RENAME"}};
+                             {"RSTICK",editing?"DEL DESK":"OPTIONS"}};
     for(int i=0;i<4;++i) {
         const int lx=18+i*92,rx=900+i*92;
         text(leftHints[i].key,lx,650,1,BLUE,lx+48);
@@ -1208,7 +1208,10 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(keys&HidNpadButton_Plus)newDesk();
     if(keys&HidNpadButton_StickL)renameDesk();
-    if(keys&HidNpadButton_StickR&&editing)deleteDesk();
+    if(keys&HidNpadButton_StickR) {
+        if(editing)deleteDesk();
+        else {workspaceMenu=true;workspaceMenuIndex=0;}
+    }
     if(keys&HidNpadButton_X){editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"EDIT MODE CLOSED");}
     if(keys&HidNpadButton_Y){editing=true;openList();}
     if(keys&HidNpadButton_L) {
