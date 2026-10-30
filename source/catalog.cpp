@@ -16,6 +16,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace desknx::catalog {
@@ -293,10 +294,84 @@ void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate) {
         }
     }
 }
-void CacheGameIcon(u64 id, const NsApplicationControlData& data) {
+bool HasCachedGameIcon(u64 id) {
     char hex[32]{};
     std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
-    CacheJpegIcon(desknx::model::iconCachePath(Kind::Game, hex), data.icon, sizeof(data.icon), true);
+    struct stat st{};
+    const std::string path = desknx::model::iconCachePath(Kind::Game, hex);
+    return !path.empty() && stat(path.c_str(), &st) == 0 &&
+           S_ISREG(st.st_mode) && st.st_size > 4;
+}
+
+void CacheGameIcon(u64 id, const NsApplicationControlData& data, u64 controlSize) {
+    // nsGetApplicationControlData reports NACP + the actual JPEG byte count.
+    // Do not write the full fixed-size icon buffer: it contains trailing zeros
+    // and can be much larger than the image returned by NS.
+    if (controlSize <= sizeof(NacpStruct)) return;
+    const u64 iconBytes = controlSize - sizeof(NacpStruct);
+    if (iconBytes > sizeof(data.icon) || iconBytes > MaxNroAssetBytes) return;
+    char hex[32]{};
+    std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
+    const std::string path = desknx::model::iconCachePath(Kind::Game, hex);
+    if (!path.empty())
+        CacheJpegIcon(path, data.icon, static_cast<size_t>(iconBytes), true);
+}
+
+using GameNameCache = std::unordered_map<u64, std::string>;
+constexpr const char* GameNameCacheFile = "sdmc:/switch/DeskNX/cache/game-names.tsv";
+constexpr const char* GameNameCacheTemp = "sdmc:/switch/DeskNX/cache/game-names.tmp";
+
+GameNameCache ReadGameNameCache() {
+    GameNameCache names;
+    struct stat st{};
+    constexpr size_t MaxNameCacheBytes = 512 * 1024;
+    if (stat(GameNameCacheFile, &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_size <= 0 || static_cast<uint64_t>(st.st_size) > MaxNameCacheBytes)
+        return names;
+    std::ifstream input(GameNameCacheFile, std::ios::binary);
+    if (!input) return names;
+    std::string line;
+    size_t lines = 0;
+    while (std::getline(input, line)) {
+        if (line.size() > 640 || ++lines > 4096) return {};
+        const auto fields = desknx::model::splitTabs(line);
+        if (fields.size() != 2 || !isHexTitleId(fields[0]) ||
+            fields[1].empty() || fields[1].size() > 512)
+            continue;
+        char* end = nullptr;
+        const unsigned long long id = std::strtoull(fields[0].c_str(), &end, 16);
+        if (!end || *end != '\\0' || id == 0) continue;
+        names[static_cast<u64>(id)] = fields[1];
+    }
+    if (input.bad()) return {};
+    return names;
+}
+
+bool WriteGameNameCache(const GameNameCache& names) {
+    EnsureCacheDirectories();
+    std::ofstream output(GameNameCacheTemp, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    for (const auto& entry : names) {
+        char id[32]{};
+        std::snprintf(id, sizeof(id), "%016llX",
+                      static_cast<unsigned long long>(entry.first));
+        output << id << '\\t' << desknx::model::safeField(entry.second) << '\\n';
+    }
+    output.flush();
+    const bool good = output.good();
+    output.close();
+    if (!good) {
+        std::remove(GameNameCacheTemp);
+        return false;
+    }
+    const auto status = desknx::safeio::replaceFilePreservingOnFailure(
+        GameNameCacheTemp, GameNameCacheFile,
+        "sdmc:/switch/DeskNX/cache/game-names.bak");
+    if (status != desknx::safeio::ReplaceStatus::Success) {
+        std::remove(GameNameCacheTemp);
+        return false;
+    }
+    return true;
 }
 bool WriteCache(const Signatures& sig, const ScanResult& result) {
     EnsureCacheDirectories();
@@ -357,29 +432,55 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     result.items.reserve(MaxItems);
     const size_t gameLimit = MaxItems - GameReserve;
     static NsApplicationControlData control{};
+    GameNameCache nameCache = ReadGameNameCache();
+    GameNameCache freshNameCache;
+    freshNameCache.reserve(games.size());
+    bool fetchedControlData = false;
     size_t colorIndex = 0;
     for (size_t i = 0; i < games.size(); ++i) {
         if (result.items.size() >= gameLimit) { result.truncated = true; break; }
         const u64 id = games[i].id;
-        u64 actual = 0;
-        std::string title;
-        if (nsReady && R_SUCCEEDED(nsGetApplicationControlData(NsApplicationControlSource_Storage,
-                                                                id, &control, sizeof(control), &actual))) {
-            NacpLanguageEntry* entry = nullptr;
-            if (R_SUCCEEDED(nacpGetLanguageEntry(&control.nacp, &entry)) && entry && entry->name[0])
-                title = entry->name;
-            CacheGameIcon(id, control);
-        }
-        if (title.empty()) {
-            char fallback[32]{};
-            std::snprintf(fallback, sizeof(fallback), "Game %08X", static_cast<unsigned int>(id & 0xFFFFFFFFu));
-            title = fallback;
-        }
         char hex[32]{};
         std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
-        result.items.push_back({Kind::Game, title, hex, 1, 1, static_cast<int>(colorIndex++ % 8)});
+
+        const auto cachedName = nameCache.find(id);
+        const bool iconCached = HasCachedGameIcon(id);
+        std::string title;
+        if (cachedName != nameCache.end() && iconCached) {
+            // SLauncher fast path: a resolved title with its icon needs no
+            // synchronous NS control-data request on this scan.
+            title = cachedName->second;
+        } else {
+            u64 actual = 0;
+            if (nsReady && R_SUCCEEDED(nsGetApplicationControlData(
+                    NsApplicationControlSource_Storage, id, &control,
+                    sizeof(control), &actual))) {
+                NacpLanguageEntry* entry = nullptr;
+                if (R_SUCCEEDED(nacpGetLanguageEntry(&control.nacp, &entry)) &&
+                    entry && entry->name[0])
+                    title = entry->name;
+                if (title.empty() && cachedName != nameCache.end())
+                    title = cachedName->second;
+                if (!iconCached) CacheGameIcon(id, control, actual);
+                fetchedControlData = true;
+            } else if (cachedName != nameCache.end()) {
+                title = cachedName->second;
+            }
+        }
+
+        if (title.empty()) {
+            std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
+            title = std::string("Game ") + hex;
+        }
+        freshNameCache.emplace(id, title);
+        result.items.push_back({Kind::Game, title, hex, 1, 1,
+                                static_cast<int>(colorIndex++ % 8)});
         if ((i + 1) % 12 == 0) report(false);
     }
+    // Keep the per-title cache in sync with the installed set. If the only
+    // change was an install/uninstall, existing names/icons are reused.
+    if (fetchedControlData || freshNameCache.size() != nameCache.size())
+        WriteGameNameCache(freshNameCache);
     report(false); // expose the installed-game part before scanning NRO assets
     if (nsReady) nsExit();
 
