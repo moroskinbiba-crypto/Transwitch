@@ -479,7 +479,8 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     }
     // Keep the per-title cache in sync with the installed set. If the only
     // change was an install/uninstall, existing names/icons are reused.
-    if (fetchedControlData || freshNameCache.size() != nameCache.size())
+    if (nsReady && result.nsErrorCode == 0 &&
+        (fetchedControlData || freshNameCache.size() != nameCache.size()))
         WriteGameNameCache(freshNameCache);
     report(false); // expose the installed-game part before scanning NRO assets
     if (nsReady) nsExit();
