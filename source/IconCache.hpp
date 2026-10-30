@@ -16,17 +16,22 @@ public:
     SDL_Texture* get(const desknx::model::Tile& tile) {
         const std::string path = desknx::model::iconCachePath(tile.kind, tile.data);
         if (path.empty() || !renderer_) return nullptr;
-        struct stat st{};
-        constexpr long long MaxCompressedIconBytes = 2LL * 1024 * 1024;
-        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
-            st.st_size <= 0 || st.st_size > MaxCompressedIconBytes ||
-            !jpegDimensionsWithinLimit(path)) return nullptr;
+        // Resolve a cached texture before touching the SD card. The old
+        // order performed stat()+JPEG parsing for every visible icon on every
+        // frame, even when its SDL texture was already resident. On a Switch
+        // SD card that turns a harmless redraw into hundreds of synchronous
+        // filesystem operations and causes progressive UI stalls.
         for (auto& entry : entries_) {
             if (entry.path == path) {
                 entry.lastUse = ++clock_;
                 return entry.texture;
             }
         }
+        struct stat st{};
+        constexpr long long MaxCompressedIconBytes = 2LL * 1024 * 1024;
+        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
+            st.st_size <= 0 || st.st_size > MaxCompressedIconBytes ||
+            !jpegDimensionsWithinLimit(path)) return nullptr;
         SDL_Surface* surface = IMG_Load(path.c_str());
         if (!surface) return nullptr;
         constexpr int MaxIconDimension = 1024;
