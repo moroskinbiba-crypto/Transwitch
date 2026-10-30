@@ -2846,6 +2846,10 @@ void touchInput(const SDL_Event&e) {
                 workspaceMenuIndex=0;
                 return;
             }
+            if(x>=900&&x<1050) {
+                openWorkspacePicker(false);
+                return;
+            }
             if(x>=1096&&x<1224) {
                 editing=!editing;
                 if(!editing&&dragging){dragging=false;saveNow();}
@@ -2898,19 +2902,6 @@ void touchInput(const SDL_Event&e) {
                 openList();
             }
             return;
-        }
-        if(y>=632&&y<=700) {
-            if(x>=302&&x<412) {openList();return;}
-            if(x>=412&&x<522) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
-            if(x>=522&&x<632) {appSettingsMenu=true;appSettingsIndex=0;return;}
-            if(x>=632&&x<742) {
-                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
-                HidLaControllerSupportResultInfo result{};
-                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))setStatus("CONTROLLER MENU UNAVAILABLE",3000);
-                return;
-            }
-            if(x>=742&&x<852) {recentIndex=0;recentOpen=true;return;}
-            if(x>=852&&x<978) {powerMenu=true;powerIndex=0;return;}
         }
     } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
         const int y=static_cast<int>(e.tfinger.y*SH);
