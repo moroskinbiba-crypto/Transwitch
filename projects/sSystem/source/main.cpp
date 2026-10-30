@@ -5,6 +5,7 @@
 #include <stratosphere.hpp>
 
 #include <desknx/Protocol.hpp>
+#include <desknx/MenuLiveness.hpp>
 #include <desknx/SafeReplace.hpp>
 #include <desknx/system/Application.hpp>
 #include <desknx/system/ExternalContent.hpp>
