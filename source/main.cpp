@@ -50,6 +50,10 @@ constexpr const char* CFG_FILE = "sdmc:/switch/DeskNX/layout.tsv";
 constexpr const char* CFG_TMP = "sdmc:/switch/DeskNX/layout.tmp";
 constexpr const char* CFG_BACKUP_BASE = "sdmc:/switch/DeskNX/layout.corrupt";
 constexpr const char* CFG_BAK_FILE = "sdmc:/switch/DeskNX/layout.bak";
+constexpr const char* ACTIVE_WORKSPACE_FILE = "sdmc:/switch/DeskNX/active-workspace.dat";
+constexpr const char* ACTIVE_WORKSPACE_TMP = "sdmc:/switch/DeskNX/active-workspace.tmp";
+constexpr const char* ACTIVE_WORKSPACE_BAK = "sdmc:/switch/DeskNX/active-workspace.bak";
+constexpr int UiCornerRadius = 10;
 size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
@@ -441,7 +445,8 @@ void applyMediaPickerSelection(int index) {
 
 void roundRect(int x,int y,int w,int h,int radius,Color c) {
     if(w<=0||h<=0) return;
-    const int r=std::max(0,std::min(radius,std::min(w,h)/2));
+    // One consistent 10 px corner radius across cards, tiles, controls and modals.
+    const int r=std::max(0,std::min(UiCornerRadius,std::min(radius,std::min(w,h)/2)));
     color(c);
     if(r==0) {
         SDL_Rect full{x,y,w,h};
@@ -465,9 +470,9 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
     }
 }
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
-    roundRect(x,y+5,w,h,20,Color{0,0,0,54});
-    roundRect(x,y,w,h,20,fill);
-    roundRect(x+1,y+1,w-2,h-2,19,edge);
+    roundRect(x,y+5,w,h,UiCornerRadius,Color{0,0,0,54});
+    roundRect(x,y,w,h,UiCornerRadius,fill);
+    roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
 }
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
@@ -930,6 +935,47 @@ bool backupBrokenLayout() {
     return false;
 }
 
+bool saveActiveWorkspaceState() {
+    if(!sdMounted || desks.empty() || deskIndex<0 ||
+       deskIndex>=static_cast<int>(desks.size())) return false;
+    const std::string state=
+        desknx::layout::serializeActiveWorkspaceState(desks,deskIndex);
+    if(state.empty()) return false;
+    std::ofstream out(ACTIVE_WORKSPACE_TMP,std::ios::binary|std::ios::trunc);
+    if(!out) return false;
+    out.write(state.data(),static_cast<std::streamsize>(state.size()));
+    out.flush();
+    const bool good=out.good();
+    out.close();
+    if(!good) {
+        std::remove(ACTIVE_WORKSPACE_TMP);
+        return false;
+    }
+    return desknx::safeio::replaceFilePreservingOnFailure(
+        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true)==
+        desknx::safeio::ReplaceStatus::Success;
+}
+
+bool loadActiveWorkspaceState() {
+    if(!sdMounted || desks.empty()) return false;
+    struct stat st{};
+    if(stat(ACTIVE_WORKSPACE_FILE,&st)!=0 || !S_ISREG(st.st_mode) ||
+       st.st_size<=0 || st.st_size>512) return false;
+    std::ifstream in(ACTIVE_WORKSPACE_FILE,std::ios::binary);
+    if(!in) return false;
+    std::ostringstream contents;
+    contents<<in.rdbuf();
+    if(in.bad()) return false;
+    int restored=deskIndex;
+    if(!desknx::layout::parseActiveWorkspaceState(contents.str(),desks,restored))
+        return false;
+    deskIndex=restored;
+    selectedX=selectedY=0;
+    desknx::diag::Write("layout","active_workspace_restored",
+        "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
+    return true;
+}
+
 bool saveLayout() {
     if(!sdMounted) {
         setStatus("SAVE FAILED: SD CARD NOT MOUNTED",3500);
@@ -958,6 +1004,14 @@ bool saveLayout() {
             setStatus("SAVE FAILED: RENAME ERROR", 3500);
         }
         return false;
+    }
+    // The main layout stores the active index too; this independently stored,
+    // shape-validated marker protects the user's last workspace across restarts.
+    if(!saveActiveWorkspaceState()) {
+        desknx::diag::Write("layout","active_workspace_marker_write_failed",
+                            "index=%d",deskIndex);
+        // Never leave a previous marker that could point to an older selection.
+        (void)std::remove(ACTIVE_WORKSPACE_FILE);
     }
     // Keep layout.bak as the last known-good version after successful replacement.
     layoutLoaded=true;
@@ -3087,6 +3141,13 @@ int main(int,char**) {
         defaultLayout();
         defaultLayoutPending=true;
     }
+    if(layoutLoaded && loadActiveWorkspaceState()) {
+        setStatus("RESTORED: "+desks[static_cast<size_t>(deskIndex)].name,2500);
+    } else if(layoutLoaded) {
+        // Migrate existing DESKNX3 layouts to the separate active-workspace marker.
+        (void)saveActiveWorkspaceState();
+    }
+
     if (layoutRecoveredTiles > 0 || layoutDroppedTiles > 0) {
         char message[96]{};
         std::snprintf(message, sizeof(message), "LAYOUT RECOVERED: %zu MOVED, %zu OMITTED",
@@ -3226,6 +3287,8 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
+        (void)saveLayout();
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
     playStatsPending=false;
