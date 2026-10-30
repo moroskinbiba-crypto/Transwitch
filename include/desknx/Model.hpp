@@ -101,6 +101,12 @@ inline std::string safeField(std::string value) {
     return value;
 }
 
+inline bool isSupportedTileSize(int w, int h) {
+    return (w == 1 && h == 1) || (w == 2 && h == 1) ||
+           (w == 3 && h == 1) || (w == 2 && h == 2) ||
+           (w == 3 && h == 2);
+}
+
 inline bool overlap(const Tile& a, const Tile& b) {
     return a.x < b.x + b.w && a.x + a.w > b.x &&
            a.y < b.y + b.h && a.y + a.h > b.y;
@@ -110,7 +116,7 @@ inline bool placeable(const Workspace& desk, const Tile& tile, int x, int y, int
     // Check against the grid before adding dimensions; x + w can overflow for
     // malformed coordinates loaded from a user-editable layout file.
     if (x < 0 || y < 0 || x >= Columns || y >= Rows ||
-        tile.w < 1 || tile.h < 1 ||
+        !isSupportedTileSize(tile.w, tile.h) ||
         tile.w > Columns - x || tile.h > Rows - y) return false;
     Tile candidate = tile;
     candidate.x = x;
