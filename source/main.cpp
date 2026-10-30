@@ -1649,6 +1649,22 @@ int main(int,char**) {
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
 
+    // Match SLauncher's startup order: query the real firmware version and
+    // publish it to libnx BEFORE initializing version-gated NS services.
+    // Initializing NS later from the scan worker while libnx still reports an
+    // unknown/default HOS version can make NS calls fail or stall on firmware
+    // newer than the build SDK.
+    const bool setsysReady = R_SUCCEEDED(setsysInitialize());
+    if (setsysReady) {
+        SetSysFirmwareVersion firmware{};
+        if (R_SUCCEEDED(setsysGetFirmwareVersion(&firmware))) {
+            hosversionSet(MAKEHOSVERSION(firmware.major, firmware.minor,
+                                         firmware.micro) | BIT(31));
+        }
+    }
+    std::uint32_t nsInitError = 0;
+    const bool nsServicesReady = desknx::catalog::InitializeServices(nsInitError);
+
     loadHistory();
     struct stat layoutStat{}, backupStat{};
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
@@ -1698,6 +1714,12 @@ int main(int,char**) {
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
     if(layoutNeedsMigration&&layoutLoaded){saveLayout();layoutNeedsMigration=false;}
 
+    if (!nsServicesReady) {
+        char message[80]{};
+        std::snprintf(message, sizeof(message), "NS INIT FAILED: 0X%08X",
+                      static_cast<unsigned int>(nsInitError));
+        setStatus(message, 6000);
+    }
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
     if(!catalogueThread){setStatus("BACKGROUND SCAN UNAVAILABLE",3000);publishCatalogue(desknx::catalog::Scan());}
     while(running&&appletMainLoop()) {
@@ -1744,6 +1766,8 @@ int main(int,char**) {
     stopHeartbeatThread();
 #endif
     if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
+    desknx::catalog::ShutdownServices();
+    if (setsysReady) setsysExit();
     gIconCache.shutdown();gFontRenderer.shutdown();IMG_Quit();
     if(psmReady)psmExit();
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
