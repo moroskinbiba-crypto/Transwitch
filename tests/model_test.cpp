@@ -1,4 +1,5 @@
 #include <desknx/Model.hpp>
+#include <desknx/WorkspaceOps.hpp>
 #include <desknx/CatalogPagination.hpp>
 #include <desknx/StrictParse.hpp>
 #include <desknx/SafeReplace.hpp>
@@ -45,6 +46,86 @@ int main() {
     int x = -1, y = -1;
     assert(firstFree(desk, small, x, y));
     assert(x >= 0 && y >= 0 && placeable(desk, small, x, y));
+
+    // Touch hit-testing must reject empty gutters, preserve spanning tile
+    // bounds, and use the same 6x3 grid geometry as the renderer.
+    {
+        using namespace desknx::workspace_ops;
+        CellPoint cell{};
+        assert(cellFromPoint(100,200,100,200,20,15,5,5,false,cell));
+        assert(cell.x==0 && cell.y==0);
+        assert(!cellFromPoint(122,200,100,200,20,15,5,5,false,cell));
+        assert(cellFromPoint(122,217,100,200,20,15,5,5,true,cell));
+        assert(cell.x==0 && cell.y==0);
+        assert(cellFromPoint(150,200,100,200,20,15,5,5,false,cell));
+        assert(cell.x==2 && cell.y==0);
+        assert(!cellFromPoint(245,200,100,200,20,15,5,5,true,cell));
+
+        Workspace touchDesk{"touch",{}};
+        touchDesk.tiles.push_back(Tile{Kind::Game,"Wide","0100000000000001",0,0,2,2,0});
+        assert(tileAtPoint(touchDesk,122,217,100,200,20,15,5,5)==0);
+        assert(tileAtPoint(touchDesk,146,234,100,200,20,15,5,5)==0);
+        assert(tileAtPoint(touchDesk,150,200,100,200,20,15,5,5)==-1);
+    }
+
+    // Moving a tile from a selected interior cell always keeps selection
+    // anchored to the tile's new top-left coordinate.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace moveDesk{"move",{}};
+        moveDesk.tiles.push_back(Tile{Kind::Game,"Wide","0100000000000002",0,0,2,2,0});
+        int sx=1,sy=1;
+        assert(moveSelectedTile(moveDesk,sx,sy,1,0));
+        assert(moveDesk.tiles[0].x==1 && moveDesk.tiles[0].y==0);
+        assert(sx==1 && sy==0);
+        assert(!moveSelectedTile(moveDesk,sx,sy,0,0));
+        assert(!moveSelectedTile(moveDesk,sx,sy,10,0));
+    }
+
+    // Shrinking a large tile must move keyboard focus back to its top-left.
+    // Otherwise the next resize/remove command would target an empty cell.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace resizeDesk{"resize",{}};
+        resizeDesk.tiles.push_back(Tile{Kind::Game,"Large","0100000000000003",0,0,3,2,0});
+        int sx=2,sy=1;
+        assert(resizeSelectedTile(resizeDesk,sx,sy,false));
+        assert(resizeDesk.tiles[0].w==2 && resizeDesk.tiles[0].h==2);
+        assert(sx==0 && sy==0 && itemAt(resizeDesk,sx,sy)==0);
+        assert(resizeSelectedTile(resizeDesk,sx,sy,false));
+        assert(resizeDesk.tiles[0].w==2 && resizeDesk.tiles[0].h==1);
+        assert(sx==0 && sy==0 && itemAt(resizeDesk,sx,sy)==0);
+    }
+
+    // Cross-workspace moves preserve the tile and choose the first free
+    // placement when the original position is occupied.
+    {
+        using namespace desknx::workspace_ops;
+        std::vector<Workspace> spaces{{"Games",{}},{"Homebrew",{}}};
+        spaces[0].tiles.push_back(Tile{Kind::Game,"Game","0100000000000004",0,0,2,1,0});
+        spaces[1].tiles.push_back(Tile{Kind::Nro,"Existing","sdmc:/switch/existing.nro",0,0,1,1,1});
+        int active=0,sx=0,sy=0;
+        assert(moveSelectedTileToWorkspace(spaces,active,sx,sy,1));
+        assert(active==1 && sx==1 && sy==0);
+        assert(spaces[0].tiles.empty());
+        assert(spaces[1].tiles.size()==2);
+        assert(spaces[1].tiles[1].data=="0100000000000004");
+    }
+
+    // A full destination cannot cause a source tile to disappear.
+    {
+        using namespace desknx::workspace_ops;
+        std::vector<Workspace> spaces{{"Source",{}},{"Full",{}}};
+        spaces[0].tiles.push_back(Tile{Kind::Game,"Keep","0100000000000005",0,0,1,1,0});
+        for(int yy=0;yy<Rows;++yy)
+            for(int xx=0;xx<Columns;++xx)
+                spaces[1].tiles.push_back(Tile{Kind::Nro,"Filler",
+                    "sdmc:/switch/filler.nro",xx,yy,1,1,0});
+        int active=0,sx=0,sy=0;
+        assert(!moveSelectedTileToWorkspace(spaces,active,sx,sy,1));
+        assert(active==0 && spaces[0].tiles.size()==1);
+        assert(spaces[0].tiles[0].title=="Keep");
+    }
     assert(typeCode(parseKind("N")) == "N");
     assert(typeCode(parseKind("C")) == "C");
     assert(parseKind("unknown") == Kind::Unsupported);
