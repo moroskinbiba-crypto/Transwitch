@@ -1079,7 +1079,9 @@ void drawScreen() {
         roundRect(840,202,70,30,9,Color{54,57,66,255});
         text("B BACK",852,212,1,WHITE,904);
         char nsInfo[80]{};
-        if(!catalogueNsAvailable)
+        if(!catalogueReady&&!catalogueScanComplete)
+            std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE INITIALIZING");
+        else if(!catalogueNsAvailable)
             std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsError));
         else if(catalogueNsError)
