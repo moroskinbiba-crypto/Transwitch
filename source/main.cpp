@@ -7,6 +7,7 @@
 #include <desknx/Protocol.hpp>
 #include <desknx/SafeReplace.hpp>
 #include "../include/desknx/Model.hpp"
+#include "../include/desknx/WorkspaceOps.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
 #include "../include/desknx/Diagnostics.hpp"
@@ -91,6 +92,8 @@ desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMod
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
+bool touchPressActive=false;
+int touchPressStartX=0, touchPressStartY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, deletePrompt=false, running=true;
@@ -1248,48 +1251,61 @@ void drawScreen() {
     SDL_RenderPresent(renderer);
 }
 void saveNow(){saveLayout();}
+void finishTileDrag(const char* message="POSITION SAVED") {
+    dragging=false;
+    touchDragging=false;
+    touchPressActive=false;
+    touchDragTabStart=-1;
+    saveNow();
+    if(message&&*message)setStatus(message);
+}
 void updateCursor(int dx,int dy){selectedX=std::max(0,std::min(COLS-1,selectedX+dx));selectedY=std::max(0,std::min(ROWS-1,selectedY+dy));}
 bool moveTile(int dx,int dy) {
-    Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);if(i<0)return false;
-    Tile&t=d.tiles[static_cast<size_t>(i)];int nx=t.x+dx,ny=t.y+dy;
-    if(!placeable(d,t,nx,ny,i)){setStatus("MOVE BLOCKED: CELL OCCUPIED");return false;}
-    t.x=nx;t.y=ny;selectedX=nx;selectedY=ny;return true;
+    Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    if(!desknx::workspace_ops::moveSelectedTile(d,selectedX,selectedY,dx,dy)) {
+        if(itemAt(d,selectedX,selectedY)>=0)
+            setStatus("MOVE BLOCKED: CELL OCCUPIED");
+        return false;
+    }
+    return true;
 }
 bool moveToDesk(int target) {
-    if(target<0||target>=static_cast<int>(desks.size())||target==deskIndex) return false;
-    Workspace& src=desks[static_cast<size_t>(deskIndex)];
-    const int i=itemAt(src,selectedX,selectedY);
-    if(i<0) return false;
-    Tile tile=src.tiles[static_cast<size_t>(i)];
-    Workspace& dst=desks[static_cast<size_t>(target)];
-    int nx=tile.x,ny=tile.y;
-    if(!placeable(dst,tile,nx,ny)&&!firstFree(dst,tile,nx,ny)) {
+    if(target<0||target>=static_cast<int>(desks.size())||target==deskIndex)return false;
+    const std::string targetName=desks[static_cast<size_t>(target)].name;
+    if(!desknx::workspace_ops::moveSelectedTileToWorkspace(
+           desks,deskIndex,selectedX,selectedY,target)) {
         setStatus("TARGET WORKSPACE IS FULL");
         return false;
     }
-    src.tiles.erase(src.tiles.begin()+i);
-    tile.x=nx;tile.y=ny;
-    dst.tiles.push_back(tile);
-    deskIndex=target;selectedX=nx;selectedY=ny;
-    setStatus("MOVED TO "+dst.name);
+    setStatus("MOVED TO "+targetName);
     return true;
 }
 bool moveAcrossDesk(int step) {
-    if(desks.size()<2) return false;
+    if(desks.size()<2)return false;
     const int next=(deskIndex+step+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
     return moveToDesk(next);
 }
 void resizeTile(bool bigger) {
-    Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);if(i<0){setStatus("SELECT A TILE FIRST");return;}
-    const std::array<std::pair<int,int>,4> sizes{{{1,1},{2,1},{2,2},{3,2}}};Tile&t=d.tiles[static_cast<size_t>(i)];int at=0;
-    for(size_t n=0;n<sizes.size();++n)if(sizes[n].first==t.w&&sizes[n].second==t.h){at=static_cast<int>(n);break;}
-    int next=std::max(0,std::min(3,at+(bigger?1:-1)));Tile p=t;p.w=sizes[static_cast<size_t>(next)].first;p.h=sizes[static_cast<size_t>(next)].second;
-    if(!placeable(d,p,t.x,t.y,i)){setStatus("RESIZE BLOCKED: NOT ENOUGH SPACE");return;}
-    t.w=p.w;t.h=p.h;saveNow();
+    Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    if(!desknx::workspace_ops::resizeSelectedTile(d,selectedX,selectedY,bigger)) {
+        setStatus(itemAt(d,selectedX,selectedY)<0?
+                  "SELECT A TILE FIRST":"RESIZE BLOCKED OR SIZE LIMIT REACHED");
+        return;
+    }
+    saveNow();
 }
 void removeTile() {
-    Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);if(i<0){setStatus("EMPTY CELL");return;}
-    std::string name=d.tiles[static_cast<size_t>(i)].title;d.tiles.erase(d.tiles.begin()+i);dragging=false;setStatus("REMOVED: "+name);saveNow();
+    Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    const int i=itemAt(d,selectedX,selectedY);
+    if(i<0){setStatus("EMPTY CELL");return;}
+    const std::string name=d.tiles[static_cast<size_t>(i)].title;
+    d.tiles.erase(d.tiles.begin()+i);
+    dragging=false;
+    touchDragging=false;
+    touchPressActive=false;
+    touchDragTabStart=-1;
+    setStatus("REMOVED: "+name);
+    saveNow();
 }
 void addSelected() {
     const auto& available=visibleCatalogueSnapshot();bool ready=false,complete=false,truncated=false;
@@ -1385,6 +1401,10 @@ void openList(){
     loadPlayStatsForSelection();
 }
 void newDesk() {
+    if(dragging || touchDragging) {
+        setStatus("DROP THE MOVING TILE BEFORE CREATING A WORKSPACE");
+        return;
+    }
     if(desks.size()>=MAX_DESKS){setStatus("MAXIMUM OF 12 WORKSPACES");return;}
     int suffix=1;
     std::string name;
@@ -1399,12 +1419,47 @@ void newDesk() {
     setStatus("NEW WORKSPACE CREATED - PRESS Y TO ADD ITEMS");
 }
 void renameDesk() {
-    SwkbdConfig kbd{};if(R_FAILED(swkbdCreate(&kbd,0))){setStatus("KEYBOARD UNAVAILABLE");return;}
-    swkbdConfigMakePresetDefault(&kbd);swkbdConfigSetHeaderText(&kbd,"Rename workspace");swkbdConfigSetInitialText(&kbd,desks[static_cast<size_t>(deskIndex)].name.c_str());
-    char result[64]{};Result rc=showKeyboard(&kbd,result,sizeof(result));swkbdClose(&kbd);
-    if(R_SUCCEEDED(rc)&&result[0]){desks[static_cast<size_t>(deskIndex)].name=result;saveNow();setStatus("WORKSPACE RENAMED");}
+    if(dragging || touchDragging) {
+        setStatus("DROP THE MOVING TILE BEFORE RENAMING");
+        return;
+    }
+    SwkbdConfig kbd{};
+    if(R_FAILED(swkbdCreate(&kbd,0))){setStatus("KEYBOARD UNAVAILABLE");return;}
+    swkbdConfigMakePresetDefault(&kbd);
+    swkbdConfigSetHeaderText(&kbd,"Rename workspace");
+    swkbdConfigSetInitialText(&kbd,desks[static_cast<size_t>(deskIndex)].name.c_str());
+    char result[64]{};
+    const Result rc=showKeyboard(&kbd,result,sizeof(result));
+    swkbdClose(&kbd);
+    if(R_FAILED(rc)||!result[0])return;
+    std::string name=result;
+    const size_t first=name.find_first_not_of(" \t\r\n");
+    if(first==std::string::npos) {
+        setStatus("WORKSPACE NAME CANNOT BE EMPTY");
+        return;
+    }
+    const size_t last=name.find_last_not_of(" \t\r\n");
+    name=name.substr(first,last-first+1);
+    if(name.size()>124) {
+        setStatus("WORKSPACE NAME IS TOO LONG");
+        return;
+    }
+    for(size_t i=0;i<desks.size();++i) {
+        if(i!=static_cast<size_t>(deskIndex)&&desks[i].name==name) {
+            setStatus("WORKSPACE NAME ALREADY EXISTS");
+            return;
+        }
+    }
+    if(desks[static_cast<size_t>(deskIndex)].name==name)return;
+    desks[static_cast<size_t>(deskIndex)].name=name;
+    saveNow();
+    setStatus("WORKSPACE RENAMED");
 }
 void deleteDesk() {
+    if(dragging || touchDragging) {
+        setStatus("DROP THE MOVING TILE BEFORE DELETING A WORKSPACE");
+        return;
+    }
     if(desks.size()<=1){setStatus("AT LEAST ONE WORKSPACE IS REQUIRED");return;}
     deletePrompt=true;
 }
@@ -1658,7 +1713,17 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(deletePrompt) {
         if(keys&HidNpadButton_B){deletePrompt=false;return;}
-        if(keys&HidNpadButton_A){deletePrompt=false;desks.erase(desks.begin()+deskIndex);deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);selectedX=selectedY=0;saveNow();setStatus("WORKSPACE DELETED");}
+        if(keys&HidNpadButton_A) {
+            deletePrompt=false;
+            if(deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return;
+            desks.erase(desks.begin()+deskIndex);
+            deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);
+            selectedX=selectedY=0;
+            dragging=false;touchDragging=false;touchPressActive=false;
+            touchDragTabStart=-1;
+            saveNow();
+            setStatus("WORKSPACE DELETED");
+        }
         return;
     }
     if(listOpen) {
@@ -1683,8 +1748,29 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A)addSelected();
         return;
     }
+    // While a tile is being moved, only movement, workspace destination,
+    // drop and deliberate removal are accepted. Modals cannot steal the
+    // partially-finished interaction.
+    if(dragging) {
+        if(keys&(HidNpadButton_A|HidNpadButton_B)) {
+            finishTileDrag();
+            return;
+        }
+        if(keys&HidNpadButton_L)moveAcrossDesk(-1);
+        else if(keys&HidNpadButton_R)moveAcrossDesk(1);
+        if(keys&HidNpadButton_Left)moveTile(-1,0);
+        else if(keys&HidNpadButton_Right)moveTile(1,0);
+        if(keys&HidNpadButton_Up)moveTile(0,-1);
+        else if(keys&HidNpadButton_Down)moveTile(0,1);
+        if(keys&HidNpadButton_Minus)removeTile();
+        if(keys&HidNpadButton_X) {
+            finishTileDrag(nullptr);
+            editing=false;
+            setStatus("EDIT MODE CLOSED");
+        }
+        return;
+    }
     if(keys&HidNpadButton_B) {
-        if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");return;}
 #ifdef DESKNX_SYSTEM_APPLET
         {
             const Result rc=sendIpc([]{return desknx::ipc::Send(desknx::ipc::Command::ReturnToGame);});
@@ -1741,12 +1827,36 @@ void keyInput(u64 keys, bool fromRepeat) {
         else if(i>=0)launch(d.tiles[static_cast<size_t>(i)]);else setStatus("EMPTY CELL - PRESS Y TO ADD");
     }
 }
-void touchSelect(int x,int y) {
-    if(x<LEFT||x>=LEFT+COLS*(CW+GX)||y<TOP||y>=TOP+ROWS*(CH+GY))return;
-    int cx=std::max(0,std::min(COLS-1,(x-LEFT)/(CW+GX))),cy=std::max(0,std::min(ROWS-1,(y-TOP)/(CH+GY)));
-    if(dragging){int dx=cx-selectedX,dy=cy-selectedY;if(dx&&dy){moveTile(dx,0);moveTile(0,dy);}else if(dx||dy)moveTile(dx,dy);return;}
-    selectedX=cx;selectedY=cy;
-    if(editing){int i=itemAt(desks[static_cast<size_t>(deskIndex)],cx,cy);if(i>=0){const Tile&t=desks[static_cast<size_t>(deskIndex)].tiles[static_cast<size_t>(i)];selectedX=t.x;selectedY=t.y;}}
+bool touchSelect(int x,int y) {
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    if(dragging) {
+        desknx::workspace_ops::CellPoint cell{};
+        if(!desknx::workspace_ops::cellFromPoint(
+               x,y,LEFT,TOP,CW,CH,GX,GY,true,cell))
+            return false;
+        const int dx=cell.x-selectedX,dy=cell.y-selectedY;
+        if(dx&&dy) {
+            moveTile(dx,0);
+            moveTile(0,dy);
+        } else if(dx||dy) {
+            moveTile(dx,dy);
+        }
+        return true;
+    }
+    const int hit=desknx::workspace_ops::tileAtPoint(
+        desk,x,y,LEFT,TOP,CW,CH,GX,GY);
+    if(hit>=0) {
+        selectedX=desk.tiles[static_cast<size_t>(hit)].x;
+        selectedY=desk.tiles[static_cast<size_t>(hit)].y;
+        return true;
+    }
+    desknx::workspace_ops::CellPoint cell{};
+    if(!desknx::workspace_ops::cellFromPoint(
+           x,y,LEFT,TOP,CW,CH,GX,GY,false,cell))
+        return false;
+    selectedX=cell.x;
+    selectedY=cell.y;
+    return true;
 }
 int tabStart(){
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
@@ -1757,7 +1867,7 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=840&&x<=910&&y>=202&&y<=232) {
             appSettingsMenu=false;
-        } else if(x>=378&&x<=902&&y>=306&&y<514) {
+        } else if(x>=358&&x<=922&&y>=306&&y<514) {
             const int row=(y-306)/52;
             if(row>=0&&row<4)activateAppSettings(row);
         }
@@ -1871,7 +1981,7 @@ void touchInput(const SDL_Event&e) {
                 addSelected();
                 return;
             }
-            if(y>=180&&y<580&&x>=130&&x<890) {
+            if(y>=180&&y<580&&x>=130&&x<874) {
                 const int row=(y-180)/40;
                 const auto& available=visibleCatalogueSnapshot();
                 const int index=listOffset+row;
@@ -1931,11 +2041,41 @@ void touchInput(const SDL_Event&e) {
             }
             return;
         }
+        if(desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
+           y>=370&&y<=408) {
+            if(x>=454&&x<630) {
+                editing=true;
+                openList();
+                return;
+            }
+            if(x>=650&&x<900) {
+                newDesk();
+                return;
+            }
+        }
         if(y>=TOP&&y<TOP+ROWS*(CH+GY)) {
-            int oldX=selectedX,oldY=selectedY;touchSelect(x,y);Workspace&d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
-            if(editing){if(i>=0&&oldX==selectedX&&oldY==selectedY){dragging=true;touchDragging=true;touchDragTabStart=tabStart();}else if(i<0)openList();}
-            else if(i>=0)launch(d.tiles[static_cast<size_t>(i)]);
-            else openList();
+            const int oldX=selectedX,oldY=selectedY;
+            if(!touchSelect(x,y))return;
+            Workspace& d=desks[static_cast<size_t>(deskIndex)];
+            const int i=itemAt(d,selectedX,selectedY);
+            if(editing) {
+                if(i>=0) {
+                    touchPressActive=true;
+                    touchPressStartX=x;
+                    touchPressStartY=y;
+                    if(oldX==selectedX&&oldY==selectedY) {
+                        dragging=true;
+                        touchDragging=true;
+                        touchDragTabStart=tabStart();
+                    }
+                } else {
+                    openList();
+                }
+            } else if(i>=0) {
+                launch(d.tiles[static_cast<size_t>(i)]);
+            } else {
+                openList();
+            }
             return;
         }
         if(y>=632&&y<=700) {
@@ -1969,6 +2109,14 @@ void touchInput(const SDL_Event&e) {
         if(catalogueTouchMoved) lastCatalogueTap=-1;
         catalogueTouchActive=false;
         catalogueTouchMoved=false;
+    } else if(e.type==SDL_FINGERMOTION&&touchPressActive&&!touchDragging) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(std::abs(x-touchPressStartX)+std::abs(y-touchPressStartY)>=12) {
+            dragging=true;
+            touchDragging=true;
+            touchDragTabStart=tabStart();
+            (void)touchSelect(x,y);
+        }
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=92&&y<=140&&x>=28) {
@@ -1981,8 +2129,16 @@ void touchInput(const SDL_Event&e) {
         } else {
             touchSelect(x,y);
         }
-    } else if(e.type==SDL_FINGERUP&&touchDragging) {
-        touchDragging=false;touchDragTabStart=-1;dragging=false;saveNow();
+    } else if(e.type==SDL_FINGERUP&&touchPressActive) {
+        const bool moved=touchDragging;
+        touchPressActive=false;
+        touchDragging=false;
+        touchDragTabStart=-1;
+        if(moved) {
+            dragging=false;
+            saveNow();
+            setStatus("POSITION SAVED");
+        }
     }
 }
 } // namespace
@@ -2155,7 +2311,7 @@ int main(int,char**) {
             // repeat active in the library, recent list and power menu. The
             // destructive workspace-confirmation prompt remains single-shot.
             const bool modalBlocksRepeat = deletePrompt;
-            if(!modalBlocksRepeat && (held&dirs) && !dragging) {
+            if(!modalBlocksRepeat && (held&dirs) && !touchDragging) {
                 const Uint32 now = SDL_GetTicks();
                 if((held&dirs) != lastHeldDirs) { holdStart=now; lastRepeat=now; lastHeldDirs=held&dirs; }
                 else if(now-holdStart >= 350 && now-lastRepeat >= 80) {
