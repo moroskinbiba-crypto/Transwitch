@@ -39,6 +39,8 @@ using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
 constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
+constexpr int ToolbarStartX=72, ToolbarButtonWidth=74, ToolbarButtonStep=80, ToolbarButtonCount=7;
+constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarButtonStep; }
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
 constexpr u32 NsViewFlagIsGameCard = BIT(6);
@@ -155,7 +157,7 @@ Uint32 lastWorkspaceTabTapTick=0;
 bool powerMenu=false;
 s32 powerIndex=0;
 bool sdMounted=false, psmReady=false, touchDragging=false;
-std::string statusText="Y ADD   X EDIT   A OPEN", lastLaunched="Nothing launched yet";
+std::string statusText="Y ADD   X EDIT   L3 TOOLS", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
 #ifdef DESKNX_SYSTEM_APPLET
 // Backend -> menu state (IPC-06/§4.4). The menu keeps no app state of its own:
@@ -1356,20 +1358,28 @@ void drawScreen() {
     }
     drawWallpaper();
 
-    // Compact system bar: common actions remain one touch away, while the
-    // desktop canvas no longer has a second row of competing workspace tabs.
+    // Compact, labelled system toolbar. Each control has a generous touch
+    // target and a visible name; the same tools are available from the gamepad.
     softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
-    struct HeaderTool { int x,icon; bool active; };
+    struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
-        {72,4,listOpen},{132,0,appSettingsMenu},{192,1,false},
-        {252,2,false},{312,3,powerMenu},{372,6,recentOpen}
+        {4,listOpen,"LIBRARY"},{0,appSettingsMenu,"SETTINGS"},
+        {1,false,"PADS"},{2,false,"ALBUM"},{3,powerMenu,"POWER"},
+        {6,recentOpen,"RECENT"},{5,systemMenu,"TOOLS"}
     };
-    for(const auto& item:headerTools) {
-        roundRect(item.x,24,50,48,14,item.active?Color{53,94,145,255}:Color{39,48,62,230});
-        drawSystemIcon(item.icon,item.x+13,36,24,item.active?WHITE:MUTED);
+    for(int i=0;i<ToolbarButtonCount;++i) {
+        const auto& item=headerTools[i];
+        const int x=toolbarButtonX(i);
+        roundRect(x,24,ToolbarButtonWidth,48,13,
+            item.active?Color{48,82,124,255}:Color{37,47,62,230});
+        if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
+        drawSystemIcon(item.icon,x+27,27,20,item.active?WHITE:Color{204,214,228,255});
+        const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
+        text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),55,1,
+             item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
     }
-    text("DESKNX",470,32,3,WHITE,760);
-    text("PERSONAL WORKSPACE",472,58,1,MUTED,760);
+    text("DESKNX",660,29,3,WHITE,900);
+    text("PERSONAL WORKSPACE",662,56,1,MUTED,900);
     roundRect(1022,24,180,48,18,Color{32,43,59,235});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,30});
@@ -1723,7 +1733,7 @@ void drawScreen() {
         }
         roundRect(1058,136,82,34,10,Color{54,57,66,255});
         text("B BACK",1074,147,1,WHITE,1130);
-        text("A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
+        text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(appSettingsMenu) {
         rect(0,0,SW,SH,Color{3,7,14,198});
@@ -2511,7 +2521,7 @@ void keyInput(u64 keys, bool fromRepeat) {
 #endif
     }
     if(keys&HidNpadButton_Plus)newDesk();
-    if(keys&HidNpadButton_StickL)renameDesk();
+    if(keys&HidNpadButton_StickL) { systemMenu=true;systemMenuIndex=0;return; }
     if(keys&HidNpadButton_StickR) {
         // The right stick opens workspace actions in every mode. Destructive
         // operations must always be selected explicitly from the menu.
@@ -2796,23 +2806,30 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(deletePrompt)return;
-        // System shortcuts in the top bar.
+        // Labelled system-toolbar hit targets use the same geometry as drawScreen().
         if(y>=16&&y<=82) {
-            if(x>=72&&x<122) {openList();return;}
-            if(x>=132&&x<182) {appSettingsMenu=true;appSettingsIndex=0;return;}
-            if(x>=192&&x<242) {
-                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
-                HidLaControllerSupportResultInfo result{};
-                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
-                    setStatus("CONTROLLER MENU UNAVAILABLE",3000);
-                return;
+            const int index=(x-ToolbarStartX)/ToolbarButtonStep;
+            if(x>=ToolbarStartX&&index>=0&&index<ToolbarButtonCount&&
+               x<toolbarButtonX(index)+ToolbarButtonWidth) {
+                switch(index) {
+                    case 0: openList(); break;
+                    case 1: appSettingsMenu=true;appSettingsIndex=0; break;
+                    case 2: {
+                        HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
+                        HidLaControllerSupportResultInfo result{};
+                        if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
+                            setStatus("CONTROLLER MENU UNAVAILABLE",3000);
+                        break;
+                    }
+                    case 3:
+                        if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
+                        break;
+                    case 4: powerMenu=true;powerIndex=0; break;
+                    case 5: recentIndex=0;recentOpen=true; break;
+                    case 6: systemMenu=true;systemMenuIndex=0; break;
+                    default: break;
+                }
             }
-            if(x>=252&&x<302) {
-                if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
-                return;
-            }
-            if(x>=312&&x<362) {powerMenu=true;powerIndex=0;return;}
-            if(x>=372&&x<422) {recentIndex=0;recentOpen=true;return;}
             return;
         }
         // Workspace tabs and their controls live at the bottom of the screen.
