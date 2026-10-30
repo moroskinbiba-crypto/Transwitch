@@ -1223,7 +1223,7 @@ void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
 
     // Large, readable labels stay on the artwork. Long names wrap to two
     // lines instead of being silently clipped at the right edge.
-    const size_t maxChars=static_cast<size_t>(std::max(10,(bounds.w-24)/9));
+    const size_t maxChars=static_cast<size_t>(std::max(8,(bounds.w-20)/12));
     const auto& titleLines=cachedTileTitleLines(tile.title,maxChars);
     const int stripHeight=titleLines.size()>1?44:32;
     rect(bounds.x+1,bounds.y+bounds.h-stripHeight,
@@ -1246,6 +1246,10 @@ void drawTile(const Tile&t,bool selected) {
              selected?Color{92,164,255,210}:Color{255,255,255,18});
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,r);
+        if(selected) {
+            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
+            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
+        }
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
         if(t.kind==Kind::Clock) {
@@ -1369,8 +1373,8 @@ void drawScreen() {
     roundRect(1022,24,180,48,18,Color{32,43,59,235});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,30});
-    text(battery>=0?std::to_string(battery)+"%":"BAT --",1165,39,2,
-         battery>=20?GREEN:RED,1190);
+    text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
+         battery>=20?GREEN:RED,1198);
 
     // Single desktop surface under the tiles and widgets.
     softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
@@ -1434,7 +1438,7 @@ void drawScreen() {
         roundRect(x,641,DeskTabWidth,48,14,
             active?Color{53,91,139,255}:Color{34,43,58,235});
         if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
-        text(desks[static_cast<size_t>(index)].name,x+12,656,2,
+        text(desks[static_cast<size_t>(index)].name,x+12,658,1,
              active?WHITE:MUTED,x+DeskTabWidth-8);
     }
     roundRect(770,641,52,48,14,desks.size()<static_cast<size_t>(MAX_DESKS)?
