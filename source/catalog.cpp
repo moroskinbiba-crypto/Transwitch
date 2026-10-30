@@ -70,6 +70,22 @@ bool IsRegularFile(const std::string& path) {
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
+// Match SLauncher's packaged-libnx title resolution: prefer English, then
+// the first populated language. This avoids opening the set service for every
+// title via nacpGetLanguageEntry and still gives a useful name when the
+// console-language entry is absent.
+std::string GetApplicationName(const NacpStruct& nacp) {
+    const NacpLanguageEntry* entry = nullptr;
+    if (nacp.lang[0].name[0] != '\\0') entry = &nacp.lang[0];
+    for (int i = 1; !entry && i < 16; ++i) {
+        if (nacp.lang[i].name[0] != '\\0') entry = &nacp.lang[i];
+    }
+    if (!entry) return {};
+    char name[129]{};
+    std::strncpy(name, entry->name, sizeof(name) - 1);
+    return std::string(name);
+}
+
 void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) {
     if (depth > 3 || out.size() >= MaxItems) return;
     DIR* dir = opendir(root.c_str());
@@ -288,9 +304,8 @@ void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate) {
         file.seekg(static_cast<std::streamoff>(assetPos + asset.nacp.offset), std::ios::beg);
         file.read(reinterpret_cast<char*>(&nacp), sizeof(nacp));
         if (file) {
-            NacpLanguageEntry* entry = nullptr;
-            if (R_SUCCEEDED(nacpGetLanguageEntry(&nacp, &entry)) && entry && entry->name[0])
-                candidate.title = entry->name;
+            const std::string name = GetApplicationName(nacp);
+            if (!name.empty()) candidate.title = name;
         }
     }
 }
@@ -455,10 +470,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             if (nsReady && R_SUCCEEDED(nsGetApplicationControlData(
                     NsApplicationControlSource_Storage, id, &control,
                     sizeof(control), &actual))) {
-                NacpLanguageEntry* entry = nullptr;
-                if (R_SUCCEEDED(nacpGetLanguageEntry(&control.nacp, &entry)) &&
-                    entry && entry->name[0])
-                    title = entry->name;
+                title = GetApplicationName(control.nacp);
                 if (title.empty() && cachedName != nameCache.end())
                     title = cachedName->second;
                 if (!iconCached) CacheGameIcon(id, control, actual);
