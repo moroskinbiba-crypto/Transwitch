@@ -453,7 +453,10 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     // the NS service is open, so never assume it is ready merely because the
     // applet is running. Each scan owns one NS session; this also makes manual
     // catalogue refreshes safe and keeps service lifetime out of the renderer.
-    result.nsErrorCode = static_cast<std::uint32_t>(nsInitialize());
+    const Result accountRc = accountInitialize(AccountServiceType_System);
+    const bool accountReady = R_SUCCEEDED(accountRc);
+    result.nsErrorCode = static_cast<std::uint32_t>(
+        accountReady ? nsInitialize() : accountRc);
     const bool nsReady = result.nsErrorCode == 0;
     result.nsAvailable = nsReady;
     const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
@@ -483,6 +486,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             item.launchCount = found->launchCount;
         }
         if (nsReady) nsExit();
+        if (accountReady) accountExit();
         result.complete = true;
         report(true);
         return result;
@@ -559,6 +563,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     // Preserve the last known-good catalogue if NS enumeration failed.
     if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
     if (nsReady) nsExit();
+    if (accountReady) accountExit();
     report(true);
     return result;
 }
