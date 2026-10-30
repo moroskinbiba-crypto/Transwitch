@@ -1777,8 +1777,9 @@ void drawScreen() {
             const auto& entry=mediaPickerEntries[static_cast<size_t>(index)];
             const int yy=166+row*34;
             if(index==mediaPickerIndex)roundRect(260,yy,760,30,8,Color{35,61,93,255});
-            text(entry.directory?"FOLDER":(mediaPickerType==MediaPickerType::Wallpaper?"IMAGE":"FONT"),
-                 278,yy+10,1,entry.directory?BLUE:MUTED,370);
+            const char* entryType=entry.directory?"FOLDER":
+                (mediaPickerType==MediaPickerType::Font?"FONT":"IMAGE");
+            text(entryType,278,yy+10,1,entry.directory?BLUE:MUTED,370);
             text(entry.name,388,yy+10,1,index==mediaPickerIndex?WHITE:MUTED,1004);
         }
         text(std::to_string(mediaPickerIndex+1)+" / "+std::to_string(mediaPickerEntries.size())+
