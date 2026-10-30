@@ -151,7 +151,7 @@ jobs:
           python3 -c 'import pathlib, zipfile; root=pathlib.Path("."); z=zipfile.ZipFile("../DeskNX-system-experimental.zip","w",zipfile.ZIP_DEFLATED); [z.write(p,p.as_posix()) for p in root.rglob("*") if p.is_file()]; z.close()'
           cd ..
           sha256sum DeskNX-system-experimental.zip > DeskNX-system-experimental.zip.sha256
-          unzip -t DeskNX-system-experimental.zip
+          python3 -c 'import zipfile; z=zipfile.ZipFile("DeskNX-system-experimental.zip"); bad=z.testzip(); assert bad is None, bad; z.close()'
 
       - name: Upload experimental system bundle
         uses: actions/upload-artifact@v4
