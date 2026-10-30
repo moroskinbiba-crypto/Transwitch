@@ -693,6 +693,11 @@ void drawScreen() {
             "  SORT: "+desknx::catalog_view::SortName(catalogueSort);
         if(!catalogueQuery.empty()) viewLabel+="  QUERY: "+catalogueQuery;
         if(!catalogCompleteNow) viewLabel+="  / SCANNING";
+        if(catalogueNsError!=0) {
+            char nsError[40]{};
+            std::snprintf(nsError,sizeof(nsError),"  / NS ERROR 0X%08X",static_cast<unsigned int>(catalogueNsError));
+            viewLabel+=nsError;
+        }
         text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-20);
         int vis=10;if(listIndex<listOffset)listOffset=listIndex;if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
         if(!catalogCompleteNow && available.empty()) {
