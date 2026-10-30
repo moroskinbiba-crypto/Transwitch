@@ -195,7 +195,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
     std::string line;
     if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
-    if (header.size() != 4 || header[0] != "DESKNXCAT1") return false;
+    if (header.size() != 4 || header[0] != "DESKNXCAT2") return false;
     char gameHash[32]{}, sdHash[32]{};
     std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
@@ -206,7 +206,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
     while (std::getline(input, line)) {
         if (line.size() > MaxCacheLineBytes || items.size() >= MaxItems) return false;
         const auto fields = desknx::model::splitTabs(line);
-        if (fields.size() != 7 || fields[0] != "C" ||
+        if (fields.size() != 8 || fields[0] != "C" ||
             fields[1].size() > 16 || fields[2].size() > 512 || fields[3].size() > 512)
             return false;
 
@@ -215,6 +215,13 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
         if (item.kind == Kind::Unsupported) return false;
         item.title = fields[2];
         item.data = fields[3];
+        char* flagsEnd = nullptr;
+        errno = 0;
+        const unsigned long parsedFlags = std::strtoul(fields[7].c_str(), &flagsEnd, 10);
+        if (errno != 0 || flagsEnd == fields[7].c_str() || !flagsEnd ||
+            *flagsEnd != '\\0' || parsedFlags > 0xFFFFFFFFul)
+            return false;
+        item.viewFlags = static_cast<uint32_t>(parsedFlags);
         if (!desknx::strict::parseInt32(fields[4], item.w) ||
             !desknx::strict::parseInt32(fields[5], item.h) ||
             !desknx::strict::parseInt32(fields[6], item.color))
@@ -490,7 +497,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         }
         freshNameCache.emplace(id, title);
         result.items.push_back({Kind::Game, title, hex, 1, 1,
-                                static_cast<int>(colorIndex++ % 8)});
+                                static_cast<int>(colorIndex++ % 8), games[i].viewFlags});
         if ((i + 1) % 12 == 0) report(false);
     }
     // Keep the per-title cache in sync with the installed set. If the only
