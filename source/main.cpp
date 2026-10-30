@@ -2086,7 +2086,7 @@ void touchInput(const SDL_Event&e) {
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen) {
+    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=566&&y<=614&&itemAt(
                desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
