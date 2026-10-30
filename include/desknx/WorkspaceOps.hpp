@@ -23,7 +23,7 @@ inline size_t utf8Codepoints(const std::string& value) {
 inline bool isValidWorkspaceName(const std::string& name) {
     if(name.empty()||name.size()>124||utf8Codepoints(name)>31)return false;
     for(unsigned char byte:name)
-        if(byte=='\\t'||byte=='\\n'||byte=='\\r'||byte=='\\0')
+        if(byte=='\t'||byte=='\n'||byte=='\r'||byte=='\0')
             return false;
     return true;
 }
