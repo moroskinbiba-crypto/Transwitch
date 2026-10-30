@@ -955,16 +955,29 @@ bool moveTile(int dx,int dy) {
     if(!placeable(d,t,nx,ny,i)){setStatus("MOVE BLOCKED: CELL OCCUPIED");return false;}
     t.x=nx;t.y=ny;selectedX=nx;selectedY=ny;return true;
 }
+bool moveToDesk(int target) {
+    if(target<0||target>=static_cast<int>(desks.size())||target==deskIndex) return false;
+    Workspace& src=desks[static_cast<size_t>(deskIndex)];
+    const int i=itemAt(src,selectedX,selectedY);
+    if(i<0) return false;
+    Tile tile=src.tiles[static_cast<size_t>(i)];
+    Workspace& dst=desks[static_cast<size_t>(target)];
+    int nx=tile.x,ny=tile.y;
+    if(!placeable(dst,tile,nx,ny)&&!firstFree(dst,tile,nx,ny)) {
+        setStatus("TARGET WORKSPACE IS FULL");
+        return false;
+    }
+    src.tiles.erase(src.tiles.begin()+i);
+    tile.x=nx;tile.y=ny;
+    dst.tiles.push_back(tile);
+    deskIndex=target;selectedX=nx;selectedY=ny;
+    setStatus("MOVED TO "+dst.name);
+    return true;
+}
 bool moveAcrossDesk(int step) {
     if(desks.size()<2) return false;
-    Workspace& src=desks[static_cast<size_t>(deskIndex)];
-    int i=itemAt(src,selectedX,selectedY);
-    if(i<0) return false;
-    int next=(deskIndex+step+static_cast<int>(desks.size()))%static_cast<int>(desks.size());Tile t=src.tiles[static_cast<size_t>(i)];
-    int nx=t.x,ny=t.y;Workspace& dst=desks[static_cast<size_t>(next)];
-    if(!placeable(dst,t,nx,ny)&&!firstFree(dst,t,nx,ny)){setStatus("TARGET WORKSPACE IS FULL");return false;}
-    src.tiles.erase(src.tiles.begin()+i);t.x=nx;t.y=ny;dst.tiles.push_back(t);deskIndex=next;selectedX=nx;selectedY=ny;
-    setStatus("MOVED TO "+dst.name);return true;
+    const int next=(deskIndex+step+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
+    return moveToDesk(next);
 }
 void resizeTile(bool bigger) {
     Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);if(i<0){setStatus("SELECT A TILE FIRST");return;}
@@ -1418,7 +1431,17 @@ void touchInput(const SDL_Event&e) {
         catalogueTouchActive=false;
         catalogueTouchMoved=false;
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
-        touchSelect(static_cast<int>(e.tfinger.x*SW),static_cast<int>(e.tfinger.y*SH));
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(y>=92&&y<=140&&x>=28) {
+            const int start=tabStart();
+            const int target=start+(x-28)/166;
+            const int tabX=28+(target-start)*166;
+            if(x>=tabX&&x<tabX+156&&target>=0&&
+               target<static_cast<int>(desks.size())&&target<start+7)
+                moveToDesk(target);
+        } else {
+            touchSelect(x,y);
+        }
     } else if(e.type==SDL_FINGERUP&&touchDragging) {
         touchDragging=false;dragging=false;saveNow();
     }
