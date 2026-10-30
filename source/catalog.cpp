@@ -385,11 +385,12 @@ bool CacheJpegIcon(const std::string& path, const u8* data, size_t length, bool 
     return actual != 0 && SaveBytes(path, data, actual);
 }
 
-void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate) {
+void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate,
+                               bool forceRefresh = false) {
     const std::string iconPath = desknx::model::iconCachePath(Kind::Nro, nro.path);
     const bool iconValid = IsUsableCachedJpeg(iconPath);
     if (!iconValid && IsRegularFile(iconPath)) std::remove(iconPath.c_str());
-    const bool needIcon = !iconValid;
+    const bool needIcon = forceRefresh || !iconValid;
     std::ifstream file(nro.path, std::ios::binary);
     if (!file) return;
     NroStart start{};
@@ -415,7 +416,7 @@ void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate) {
         file.clear();
         file.seekg(static_cast<std::streamoff>(assetPos + asset.icon.offset), std::ios::beg);
         file.read(reinterpret_cast<char*>(image.data()), static_cast<std::streamsize>(image.size()));
-        if (file) CacheJpegIcon(iconPath, image.data(), image.size());
+        if (file) CacheJpegIcon(iconPath, image.data(), image.size(), forceRefresh);
     }
     if (sectionValid(asset.nacp) && asset.nacp.size >= sizeof(NacpStruct)) {
         NacpStruct nacp{};
@@ -640,7 +641,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                 title = desknx::slaunch::ResolveTitleName(control.nacp);
                 if (title.empty() && cachedName != nameCache.end())
                     title = cachedName->second;
-                if (!iconCached) CacheGameIcon(id, control, actual);
+                if (forceRefresh || !iconCached) CacheGameIcon(id, control, actual);
                 fetchedControlData = true;
             } else {
                 ++controlDataFailed;
@@ -679,7 +680,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
         Candidate item{Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
                        static_cast<int>(result.items.size() % 8)};
-        CacheNroIconAndMetadata(nro, item);
+        CacheNroIconAndMetadata(nro, item, forceRefresh);
         result.items.push_back(std::move(item));
         if (result.items.size() % 12 == 0) report(false);
     }
