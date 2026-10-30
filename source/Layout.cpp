@@ -31,13 +31,6 @@ bool validKindCode(const std::string& code) {
     return true;
 }
 
-size_t utf8Codepoints(const std::string& value) {
-    size_t count = 0;
-    for (unsigned char c : value)
-        if ((c & 0xC0) != 0x80) ++count;
-    return count;
-}
-
 int nearestAllowedDimension(int w, int h, bool wantWidth) {
     const std::array<std::pair<int,int>,4> allowed{{{1,1},{2,1},{2,2},{3,2}}};
     size_t best = 0;
@@ -107,9 +100,8 @@ bool parse(const std::string& input, LoadResult& result) {
             }
             sawActive = true;
         } else if (fields[0] == "D") {
-            if (fields.size() != 2 || fields[1].empty() ||
-                fields[1].size() > 124 || utf8Codepoints(fields[1]) > 31 ||
-                fields[1].find('\0') != std::string::npos ||
+            if (fields.size() != 2 ||
+                !desknx::workspace_ops::isValidWorkspaceName(fields[1]) ||
                 parsed.workspaces.size() >= static_cast<size_t>(model::MaxDesks)) {
                 structuralError = true;
                 break;
