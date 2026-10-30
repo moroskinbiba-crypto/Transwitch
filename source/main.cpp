@@ -1611,6 +1611,10 @@ void launch(const Tile& t) {
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    // A live touch gesture owns focus until its initiating finger is released.
+    // This prevents controller buttons from closing the menu or mutating the
+    // workspace midway through a touch selection/drag.
+    if(touchPressActive)return;
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
         if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+3)%4;
