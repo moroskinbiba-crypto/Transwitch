@@ -732,10 +732,11 @@ void drawScreen() {
     if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
     // Floating Dock: quick access to the library, edit mode and adjacent desktops.
     rect(0,628,SW,92,Color{23,24,29,250});rect(0,628,SW,1,Color{255,255,255,18});
-    softCard(416,636,448,54,Color{48,50,58,245},Color{255,255,255,28});
+    softCard(380,636,520,54,Color{48,50,58,245},Color{255,255,255,28});
     struct DockItem { int x; const char* glyph; const char* label; bool active; };
-    const DockItem dock[]={{428,"APP","LIBRARY",listOpen},{536,"EDIT","LAYOUT",editing},
-        {644,"LEFT","PREV",false},{752,"RIGHT","NEXT",false}};
+    const DockItem dock[]={{388,"APP","LIBRARY",listOpen},{490,"EDIT","LAYOUT",editing},
+        {592,"LEFT","PREV",false},{694,"RIGHT","NEXT",false},
+        {796,"HIST","RECENT",recentOpen}};
     for(const auto& item:dock) {
         const Color tileFill=item.active?Color{10,132,255,255}:Color{67,70,79,255};
         roundRect(item.x,642,44,40,12,tileFill);
@@ -1317,10 +1318,11 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(y>=632&&y<=700) {
-            if(x>=416&&x<524) {openList();return;}
-            if(x>=524&&x<632) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
-            if(x>=632&&x<740) {deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
-            if(x>=740&&x<848) {deskIndex=(deskIndex+1)%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
+            if(x>=380&&x<490) {openList();return;}
+            if(x>=490&&x<590) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
+            if(x>=590&&x<690) {deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
+            if(x>=690&&x<790) {deskIndex=(deskIndex+1)%static_cast<int>(desks.size());saveNow();setStatus(desks[static_cast<size_t>(deskIndex)].name);return;}
+            if(x>=790&&x<900) {recentIndex=0;recentOpen=true;return;}
         }
     } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
         const int y=static_cast<int>(e.tfinger.y*SH);
