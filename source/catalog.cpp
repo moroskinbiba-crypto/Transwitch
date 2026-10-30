@@ -216,6 +216,14 @@ bool isCachedNroPath(const std::string& path) {
 
 bool IsUsableCachedJpeg(const std::string& path);
 
+bool IsMissingOrUsableCachedJpeg(const std::string& path) {
+    // Some legitimate NACP/NRO files contain no icon. A missing icon is not a
+    // reason to discard the entire application catalogue; an existing broken
+    // image is, because the next full scan can rebuild it.
+    if (!IsRegularFile(path)) return true;
+    return IsUsableCachedJpeg(path);
+}
+
 bool ReadCache(const Signatures& sig, ScanResult& result) {
     // The cache is stored on removable media and can be truncated or edited.
     // Bound the file before getline() so a corrupt single line cannot exhaust
@@ -270,11 +278,11 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
 
         if (item.kind == Kind::Game) {
             if (!isHexTitleId(item.data) ||
-                !IsUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
+                !IsMissingOrUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
                 return false;
         } else if (item.kind == Kind::Nro) {
             if (!isCachedNroPath(item.data) ||
-                !IsUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
+                !IsMissingOrUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
                 return false;
         } else if (!item.data.empty()) {
             return false;
@@ -549,7 +557,7 @@ void ShutdownServices() {
     if (gAccountServiceReady) { accountExit(); gAccountServiceReady = false; }
 }
 
-ScanResult Scan(ProgressCallback progress, void* context) {
+ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     ScanResult result;
     auto report = [&](bool complete) {
         result.complete = complete;
@@ -579,7 +587,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
     });
     const Signatures sig = MakeSignatures(games, nros);
     // Never reuse a cache after NS failed or returned a partial application list.
-    if (nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
+    if (!forceRefresh && nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
         // Volatile play statistics are fetched only for the selected game.
         result.complete = true;
         LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu elapsed=%llds",
@@ -608,7 +616,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         const auto cachedName = nameCache.find(id);
         const bool iconCached = HasCachedGameIcon(id);
         std::string title;
-        if (cachedName != nameCache.end() && iconCached) {
+        if (!forceRefresh && cachedName != nameCache.end() && iconCached) {
             // SLauncher fast path: a resolved title with its icon needs no
             // synchronous NS control-data request on this scan.
             title = cachedName->second;
