@@ -13,6 +13,21 @@ struct CellPoint {
     int y{0};
 };
 
+inline size_t utf8Codepoints(const std::string& value) {
+    size_t count=0;
+    for(unsigned char byte:value)
+        if((byte&0xC0)!=0x80)++count;
+    return count;
+}
+
+inline bool isValidWorkspaceName(const std::string& name) {
+    if(name.empty()||name.size()>124||utf8Codepoints(name)>31)return false;
+    for(unsigned char byte:name)
+        if(byte=='\\t'||byte=='\\n'||byte=='\\r'||byte=='\\0')
+            return false;
+    return true;
+}
+
 // Convert a touch coordinate to a logical grid cell. Gaps can be accepted while
 // dragging so a finger may move naturally between cells; taps must land on a
 // real cell or on a tile's actual bounds.
