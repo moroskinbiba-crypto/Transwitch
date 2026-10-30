@@ -360,6 +360,17 @@ void openMediaPicker(MediaPickerType type) {
     mediaPickerOpen=true;
 }
 
+void mediaPickerBack() {
+    if(mediaPickerDirectory==MEDIA_ROOT) {
+        mediaPickerOpen=false;
+        return;
+    }
+    const size_t slash=mediaPickerDirectory.find_last_of('/');
+    mediaPickerDirectory=(slash==std::string::npos)?std::string(MEDIA_ROOT):
+        mediaPickerDirectory.substr(0,slash);
+    mediaPickerIndex=mediaPickerOffset=0;
+    refreshMediaPicker();
+}
 void applyMediaPickerSelection(int index) {
     if(index<0||index>=static_cast<int>(mediaPickerEntries.size()))return;
     const MediaEntry selected=mediaPickerEntries[static_cast<size_t>(index)];
@@ -1550,39 +1561,62 @@ void drawScreen() {
         text("A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(appSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
-        softCard(320,174,640,390,Color{17,24,36,255},Color{255,255,255,25});
-        text("DESKNX SETTINGS",364,198,3,WHITE,900);
-        text("Library health and workspace preferences",
-             366,236,1,MUTED,900);
-        roundRect(840,202,70,30,9,Color{54,57,66,255});
-        text("B BACK",852,212,1,WHITE,904);
+        rect(0,0,SW,SH,Color{3,7,14,198});
+        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+        text("DESKNX SETTINGS",344,130,3,WHITE,930);
+        text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
+        roundRect(842,132,92,32,10,Color{54,57,66,255});
+        text("B  BACK",856,143,1,WHITE,926);
+        text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
+             346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
+        text("FONT  "+(fontPath.empty()?std::string("SYSTEM"):std::string("CUSTOM")),
+             646,190,1,fontPath.empty()?MUTED:BLUE,930);
+        const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT",
+            "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
+            "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE"};
+        for(int i=0;i<8;++i) {
+            const int yy=210+i*44;
+            if(i==appSettingsIndex)roundRect(340,yy,600,38,10,Color{35,61,93,255});
+            text(actions[i],362,yy+13,1,i==appSettingsIndex?WHITE:MUTED,918);
+            if(i==2)text("THEME "+std::to_string(themeIndex+1)+"/5",790,yy+13,1,BLUE,920);
+        }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
-            std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE INITIALIZING");
+            std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY INITIALIZING");
         else if(!catalogueNsAvailableNow)
-            std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE OFFLINE  0X%08X",
+            std::snprintf(nsInfo,sizeof(nsInfo),"GAME SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsErrorNow));
-        else if(catalogueNsErrorNow)
-            std::snprintf(nsInfo,sizeof(nsInfo),"NS RESPONSE ERROR  0X%08X",
-                          static_cast<unsigned int>(catalogueNsErrorNow));
-        else
-            std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE READY");
-        text(nsInfo,384,270,1,catalogueNsAvailableNow?GREEN:RED,900);
-        const std::string scanInfo=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
-            std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
-            (catalogCompleteNow?"SCAN COMPLETE":"SCANNING");
-        text(scanInfo,384,286,1,MUTED,900);
-        const char* actions[]={"RETRY NS / RESCAN LIBRARY",
-                               "RENAME CURRENT WORKSPACE",
-                               "WORKSPACE MANAGEMENT",
-                               "TOGGLE EDIT / ARRANGE MODE"};
-        for(int i=0;i<4;++i) {
-            const int yy=306+i*52;
-            if(i==appSettingsIndex)roundRect(358,yy,564,45,12,Color{35,61,93,255});
-            text(actions[i],382,yy+15,1,i==appSettingsIndex?WHITE:MUTED,900);
+        else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
+        text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
+        text("SD:/switch/DeskNX/media  •  JPG / PNG / TTF / OTF",346,592,1,MUTED,930);
+        text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
+    }
+    if(mediaPickerOpen) {
+        rect(0,0,SW,SH,Color{3,7,14,205});
+        softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
+        text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":"CHOOSE FONT",
+             264,88,3,WHITE,1000);
+        text(mediaPickerDirectory,266,128,1,MUTED,1000);
+        roundRect(930,86,92,34,10,Color{54,57,66,255});
+        text("B  BACK",944,98,1,WHITE,1012);
+        if(mediaPickerEntries.empty()) {
+            text("NO SUPPORTED FILES FOUND",286,220,2,WHITE,980);
+            text("COPY JPG / PNG OR TTF / OTF FILES INTO THIS FOLDER",
+                 286,256,1,MUTED,1000);
         }
-        text("UP / DOWN SELECT     A APPLY     B CLOSE",382,520,1,BLUE,900);
+        for(int row=0;row<12;++row) {
+            const int index=mediaPickerOffset+row;
+            if(index>=static_cast<int>(mediaPickerEntries.size()))break;
+            const auto& entry=mediaPickerEntries[static_cast<size_t>(index)];
+            const int yy=166+row*34;
+            if(index==mediaPickerIndex)roundRect(260,yy,760,30,8,Color{35,61,93,255});
+            text(entry.directory?"FOLDER":(mediaPickerType==MediaPickerType::Wallpaper?"IMAGE":"FONT"),
+                 278,yy+10,1,entry.directory?BLUE:MUTED,370);
+            text(entry.name,388,yy+10,1,index==mediaPickerIndex?WHITE:MUTED,1004);
+        }
+        text(std::to_string(mediaPickerIndex+1)+" / "+std::to_string(mediaPickerEntries.size())+
+             "    A OPEN / APPLY",266,590,1,MUTED,650);
+        text("UP / DOWN SELECT     B BACK",730,590,1,BLUE,1018);
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
@@ -1935,16 +1969,38 @@ void openUserProfile() {
 void activateAppSettings(int action) {
     appSettingsMenu=false;
     switch(action) {
-        case 0: restartCatalogueScan(); break;
-        case 1: renameDesk(); break;
+        case 0: openMediaPicker(MediaPickerType::Wallpaper); break;
+        case 1: openMediaPicker(MediaPickerType::Font); break;
         case 2:
+            themeIndex=(themeIndex+1)%5;
+            applyThemePalette();
+            if(saveLauncherSettings())
+                setStatus("THEME "+std::to_string(themeIndex+1)+" APPLIED");
+            break;
+        case 3:
+            editing=true;
+            catalogueFilter=desknx::catalog_view::FilterMode::Widgets;
+            catalogueQuery.clear();
+            ++catalogueViewRevision;
+            openList();
+            setStatus("CHOOSE A WIDGET TO ADD");
+            break;
+        case 4: restartCatalogueScan(); break;
+        case 5:
             workspaceMenu=true;
             workspaceMenuIndex=0;
             break;
-        case 3:
+        case 6:
             editing=!editing;
             if(!editing&&dragging){dragging=false;saveNow();}
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
+            break;
+        case 7:
+            wallpaperPath.clear();fontPath.clear();themeIndex=0;
+            (void)loadWallpaperTexture("");
+            (void)gFontRenderer.setCustomFont("");
+            applyThemePalette();
+            if(saveLauncherSettings())setStatus("APPEARANCE RESET");
             break;
         default: break;
     }
@@ -2046,10 +2102,26 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive)return;
+    if(mediaPickerOpen) {
+        if(keys&HidNpadButton_B){mediaPickerBack();return;}
+        if(!mediaPickerEntries.empty()) {
+            if(keys&HidNpadButton_Up) {
+                mediaPickerIndex=(mediaPickerIndex-1+static_cast<int>(mediaPickerEntries.size()))%
+                    static_cast<int>(mediaPickerEntries.size());
+                if(mediaPickerIndex<mediaPickerOffset)mediaPickerOffset=mediaPickerIndex;
+            }
+            if(keys&HidNpadButton_Down) {
+                mediaPickerIndex=(mediaPickerIndex+1)%static_cast<int>(mediaPickerEntries.size());
+                if(mediaPickerIndex>=mediaPickerOffset+12)mediaPickerOffset=mediaPickerIndex-11;
+            }
+            if(keys&HidNpadButton_A)applyMediaPickerSelection(mediaPickerIndex);
+        }
+        return;
+    }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+3)%4;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%4;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+7)%8;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%8;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -2341,13 +2413,23 @@ void touchInput(const SDL_Event&e) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
     }
+    if(e.type==SDL_FINGERDOWN && mediaPickerOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=930&&x<=1022&&y>=86&&y<=120) {
+            mediaPickerBack();
+        } else if(x>=260&&x<=1020&&y>=166&&y<574) {
+            const int row=(y-166)/34;
+            applyMediaPickerSelection(mediaPickerOffset+row);
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=840&&x<=910&&y>=202&&y<=232) {
+        if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=358&&x<=922&&y>=306&&y<514) {
-            const int row=(y-306)/52;
-            if(row>=0&&row<4)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=210&&y<562) {
+            const int row=(y-210)/44;
+            if(row>=0&&row<8)activateAppSettings(row);
         }
         return;
     }
@@ -2595,7 +2677,7 @@ void touchInput(const SDL_Event&e) {
         if(y>=632&&y<=700) {
             if(x>=302&&x<412) {openList();return;}
             if(x>=412&&x<522) {editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE":"EDIT MODE CLOSED");return;}
-            if(x>=522&&x<632) {systemMenu=true;systemMenuIndex=0;return;}
+            if(x>=522&&x<632) {appSettingsMenu=true;appSettingsIndex=0;return;}
             if(x>=632&&x<742) {
                 HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
                 HidLaControllerSupportResultInfo result{};
