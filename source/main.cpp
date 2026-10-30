@@ -817,13 +817,16 @@ void drawScreen() {
                              {"RSTICK",editing?"DEL DESK":"OPTIONS"}};
     for(int i=0;i<4;++i) {
         const int lx=18+i*92,rx=900+i*92;
-        text(leftHints[i].key,lx,650,1,BLUE,lx+48);
-        text(leftHints[i].action,lx,670,1,MUTED,lx+86);
-        text(rightHints[i].key,rx,650,1,BLUE,rx+48);
-        text(rightHints[i].action,rx,670,1,MUTED,rx+86);
+        // Keep control hints in the free strip above the dock. Previously
+        // they were drawn at y=650/670 on top of the dock labels, making the
+        // footer visibly garbled and hard to read.
+        text(leftHints[i].key,lx,548,1,BLUE,lx+48);
+        text(leftHints[i].action,lx,568,1,MUTED,lx+86);
+        text(rightHints[i].key,rx,548,1,BLUE,rx+48);
+        text(rightHints[i].action,rx,568,1,MUTED,rx+86);
     }
     bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
-    text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,699,1,show?BLUE:MUTED,1230);
+    text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,598,1,show?BLUE:MUTED,1230);
     if(listOpen) {
         rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;softCard(mx,my,mw,mh,Color{31,33,39,252},Color{255,255,255,30});
         text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);
