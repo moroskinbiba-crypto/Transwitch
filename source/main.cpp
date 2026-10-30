@@ -757,7 +757,15 @@ void drawScreen() {
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                 drawTileIcon(iconTile,mx+30,yy+5,26);
                 text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+575);
-                text(typeName(candidate.kind),mx+595,yy+11,1,i==listIndex?BLUE:MUTED,mx+mw-18);
+                const char* appBadge = typeName(candidate.kind);
+                if (candidate.kind == Kind::Game) {
+                    // SLaunch view flags: update takes priority over gamecard.
+                    if (candidate.viewFlags & BIT(4)) appBadge = "UPDATE";
+                    else if (candidate.viewFlags & BIT(2)) appBadge = "GAMECARD";
+                }
+                text(appBadge,mx+595,yy+11,1,
+                     (candidate.viewFlags & BIT(4)) ? Color{255,159,10,255} :
+                     (i==listIndex?BLUE:MUTED),mx+mw-18);
             }
         }
         const std::string counts=std::to_string(catalogueGameCount)+" GAMES  /  "+
