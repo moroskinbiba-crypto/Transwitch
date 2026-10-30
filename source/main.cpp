@@ -598,20 +598,23 @@ bool backupBrokenLayout() {
     return false;
 }
 
-void saveLayout() {
-    if(!sdMounted)return;
+bool saveLayout() {
+    if(!sdMounted) {
+        setStatus("SAVE FAILED: SD CARD NOT MOUNTED",3500);
+        return false;
+    }
     if (layoutSaveBlocked) {
         setStatus("SAVE BLOCKED: PRESERVE LAYOUT BACKUP", 4500);
-        return;
+        return false;
     }
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     const std::string serialized=desknx::layout::serialize(desks,deskIndex);
-    if(serialized.empty()){setStatus("LAYOUT INVALID; SAVE REFUSED",3500);return;}
+    if(serialized.empty()){setStatus("LAYOUT INVALID; SAVE REFUSED",3500);return false;}
     std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
-    if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return;}
+    if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return false;}
     f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
     f.flush();const bool good=f.good();f.close();
-    if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return;}
+    if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return false;}
     const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
         CFG_TMP, CFG_FILE, CFG_BAK_FILE, true);
     if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
@@ -622,11 +625,12 @@ void saveLayout() {
         } else {
             setStatus("SAVE FAILED: RENAME ERROR", 3500);
         }
-        return;
+        return false;
     }
     // Keep layout.bak as the last known-good version after successful replacement.
     layoutLoaded=true;
     setStatus("LAYOUT SAVED",1600);
+    return true;
 }
 bool loadLayoutFrom(const char* path) {
     struct stat fileStat{};
@@ -1251,15 +1255,14 @@ void drawScreen() {
     }
     SDL_RenderPresent(renderer);
 }
-void saveNow(){saveLayout();}
+bool saveNow(){return saveLayout();}
 void finishTileDrag(const char* message="POSITION SAVED") {
     dragging=false;
     touchDragging=false;
     touchPressActive=false;
     touchDragOffsetX=touchDragOffsetY=0;
     touchDragTabStart=-1;
-    saveNow();
-    if(message&&*message)setStatus(message);
+    if(saveNow()&&message&&*message)setStatus(message);
 }
 void updateCursor(int dx,int dy){selectedX=std::max(0,std::min(COLS-1,selectedX+dx));selectedY=std::max(0,std::min(ROWS-1,selectedY+dy));}
 bool moveTile(int dx,int dy) {
@@ -1307,8 +1310,7 @@ void removeTile() {
     touchPressActive=false;
     touchDragTabStart=-1;
     touchDragOffsetX=touchDragOffsetY=0;
-    saveNow();
-    setStatus("REMOVED: "+name);
+    if(saveNow())setStatus("REMOVED: "+name);
 }
 void addSelected() {
     const auto& available=visibleCatalogueSnapshot();bool ready=false,complete=false,truncated=false;
@@ -1418,8 +1420,8 @@ void newDesk() {
         for(const auto& desk:desks) if(desk.name==name){exists=true;break;}
     }
     desks.push_back(Workspace{name,{}});deskIndex=static_cast<int>(desks.size())-1;
-    selectedX=selectedY=0;editing=true;saveNow();
-    setStatus("NEW WORKSPACE CREATED - PRESS Y TO ADD ITEMS");
+    selectedX=selectedY=0;editing=true;
+    if(saveNow())setStatus("NEW WORKSPACE CREATED - PRESS Y TO ADD ITEMS");
 }
 void renameDesk() {
     if(dragging || touchDragging) {
@@ -1455,8 +1457,7 @@ void renameDesk() {
     }
     if(desks[static_cast<size_t>(deskIndex)].name==name)return;
     desks[static_cast<size_t>(deskIndex)].name=name;
-    saveNow();
-    setStatus("WORKSPACE RENAMED");
+    if(saveNow())setStatus("WORKSPACE RENAMED");
 }
 void deleteDesk() {
     if(dragging || touchDragging) {
@@ -1724,8 +1725,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             selectedX=selectedY=0;
             dragging=false;touchDragging=false;touchPressActive=false;
             touchDragTabStart=-1;
-            saveNow();
-            setStatus("WORKSPACE DELETED");
+            if(saveNow())setStatus("WORKSPACE DELETED");
         }
         return;
     }
@@ -1798,15 +1798,13 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(dragging) moveAcrossDesk(-1);
         else {
             deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
-            saveNow();
-            setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
         }
     } else if(keys&HidNpadButton_R) {
         if(dragging) moveAcrossDesk(1);
         else {
             deskIndex=(deskIndex+1)%static_cast<int>(desks.size());
-            saveNow();
-            setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
         }
     }
     if(keys&HidNpadButton_Left){if(dragging)moveTile(-1,0);else updateCursor(-1,0);}
@@ -2165,8 +2163,7 @@ void touchInput(const SDL_Event&e) {
         touchDragTabStart=-1;
         if(moved) {
             dragging=false;
-            saveNow();
-            setStatus("POSITION SAVED");
+            if(saveNow())setStatus("POSITION SAVED");
         }
     }
 }
