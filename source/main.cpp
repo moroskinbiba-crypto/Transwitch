@@ -66,11 +66,11 @@ std::array<Color,8> COLORS{{
     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255}
 }};
 int themeIndex=1;
-std::string wallpaperPath, fontPath;
+std::string wallpaperPath, fontPath, iconPackPath;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
 
-enum class MediaPickerType { Wallpaper, Font };
+enum class MediaPickerType { Wallpaper, Font, IconPack };
 struct MediaEntry { std::string name, path; bool directory{false}; };
 bool mediaPickerOpen=false;
 MediaPickerType mediaPickerType=MediaPickerType::Wallpaper;
@@ -225,8 +225,8 @@ bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
         return false;
     static const char* imageExts[]={".jpg",".jpeg",".png"};
     static const char* fontExts[]={".ttf",".otf",".ttc"};
-    return type==MediaPickerType::Wallpaper
-        ?hasExtension(path,imageExts,3):hasExtension(path,fontExts,3);
+    return type==MediaPickerType::Font
+        ?hasExtension(path,fontExts,3):hasExtension(path,imageExts,3);
 }
 
 void loadLauncherSettings() {
@@ -255,6 +255,13 @@ void loadLauncherSettings() {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
             fontPath=value;
+        } else if(key=="iconpack") {
+            struct stat packStat{};
+            if(value.compare(0,(std::string(MEDIA_ROOT)+"/iconpacks/").size(),
+                    std::string(MEDIA_ROOT)+"/iconpacks/")==0 &&
+               value.find("..")==std::string::npos && value.size()<240 &&
+               stat(value.c_str(),&packStat)==0 && S_ISDIR(packStat.st_mode))
+                iconPackPath=value;
         }
     }
     applyThemePalette();
@@ -268,7 +275,8 @@ bool saveLauncherSettings() {
     out<<"DESKNXSET1\n"
        <<"theme="<<themeIndex<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
-       <<"font="<<safeField(fontPath)<<"\n";
+       <<"font="<<safeField(fontPath)<<"\n"
+       <<"iconpack="<<safeField(iconPackPath)<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     const auto rc=desknx::safeio::replaceFilePreservingOnFailure(
@@ -353,8 +361,10 @@ void refreshMediaPicker() {
 
 void openMediaPicker(MediaPickerType type) {
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
+    mkdir((std::string(MEDIA_ROOT)+"/iconpacks").c_str(),0777);
     mediaPickerType=type;
-    mediaPickerDirectory=MEDIA_ROOT;
+    mediaPickerDirectory=(type==MediaPickerType::IconPack)
+        ?std::string(MEDIA_ROOT)+"/iconpacks":std::string(MEDIA_ROOT);
     mediaPickerIndex=mediaPickerOffset=0;
     refreshMediaPicker();
     mediaPickerOpen=true;
@@ -374,6 +384,19 @@ void mediaPickerBack() {
 void applyMediaPickerSelection(int index) {
     if(index<0||index>=static_cast<int>(mediaPickerEntries.size()))return;
     const MediaEntry selected=mediaPickerEntries[static_cast<size_t>(index)];
+    if(selected.directory && mediaPickerType==MediaPickerType::IconPack) {
+        const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
+        if(selected.path.compare(0,prefix.size(),prefix)!=0 ||
+           selected.path.find("..")!=std::string::npos) {
+            setStatus("INVALID ICON PACK FOLDER",2500);
+            return;
+        }
+        iconPackPath=selected.path;
+        gIconCache.setCustomIconPackDir(iconPackPath);
+        if(saveLauncherSettings())setStatus("ICON PACK APPLIED");
+        mediaPickerOpen=false;
+        return;
+    }
     if(selected.directory) {
         mediaPickerDirectory=selected.path;
         mediaPickerIndex=mediaPickerOffset=0;
@@ -1571,14 +1594,16 @@ void drawScreen() {
              346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
         text("FONT  "+(fontPath.empty()?std::string("SYSTEM"):std::string("CUSTOM")),
              646,190,1,fontPath.empty()?MUTED:BLUE,930);
-        const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT",
+        text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
+             346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
+        const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE"};
-        for(int i=0;i<8;++i) {
-            const int yy=210+i*44;
-            if(i==appSettingsIndex)roundRect(340,yy,600,38,10,Color{35,61,93,255});
-            text(actions[i],362,yy+13,1,i==appSettingsIndex?WHITE:MUTED,918);
-            if(i==2)text("THEME "+std::to_string(themeIndex+1)+"/5",790,yy+13,1,BLUE,920);
+        for(int i=0;i<9;++i) {
+            const int yy=216+i*38;
+            if(i==appSettingsIndex)roundRect(340,yy,600,33,9,Color{35,61,93,255});
+            text(actions[i],362,yy+11,1,i==appSettingsIndex?WHITE:MUTED,918);
+            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/5",790,yy+11,1,BLUE,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -1588,7 +1613,7 @@ void drawScreen() {
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
         text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("SD:/switch/DeskNX/media  •  JPG / PNG / TTF / OTF",346,592,1,MUTED,930);
+        text("MEDIA: /switch/DeskNX/media  •  IMAGE / FONT / ICON PACK",346,592,1,MUTED,930);
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
     }
     if(mediaPickerOpen) {
@@ -1971,13 +1996,14 @@ void activateAppSettings(int action) {
     switch(action) {
         case 0: openMediaPicker(MediaPickerType::Wallpaper); break;
         case 1: openMediaPicker(MediaPickerType::Font); break;
-        case 2:
+        case 2: openMediaPicker(MediaPickerType::IconPack); break;
+        case 3:
             themeIndex=(themeIndex+1)%5;
             applyThemePalette();
             if(saveLauncherSettings())
                 setStatus("THEME "+std::to_string(themeIndex+1)+" APPLIED");
             break;
-        case 3:
+        case 4:
             editing=true;
             catalogueFilter=desknx::catalog_view::FilterMode::Widgets;
             catalogueQuery.clear();
@@ -1985,20 +2011,21 @@ void activateAppSettings(int action) {
             openList();
             setStatus("CHOOSE A WIDGET TO ADD");
             break;
-        case 4: restartCatalogueScan(); break;
-        case 5:
+        case 5: restartCatalogueScan(); break;
+        case 6:
             workspaceMenu=true;
             workspaceMenuIndex=0;
             break;
-        case 6:
+        case 7:
             editing=!editing;
             if(!editing&&dragging){dragging=false;saveNow();}
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
-        case 7:
-            wallpaperPath.clear();fontPath.clear();themeIndex=1;
+        case 8:
+            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
+            gIconCache.setCustomIconPackDir("");
             applyThemePalette();
             if(saveLauncherSettings())setStatus("APPEARANCE RESET");
             break;
@@ -2120,8 +2147,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+7)%8;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%8;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+8)%9;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%9;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -2427,9 +2454,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=210&&y<562) {
-            const int row=(y-210)/44;
-            if(row>=0&&row<8)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=216&&y<558) {
+            const int row=(y-216)/38;
+            if(row>=0&&row<9)activateAppSettings(row);
         }
         return;
     }
@@ -2876,6 +2903,7 @@ int main(int,char**) {
     gIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
+    gIconCache.setCustomIconPackDir(iconPackPath);
     if(!fontPath.empty()&&!gFontRenderer.setCustomFont(fontPath)) {
         fontPath.clear();
         setStatus("CUSTOM FONT UNAVAILABLE - USING SYSTEM FONT",3000);

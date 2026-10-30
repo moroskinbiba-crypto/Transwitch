@@ -14,9 +14,17 @@
 class IconCache {
 public:
     void setRenderer(SDL_Renderer* renderer) { renderer_ = renderer; }
+    void setCustomIconPackDir(const std::string& path) {
+        if(path==customIconPackDir_)return;
+        shutdown();
+        customIconPackDir_=path;
+    }
     SDL_Texture* get(const desknx::model::Tile& tile) {
-        const std::string path = desknx::model::iconCachePath(tile.kind, tile.data);
-        if (path.empty() || !renderer_) return nullptr;
+        const std::string defaultPath = desknx::model::iconCachePath(tile.kind, tile.data);
+        if (defaultPath.empty() || !renderer_) return nullptr;
+        std::string path=customPathFor(tile);
+        bool isCustom=!path.empty();
+        if(path.empty())path=defaultPath;
         // Resolve a cached texture before touching the SD card. The old
         // order performed stat()+JPEG parsing for every visible icon on every
         // frame, even when its SDL texture was already resident. On a Switch
@@ -32,14 +40,15 @@ public:
         constexpr long long MaxCompressedIconBytes = 2LL * 1024 * 1024;
         if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return nullptr;
         if (st.st_size <= 0 || st.st_size > MaxCompressedIconBytes ||
-            !jpegDimensionsWithinLimit(path)) {
-            // Let the next catalogue refresh fetch this icon again from NS/NRO.
-            std::remove(path.c_str());
+            !imageDimensionsWithinLimit(path)) {
+            // Never delete user-owned icon-pack files. Only the generated cache
+            // may be removed so the next catalogue refresh can rebuild it.
+            if(!isCustom)std::remove(path.c_str());
             return nullptr;
         }
         SDL_Surface* surface = IMG_Load(path.c_str());
         if (!surface) {
-            std::remove(path.c_str());
+            if(!isCustom)std::remove(path.c_str());
             return nullptr;
         }
         constexpr int MaxIconDimension = 1024;
@@ -49,7 +58,7 @@ public:
                 static_cast<std::uint64_t>(MaxIconDimension) * MaxIconDimension;
         if (!dimensionsOk) {
             SDL_FreeSurface(surface);
-            std::remove(path.c_str());
+            if(!isCustom)std::remove(path.c_str());
             return nullptr;
         }
         SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
@@ -71,9 +80,50 @@ public:
         entries_.clear();
     }
 private:
-    // Cached icons are JPEGs produced by the catalogue scanner. Inspect SOF
-    // dimensions before IMG_Load so a tiny compressed file with absurd image
-    // dimensions cannot immediately request an enormous decoded surface.
+    std::string customPathFor(const desknx::model::Tile& tile) const {
+        if(customIconPackDir_.empty())return {};
+        std::string stem;
+        if(tile.kind==desknx::model::Kind::Game) {
+            if(!desknx::model::isTitleId(tile.data))return {};
+            stem=tile.data;
+            for(char& ch:stem)if(ch>='a'&&ch<='f')ch=static_cast<char>(ch-'a'+'A');
+        } else if(tile.kind==desknx::model::Kind::Nro) {
+            char key[32]{};
+            std::snprintf(key,sizeof(key),"nro-%016llX",
+                static_cast<unsigned long long>(desknx::model::stableHash(tile.data)));
+            stem=key;
+        } else return {};
+        static const char* const exts[]={".jpg",".png",".jpeg"};
+        for(const char* ext:exts) {
+            const std::string candidate=customIconPackDir_+"/"+stem+ext;
+            struct stat st{};
+            if(stat(candidate.c_str(),&st)==0&&S_ISREG(st.st_mode)&&st.st_size>0)
+                return candidate;
+        }
+        return {};
+    }
+
+    static bool imageDimensionsWithinLimit(const std::string& path) {
+        std::ifstream input(path,std::ios::binary);
+        unsigned char header[24]{};
+        if(!input.read(reinterpret_cast<char*>(header),8))return false;
+        static const unsigned char pngSig[]={137,80,78,71,13,10,26,10};
+        bool png=true;
+        for(size_t i=0;i<8;++i)if(header[i]!=pngSig[i])png=false;
+        if(png) {
+            if(!input.read(reinterpret_cast<char*>(header+8),16))return false;
+            const std::uint32_t width=(static_cast<std::uint32_t>(header[16])<<24)|
+                (static_cast<std::uint32_t>(header[17])<<16)|
+                (static_cast<std::uint32_t>(header[18])<<8)|header[19];
+            const std::uint32_t height=(static_cast<std::uint32_t>(header[20])<<24)|
+                (static_cast<std::uint32_t>(header[21])<<16)|
+                (static_cast<std::uint32_t>(header[22])<<8)|header[23];
+            return width>0&&height>0&&width<=1024&&height<=1024&&width*height<=1024u*1024u;
+        }
+        return jpegDimensionsWithinLimit(path);
+    }
+
+    // Cached and user-supplied JPEGs are dimension-checked before IMG_Load.
     static bool jpegDimensionsWithinLimit(const std::string& path) {
         std::ifstream input(path, std::ios::binary);
         unsigned char soi[2]{};
@@ -119,6 +169,7 @@ private:
     struct Entry { std::string path; SDL_Texture* texture; unsigned long long lastUse; };
     static constexpr size_t MaxEntries = 64;
     SDL_Renderer* renderer_{nullptr};
+    std::string customIconPackDir_;
     unsigned long long clock_{0};
     std::vector<Entry> entries_;
 };
