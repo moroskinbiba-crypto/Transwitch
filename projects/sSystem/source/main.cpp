@@ -5,6 +5,8 @@
 #include <stratosphere.hpp>
 
 #include <desknx/Protocol.hpp>
+#include <desknx/MenuLiveness.hpp>
+#include <desknx/SafeReplace.hpp>
 #include <desknx/system/Application.hpp>
 #include <desknx/system/ExternalContent.hpp>
 #include <desknx/system/LibraryApplet.hpp>
@@ -29,12 +31,10 @@ constexpr const char* kLogPath = "sdmc:/switch/DeskNX/logs/daemon.log";
 constexpr const char* kPrevLogPath = "sdmc:/switch/DeskNX/logs/daemon.prev.log";
 constexpr const char* kHbTargetPath = "sdmc:/switch/DeskNX/hbtarget.txt";
 constexpr const char* kHbTargetTemp = "sdmc:/switch/DeskNX/hbtarget.tmp";
+constexpr const char* kHbTargetBackup = "sdmc:/switch/DeskNX/hbtarget.bak";
 constexpr u64 kHomePressSettleMs = 1500;
 constexpr u64 kMenuFastExitMs = 3000;
 constexpr u64 kMenuReadyTimeoutSeconds = 25;
-constexpr u64 kMenuHeartbeatTimeoutSeconds = 15;
-constexpr u64 kBusyMaximumSeconds = 120;
-constexpr u64 kBusyMinimumIntervalSeconds = 5;
 constexpr u64 kMenuRetryDelaySeconds = 5;
 constexpr u64 kRecoveryChordHoldSeconds = 3;
 constexpr const char* kQlaunchOverride = "sdmc:/atmosphere/contents/0100000000001000";
@@ -60,14 +60,7 @@ char g_PendingHomebrewPath[desknx::ipc::MaxHomebrewPath]{};
 char g_PendingHomebrewArgv[desknx::ipc::MaxHomebrewArgv]{};
 bool g_MenuReady = false;
 u64 g_MenuLaunchTick = 0;
-u64 g_LastMenuHeartbeatTick = 0;
-u64 g_BusyUntilTick = 0;
-u64 g_LastBusyCommandTick = 0;
-u64 g_LastBusyEndTick = 0;
-u64 g_HeartbeatDeadlineTick = 0;
-u64 g_BusyRemainingTicks = 0;
-bool g_BusyHeartbeatSeen = false;
-bool g_BusyPauseProcessed = false;
+desknx::watchdog::MenuLiveness g_MenuLiveness;
 u64 g_NextMenuRetryTick = 0;
 desknx::system::ecs::MenuSlot g_ActiveMenuSlots[desknx::system::ecs::MenuSlotCount + 1]{};
 size_t g_ActiveMenuSlotCount = 0;
@@ -80,30 +73,24 @@ bool g_RecoveryChordAttempted = false;
 AccountUid g_PendingUser{};         // SelectUser (IPC cmd 8) / LaunchTitle uid
 bool g_HasPendingUser = false;
 u64 g_PendingLaunchFlags = 0;       // LaunchTitle v2 flag bits (LNC-02)
-// Backend-state for the remaining v2 commands (CloseApp/PowerAction/
-// LaunchSystemApplet). All are honoured after the menu closes so we never
-// fight a live applet for focus.
+// Backend-state for implemented v2 commands (CloseApp/PowerAction).
+// Generic library-applet launch is intentionally not queued: libnx does not
+// expose the assumed appletLaunchInteractiveSystemApplet API, and every
+// supported library applet needs its own validated argument contract.
 bool g_PendingCloseApp = false;
 desknx::ipc::PowerKind g_PendingPowerAction = desknx::ipc::PowerKind::Sleep;
 bool g_HasPendingPowerAction = false;
-u32 g_PendingSystemApplet = 0;
-bool g_HasPendingSystemApplet = false;
 // Last title-launch failure, reported to the menu in the initial state block
 // (IPC-06 §4.4). Cleared when a launch succeeds.
 u32 g_LastLaunchRc = 0;
 u64 g_LastLaunchTitle = 0;
 bool g_SdMountedForBackend = true;  // REC-05: drives the degraded flag
-u64 g_DroppedLogLastTick = 0;       // IPC-01 log rate limit (once per second)
+u64 g_DroppedLogLastTick = 0;       // IPC-01 suppressed-log summary window
+u64 g_LastMenuLogTick = 0;
+u32 g_DroppedMenuLogCount = 0;
 
 void ResetMenuHeartbeatTracking() {
-    g_LastMenuHeartbeatTick = 0;
-    g_BusyUntilTick = 0;
-    g_LastBusyCommandTick = 0;
-    g_LastBusyEndTick = 0;
-    g_HeartbeatDeadlineTick = 0;
-    g_BusyRemainingTicks = 0;
-    g_BusyHeartbeatSeen = false;
-    g_BusyPauseProcessed = false;
+    g_MenuLiveness.Reset();
 }
 
 void MakeDirectories() {
@@ -218,12 +205,17 @@ bool WriteHomebrewTarget(const char* path, const char* argv) {
         return false;
     }
 
-    // The loader only sees the request after the final rename. Replacing the
-    // previous target is safe because the menu slot is free at this point.
-    remove(kHbTargetPath);
-    if (std::rename(kHbTargetTemp, kHbTargetPath) != 0) {
+    // Preserve the previous one-shot target until the complete new request
+    // has been published. A failed rename restores the previous request.
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        kHbTargetTemp, kHbTargetPath, kHbTargetBackup);
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
         remove(kHbTargetTemp);
-        DaemonLog("hb: cannot publish target request (errno=%d)", errno);
+        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed)
+            DaemonLog("hb: target publish and rollback failed; recovery copy may remain at %s",
+                      kHbTargetBackup);
+        else
+            DaemonLog("hb: cannot publish target request (errno=%d)", errno);
         return false;
     }
     return true;
@@ -443,14 +435,24 @@ bool ParseMenuCommand(AppletStorage& storage) {
     }
 
     const auto command = static_cast<Command>(hdr.command);
+    if (desknx::ipc::rules::IsKnownCommand(hdr.command) &&
+        !desknx::ipc::rules::IsValidCommandPayloadSize(
+            hdr.version, hdr.command, hdr.payload_size)) {
+        DaemonLog("ipc: dropped command with invalid version/payload size (cmd=%u size=%u version=%u)",
+                  hdr.command, hdr.payload_size, hdr.version);
+        return false;
+    }
     switch (command) {
         case Command::MenuReady:
-            if (hdr.payload_size != 0) return false;
-            ResetMenuHeartbeatTracking();
+            if (hdr.payload_size != 0 || g_MenuReady) {
+                DaemonLog("ipc: ignored duplicate or malformed MenuReady");
+                return false;
+            }
+            if (!g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq())) {
+                DaemonLog("ipc: ignored MenuReady while liveness controller is already ready");
+                return false;
+            }
             g_MenuReady = true;
-            g_LastMenuHeartbeatTick = armGetSystemTick();
-            g_HeartbeatDeadlineTick = g_LastMenuHeartbeatTick +
-                armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds;
             TransitionTo(BackendState::MenuActive, "ready handshake");
             DaemonLog("ipc: DeskNX menu ready");
             return true;
@@ -458,14 +460,10 @@ bool ParseMenuCommand(AppletStorage& storage) {
         case Command::Heartbeat:
             if (hdr.payload_size != 0) return false;
             if (g_MenuReady) {
-                const u64 now = armGetSystemTick();
-                if (g_BusyUntilTick != 0 && now < g_BusyUntilTick) {
-                    g_BusyHeartbeatSeen = true;
-                } else {
-                    g_LastMenuHeartbeatTick = now;
-                    g_HeartbeatDeadlineTick = now +
-                        armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds;
-                }
+                const auto heartbeatBusyTick =
+                    g_MenuLiveness.Heartbeat(armGetSystemTick(), armGetSystemTickFreq());
+                if (heartbeatBusyTick != desknx::watchdog::BusyTickResult::None)
+                    DaemonLog("ipc: Busy pause ended; heartbeat monitoring resumed");
             }
             return true;
 
@@ -480,49 +478,17 @@ bool ParseMenuCommand(AppletStorage& storage) {
 
             const u64 now = armGetSystemTick();
             const u64 frequency = armGetSystemTickFreq();
-            if (desknx::ipc::rules::IsBusyEndSignal(payload.seconds)) {
-                // End a pause as soon as a blocking dialog returns. Restore the
-                // remaining heartbeat budget, or start a fresh interval if a
-                // heartbeat arrived while the pause was active.
-                if (g_BusyUntilTick == 0 || now >= g_BusyUntilTick ||
-                    g_BusyPauseProcessed)
-                    return false;
-                if (g_BusyHeartbeatSeen) {
-                    g_LastMenuHeartbeatTick = now;
-                    g_HeartbeatDeadlineTick = now +
-                        frequency * kMenuHeartbeatTimeoutSeconds;
-                } else {
-                    g_HeartbeatDeadlineTick = now + g_BusyRemainingTicks;
-                }
-                g_LastBusyEndTick = now;
-                g_BusyUntilTick = now;
-                g_BusyPauseProcessed = true;
-                DaemonLog("ipc: Busy pause ended by menu");
-                return true;
-            }
-            if (!desknx::ipc::rules::IsValidBusySeconds(payload.seconds))
-                return false;
-
-            // One bounded pause per heartbeat interval. Do not allow nested or
-            // back-to-back Busy messages to keep an unresponsive menu alive.
-            if (g_HeartbeatDeadlineTick == 0 || now >= g_HeartbeatDeadlineTick)
-                return false;
-            if (g_BusyUntilTick != 0) {
-                if (now < g_BusyUntilTick || !g_BusyPauseProcessed ||
-                    g_LastMenuHeartbeatTick <= g_LastBusyEndTick)
+            switch (g_MenuLiveness.HandleBusy(payload.seconds, now, frequency)) {
+                case desknx::watchdog::BusyResult::Started:
+                    DaemonLog("ipc: heartbeat check paused for %u seconds", payload.seconds);
+                    return true;
+                case desknx::watchdog::BusyResult::Ended:
+                    DaemonLog("ipc: Busy pause ended by menu");
+                    return true;
+                case desknx::watchdog::BusyResult::Rejected:
+                default:
                     return false;
             }
-            if (g_LastBusyCommandTick != 0 &&
-                now - g_LastBusyCommandTick < frequency * kBusyMinimumIntervalSeconds)
-                return false;
-
-            g_BusyRemainingTicks = g_HeartbeatDeadlineTick - now;
-            g_BusyUntilTick = now + frequency * payload.seconds;
-            g_BusyHeartbeatSeen = false;
-            g_BusyPauseProcessed = false;
-            g_LastBusyCommandTick = now;
-            DaemonLog("ipc: heartbeat check paused for %u seconds", payload.seconds);
-            return true;
         }
 
         case Command::LaunchTitle: {
@@ -652,16 +618,18 @@ bool ParseMenuCommand(AppletStorage& storage) {
             desknx::ipc::LaunchSystemAppletPayload payload{};
             if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
                 return false;
-            // SYS-01: strict whitelist; anything else is dropped like garbage.
             if (!desknx::ipc::rules::IsAllowedSystemApplet(payload.applet_id)) {
-                DaemonLog("ipc: system applet 0x%X rejected (not whitelisted)",
+                DaemonLog("ipc: library applet 0x%X rejected (not whitelisted)",
                           payload.applet_id);
                 return false;
             }
-            g_PendingSystemApplet = payload.applet_id;
-            g_HasPendingSystemApplet = true;
-            DaemonLog("ipc: system applet 0x%X queued", payload.applet_id);
-            return true;
+            // Do not call a nonexistent generic launcher or hand an applet an
+            // empty/unvalidated argument block. Each applet has its own input
+            // format and lifecycle requirements; implement explicit handlers
+            // before enabling this command.
+            DaemonLog("ipc: library applet 0x%X not launched: per-applet arguments/lifecycle are not implemented",
+                      payload.applet_id);
+            return false;
         }
 
         case Command::Log: {
@@ -680,6 +648,30 @@ bool ParseMenuCommand(AppletStorage& storage) {
                 if (c < 0x20) { printable = false; break; }
             }
             if (!printable || !line[0]) return false;
+
+            // IPC-01: a buggy or hostile menu must not turn the SD log into an
+            // unbounded write sink. Accept at most 10 menu log lines per
+            // second; aggregate suppressed lines into at most one summary/sec.
+            const u64 now = armGetSystemTick();
+            const u64 frequency = armGetSystemTickFreq();
+            const u64 minimumInterval = std::max<u64>(1, frequency / 10);
+            if (g_LastMenuLogTick != 0 &&
+                now - g_LastMenuLogTick < minimumInterval) {
+                if (g_DroppedMenuLogCount != 0xFFFFFFFFu)
+                    ++g_DroppedMenuLogCount;
+                if (g_DroppedLogLastTick == 0) {
+                    g_DroppedLogLastTick = now;
+                } else if (now >= g_DroppedLogLastTick &&
+                           now - g_DroppedLogLastTick >= frequency) {
+                    if (g_DroppedMenuLogCount != 0)
+                        DaemonLog("ipc: suppressed %u menu log messages by rate limiter",
+                                  g_DroppedMenuLogCount);
+                    g_DroppedMenuLogCount = 0;
+                    g_DroppedLogLastTick = now;
+                }
+                return true; // valid IPC accepted, line intentionally rate-limited
+            }
+            g_LastMenuLogTick = now;
             DaemonLog("menu: %s", line);
             return true;
         }
@@ -1132,23 +1124,6 @@ void HandleMenuClosed() {
         return;
     }
 
-    // SYS-01: whitelisted system applet (Settings, Web, Shop...). am refuses
-    // to start an applet while another library applet holds foreground, so we
-    // launch after the menu closed. These applets are transient: when they
-    // exit, the normal slot machinery brings DeskNX back.
-    if (g_HasPendingSystemApplet) {
-        const u32 pending_id = g_PendingSystemApplet;
-        const auto applet_id = static_cast<AppletId>(g_PendingSystemApplet);
-        g_HasPendingSystemApplet = false;
-        const Result rc = appletLaunchInteractiveSystemApplet(applet_id);
-        DaemonLog("sysapplet: launch id=0x%X rc=0x%08X",
-                  pending_id, static_cast<unsigned int>(rc));
-        if (R_FAILED(rc)) LaunchMenu();
-        // On success AM owns the screen; the next HOME press or message loop
-        // restores DeskNX once the applet exits.
-        return;
-    }
-
     if (!didHandshake && lifetimeMs < kMenuFastExitMs &&
         g_MenuSlotIndex + 1 < g_ActiveMenuSlotCount && !g_MenuSlotExhausted) {
         ++g_MenuSlotIndex;
@@ -1186,19 +1161,10 @@ void RunMainLoop() {
 
     while (true) {
         const u64 loopNow = armGetSystemTick();
-        if (g_MenuReady && g_BusyUntilTick != 0 && !g_BusyPauseProcessed &&
-            loopNow >= g_BusyUntilTick) {
-            if (g_BusyHeartbeatSeen) {
-                g_LastMenuHeartbeatTick = loopNow;
-                g_HeartbeatDeadlineTick = loopNow +
-                    armGetSystemTickFreq() * kMenuHeartbeatTimeoutSeconds;
-            } else {
-                g_HeartbeatDeadlineTick = loopNow + g_BusyRemainingTicks;
-            }
-            g_LastBusyEndTick = loopNow;
-            g_BusyPauseProcessed = true;
+        const auto busyTick = g_MenuLiveness.UpdateBusyPause(
+            loopNow, armGetSystemTickFreq(), g_MenuReady);
+        if (busyTick != desknx::watchdog::BusyTickResult::None)
             DaemonLog("ipc: Busy pause ended; heartbeat monitoring resumed");
-        }
 
         if (la::IsMenuAlive()) DrainMenuCommands();
         PumpAppletMessages();
@@ -1252,10 +1218,10 @@ void RunMainLoop() {
             }
         }
 
-        if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && g_MenuReady && g_HeartbeatDeadlineTick != 0) {
+        if (la::IsMenuAlive() && !g_HomebrewLoaderRunning && g_MenuReady &&
+            g_MenuLiveness.HeartbeatDeadlineTick() != 0) {
             const u64 heartbeatNow = armGetSystemTick();
-            const bool busyPauseActive = g_BusyUntilTick != 0 && heartbeatNow < g_BusyUntilTick;
-            if (!busyPauseActive && heartbeatNow >= g_HeartbeatDeadlineTick) {
+            if (g_MenuLiveness.HeartbeatTimedOut(heartbeatNow, g_MenuReady)) {
                 DaemonLog("menu: heartbeat timeout; slot=%s", CurrentMenuSlot().name);
                 la::StopMenu();
                 g_MenuReady = false;

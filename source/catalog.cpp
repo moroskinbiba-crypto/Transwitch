@@ -1,5 +1,7 @@
 #include "catalog.hpp"
 #include "../include/desknx/StrictParse.hpp"
+#include "../include/desknx/CatalogPagination.hpp"
+#include <desknx/SafeReplace.hpp>
 
 #include <switch.h>
 #include <algorithm>
@@ -90,22 +92,33 @@ void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) 
     }
     closedir(dir);
 }
-std::vector<GameRecord> ReadGameRecords(bool nsReady) {
+std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) {
     std::vector<GameRecord> records;
     if (!nsReady) return records;
-    constexpr s32 PageSize = 128;
-    std::array<NsApplicationRecord, PageSize> page{};
+    std::array<NsApplicationRecord, ApplicationPageCapacity> page{};
     s32 offset = 0;
     while (records.size() < 4096) {
-        s32 count = 0;
-        const Result rc = nsListApplicationRecord(page.data(), PageSize, offset, &count);
-        if (R_FAILED(rc) || count <= 0) break;
-        const s32 bounded = std::max<s32>(0, std::min<s32>(count, PageSize));
-        for (s32 i = 0; i < bounded && records.size() < 4096; ++i)
+        const ApplicationPageRequest request = MakeApplicationPageRequest(offset);
+        // libnx treats this argument as both requested capacity and returned
+        // count. Passing zero here asks NS for zero records: the old code then
+        // silently built an empty games catalogue on every console.
+        s32 count = request.capacity;
+        const Result rc = nsListApplicationRecord(page.data(), request.capacity,
+                                                   request.offset, &count);
+        if (R_FAILED(rc)) {
+            errorCode = static_cast<std::uint32_t>(rc);
+            break;
+        }
+        if (!IsValidApplicationPageCount(request.capacity, count)) {
+            errorCode = 0xD35C0001u; // invalid count returned by NS/libnx
+            break;
+        }
+        if (count == 0) break;
+        for (s32 i = 0; i < count && records.size() < 4096; ++i)
             records.push_back({page[static_cast<size_t>(i)].application_id,
                                page[static_cast<size_t>(i)].last_updated});
-        offset += bounded;
-        if (bounded < PageSize) break;
+        offset = NextApplicationPageOffset(request.offset, count);
+        if (count < request.capacity) break;
     }
     std::sort(records.begin(), records.end(), [](const GameRecord& a, const GameRecord& b) {
         return a.id < b.id;
@@ -224,8 +237,10 @@ bool SaveBytes(const std::string& path, const unsigned char* data, size_t length
     const bool good = output.good();
     output.close();
     if (!good) { std::remove(temp.c_str()); return false; }
-    std::remove(path.c_str());
-    if (std::rename(temp.c_str(), path.c_str()) != 0) {
+    const std::string backup = path + ".bak";
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        temp.c_str(), path.c_str(), backup.c_str());
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
         std::remove(temp.c_str());
         return false;
     }
@@ -302,8 +317,9 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     const bool good = output.good();
     output.close();
     if (!good) { std::remove(CacheTemp); return false; }
-    std::remove(CacheFile);
-    if (std::rename(CacheTemp, CacheFile) != 0) {
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        CacheTemp, CacheFile, "sdmc:/switch/DeskNX/cache/catalogue.bak");
+    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
         std::remove(CacheTemp);
         return false;
     }
@@ -318,15 +334,21 @@ ScanResult Scan(ProgressCallback progress, void* context) {
         if (progress) progress(result, context);
     };
     EnsureCacheDirectories();
-    const bool nsReady = R_SUCCEEDED(nsInitialize());
-    const std::vector<GameRecord> games = ReadGameRecords(nsReady);
+    const Result nsRc = nsInitialize();
+    const bool nsReady = R_SUCCEEDED(nsRc);
+    result.nsAvailable = nsReady;
+    result.nsErrorCode = nsReady ? 0u : static_cast<std::uint32_t>(nsRc);
+    const std::vector<GameRecord> games = ReadGameRecords(nsReady, result.nsErrorCode);
+    result.gameCount = games.size();
     std::vector<NroFile> nros;
     CollectNros("sdmc:/switch", 0, nros);
+    result.nroCount = nros.size();
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
         return a.path < b.path;
     });
     const Signatures sig = MakeSignatures(games, nros);
-    if (ReadCache(sig, result)) {
+    // Never reuse a cache after NS failed or returned a partial application list.
+    if (nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
         result.complete = true;
         if (nsReady) nsExit();
         report(true);

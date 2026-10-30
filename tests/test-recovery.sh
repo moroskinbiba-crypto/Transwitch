@@ -27,6 +27,26 @@ make_fake_package() {
   printf 'new DeskNX NRO\n' > "$package/switch/DeskNX/DeskNX.nro"
 }
 
+make_one_shot_mv_failure_wrapper() {
+  local wrapper_dir="$1"
+  mkdir -p "$wrapper_dir"
+  cat > "$wrapper_dir/mv" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+real_mv="${DESKNX_TEST_REAL_MV:?}"
+dest="${DESKNX_TEST_MV_FAIL_DEST:?}"
+needle="${DESKNX_TEST_MV_FAIL_SOURCE_NEEDLE:?}"
+marker="${DESKNX_TEST_MV_FAIL_MARKER:?}"
+if [[ "${2:-}" == "$dest" && "${1:-}" == *"$needle"* && ! -e "$marker" ]]; then
+  : > "$marker"
+  echo "Injected one-shot mv failure: $1 -> $2" >&2
+  exit 73
+fi
+exec "$real_mv" "$@"
+WRAPPER
+  chmod +x "$wrapper_dir/mv"
+}
+
 PACKAGE="$TMP/package"
 make_fake_package "$PACKAGE"
 
@@ -186,4 +206,79 @@ bash "$ROOT/scripts/uninstall-system.sh" --sd-root "$SD4" --acknowledge-risk
 assert_absent "$SD4/atmosphere/contents/0100000000001000"
 assert_absent "$SD4/switch/DeskNX/install-manifest.txt"
 
-echo "PASS: installer and uninstaller recovery scenarios, including symlink ancestors and emergency-disabled qlaunch"
+
+# Case 5: inject a one-shot rename failure while publishing the staged qlaunch
+# directory. The install trap must restore qlaunch and every side-by-side file.
+SD5="$TMP/sd-install-failure"
+QLAUNCH5="$SD5/atmosphere/contents/0100000000001000"
+MENU5="$SD5/switch/DeskNX/bin/Menu"
+HBLOADER5="$SD5/switch/DeskNX/bin/hbloader"
+NRO5="$SD5/switch/DeskNX/DeskNX.nro"
+mkdir -p "$QLAUNCH5/exefs" "$MENU5" "$HBLOADER5" "$(dirname "$NRO5")"
+printf 'old qlaunch executable\n' > "$QLAUNCH5/exefs/main"
+printf 'old qlaunch npdm\n' > "$QLAUNCH5/exefs/main.npdm"
+printf 'old menu executable\n' > "$MENU5/main"
+printf 'old menu npdm\n' > "$MENU5/main.npdm"
+printf 'old hbloader executable\n' > "$HBLOADER5/main"
+printf 'old hbloader npdm\n' > "$HBLOADER5/main.npdm"
+printf 'old DeskNX NRO\n' > "$NRO5"
+MV_FAIL_BIN="$TMP/fail-mv-install"
+make_one_shot_mv_failure_wrapper "$MV_FAIL_BIN"
+if DESKNX_PACKAGE_DIR="$PACKAGE" \
+   DESKNX_TEST_REAL_MV="$(command -v mv)" \
+   DESKNX_TEST_MV_FAIL_DEST="$QLAUNCH5" \
+   DESKNX_TEST_MV_FAIL_SOURCE_NEEDLE=".0100000000001000.desknx-stage-" \
+   DESKNX_TEST_MV_FAIL_MARKER="$TMP/install-mv-failed" \
+   PATH="$MV_FAIL_BIN:$PATH" \
+   bash "$ROOT/scripts/install-system.sh" --sd-root "$SD5" --acknowledge-risk --backup-existing; then
+  fail "installer succeeded despite injected qlaunch publish failure"
+fi
+[[ -f "$TMP/install-mv-failed" ]] || fail "installer failure injection did not trigger"
+assert_file_content "$QLAUNCH5/exefs/main" "old qlaunch executable"
+assert_file_content "$QLAUNCH5/exefs/main.npdm" "old qlaunch npdm"
+assert_file_content "$MENU5/main" "old menu executable"
+assert_file_content "$HBLOADER5/main" "old hbloader executable"
+assert_file_content "$NRO5" "old DeskNX NRO"
+assert_absent "$QLAUNCH5/exefs/DeskNX.install-marker"
+assert_absent "$SD5/switch/DeskNX/install-manifest.txt"
+[[ -z "$(find "$SD5/atmosphere/contents" -maxdepth 1 -name '.0100000000001000.desknx-stage-*' -print -quit)" ]] || fail "installer left qlaunch stage directory"
+[[ -z "$(find "$SD5/atmosphere/contents" -maxdepth 1 -name '.0100000000001000.desknx-rollback-*' -print -quit)" ]] || fail "installer left qlaunch rollback directory"
+
+# Case 6: inject a rename failure while the uninstaller is restoring the previous
+# qlaunch directory. Its EXIT trap must put the installed DeskNX package back,
+# retaining the ownership marker and manifest so recovery can be retried.
+SD6="$TMP/sd-uninstall-failure"
+QLAUNCH6="$SD6/atmosphere/contents/0100000000001000"
+MENU6="$SD6/switch/DeskNX/bin/Menu"
+HBLOADER6="$SD6/switch/DeskNX/bin/hbloader"
+NRO6="$SD6/switch/DeskNX/DeskNX.nro"
+mkdir -p "$QLAUNCH6/exefs" "$MENU6" "$HBLOADER6" "$(dirname "$NRO6")"
+printf 'old qlaunch executable\n' > "$QLAUNCH6/exefs/main"
+printf 'old qlaunch npdm\n' > "$QLAUNCH6/exefs/main.npdm"
+printf 'old menu executable\n' > "$MENU6/main"
+printf 'old menu npdm\n' > "$MENU6/main.npdm"
+printf 'old hbloader executable\n' > "$HBLOADER6/main"
+printf 'old hbloader npdm\n' > "$HBLOADER6/main.npdm"
+printf 'old DeskNX NRO\n' > "$NRO6"
+DESKNX_PACKAGE_DIR="$PACKAGE" bash "$ROOT/scripts/install-system.sh" --sd-root "$SD6" --acknowledge-risk --backup-existing
+MV_FAIL_BIN_UNINSTALL="$TMP/fail-mv-uninstall"
+make_one_shot_mv_failure_wrapper "$MV_FAIL_BIN_UNINSTALL"
+if DESKNX_TEST_REAL_MV="$(command -v mv)" \
+   DESKNX_TEST_MV_FAIL_DEST="$QLAUNCH6" \
+   DESKNX_TEST_MV_FAIL_SOURCE_NEEDLE="/.uninstall-stage-" \
+   DESKNX_TEST_MV_FAIL_MARKER="$TMP/uninstall-mv-failed" \
+   PATH="$MV_FAIL_BIN_UNINSTALL:$PATH" \
+   bash "$ROOT/scripts/uninstall-system.sh" --sd-root "$SD6" --acknowledge-risk; then
+  fail "uninstaller succeeded despite injected qlaunch restore failure"
+fi
+[[ -f "$TMP/uninstall-mv-failed" ]] || fail "uninstaller failure injection did not trigger"
+assert_file_content "$QLAUNCH6/exefs/main" "new qlaunch executable"
+assert_file_content "$QLAUNCH6/exefs/main.npdm" "new qlaunch npdm"
+assert_file_content "$QLAUNCH6/exefs/DeskNX.install-marker" "DeskNX qlaunch override v0.2.0"
+assert_file_content "$MENU6/main" "new menu executable"
+assert_file_content "$HBLOADER6/main" "new hbloader executable"
+assert_file_content "$NRO6" "new DeskNX NRO"
+[[ -s "$SD6/switch/DeskNX/install-manifest.txt" ]] || fail "manifest lost after failed uninstall"
+[[ -n "$(find "$SD6/switch/DeskNX/backup" -mindepth 1 -maxdepth 1 -type d -name 'qlaunch-*' -print -quit)" ]] || fail "original qlaunch backup lost after failed uninstall"
+
+echo "PASS: installer and uninstaller recovery scenarios, including symlinks and injected rename failures"

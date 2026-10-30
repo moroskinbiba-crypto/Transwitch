@@ -1,12 +1,17 @@
 #include <desknx/Model.hpp>
+#include <desknx/CatalogPagination.hpp>
 #include <desknx/StrictParse.hpp>
+#include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
 #include "../source/catalog_view.hpp"
 
 #include <cassert>
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <iterator>
+#include <unistd.h>
 #include <string>
 
 using namespace desknx::model;
@@ -121,5 +126,100 @@ int main() {
     std::remove("/tmp/desknx-small.nro");std::remove("/tmp/desknx-large.nro");
     assert(std::string(FilterName(FilterMode::Homebrew))=="HOMEBREW");
     assert(std::string(SortName(SortMode::Recent))=="RECENT");
+
+    // Safe file replacement preserves the last good destination if publishing
+    // a fully-written temp file fails.
+    {
+        char directoryTemplate[] = "/tmp/desknx-safe-replace-XXXXXX";
+        char* directory = mkdtemp(directoryTemplate);
+        assert(directory != nullptr);
+        const std::string root(directory);
+        const std::string destination = root + "/state.dat";
+        const std::string temporary = root + "/state.tmp";
+        const std::string backup = root + "/state.bak";
+        auto writeText = [](const std::string& path, const std::string& value) {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out << value;
+            out.close();
+            assert(out.good());
+        };
+        auto readText = [](const std::string& path) {
+            std::ifstream in(path, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in),
+                               std::istreambuf_iterator<char>());
+        };
+
+        writeText(destination, "old-state");
+        writeText(temporary, "new-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   temporary.c_str(), destination.c_str(), backup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Success);
+        assert(readText(destination) == "new-state");
+        assert(readText(backup).empty());
+        assert(readText(temporary).empty());
+
+        // Layout saves intentionally keep the old valid version as a backup.
+        writeText(temporary, "next-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   temporary.c_str(), destination.c_str(), backup.c_str(), true) ==
+               desknx::safeio::ReplaceStatus::Success);
+        assert(readText(destination) == "next-state");
+        assert(readText(backup) == "new-state");
+
+        // A missing temp simulates publication failure after the old file has
+        // been moved aside; the helper must roll the old file back.
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   (root + "/missing.tmp").c_str(),
+                   destination.c_str(), backup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Failed);
+        assert(readText(destination) == "next-state");
+        assert(readText(backup).empty());
+
+        // If a prior failed rollback left only the backup, a later failed
+        // publish must first restore and then preserve that recovery copy.
+        std::remove(destination.c_str());
+        writeText(backup, "recovery-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   (root + "/still-missing.tmp").c_str(),
+                   destination.c_str(), backup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Failed);
+        assert(readText(destination) == "recovery-state");
+        assert(readText(backup).empty());
+
+        const std::string first = root + "/first.dat";
+        const std::string firstTemp = root + "/first.tmp";
+        const std::string firstBackup = root + "/first.bak";
+        writeText(firstTemp, "first-state");
+        assert(desknx::safeio::replaceFilePreservingOnFailure(
+                   firstTemp.c_str(), first.c_str(), firstBackup.c_str()) ==
+               desknx::safeio::ReplaceStatus::Success);
+        assert(readText(first) == "first-state");
+
+        std::remove(destination.c_str());
+        std::remove(temporary.c_str());
+        std::remove(backup.c_str());
+        std::remove(first.c_str());
+        std::remove(firstTemp.c_str());
+        std::remove(firstBackup.c_str());
+        rmdir(root.c_str());
+    }
+
+    // NS application-record pagination: count is an in/out parameter and
+    // must start at the output buffer capacity, not zero.
+    {
+        using namespace desknx::catalog;
+        const auto firstPage = MakeApplicationPageRequest(0);
+        assert(firstPage.offset == 0);
+        assert(firstPage.capacity == 128);
+        assert(IsValidApplicationPageCount(firstPage.capacity, 128));
+        assert(NextApplicationPageOffset(firstPage.offset, 128) == 128);
+        const auto secondPage = MakeApplicationPageRequest(128);
+        assert(secondPage.capacity == 128);
+        assert(IsValidApplicationPageCount(secondPage.capacity, 37));
+        assert(NextApplicationPageOffset(secondPage.offset, 37) == 165);
+        assert(!IsValidApplicationPageCount(secondPage.capacity, 129));
+        assert(!IsValidApplicationPageCount(secondPage.capacity, -1));
+    }
+
     return 0;
 }

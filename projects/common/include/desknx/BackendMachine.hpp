@@ -75,6 +75,8 @@ class Machine {
     explicit Machine(const Config& config) : config_(config) {}
 
     // Feed one event; returns the number of actions written to `out`.
+    // If capacity cannot hold every action this event would emit, no state
+    // transition is committed and zero is returned so the caller can retry.
     std::size_t OnEvent(Event event, const Input& input, Action* out, std::size_t capacity);
 
     // IPC-driven inputs that also mutate state but are not table events.

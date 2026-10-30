@@ -129,19 +129,20 @@ constexpr bool IsValidPowerAction(std::uint32_t action) {
     return action <= 2; // Sleep, Reboot, Shutdown
 }
 
-// LaunchSystemApplet whitelist (SYS-01): only settings-class applets a user
-// can legitimately reach from HOME. Anything else is dropped by the backend.
+// AppletId values from libnx's public enum. These are library applets,
+// not a generic "system applet" launch API. LaunchSystemApplet remains blocked
+// in production until per-applet arguments and a supported launch lifecycle
+// are implemented; this list is only the future feature's strict allowlist.
 constexpr bool IsAllowedSystemApplet(std::uint32_t applet_id) {
     switch (applet_id) {
-        case 0x0A: return true; // LibraryAppletWeb
-        case 0x0B: return true; // LibraryAppletShop
-        case 0x0D: return true; // LibraryAppletPhotoViewer
-        case 0x0E: return true; // LibraryAppletSet
-        case 0x0F: return true; // LibraryAppletOfflineWeb
-        case 0x10: return true; // LibraryAppletLoginShare (user mgmt entry)
-        case 0x11: return true; // LibraryAppletWifiWebAuth
-        case 0x13: return true; // LibraryAppletMyPage
-        default:   return false;
+        case 0x13: return true; // LibraryAppletWeb
+        case 0x14: return true; // LibraryAppletShop
+        case 0x15: return true; // LibraryAppletPhotoViewer
+        case 0x17: return true; // LibraryAppletOfflineWeb
+        case 0x18: return true; // LibraryAppletLoginShare
+        case 0x19: return true; // LibraryAppletWifiWebAuth
+        case 0x1A: return true; // LibraryAppletMyPage
+        default:   return false; // includes unavailable-on-retail LibraryAppletSet (0x16)
     }
 }
 
@@ -156,6 +157,40 @@ constexpr std::uint32_t ExpectedEventPayloadSize(std::uint32_t event) {
         default:
             return 0xFFFFFFFFu;
     }
+}
+
+// Shared payload contract used by the production sysmodule and host tests.
+// Unknown commands are handled separately so callers can log/ignore them.
+constexpr bool IsValidCommandPayloadSize(std::uint16_t version,
+                                         std::uint32_t command,
+                                         std::uint64_t size) {
+    if (!IsSupportedVersion(version) || !IsKnownCommand(command) ||
+        !IsValidPayloadSize(size))
+        return false;
+
+    if (version < CurrentVersion) {
+        switch (static_cast<CommandId>(command)) {
+            case CommandId::Busy:
+            case CommandId::CloseApp:
+            case CommandId::SelectUser:
+            case CommandId::PowerAction:
+            case CommandId::LaunchSystemApplet:
+            case CommandId::Log:
+                return false;
+            default:
+                break;
+        }
+    }
+
+    if (command == static_cast<std::uint32_t>(CommandId::LaunchTitle)) {
+        return version == LegacyVersion ? size == 8 : MatchesLaunchTitleSize(
+            static_cast<std::uint32_t>(size));
+    }
+    if (command == static_cast<std::uint32_t>(CommandId::Log))
+        return size >= 1 && size <= MaxLogLineBytes;
+
+    const std::uint32_t expected = ExpectedPayloadSize(command);
+    return expected != 0xFFFFFFFFu && size == expected;
 }
 
 } // namespace desknx::ipc::rules
