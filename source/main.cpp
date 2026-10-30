@@ -307,9 +307,17 @@ void publishCatalogue(const desknx::catalog::ScanResult& result) {
     catalogueNroCount=result.nroCount;
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
-void readCatalogueState(bool& ready,bool& complete,bool& truncated) {
+void readCatalogueState(bool& ready,bool& complete,bool& truncated,
+                        bool* nsAvailable=nullptr,std::uint32_t* nsError=nullptr,
+                        size_t* gameCount=nullptr,size_t* nroCount=nullptr) {
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
-    ready=catalogueReady; complete=catalogueScanComplete; truncated=catalogueTruncated;
+    ready=catalogueReady;
+    complete=catalogueScanComplete;
+    truncated=catalogueTruncated;
+    if(nsAvailable)*nsAvailable=catalogueNsAvailable;
+    if(nsError)*nsError=catalogueNsError;
+    if(gameCount)*gameCount=catalogueGameCount;
+    if(nroCount)*nroCount=catalogueNroCount;
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
 void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
@@ -784,7 +792,12 @@ int visibleStart() {
 void drawScreen() {
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
-    readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow);
+    bool catalogueNsAvailableNow=false;
+    std::uint32_t catalogueNsErrorNow=0;
+    size_t catalogueGameCountNow=0,catalogueNroCountNow=0;
+    readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
+        &catalogueNsAvailableNow,&catalogueNsErrorNow,
+        &catalogueGameCountNow,&catalogueNroCountNow);
     refreshBattery();rect(0,0,SW,SH,BG);
     for(int y=0;y<SH;y+=28)rect(0,y,SW,1,Color{255,255,255,static_cast<Uint8>(y%3==0?7:3)});
     rect(0,0,SW,76,Color{24,25,30,245});rect(0,74,SW,1,Color{255,255,255,18});
@@ -862,9 +875,9 @@ void drawScreen() {
             "  SORT: "+desknx::catalog_view::SortName(catalogueSort);
         if(!catalogueQuery.empty()) viewLabel+="  QUERY: "+catalogueQuery;
         if(!catalogCompleteNow) viewLabel+="  / SCANNING";
-        if(catalogueNsError!=0) {
+        if(catalogueNsErrorNow!=0) {
             char nsError[40]{};
-            std::snprintf(nsError,sizeof(nsError),"  / NS ERROR 0X%08X",static_cast<unsigned int>(catalogueNsError));
+            std::snprintf(nsError,sizeof(nsError),"  / NS ERROR 0X%08X",static_cast<unsigned int>(catalogueNsErrorNow));
             viewLabel+=nsError;
         }
         text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-20);
@@ -983,8 +996,8 @@ void drawScreen() {
                  mx+654,my+472,1,MUTED,mx+818);
             text("A  ADD TO WORKSPACE",mx+654,my+490,1,BLUE,mx+818);
         }
-        const std::string counts=std::to_string(catalogueGameCount)+" GAMES  /  "+
-            std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
+        const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
+            std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
         text(counts,mx+28,my+mh-26,1,MUTED,mx+620);
     }
@@ -1079,19 +1092,19 @@ void drawScreen() {
         roundRect(840,202,70,30,9,Color{54,57,66,255});
         text("B BACK",852,212,1,WHITE,904);
         char nsInfo[80]{};
-        if(!catalogueReady&&!catalogueScanComplete)
+        if(!catalogReadyNow&&!catalogCompleteNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE INITIALIZING");
-        else if(!catalogueNsAvailable)
+        else if(!catalogueNsAvailableNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsError));
-        else if(catalogueNsError)
+        else if(catalogueNsErrorNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"NS RESPONSE ERROR  0X%08X",
                           static_cast<unsigned int>(catalogueNsError));
         else
             std::snprintf(nsInfo,sizeof(nsInfo),"NS SERVICE READY");
-        text(nsInfo,384,270,1,catalogueNsAvailable?GREEN:RED,900);
-        const std::string scanInfo=std::to_string(catalogueGameCount)+" GAMES  /  "+
-            std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
+        text(nsInfo,384,270,1,catalogueNsAvailableNow?GREEN:RED,900);
+        const std::string scanInfo=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
+            std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
             (catalogueScanComplete?"SCAN COMPLETE":"SCANNING");
         text(scanInfo,384,286,1,MUTED,900);
         const char* actions[]={"RESCAN GAME AND HOMEBREW LIBRARY",
