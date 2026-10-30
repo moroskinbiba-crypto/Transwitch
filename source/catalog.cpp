@@ -234,7 +234,7 @@ bool IsMissingOrUsableCachedJpeg(const std::string& path) {
     return IsUsableCachedJpeg(path);
 }
 
-bool ReadCache(const Signatures& sig, ScanResult& result) {
+bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = false) {
     // The cache is stored on removable media and can be truncated or edited.
     // Bound the file before getline() so a corrupt single line cannot exhaust
     // the small heap available to the Switch applet.
@@ -252,11 +252,13 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
     if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
     if (header.size() != 4 || header[0] != "DESKNXCAT2") return false;
-    char gameHash[32]{}, sdHash[32]{};
-    std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
-    std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
-    if (header[1] != std::to_string(sig.gameCount) || header[2] != gameHash || header[3] != sdHash)
-        return false;
+    if (!allowStale) {
+        char gameHash[32]{}, sdHash[32]{};
+        std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
+        std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
+        if (header[1] != std::to_string(sig.gameCount) || header[2] != gameHash || header[3] != sdHash)
+            return false;
+    }
 
     std::vector<Candidate> items;
     while (std::getline(input, line)) {
@@ -597,7 +599,24 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         return a.path < b.path;
     });
     const Signatures sig = MakeSignatures(games, nros);
-    // Never reuse a cache after NS failed or returned a partial application list.
+    // If NS is unavailable, keep the last known-good game list visible rather
+    // than replacing it with an empty catalogue. The UI reports the NS error,
+    // and stale entries remain launch-attemptable until the service recovers.
+    if ((!nsReady || result.nsErrorCode != 0) && ReadCache(sig, result, true)) {
+        result.gameCount = static_cast<size_t>(std::count_if(result.items.begin(), result.items.end(),
+            [](const Candidate& item) { return item.kind == Kind::Game; }));
+        result.nroCount = static_cast<size_t>(std::count_if(result.items.begin(), result.items.end(),
+            [](const Candidate& item) { return item.kind == Kind::Nro; }));
+        result.nsAvailable = false;
+        result.complete = true;
+        LogDiagnostic("scan_stale_cache games=%zu nros=%zu items=%zu ns_error=0x%08X",
+                      result.gameCount, result.nroCount, result.items.size(),
+                      static_cast<unsigned int>(result.nsErrorCode));
+        report(true);
+        return result;
+    }
+
+    // Never reuse a cache with mismatched live signatures during a normal scan.
     if (!forceRefresh && nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
         // Volatile play statistics are fetched only for the selected game.
         result.complete = true;
