@@ -723,8 +723,11 @@ void drawTile(const Tile&t,bool selected) {
         int maxW=std::max(1,r.w-42),value=battery>=0?maxW*battery/100:4;
         rect(r.x+20,r.y+r.h-24,std::max(4,value),7,battery>=20?GREEN:RED);outline(r.x+18,r.y+r.h-26,maxW+4,11,EDGE);
     } else if(t.kind==Kind::System) {
-        text("SYSTEM",r.x+18,r.y+14,2,MUTED,r.x+r.w-10);text("DESKNX",r.x+18,r.y+39,3,WHITE,r.x+r.w-10);
-        text("HOME REPLACEMENT INACTIVE",r.x+18,r.y+78,1,accent,r.x+r.w-10);
+        roundRect(r.x+18,r.y+18,70,70,20,Color{55,65,82,255});
+        drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
+        text("SYSTEM TOOLS",r.x+104,r.y+28,2,WHITE,r.x+r.w-10);
+        text("SETTINGS  /  GAMEPAD",r.x+104,r.y+54,1,MUTED,r.x+r.w-10);
+        text("ALBUM  /  POWER  /  MORE",r.x+104,r.y+73,1,accent,r.x+r.w-10);
     } else if(t.kind==Kind::Unsupported) {
         rect(r.x+3,r.y+3,r.w-6,r.h-6,Color{52,55,61,255});
         text("UNSUPPORTED TILE",r.x+12,r.y+18,2,WHITE,r.x+r.w-10);
@@ -1394,16 +1397,17 @@ void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN && systemMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=890&&x<=972&&y>=136&&y<=170){systemMenu=false;return;}
+        bool cardHit=false;
         if(y>=218&&y<354) {
-            if(x>=308&&x<518)systemMenuIndex=0;
-            else if(x>=542&&x<752)systemMenuIndex=1;
-            else if(x>=776&&x<986)systemMenuIndex=2;
+            if(x>=308&&x<518){systemMenuIndex=0;cardHit=true;}
+            else if(x>=542&&x<752){systemMenuIndex=1;cardHit=true;}
+            else if(x>=776&&x<986){systemMenuIndex=2;cardHit=true;}
         } else if(y>=382&&y<518) {
-            if(x>=308&&x<518)systemMenuIndex=3;
-            else if(x>=542&&x<752)systemMenuIndex=4;
-            else if(x>=776&&x<986)systemMenuIndex=5;
+            if(x>=308&&x<518){systemMenuIndex=3;cardHit=true;}
+            else if(x>=542&&x<752){systemMenuIndex=4;cardHit=true;}
+            else if(x>=776&&x<986){systemMenuIndex=5;cardHit=true;}
         }
-        if((y>=218&&y<354)||(y>=382&&y<518)) {
+        if(cardHit) {
             systemMenu=false;
             if(systemMenuIndex==0) {
                 const Result rc=appletRequestLaunchApplication(0x0100000000001000ULL,nullptr);
