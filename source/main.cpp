@@ -1256,13 +1256,15 @@ void drawScreen() {
     SDL_RenderPresent(renderer);
 }
 bool saveNow(){return saveLayout();}
-void finishTileDrag(const char* message="POSITION SAVED") {
+bool finishTileDrag(const char* message="POSITION SAVED") {
     dragging=false;
     touchDragging=false;
     touchPressActive=false;
     touchDragOffsetX=touchDragOffsetY=0;
     touchDragTabStart=-1;
-    if(saveNow()&&message&&*message)setStatus(message);
+    const bool saved=saveNow();
+    if(saved&&message&&*message)setStatus(message);
+    return saved;
 }
 void updateCursor(int dx,int dy){selectedX=std::max(0,std::min(COLS-1,selectedX+dx));selectedY=std::max(0,std::min(ROWS-1,selectedY+dy));}
 bool moveTile(int dx,int dy) {
@@ -1725,6 +1727,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             deskIndex=std::min(deskIndex,static_cast<int>(desks.size())-1);
             selectedX=selectedY=0;
             dragging=false;touchDragging=false;touchPressActive=false;
+            touchDragOffsetX=touchDragOffsetY=0;
             touchDragTabStart=-1;
             if(saveNow())setStatus("WORKSPACE DELETED");
         }
@@ -1768,9 +1771,9 @@ void keyInput(u64 keys, bool fromRepeat) {
         else if(keys&HidNpadButton_Down)moveTile(0,1);
         if(keys&HidNpadButton_Minus)removeTile();
         if(keys&HidNpadButton_X) {
-            finishTileDrag(nullptr);
+            const bool saved=finishTileDrag(nullptr);
             editing=false;
-            setStatus("EDIT MODE CLOSED");
+            if(saved)setStatus("EDIT MODE CLOSED");
         }
         return;
     }
@@ -1873,6 +1876,13 @@ int tabStart(){
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
 void touchInput(const SDL_Event&e) {
+    // A second pointer must not steal the workspace interaction from an
+    // in-progress drag, whether the drag was started by touch or controller.
+    if(e.type==SDL_FINGERDOWN && touchPressActive)return;
+    if(e.type==SDL_FINGERDOWN && dragging && !touchDragging) {
+        setStatus("FINISH MOVING THE TILE FIRST");
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=840&&x<=910&&y>=202&&y<=232) {
@@ -2040,8 +2050,7 @@ void touchInput(const SDL_Event&e) {
                 } else {
                     if(idx!=deskIndex) {
                         deskIndex=idx;
-                        saveNow();
-                        setStatus(desks[static_cast<size_t>(deskIndex)].name);
+                        if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
                     }
                     lastWorkspaceTabTap=idx;
                     lastWorkspaceTabTapTick=now;
@@ -2291,7 +2300,8 @@ int main(int,char**) {
     gIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
-    if(layoutNeedsMigration&&layoutLoaded){saveLayout();layoutNeedsMigration=false;}
+    if(layoutNeedsMigration&&layoutLoaded&&saveLayout())
+        layoutNeedsMigration=false;
 
     if (!nsServicesReady) {
         char message[80]{};
@@ -2319,7 +2329,14 @@ int main(int,char**) {
                 "delta_ms=%u catalogue_ready=%d scan_complete=%d",
                 frameDelta, ready ? 1 : 0, complete ? 1 : 0);
         }
-        if(complete&&!layoutLoaded){defaultLayout();saveLayout();layoutLoaded=true;setStatus("DESKNX READY - Y ADD  X EDIT",4000);}
+        if(complete&&!layoutLoaded) {
+            defaultLayout();
+            const bool saved=saveLayout();
+            // Keep the generated layout in memory for this session even if
+            // the SD card is read-only; do not rebuild it on every frame.
+            layoutLoaded=true;
+            if(saved)setStatus("DESKNX READY - Y ADD  X EDIT",4000);
+        }
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
 #ifdef DESKNX_SYSTEM_APPLET
         if(SDL_AtomicGet(&heartbeatError)){SDL_AtomicSet(&heartbeatError,0);setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);}
