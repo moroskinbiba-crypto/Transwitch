@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <ctime>
 #include <dirent.h>
 #include <fstream>
@@ -42,9 +43,9 @@ constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
 
 struct Color { Uint8 r, g, b, a; };
-constexpr Color BG{14,17,25,255}, PANEL{24,29,40,255}, EDGE{55,66,83,255};
-constexpr Color WHITE{242,246,252,255}, MUTED{147,160,181,255}, BLUE{92,166,255,255};
-constexpr Color GREEN{97,214,174,255}, RED{246,105,119,255};
+constexpr Color BG{17,18,22,255}, PANEL{34,36,42,255}, EDGE{66,69,77,255};
+constexpr Color WHITE{250,250,252,255}, MUTED{164,168,178,255}, BLUE{10,132,255,255};
+constexpr Color GREEN{48,209,88,255}, RED{255,69,58,255};
 constexpr std::array<Color,8> COLORS{{
     {78,117,188,255},{45,139,123,255},{151,91,185,255},{187,116,66,255},
     {177,77,99,255},{67,135,177,255},{115,128,74,255},{89,99,119,255}
@@ -109,6 +110,27 @@ void rect(int x,int y,int w,int h,Color c) {
 }
 void outline(int x,int y,int w,int h,Color c) {
     color(c); SDL_Rect r{x,y,w,h}; SDL_RenderDrawRect(renderer,&r);
+}
+void roundRect(int x,int y,int w,int h,int radius,Color c) {
+    if(w<=0||h<=0) return;
+    const int r=std::max(0,std::min(radius,std::min(w,h)/2));
+    color(c);
+    for(int row=0;row<h;++row) {
+        int inset=0;
+        if(row<r) {
+            const double dy=static_cast<double>(r-row);
+            inset=static_cast<int>(std::ceil(r-std::sqrt(std::max(0.0,static_cast<double>(r*r)-dy*dy))));
+        } else if(row>=h-r) {
+            const double dy=static_cast<double>(row-(h-r-1));
+            inset=static_cast<int>(std::ceil(r-std::sqrt(std::max(0.0,static_cast<double>(r*r)-dy*dy))));
+        }
+        SDL_RenderDrawLine(renderer,x+inset,y+row,x+w-inset-1,y+row);
+    }
+}
+void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,18}) {
+    roundRect(x,y+4,w,h,18,Color{0,0,0,45});
+    roundRect(x,y,w,h,18,fill);
+    roundRect(x+1,y+1,w-2,h-2,17,edge);
 }
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
@@ -593,7 +615,8 @@ void drawTileIcon(const Tile&t,int x,int y,int size) {
 }
 void drawTile(const Tile&t,bool selected) {
     SDL_Rect r=tileRect(t);Color accent=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
-    rect(r.x,r.y,r.w,r.h,PANEL);rect(r.x,r.y,r.w,3,accent);outline(r.x,r.y,r.w,r.h,selected?BLUE:EDGE);
+    softCard(r.x,r.y,r.w,r.h,PANEL,selected?Color{10,132,255,180}:Color{255,255,255,22});
+    roundRect(r.x+10,r.y+7,r.w-20,3,2,accent);
     if(t.kind==Kind::Clock) {
         text(clockText(),r.x+16,r.y+18,5,WHITE,r.x+r.w-10);
         text(clockText(true).substr(6),r.x+18,r.y+74,2,MUTED,r.x+r.w-10);
@@ -645,14 +668,15 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow);
     refreshBattery();rect(0,0,SW,SH,BG);
     for(int y=0;y<SH;y+=28)rect(0,y,SW,1,Color{255,255,255,static_cast<Uint8>(y%3==0?7:3)});
-    rect(0,0,SW,76,Color{19,23,33,255});rect(0,74,SW,2,Color{43,53,69,255});
+    rect(0,0,SW,76,Color{24,25,30,245});rect(0,74,SW,1,Color{255,255,255,18});
     text("DESKNX",30,21,4,WHITE,260);text("PERSONAL HOME WORKSPACE",34,50,1,MUTED,420);
     text(clockText(),1124,20,3,WHITE,1260);text(battery>=0?std::to_string(battery)+"%":"BAT --",1130,50,1,MUTED,1260);
     int start=visibleStart(),tabW=156,x=28;
     for(int i=0;i<7&&start+i<static_cast<int>(desks.size());++i) {
-        int idx=start+i;bool active=idx==deskIndex;rect(x,94,tabW,42,active?Color{42,61,86,255}:Color{24,29,40,255});
-        outline(x,94,tabW,42,active?BLUE:EDGE);text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
-        if(active) rect(x+10,132,tabW-20,2,BLUE);
+        int idx=start+i;bool active=idx==deskIndex;
+        roundRect(x,94,tabW,42,14,active?Color{54,58,68,255}:Color{32,34,40,210});
+        if(active) roundRect(x+10,132,tabW-20,2,1,BLUE);
+        text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
         x+=166;
     }
     text("L / R SWITCH DESK",930,110,1,MUTED,1105);
@@ -663,13 +687,13 @@ void drawScreen() {
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h);
     if(editing&&dragging)text("MOVING",1040,146,1,BLUE,1260);
-    rect(0,628,SW,92,Color{18,22,31,255});rect(0,628,SW,2,EDGE);
+    rect(0,628,SW,92,Color{23,24,29,250});rect(0,628,SW,1,Color{255,255,255,18});
     struct Hint{const char*k;const char*v;};
     const Hint hints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},{"Y","ADD"},{"ZL/ZR","SIZE"},{"-","REMOVE"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
     const int hintCount=static_cast<int>(sizeof(hints)/sizeof(hints[0]));
     const int hintStep=(SW-36)/hintCount;
     int hx=18;for(const auto& h:hints){
-        rect(hx,650,50,28,Color{37,45,59,255});outline(hx,650,50,28,EDGE);
+        roundRect(hx,650,50,28,9,Color{48,50,58,255});
         text(h.k,hx+5,659,1,WHITE,hx+47);
         text(h.v,hx+56,659,1,MUTED,std::min(hx+hintStep-4,SW-18));
         hx+=hintStep;
@@ -677,7 +701,7 @@ void drawScreen() {
     bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
     text(show?statusText:(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"DESKNX WORKSPACE"),24,694,1,show?BLUE:MUTED,850);
     if(listOpen) {
-        rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;rect(mx,my,mw,mh,Color{22,27,38,250});outline(mx,my,mw,mh,BLUE);
+        rect(0,0,SW,SH,Color{0,0,0,175});int mx=210,my=70,mw=860,mh=570;softCard(mx,my,mw,mh,Color{31,33,39,252},Color{255,255,255,30});
         text("ADD TO DESKTOP",mx+28,my+22,3,WHITE,mx+mw-20);
         struct DrawerChip { int x; int w; const char* label; };
         const DrawerChip chips[]={{mx+28,96,"Y SEARCH"},{mx+132,82,"X SORT"},
@@ -685,8 +709,7 @@ void drawScreen() {
             {mx+432,126,"RSTICK RESCAN"},{mx+566,72,"B BACK"},
             {mx+646,72,"A ADD"}};
         for(const auto& chip:chips) {
-            rect(chip.x,my+52,chip.w,25,Color{37,45,59,255});
-            outline(chip.x,my+52,chip.w,25,EDGE);
+            roundRect(chip.x,my+52,chip.w,25,8,Color{49,52,61,255});
             text(chip.label,chip.x+6,my+61,1,WHITE,chip.x+chip.w-4);
         }
         std::string viewLabel=std::string("FILTER: ")+desknx::catalog_view::FilterName(catalogueFilter)+
