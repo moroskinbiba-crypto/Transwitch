@@ -1387,8 +1387,11 @@ int main(int,char**) {
             static u64 lastHeldDirs = 0;
             const u64 held = padGetButtons(&pad);
             const u64 dirs = HidNpadButton_Left|HidNpadButton_Right|HidNpadButton_Up|HidNpadButton_Down;
-            const bool modal = listOpen||recentOpen||deletePrompt||powerMenu;
-            if(!modal && (held&dirs) && !dragging) {
+            // Navigation modals handle directional input themselves; keep key
+            // repeat active in the library, recent list and power menu. The
+            // destructive workspace-confirmation prompt remains single-shot.
+            const bool modalBlocksRepeat = deletePrompt;
+            if(!modalBlocksRepeat && (held&dirs) && !dragging) {
                 const Uint32 now = SDL_GetTicks();
                 if((held&dirs) != lastHeldDirs) { holdStart=now; lastRepeat=now; lastHeldDirs=held&dirs; }
                 else if(now-holdStart >= 350 && now-lastRepeat >= 80) {
