@@ -69,11 +69,6 @@ bool matchesFilter(model::Kind kind, FilterMode filter) {
     }
     return true;
 }
-bool matchesQuery(const model::Candidate& item, const std::string& queryKey) {
-    if(queryKey.empty()) return true;
-    return searchKey(item.title).find(queryKey)!=std::string::npos ||
-           searchKey(item.data).find(queryKey)!=std::string::npos;
-}
 uint64_t fileSize(const model::Candidate& item) {
     if(item.kind!=model::Kind::Nro) return 0;
     struct stat st{};
@@ -94,26 +89,49 @@ std::vector<model::Candidate> FilterAndSort(
     FilterMode filter,
     SortMode sort,
     const std::vector<RecentKey>& recent) {
-    const std::string queryKey=searchKey(query);
-    std::vector<model::Candidate> result;
-    result.reserve(candidates.size());
-    for(const auto& item:candidates)
-        if(matchesFilter(item.kind,filter)&&matchesQuery(item,queryKey))
-            result.push_back(item);
+    struct SortEntry {
+        model::Candidate item;
+        std::string titleKey;
+        uint64_t sizeBytes{0};
+        size_t recentOrder{0};
+    };
 
-    std::sort(result.begin(),result.end(),[&](const auto& a,const auto& b) {
-        const std::string ak=searchKey(a.title),bk=searchKey(b.title);
+    const std::string queryKey=searchKey(query);
+    std::vector<SortEntry> entries;
+    entries.reserve(candidates.size());
+    for(const auto& item:candidates) {
+        if(!matchesFilter(item.kind,filter))continue;
+        std::string titleKey=searchKey(item.title);
+        if(!queryKey.empty() &&
+           titleKey.find(queryKey)==std::string::npos &&
+           searchKey(item.data).find(queryKey)==std::string::npos)
+            continue;
+
+        SortEntry entry{};
+        entry.item=item;
+        entry.titleKey=std::move(titleKey);
+        // Filesystem metadata and transliterated sort keys are prepared once,
+        // never recomputed from inside std::sort's O(n log n) comparator.
+        if(sort==SortMode::Size)entry.sizeBytes=fileSize(item);
+        if(sort==SortMode::Recent)entry.recentOrder=recentRank(item,recent);
+        entries.push_back(std::move(entry));
+    }
+
+    std::sort(entries.begin(),entries.end(),[&](const SortEntry& a,const SortEntry& b) {
         if(sort==SortMode::Recent) {
-            const size_t ar=recentRank(a,recent),br=recentRank(b,recent);
-            if(ar!=br) return ar<br;
+            if(a.recentOrder!=b.recentOrder)return a.recentOrder<b.recentOrder;
         } else if(sort==SortMode::Size) {
-            const uint64_t as=fileSize(a),bs=fileSize(b);
-            if(as!=bs) return as>bs;
+            if(a.sizeBytes!=b.sizeBytes)return a.sizeBytes>b.sizeBytes;
         }
-        if(ak!=bk) return ak<bk;
-        if(a.kind!=b.kind) return static_cast<int>(a.kind)<static_cast<int>(b.kind);
-        return a.data<b.data;
+        if(a.titleKey!=b.titleKey)return a.titleKey<b.titleKey;
+        if(a.item.kind!=b.item.kind)
+            return static_cast<int>(a.item.kind)<static_cast<int>(b.item.kind);
+        return a.item.data<b.item.data;
     });
+
+    std::vector<model::Candidate> result;
+    result.reserve(entries.size());
+    for(auto& entry:entries)result.push_back(std::move(entry.item));
     return result;
 }
 const char* FilterName(FilterMode filter) {
