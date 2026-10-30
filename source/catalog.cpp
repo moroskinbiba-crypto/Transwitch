@@ -108,15 +108,9 @@ bool IsRegularFile(const std::string& path) {
 // title via nacpGetLanguageEntry and still gives a useful name when the
 // console-language entry is absent.
 std::string GetApplicationName(const NacpStruct& nacp) {
-    const NacpLanguageEntry* entry = nullptr;
-    if (nacp.lang[0].name[0] != '\0') entry = &nacp.lang[0];
-    for (int i = 1; !entry && i < 16; ++i) {
-        if (nacp.lang[i].name[0] != '\0') entry = &nacp.lang[i];
-    }
-    if (!entry) return {};
-    char name[129]{};
-    std::strncpy(name, entry->name, sizeof(name) - 1);
-    return std::string(name);
+    // Keep all libnx NACP layout differences in the SLaunch compatibility
+    // adapter (legacy NacpStruct::lang vs newer lang_data.lang).
+    return desknx::slaunch::ResolveTitleName(nacp);
 }
 
 void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) {
@@ -560,7 +554,7 @@ ScanResult Scan(ProgressCallback progress, void* context) {
             if (item.kind != Kind::Game) continue;
             char* end = nullptr;
             const unsigned long long id = std::strtoull(item.data.c_str(), &end, 16);
-            if (!end || *end != '\\0') continue;
+            if (!end || *end != '\0') continue;
             const auto found = std::find_if(games.begin(), games.end(),
                 [id](const GameRecord& game) { return game.id == static_cast<u64>(id); });
             if (found == games.end()) continue;
