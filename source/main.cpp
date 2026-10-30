@@ -1119,6 +1119,9 @@ void touchInput(const SDL_Event&e) {
 
 int main(int,char**) {
     if(R_SUCCEEDED(fsdevMountSdmc()))sdMounted=true;
+    // Match SLauncher: initialize setsys, publish the real HOS version, then
+    // initialize ns on the main thread before the catalogue worker is created.
+    (void)desknx::catalog::InitializeServices();
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){if(sdMounted)fsdevUnmountDevice("sdmc");return 1;}
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"1");
     window=SDL_CreateWindow("DeskNX",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -1225,6 +1228,7 @@ int main(int,char**) {
     stopHeartbeatThread();
 #endif
     if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
+    desknx::catalog::ShutdownServices();
     gIconCache.shutdown();gFontRenderer.shutdown();IMG_Quit();
     if(psmReady)psmExit();
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
