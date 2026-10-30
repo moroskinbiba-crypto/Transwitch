@@ -1342,7 +1342,7 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,const SDL_Rect& b
                 viewport.x,viewport.y,viewport.w,viewport.h,sourceWidth,sourceHeight,mode);
             if(mode==desknx::artwork::FitMode::Contain)
                 roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,
-                          Color{fallback.r/3,fallback.g/3,fallback.b/3,255});
+                          Color{static_cast<Uint8>(fallback.r/3),static_cast<Uint8>(fallback.g/3),static_cast<Uint8>(fallback.b/3),255});
             SDL_Rect clip=viewport,target{fit.x,fit.y,fit.w,fit.h};
             // Cover scales the entire image beyond the tile and clips it to
             // the tile viewport. This avoids source-rect rounding gaps.
