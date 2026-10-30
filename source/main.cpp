@@ -100,8 +100,8 @@ int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, deletePrompt=false, running=true;
-int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
+int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -1134,17 +1134,43 @@ void drawScreen() {
     }
     if(workspaceMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(390,210,500,300,Color{18,25,37,255},Color{255,255,255,26});
-        text("WORKSPACE OPTIONS",430,238,3,WHITE,850);
-        const char* actions[]={"RENAME WORKSPACE","DELETE WORKSPACE"};
-        for(int i=0;i<2;++i) {
-            const int yy=302+i*58;
-            if(i==workspaceMenuIndex)roundRect(430,yy,420,48,11,Color{45,61,82,255});
-            text(actions[i],452,yy+15,2,i==workspaceMenuIndex?WHITE:MUTED,830);
+        softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
+        text("WORKSPACE OPTIONS",390,204,3,WHITE,900);
+        const Workspace& current=desks[static_cast<size_t>(deskIndex)];
+        const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
+        const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE",
+                               "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
+        for(int i=0;i<5;++i) {
+            const int yy=252+i*50;
+            if(i==workspaceMenuIndex)roundRect(390,yy,500,42,10,Color{45,61,82,255});
+            const Color labelColor=(i==1&&!canMoveTile)?Color{91,101,118,255}:
+                                   (i==workspaceMenuIndex?WHITE:MUTED);
+            text(actions[i],412,yy+13,1,labelColor,875);
         }
-        roundRect(430,430,420,42,11,Color{54,57,66,255});
-        text("CANCEL",592,444,1,WHITE,700);
-        text("UP / DOWN SELECT     A OPEN     B CLOSE",438,482,1,MUTED,840);
+        text("ALL WORKSPACES ARE AVAILABLE HERE",390,512,1,MUTED,900);
+    }
+    if(workspacePicker) {
+        rect(0,0,SW,SH,Color{3,7,14,194});
+        softCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
+        text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
+             360,100,3,WHITE,920);
+        text("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
+             360,136,1,MUTED,920);
+        for(size_t i=0;i<desks.size();++i) {
+            const int yy=168+static_cast<int>(i)*32;
+            const bool selected=static_cast<int>(i)==workspacePickerIndex;
+            const bool current=static_cast<int>(i)==deskIndex;
+            if(selected)roundRect(360,yy,560,29,8,Color{45,61,82,255});
+            else if(current)roundRect(360,yy,560,29,8,Color{30,43,60,255});
+            text(desks[i].name,382,yy+9,1,
+                 selected?WHITE:(current?BLUE:MUTED),760);
+            const std::string detail=current?"CURRENT":
+                std::to_string(desks[i].tiles.size())+" ITEMS";
+            text(detail,804,yy+9,1,current?BLUE:MUTED,902);
+        }
+        roundRect(744,590,176,38,10,Color{54,57,66,255});
+        text("CANCEL",795,603,1,WHITE,875);
+        text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{3,7,14,194});
@@ -1493,6 +1519,39 @@ void deleteDesk() {
     if(desks.size()<=1){setStatus("AT LEAST ONE WORKSPACE IS REQUIRED");return;}
     deletePrompt=true;
 }
+void openWorkspacePicker(bool moveTile) {
+    if(moveTile) {
+        const Workspace& current=desks[static_cast<size_t>(deskIndex)];
+        if(!editing || itemAt(current,selectedX,selectedY)<0) {
+            setStatus("SELECT A TILE IN EDIT MODE FIRST");
+            return;
+        }
+    }
+    workspacePickerMoveTile=moveTile;
+    workspacePickerIndex=deskIndex;
+    workspacePicker=true;
+}
+void selectWorkspace(int target) {
+    if(target<0||target>=static_cast<int>(desks.size()))return;
+    const std::string targetName=desks[static_cast<size_t>(target)].name;
+    if(workspacePickerMoveTile) {
+        if(target==deskIndex) {
+            setStatus("CHOOSE A DIFFERENT WORKSPACE");
+            return;
+        }
+        if(!moveToDesk(target))return;
+        workspacePicker=false;
+        if(saveNow())setStatus("MOVED TO "+targetName);
+        return;
+    }
+    workspacePicker=false;
+    if(target==deskIndex) {
+        setStatus("ALREADY ON "+targetName);
+        return;
+    }
+    deskIndex=target;
+    if(saveNow())setStatus(targetName);
+}
 void openUserProfile() {
     AccountUid uid{};
     bool haveUser=false;
@@ -1696,15 +1755,29 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
+    if(workspacePicker) {
+        const int count=static_cast<int>(desks.size());
+        if(keys&HidNpadButton_B){workspacePicker=false;return;}
+        if(count>0&&keys&HidNpadButton_Up)
+            workspacePickerIndex=(workspacePickerIndex-1+count)%count;
+        if(count>0&&keys&HidNpadButton_Down)
+            workspacePickerIndex=(workspacePickerIndex+1)%count;
+        if(keys&HidNpadButton_A)selectWorkspace(workspacePickerIndex);
+        return;
+    }
     if(workspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
-        if(keys&HidNpadButton_Up)workspaceMenuIndex=0;
-        if(keys&HidNpadButton_Down)workspaceMenuIndex=1;
+        if(keys&HidNpadButton_Up)
+            workspaceMenuIndex=(workspaceMenuIndex+4)%5;
+        if(keys&HidNpadButton_Down)
+            workspaceMenuIndex=(workspaceMenuIndex+1)%5;
         if(keys&HidNpadButton_A) {
             const int action=workspaceMenuIndex;
             workspaceMenu=false;
-            if(action==0)renameDesk();
-            else deleteDesk();
+            if(action==0)openWorkspacePicker(false);
+            else if(action==1)openWorkspacePicker(true);
+            else if(action==2)renameDesk();
+            else if(action==3)deleteDesk();
         }
         return;
     }
@@ -1969,16 +2042,34 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(e.type==SDL_FINGERDOWN && workspacePicker) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=744&&x<=920&&y>=590&&y<=628) {
+            workspacePicker=false;
+        } else if(x>=360&&x<=920&&y>=168&&y<168+static_cast<int>(desks.size())*32) {
+            const int target=(y-168)/32;
+            selectWorkspace(target);
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && workspaceMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=430&&x<=850&&y>=302&&y<350) {
-            workspaceMenu=false;
-            renameDesk();
-        } else if(x>=430&&x<=850&&y>=360&&y<408) {
-            workspaceMenu=false;
-            deleteDesk();
-        } else if(x>=430&&x<=850&&y>=430&&y<=472) {
-            workspaceMenu=false;
+        if(x>=390&&x<=890) {
+            if(y>=252&&y<294) {
+                workspaceMenu=false;
+                openWorkspacePicker(false);
+            } else if(y>=302&&y<344) {
+                workspaceMenu=false;
+                openWorkspacePicker(true);
+            } else if(y>=352&&y<394) {
+                workspaceMenu=false;
+                renameDesk();
+            } else if(y>=402&&y<444) {
+                workspaceMenu=false;
+                deleteDesk();
+            } else if(y>=452&&y<494) {
+                workspaceMenu=false;
+            }
         }
         return;
     }
