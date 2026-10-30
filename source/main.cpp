@@ -132,6 +132,7 @@ uint64_t sdFreeBytes=0, sdTotalBytes=0;
 Uint32 lastStorageUpdate=0;
 bool storageStatsAvailable=false;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
+std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
 bool widgetPickerMode=false;
 desknx::catalog_view::FilterMode widgetPickerPreviousFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode widgetPickerPreviousSort=desknx::catalog_view::SortMode::Name;
@@ -699,6 +700,7 @@ void restartCatalogueScan() {
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
     catalogueWarningShown=false;
     nroSizeCache.clear();
+    tileTitleWrapCache.clear();
     listIndex=0;
     listOffset=0;
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue refresh",
@@ -995,7 +997,7 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
 }
 void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<3000)return;lastBatteryTick=now;
+    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
     if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
     if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
 }
@@ -1128,6 +1130,13 @@ size_t utf8Count(const std::string& value) {
     }
     return count;
 }
+const std::vector<std::string>& cachedTileTitleLines(const std::string& title,size_t maxChars) {
+    const std::string key=std::to_string(maxChars)+"\t"+title;
+    auto found=tileTitleWrapCache.find(key);
+    if(found!=tileTitleWrapCache.end())return found->second;
+    if(tileTitleWrapCache.size()>=512)tileTitleWrapCache.clear();
+    return tileTitleWrapCache.emplace(key,wrapTileTitle(title,maxChars)).first->second;
+}
 std::vector<std::string> wrapTileTitle(const std::string& title,size_t maxChars) {
     std::vector<std::string> words;
     for(size_t pos=0;pos<title.size();) {
@@ -1215,7 +1224,7 @@ void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
     // Large, readable labels stay on the artwork. Long names wrap to two
     // lines instead of being silently clipped at the right edge.
     const size_t maxChars=static_cast<size_t>(std::max(10,(bounds.w-24)/9));
-    const auto titleLines=wrapTileTitle(tile.title,maxChars);
+    const auto& titleLines=cachedTileTitleLines(tile.title,maxChars);
     const int stripHeight=titleLines.size()>1?44:32;
     rect(bounds.x+1,bounds.y+bounds.h-stripHeight,
          bounds.w-2,stripHeight,Color{5,9,16,196});
@@ -1237,12 +1246,13 @@ void drawTile(const Tile&t,bool selected) {
              selected?Color{92,164,255,210}:Color{255,255,255,18});
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,r);
-    } else if(t.kind==Kind::Clock) {
+    } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
+        if(t.kind==Kind::Clock) {
         text(clockText(),r.x+18,r.y+18,5,WHITE,r.x+r.w-12);
         text(clockText(true).substr(6),r.x+20,r.y+74,2,MUTED,r.x+r.w-12);
         text("CLOCK",r.x+20,r.y+r.h-23,1,BLUE,r.x+r.w-12);
-    } else if(t.kind==Kind::Battery) {
+        } else if(t.kind==Kind::Battery) {
         text("BATTERY",r.x+20,r.y+14,1,MUTED,r.x+r.w-12);
         text(battery>=0?std::to_string(battery)+"%":"N/A",r.x+20,r.y+38,4,WHITE,r.x+r.w-12);
         int maxW=std::max(1,r.w-48),value=battery>=0?maxW*battery/100:4;
@@ -1286,7 +1296,7 @@ void drawTile(const Tile&t,bool selected) {
         } else {
             text("SD STATUS UNAVAILABLE",r.x+18,r.y+45,1,RED,r.x+r.w-14);
         }
-    } else if(t.kind==Kind::Calendar) {
+        } else if(t.kind==Kind::Calendar) {
         std::time_t now=std::time(nullptr);
         std::tm* tmv=std::localtime(&now);
         char date[48]="--";
@@ -1298,7 +1308,7 @@ void drawTile(const Tile&t,bool selected) {
         text("TODAY",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
         text(date,r.x+18,r.y+35,3,WHITE,r.x+r.w-14);
         text(day,r.x+18,r.y+r.h-24,1,BLUE,r.x+r.w-14);
-    } else if(t.w==1&&t.h==1) {
+        } else if(t.w==1&&t.h==1) {
         drawTileIcon(t,r.x+(r.w-60)/2,r.y+9,60);
         text(t.title,r.x+9,r.y+r.h-21,1,WHITE,r.x+r.w-8);
         if(t.kind==Kind::Nro)roundRect(r.x+8,r.y+8,6,6,3,GREEN);
@@ -1307,6 +1317,7 @@ void drawTile(const Tile&t,bool selected) {
         drawTileIcon(t,r.x+17,r.y+(r.h-is)/2,is);
         text(t.title,r.x+is+31,r.y+r.h/2-13,2,WHITE,r.x+r.w-12);
         text(t.kind==Kind::Nro?"HOMEBREW":"GAME",r.x+is+31,r.y+r.h/2+13,1,MUTED,r.x+r.w-12);
+        }
     }
     if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
 }
