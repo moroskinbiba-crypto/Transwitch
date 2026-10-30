@@ -869,9 +869,16 @@ void drawScreen() {
         text(counts,mx+28,my+mh-26,1,MUTED,mx+620);
     }
     if(deletePrompt) {
-        rect(0,0,SW,SH,Color{0,0,0,185});rect(360,250,560,200,Color{25,30,42,255});outline(360,250,560,200,RED);
-        text("DELETE WORKSPACE?",405,292,3,WHITE,890);text(desks[static_cast<size_t>(deskIndex)].name,405,334,2,MUTED,890);
-        text("A CONFIRM   /   B CANCEL",405,394,2,BLUE,890);
+        rect(0,0,SW,SH,Color{0,0,0,190});
+        softCard(360,250,560,200,Color{31,33,39,255},Color{255,69,58,100});
+        text("DELETE WORKSPACE?",405,278,3,WHITE,890);
+        text(desks[static_cast<size_t>(deskIndex)].name,405,320,2,MUTED,890);
+        roundRect(405,366,210,48,12,Color{112,38,42,255});
+        outline(405,366,210,48,Color{255,69,58,130});
+        text("DELETE",466,383,2,WHITE,600);
+        roundRect(635,366,240,48,12,Color{54,57,66,255});
+        text("CANCEL",706,383,2,WHITE,865);
+        text("A CONFIRM     B CANCEL",405,425,1,MUTED,890);
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(recentOpen) {
@@ -902,14 +909,19 @@ void drawScreen() {
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
-        rect(0,0,SW,SH,Color{0,0,0,185});rect(420,220,440,280,Color{25,30,42,255});outline(420,220,440,280,BLUE);
-        text("POWER",470,246,3,WHITE,810);
+        rect(0,0,SW,SH,Color{0,0,0,190});
+        softCard(420,220,440,280,Color{31,33,39,255},Color{255,255,255,28});
+        text("POWER",460,242,3,WHITE,810);
+        roundRect(780,238,52,30,9,Color{54,57,66,255});
+        text("B",798,247,1,WHITE,828);
         for(int i=0;i<3;++i){
-            int yy=300+i*44;
-            if(i==powerIndex)rect(442,yy-6,396,38,Color{45,61,82,255});
-            text(kPowerItems[i],460,yy,2,i==powerIndex?WHITE:MUTED,810);
+            int yy=294+i*44;
+            if(i==powerIndex)roundRect(442,yy-5,396,38,9,Color{45,61,82,255});
+            text(kPowerItems[i],460,yy+2,2,i==powerIndex?WHITE:MUTED,810);
         }
-        text("UP/DOWN SELECT   A EXECUTE   B CANCEL",440,452,1,MUTED,820);
+        roundRect(590,432,248,42,11,Color{10,132,255,255});
+        text("EXECUTE",674,445,2,WHITE,820);
+        text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
     }
     SDL_RenderPresent(renderer);
 }
@@ -1210,6 +1222,23 @@ void touchSelect(int x,int y) {
 }
 int tabStart(){return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));}
 void touchInput(const SDL_Event&e) {
+    if(e.type==SDL_FINGERDOWN && deletePrompt) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(y>=366&&y<=414&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
+        else if(y>=366&&y<=414&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
+        return;
+    }
+    if(e.type==SDL_FINGERDOWN && powerMenu) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=780&&x<=832&&y>=238&&y<=270) {
+            keyInput(HidNpadButton_B,false);
+        } else if(y>=289&&y<421&&x>=442&&x<=838) {
+            powerIndex=std::max(0,std::min(2,(y-289)/44));
+        } else if(x>=590&&x<=838&&y>=432&&y<=474) {
+            keyInput(HidNpadButton_A,false);
+        }
+        return;
+    }
     if(recentOpen) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
@@ -1239,7 +1268,11 @@ void touchInput(const SDL_Event&e) {
                 else if(x>=856&&x<928) addSelected();
                 return;
             }
-            if(y>=180&&y<584&&x<830) {
+            if(y>=550&&y<=584&&x>=850&&x<=1042) {
+                addSelected();
+                return;
+            }
+            if(y>=180&&y<580&&x<830) {
                 const int row=(y-180)/40;
                 const auto& available=visibleCatalogueSnapshot();
                 const int index=listOffset+row;
@@ -1268,7 +1301,8 @@ void touchInput(const SDL_Event&e) {
         if(deletePrompt)return;
         if(y>=92&&y<=140){
             int idx=tabStart()+(x-28)/166;
-            if(x>=28&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7&&idx!=deskIndex){
+            const int tabX=28+(idx-tabStart())*166;
+            if(x>=tabX&&x<tabX+156&&idx>=0&&idx<static_cast<int>(desks.size())&&idx<tabStart()+7&&idx!=deskIndex){
                 deskIndex=idx;
                 saveNow();
                 setStatus(desks[static_cast<size_t>(deskIndex)].name);
@@ -1279,6 +1313,7 @@ void touchInput(const SDL_Event&e) {
             int oldX=selectedX,oldY=selectedY;touchSelect(x,y);Workspace&d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
             if(editing){if(i>=0&&oldX==selectedX&&oldY==selectedY){dragging=true;touchDragging=true;}else if(i<0)openList();}
             else if(i>=0)launch(d.tiles[static_cast<size_t>(i)]);
+            else openList();
             return;
         }
         if(y>=632&&y<=700) {
