@@ -100,6 +100,19 @@ int main() {
         assert(!moveSelectedTile(moveDesk,sx,sy,10,0));
     }
 
+    // A diagonal drag should use the final cell atomically. An occupied
+    // horizontal intermediate cell must not block a free diagonal target.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace diagonal{"diagonal",{}};
+        diagonal.tiles.push_back(Tile{Kind::Game,"Move","0100000000000006",0,0,1,1,0});
+        diagonal.tiles.push_back(Tile{Kind::Nro,"Blocker","sdmc:/switch/blocker.nro",1,0,1,1,1});
+        int sx=0,sy=0;
+        assert(moveSelectedTile(diagonal,sx,sy,1,1));
+        assert(diagonal.tiles[0].x==1 && diagonal.tiles[0].y==1);
+        assert(sx==1 && sy==1);
+    }
+
     // Shrinking a large tile must move keyboard focus back to its top-left.
     // Otherwise the next resize/remove command would target an empty cell.
     {
