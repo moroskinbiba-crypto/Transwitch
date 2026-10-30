@@ -1,4 +1,5 @@
 #include "../include/desknx/Layout.hpp"
+#include "../include/desknx/WorkspaceOps.hpp"
 
 #include <algorithm>
 #include <array>
@@ -192,10 +193,12 @@ bool parse(const std::string& input, LoadResult& result) {
 std::string serialize(const std::vector<model::Workspace>& workspaces, int activeWorkspace) {
     if (workspaces.empty() || workspaces.size() > static_cast<size_t>(model::MaxDesks))
         return {};
+    for (const auto& workspace : workspaces)
+        if (!desknx::workspace_ops::isValidWorkspaceName(workspace.name)) return {};
     activeWorkspace = std::max(0, std::min(activeWorkspace, static_cast<int>(workspaces.size()) - 1));
     std::string output = "DESKNX3\nA\t" + std::to_string(activeWorkspace) + "\n";
     for (const auto& workspace : workspaces)
-        output += "D\t" + model::safeField(workspace.name.substr(0, workspace.name.size() > 124 ? 124 : workspace.name.size())) + "\n";
+        output += "D\t" + model::safeField(workspace.name) + "\n";
     for (size_t desk = 0; desk < workspaces.size(); ++desk) {
         const auto& workspace = workspaces[desk];
         for (size_t tileIndex = 0; tileIndex < workspace.tiles.size(); ++tileIndex) {
