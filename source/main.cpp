@@ -754,6 +754,51 @@ void drawTileIcon(const Tile&t,int x,int y,int size) {
     std::string mark=initials(t.title);int s=size>=70?3:2;int w=static_cast<int>(mark.size())*6*s-s;
     text(mark,x+(size-w)/2,y+(size-7*s)/2,s,WHITE,x+size-2);
 }
+void drawTileCover(const Tile& tile,const SDL_Rect& bounds) {
+    SDL_Texture* texture=gIconCache.get(tile);
+    if(texture) {
+        int sourceWidth=0,sourceHeight=0;
+        if(SDL_QueryTexture(texture,nullptr,nullptr,&sourceWidth,&sourceHeight)==0 &&
+           sourceWidth>0 && sourceHeight>0) {
+            // Fill the entire tile while preserving the artwork's aspect ratio.
+            // Crop the longer source dimension around its centre (cover, not contain).
+            SDL_Rect source{0,0,sourceWidth,sourceHeight};
+            const double sourceAspect=static_cast<double>(sourceWidth)/sourceHeight;
+            const double targetAspect=static_cast<double>(bounds.w)/std::max(1,bounds.h);
+            if(sourceAspect>targetAspect) {
+                source.w=std::max(1,std::min(sourceWidth,
+                    static_cast<int>(sourceHeight*targetAspect)));
+                source.x=(sourceWidth-source.w)/2;
+            } else if(sourceAspect<targetAspect) {
+                source.h=std::max(1,std::min(sourceHeight,
+                    static_cast<int>(sourceWidth/targetAspect)));
+                source.y=(sourceHeight-source.h)/2;
+            }
+            SDL_Rect target{bounds.x+1,bounds.y+1,
+                            std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
+            SDL_RenderCopy(renderer,texture,&source,&target);
+        } else {
+            roundRect(bounds.x+1,bounds.y+1,bounds.w-2,bounds.h-2,
+                      12,COLORS[static_cast<size_t>(tile.color)%COLORS.size()]);
+        }
+    } else {
+        const Color base=COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
+        roundRect(bounds.x+1,bounds.y+1,bounds.w-2,bounds.h-2,12,base);
+        const std::string mark=initials(tile.title);
+        const int scale=std::max(2,std::min(5,bounds.h/24));
+        const int width=static_cast<int>(mark.size())*6*scale-scale;
+        text(mark,bounds.x+(bounds.w-width)/2,
+             bounds.y+(bounds.h-7*scale)/2,scale,WHITE,bounds.x+bounds.w-8);
+    }
+
+    // Keep the title attached to the cover itself, like a console home-screen tile.
+    const int stripHeight=std::max(27,std::min(38,bounds.h/3));
+    rect(bounds.x+1,bounds.y+bounds.h-stripHeight,
+         bounds.w-2,stripHeight,Color{5,9,16,190});
+    text(tile.title,bounds.x+10,
+         bounds.y+bounds.h-stripHeight+(stripHeight-7)/2,
+         1,WHITE,bounds.x+bounds.w-10);
+}
 void drawTile(const Tile&t,bool selected) {
     SDL_Rect r=tileRect(t);
     const Color accent=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
@@ -761,7 +806,9 @@ void drawTile(const Tile&t,bool selected) {
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
     roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
-    if(t.kind==Kind::Clock) {
+    if(t.kind==Kind::Game||t.kind==Kind::Nro) {
+        drawTileCover(t,r);
+    } else if(t.kind==Kind::Clock) {
         text(clockText(),r.x+18,r.y+18,5,WHITE,r.x+r.w-12);
         text(clockText(true).substr(6),r.x+20,r.y+74,2,MUTED,r.x+r.w-12);
         text("CLOCK",r.x+20,r.y+r.h-23,1,BLUE,r.x+r.w-12);
