@@ -167,4 +167,25 @@ inline bool moveSelectedTileToWorkspace(std::vector<model::Workspace>& workspace
     return true;
 }
 
+inline bool deleteWorkspace(std::vector<model::Workspace>& workspaces,
+                            int& activeWorkspace, int workspaceIndex) {
+    if (workspaces.size() <= 1 ||
+        workspaceIndex < 0 ||
+        workspaceIndex >= static_cast<int>(workspaces.size()) ||
+        activeWorkspace < 0 ||
+        activeWorkspace >= static_cast<int>(workspaces.size()))
+        return false;
+
+    workspaces.erase(workspaces.begin() + workspaceIndex);
+    if (activeWorkspace > workspaceIndex) {
+        --activeWorkspace;
+    } else if (activeWorkspace == workspaceIndex) {
+        // Prefer the workspace that followed the deleted one; when deleting
+        // the last workspace, stay on the new last workspace.
+        activeWorkspace = std::min(workspaceIndex,
+                                   static_cast<int>(workspaces.size()) - 1);
+    }
+    return true;
+}
+
 } // namespace desknx::workspace_ops
