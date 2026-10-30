@@ -270,7 +270,9 @@ bool ReadCache(const Signatures& sig, ScanResult& result) {
                 !IsUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
                 return false;
         } else if (item.kind == Kind::Nro) {
-            if (!isCachedNroPath(item.data)) return false;
+            if (!isCachedNroPath(item.data) ||
+                !IsUsableCachedJpeg(desknx::model::iconCachePath(item.kind, item.data)))
+                return false;
         } else if (!item.data.empty()) {
             return false;
         }
