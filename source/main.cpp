@@ -67,6 +67,11 @@ bool catalogueReady = false, catalogueScanComplete = false, catalogueTruncated =
 bool catalogueNsAvailable = false;
 Uint32 catalogueNsError = 0;
 size_t catalogueGameCount = 0, catalogueNroCount = 0;
+uint64_t catalogueRevision = 0, catalogueViewRevision = 0, recentLaunchRevision = 0;
+std::vector<Candidate> visibleCatalogueCache;
+uint64_t visibleCacheCatalogueRevision = UINT64_MAX;
+uint64_t visibleCacheViewRevision = UINT64_MAX;
+uint64_t visibleCacheRecentRevision = UINT64_MAX;
 bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown = false;
 bool layoutSaveBlocked = false;
 FontRenderer gFontRenderer;
@@ -212,12 +217,30 @@ std::vector<Candidate> catalogueSnapshot() {
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
     return result;
 }
-std::vector<Candidate> visibleCatalogueSnapshot() {
-    const auto all=catalogueSnapshot();
+const std::vector<Candidate>& visibleCatalogueSnapshot() {
+    uint64_t revision = 0;
+    std::vector<Candidate> all;
+    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
+    revision = catalogueRevision;
+    if(catalogueMutex) {
+        all = catalogue;
+        SDL_UnlockMutex(catalogueMutex);
+    } else {
+        all = catalogue;
+    }
+    if(revision == visibleCacheCatalogueRevision &&
+       catalogueViewRevision == visibleCacheViewRevision &&
+       recentLaunchRevision == visibleCacheRecentRevision)
+        return visibleCatalogueCache;
     std::vector<desknx::catalog_view::RecentKey> recent;
     recent.reserve(recentLaunches.size());
     for(const auto& item:recentLaunches) recent.push_back({item.kind,item.data});
-    return desknx::catalog_view::FilterAndSort(all,catalogueQuery,catalogueFilter,catalogueSort,recent);
+    visibleCatalogueCache = desknx::catalog_view::FilterAndSort(
+        all,catalogueQuery,catalogueFilter,catalogueSort,recent);
+    visibleCacheCatalogueRevision = revision;
+    visibleCacheViewRevision = catalogueViewRevision;
+    visibleCacheRecentRevision = recentLaunchRevision;
+    return visibleCatalogueCache;
 }
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize);
 void searchCatalogue() {
@@ -232,6 +255,7 @@ void searchCatalogue() {
     swkbdClose(&config);
     if(R_SUCCEEDED(rc)) {
         catalogueQuery=value;
+        ++catalogueViewRevision;
         listIndex=0;listOffset=0;
         setStatus(catalogueQuery.empty()?"SEARCH CLEARED":"SEARCH: "+catalogueQuery,2500);
     }
@@ -241,6 +265,7 @@ void cycleCatalogueFilter(int direction) {
     int current=static_cast<int>(catalogueFilter);
     current=(current+direction+count)%count;
     catalogueFilter=static_cast<desknx::catalog_view::FilterMode>(current);
+    ++catalogueViewRevision;
     listIndex=0;listOffset=0;
     setStatus(std::string("FILTER: ")+desknx::catalog_view::FilterName(catalogueFilter),1800);
 }
@@ -248,12 +273,14 @@ void cycleCatalogueSort() {
     constexpr int count=3;
     int current=(static_cast<int>(catalogueSort)+1)%count;
     catalogueSort=static_cast<desknx::catalog_view::SortMode>(current);
+    ++catalogueViewRevision;
     listIndex=0;listOffset=0;
     setStatus(std::string("SORT: ")+desknx::catalog_view::SortName(catalogueSort),1800);
 }
 void publishCatalogue(const desknx::catalog::ScanResult& result) {
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
     catalogue=result.items;
+    ++catalogueRevision;
     catalogueTruncated=result.truncated;
     catalogueReady=!catalogue.empty()||result.complete;
     catalogueScanComplete=result.complete;
@@ -485,6 +512,7 @@ void recordRecentLaunch(const Tile& tile) {
     recentLaunches.erase(std::remove_if(recentLaunches.begin(),recentLaunches.end(),
         [&](const HistoryEntry& e){return e.kind==tile.kind&&e.data==tile.data;}),recentLaunches.end());
     recentLaunches.insert(recentLaunches.begin(),{tile.kind,tile.title,tile.data});
+    ++recentLaunchRevision;
     if(recentLaunches.size()>10)recentLaunches.resize(10);
     lastLaunched=tile.title;saveHistory();
 }
@@ -663,13 +691,14 @@ int visibleStart() {
     return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));
 }
 void drawScreen() {
-    const auto available=visibleCatalogueSnapshot();
+    const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow);
     refreshBattery();rect(0,0,SW,SH,BG);
     for(int y=0;y<SH;y+=28)rect(0,y,SW,1,Color{255,255,255,static_cast<Uint8>(y%3==0?7:3)});
     rect(0,0,SW,76,Color{24,25,30,245});rect(0,74,SW,1,Color{255,255,255,18});
     text("DESKNX",30,21,4,WHITE,260);text("PERSONAL HOME WORKSPACE",34,50,1,MUTED,420);
+    text("DESKTOP "+std::to_string(deskIndex+1)+" OF "+std::to_string(desks.size()),470,28,1,MUTED,690);
     text(clockText(),1124,20,3,WHITE,1260);text(battery>=0?std::to_string(battery)+"%":"BAT --",1130,50,1,MUTED,1260);
     int start=visibleStart(),tabW=156,x=28;
     for(int i=0;i<7&&start+i<static_cast<int>(desks.size());++i) {
@@ -701,8 +730,8 @@ void drawScreen() {
     }
     struct Hint { const char* key; const char* action; };
     const Hint leftHints[]={{"A",editing?(dragging?"DROP":"MOVE"):"OPEN"},{"X",editing?"DONE":"EDIT"},
-                            {"Y","ADD"},{"ZL/ZR","SIZE"}};
-    const Hint rightHints[]={{"-","POWER"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
+                            {"Y","ADD"},{"ZL/ZR",editing?"SIZE":""}};
+    const Hint rightHints[]={{"-",editing?"REMOVE":"POWER"},{"L/R","DESK"},{"+","NEW DESK"},{"RSTICK",editing?"DEL DESK":""}};
     for(int i=0;i<4;++i) {
         const int lx=18+i*92,rx=900+i*92;
         text(leftHints[i].key,lx,650,1,BLUE,lx+48);
@@ -750,28 +779,63 @@ void drawScreen() {
                 text("TRY ANOTHER FILTER OR CLEAR SEARCH",mx+32,my+162,1,MUTED,mx+mw-20);
             }
         } else {
+            // The list occupies the left side; the persistent inspector keeps
+            // the selected item's metadata visible without another modal.
             for(int row=0;row<vis;++row) {
                 int i=listOffset+row;if(i>=static_cast<int>(available.size()))break;int yy=my+110+row*40;
-                if(i==listIndex)rect(mx+22,yy,mw-44,36,Color{45,61,82,255});
+                if(i==listIndex)roundRect(mx+22,yy,mx+604,36,9,Color{45,61,82,255});
                 const Candidate& candidate=available[static_cast<size_t>(i)];
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                 drawTileIcon(iconTile,mx+30,yy+5,26);
-                text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+575);
+                text(candidate.title,mx+66,yy+7,2,i==listIndex?WHITE:MUTED,mx+475);
                 const char* appBadge = typeName(candidate.kind);
                 if (candidate.kind == Kind::Game) {
-                    // SLaunch view flags: update takes priority over gamecard.
                     if (candidate.viewFlags & BIT(4)) appBadge = "UPDATE";
                     else if (candidate.viewFlags & BIT(2)) appBadge = "GAMECARD";
                 }
-                text(appBadge,mx+595,yy+11,1,
+                text(appBadge,mx+486,yy+11,1,
                      (candidate.viewFlags & BIT(4)) ? Color{255,159,10,255} :
-                     (i==listIndex?BLUE:MUTED),mx+mw-18);
+                     (i==listIndex?BLUE:MUTED),mx+620);
             }
+            roundRect(mx+640,my+110,192,410,15,Color{25,27,33,255});
+            outline(mx+640,my+110,192,410,Color{255,255,255,20});
+            const Candidate& selected = available[static_cast<size_t>(
+                std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
+            Tile preview{selected.kind,selected.title,selected.data,0,0,1,1,selected.color};
+            drawTileIcon(preview,mx+694,my+128,84);
+            text(selected.title,mx+654,my+224,2,WHITE,mx+818);
+            const char* detailType = typeName(selected.kind);
+            if(selected.kind==Kind::Game && (selected.viewFlags&BIT(4))) detailType="UPDATE AVAILABLE";
+            else if(selected.kind==Kind::Game && (selected.viewFlags&BIT(2))) detailType="GAME CARD";
+            text(detailType,mx+654,my+266,1,BLUE,mx+818);
+            if(selected.kind==Kind::Game) {
+                text("TITLE ID",mx+654,my+296,1,MUTED,mx+818);
+                text(selected.data,mx+654,my+314,1,WHITE,mx+818);
+            } else if(selected.kind==Kind::Nro) {
+                text("LOCATION",mx+654,my+296,1,MUTED,mx+818);
+                text(selected.data,mx+654,my+314,1,WHITE,mx+818);
+                struct stat appStat{};
+                if(stat(selected.data.c_str(),&appStat)==0 && S_ISREG(appStat.st_mode) && appStat.st_size>=0) {
+                    const unsigned long long bytes=static_cast<unsigned long long>(appStat.st_size);
+                    char sizeLabel[48]{};
+                    if(bytes>=1024ULL*1024ULL)
+                        std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu MB",bytes/(1024ULL*1024ULL));
+                    else
+                        std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu KB",bytes/1024ULL);
+                    text(sizeLabel,mx+654,my+352,1,MUTED,mx+818);
+                }
+            } else {
+                text("DESKTOP WIDGET",mx+654,my+296,1,MUTED,mx+818);
+                text("ADDS LIVE INFORMATION",mx+654,my+314,1,WHITE,mx+818);
+            }
+            text(std::to_string(listIndex+1)+" / "+std::to_string(available.size()),
+                 mx+654,my+472,1,MUTED,mx+818);
+            text("A  ADD TO WORKSPACE",mx+654,my+490,1,BLUE,mx+818);
         }
         const std::string counts=std::to_string(catalogueGameCount)+" GAMES  /  "+
             std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
-        text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-18);
+        text(counts,mx+28,my+mh-26,1,MUTED,mx+620);
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{0,0,0,185});rect(360,250,560,200,Color{25,30,42,255});outline(360,250,560,200,RED);
@@ -824,26 +888,50 @@ void removeTile() {
     std::string name=d.tiles[static_cast<size_t>(i)].title;d.tiles.erase(d.tiles.begin()+i);dragging=false;setStatus("REMOVED: "+name);saveNow();
 }
 void addSelected() {
-    const auto available=visibleCatalogueSnapshot();bool ready=false,complete=false,truncated=false;
+    const auto& available=visibleCatalogueSnapshot();bool ready=false,complete=false,truncated=false;
     readCatalogueState(ready,complete,truncated);
     if(available.empty()){setStatus(complete?"NO APPS FOUND":"CATALOGUE IS STILL SCANNING",2200);return;}
     if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())listIndex=0;
-    Workspace& d=desks[static_cast<size_t>(deskIndex)];if(itemAt(d,selectedX,selectedY)>=0){listOpen=false;setStatus("CHOOSE AN EMPTY CELL FIRST");return;}
-    const Candidate& c=available[static_cast<size_t>(listIndex)];Tile t{c.kind,c.title,c.data,selectedX,selectedY,c.w,c.h,c.color};
-    if(!placeable(d,t,t.x,t.y)){listOpen=false;setStatus("ITEM NEEDS MORE SPACE");return;}
-    d.tiles.push_back(t);selectedX=t.x;selectedY=t.y;listOpen=false;editing=true;setStatus("ADDED: "+t.title);saveNow();
+    Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    const Candidate& c=available[static_cast<size_t>(listIndex)];
+    for(const auto& existing:d.tiles) {
+        if(existing.kind==c.kind && existing.data==c.data) {
+            Tile placeholder{Kind::Game,"","",0,0,1,1,0};
+            int freeX=0,freeY=0;
+            if(firstFree(d,placeholder,freeX,freeY)){selectedX=freeX;selectedY=freeY;}
+            setStatus("ALREADY ON THIS WORKSPACE: "+c.title,2200);
+            return;
+        }
+    }
+    Tile t{c.kind,c.title,c.data,selectedX,selectedY,c.w,c.h,c.color};
+    if(!placeable(d,t,t.x,t.y) && !firstFree(d,t,t.x,t.y)) {
+        listOpen=false;
+        setStatus("WORKSPACE FULL - REMOVE A TILE BEFORE ADDING APPS",3500);
+        return;
+    }
+    d.tiles.push_back(t);editing=true;
+    Tile placeholder{Kind::Game,"","",0,0,1,1,0};
+    int freeX=0,freeY=0;
+    if(firstFree(d,placeholder,freeX,freeY)) {
+        selectedX=freeX;selectedY=freeY;
+        setStatus("ADDED: "+t.title+"  -  SELECT ANOTHER OR PRESS B",2600);
+    } else {
+        selectedX=t.x;selectedY=t.y;listOpen=false;
+        setStatus("DESKTOP FULL - ITEM ADDED",2600);
+    }
+    saveNow();
 }
 void openList(){
     Workspace& desk=desks[static_cast<size_t>(deskIndex)];
     if(itemAt(desk,selectedX,selectedY)>=0) {
         Tile placeholder{Kind::Game,"","",0,0,1,1,0};
         int freeX=0,freeY=0;
-        if(firstFree(desk,placeholder,freeX,freeY)) {
-            selectedX=freeX;
-            selectedY=freeY;
-        } else {
+        if(!firstFree(desk,placeholder,freeX,freeY)) {
             setStatus("WORKSPACE FULL - REMOVE A TILE BEFORE ADDING APPS",3500);
+            return;
         }
+        selectedX=freeX;
+        selectedY=freeY;
     }
     listOpen=true;
     listIndex=0;
@@ -959,13 +1047,13 @@ void keyInput(u64 keys, bool fromRepeat) {
         return;
     }
     if(listOpen) {
-        const auto available=visibleCatalogueSnapshot();
+        const auto& available=visibleCatalogueSnapshot();
         if(keys&HidNpadButton_B){listOpen=false;return;}
         if(keys&HidNpadButton_Y){searchCatalogue();return;}
         if(keys&HidNpadButton_X){cycleCatalogueSort();return;}
         if(keys&HidNpadButton_L){cycleCatalogueFilter(-1);return;}
         if(keys&HidNpadButton_R){cycleCatalogueFilter(1);return;}
-        if(keys&HidNpadButton_Minus){catalogueQuery.clear();listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);return;}
+        if(keys&HidNpadButton_Minus){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);return;}
         if(keys&HidNpadButton_StickR){restartCatalogueScan();return;}
         if(available.empty())return;
         if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
@@ -1045,13 +1133,13 @@ void touchInput(const SDL_Event&e) {
                 if(x>=238&&x<334) searchCatalogue();
                 else if(x>=342&&x<424) cycleCatalogueSort();
                 else if(x>=432&&x<544) cycleCatalogueFilter(1);
-                else if(x>=552&&x<634){catalogueQuery.clear();listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
+                else if(x>=552&&x<634){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
                 else if(x>=642&&x<768) restartCatalogueScan();
                 else if(x>=776&&x<848) listOpen=false;
                 else if(x>=856&&x<928) addSelected();
                 return;
             }
-            if(y>=180&&y<584) {
+            if(y>=180&&y<584&&x<mx + 620) {
                 const int row=(y-180)/40;
                 const auto available=visibleCatalogueSnapshot();
                 const int index=listOffset+row;
@@ -1205,11 +1293,7 @@ int main(int,char**) {
             static u64 lastHeldDirs = 0;
             const u64 held = padGetButtons(&pad);
             const u64 dirs = HidNpadButton_Left|HidNpadButton_Right|HidNpadButton_Up|HidNpadButton_Down;
-            const bool modal = listOpen||deletePrompt
-#ifdef DESKNX_SYSTEM_APPLET
-                ||powerMenu
-#endif
-                ;
+            const bool modal = listOpen||deletePrompt||powerMenu;
             if(!modal && (held&dirs) && !dragging) {
                 const Uint32 now = SDL_GetTicks();
                 if((held&dirs) != lastHeldDirs) { holdStart=now; lastRepeat=now; lastHeldDirs=held&dirs; }
