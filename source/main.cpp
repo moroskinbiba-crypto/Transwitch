@@ -218,20 +218,27 @@ std::vector<Candidate> catalogueSnapshot() {
     return result;
 }
 const std::vector<Candidate>& visibleCatalogueSnapshot() {
-    uint64_t revision = 0;
     std::vector<Candidate> all;
-    if(catalogueMutex) SDL_LockMutex(catalogueMutex);
-    revision = catalogueRevision;
+    uint64_t revision = 0;
     if(catalogueMutex) {
+        SDL_LockMutex(catalogueMutex);
+        revision = catalogueRevision;
+        if(revision == visibleCacheCatalogueRevision &&
+           catalogueViewRevision == visibleCacheViewRevision &&
+           recentLaunchRevision == visibleCacheRecentRevision) {
+            SDL_UnlockMutex(catalogueMutex);
+            return visibleCatalogueCache;
+        }
         all = catalogue;
         SDL_UnlockMutex(catalogueMutex);
     } else {
+        revision = catalogueRevision;
+        if(revision == visibleCacheCatalogueRevision &&
+           catalogueViewRevision == visibleCacheViewRevision &&
+           recentLaunchRevision == visibleCacheRecentRevision)
+            return visibleCatalogueCache;
         all = catalogue;
     }
-    if(revision == visibleCacheCatalogueRevision &&
-       catalogueViewRevision == visibleCacheViewRevision &&
-       recentLaunchRevision == visibleCacheRecentRevision)
-        return visibleCatalogueCache;
     std::vector<desknx::catalog_view::RecentKey> recent;
     recent.reserve(recentLaunches.size());
     for(const auto& item:recentLaunches) recent.push_back({item.kind,item.data});
@@ -1139,9 +1146,9 @@ void touchInput(const SDL_Event&e) {
                 else if(x>=856&&x<928) addSelected();
                 return;
             }
-            if(y>=180&&y<584&&x<mx + 620) {
+            if(y>=180&&y<584&&x<830) {
                 const int row=(y-180)/40;
-                const auto available=visibleCatalogueSnapshot();
+                const auto& available=visibleCatalogueSnapshot();
                 const int index=listOffset+row;
                 if(index>=0&&static_cast<size_t>(index)<available.size()) {
                     const Uint32 now=SDL_GetTicks();
