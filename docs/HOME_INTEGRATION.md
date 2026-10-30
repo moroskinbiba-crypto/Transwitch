@@ -7,7 +7,7 @@ DeskNX currently has two build paths:
 1. **Standalone NRO** — compiles in the standard devkitPro Switch container and can be launched from Homebrew Menu.
 2. **Experimental HOME backend + library applet** — source scaffolding is present under projects/sSystem/ and projects/DeskNXMenu/. The applet uses ECS to be served into a selected library-applet slot; the backend is designed to own HOME lifecycle and title launching.
 
-The standard CI builds the standalone NRO and the library applet. A separate workflow, Build experimental DeskNX HOME backend, attempts a full compile with selected libnx and Atmosphère refs (default: Atmosphère 1.12.1 and a pinned libnx commit). Even if that job passes, it only verifies compilation against that toolchain; it does not validate the firmware on a real console or make the build production-ready. Do not interpret the source tree or a generated package as proof that qlaunch replacement is operational.
+The standard CI builds the standalone NRO and the library applet. A separate workflow, Build experimental DeskNX HOME backend, attempts a full compile with selected libnx and Atmosphère refs (default: Atmosphère 1.12.1 and a pinned libnx commit). Even if that job passes, it only verifies compilation against that toolchain; it does not validate the firmware on a real console or make the build production-ready. Do not interpret the source tree or a generated package as proof that qlaunch replacement is operational. The first real-console acceptance sequence is documented in [the stage 1 smoke test](STAGE_1_SMOKE_TEST.md).
 
 ## Architecture (based on public sLaunch patterns)
 
