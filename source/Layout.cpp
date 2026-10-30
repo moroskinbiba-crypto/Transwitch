@@ -60,10 +60,10 @@ std::string serializeActiveWorkspaceState(
         activeWorkspace >= static_cast<int>(workspaces.size())) return {};
     const std::string shape = serialize(workspaces, 0);
     if (shape.empty()) return {};
-    return "DESKNX-ACTIVE1\\n" + std::to_string(activeWorkspace) + "\\n" +
-           std::to_string(workspaces.size()) + "\\n" +
-           std::to_string(model::stableHash(shape)) + "\\n" +
-           model::safeField(workspaces[static_cast<size_t>(activeWorkspace)].name) + "\\n";
+    return "DESKNX-ACTIVE1\n" + std::to_string(activeWorkspace) + "\n" +
+           std::to_string(workspaces.size()) + "\n" +
+           std::to_string(model::stableHash(shape)) + "\n" +
+           model::safeField(workspaces[static_cast<size_t>(activeWorkspace)].name) + "\n";
 }
 
 bool parseActiveWorkspaceState(const std::string& input,
@@ -85,7 +85,7 @@ bool parseActiveWorkspaceState(const std::string& input,
     errno = 0;
     char* end = nullptr;
     const unsigned long long signature = std::strtoull(signatureText.c_str(), &end, 10);
-    if (errno != 0 || end == signatureText.c_str() || !end || *end != '\\0')
+    if (errno != 0 || end == signatureText.c_str() || !end || *end != '\0')
         return false;
 
     const std::string shape = serialize(workspaces, 0);
