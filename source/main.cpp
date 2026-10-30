@@ -1326,7 +1326,28 @@ const std::vector<std::string>& cachedTileTitleLines(const std::string& title,si
     if(tileTitleWrapCache.size()>=512)tileTitleWrapCache.clear();
     return tileTitleWrapCache.emplace(key,wrapTileTitle(title,maxChars)).first->second;
 }
-void drawTileCover(const Tile& tile,const Workspace& workspace,const SDL_Rect& bounds) {
+void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
+    const int r=std::max(0,std::min(radius,std::min(bounds.w,bounds.h)/2));
+    if(r==0)return;
+    color(fill);
+    for(int row=0;row<r;++row) {
+        const double dy=static_cast<double>(r-row);
+        const int inset=static_cast<int>(std::ceil(r-std::sqrt(
+            std::max(0.0,static_cast<double>(r*r)-dy*dy))));
+        if(inset<=0)continue;
+        SDL_RenderDrawLine(renderer,bounds.x,bounds.y+row,
+                           bounds.x+inset-1,bounds.y+row);
+        SDL_RenderDrawLine(renderer,bounds.x+bounds.w-inset,bounds.y+row,
+                           bounds.x+bounds.w-1,bounds.y+row);
+        SDL_RenderDrawLine(renderer,bounds.x,bounds.y+bounds.h-1-row,
+                           bounds.x+inset-1,bounds.y+bounds.h-1-row);
+        SDL_RenderDrawLine(renderer,bounds.x+bounds.w-inset,bounds.y+bounds.h-1-row,
+                           bounds.x+bounds.w-1,bounds.y+bounds.h-1-row);
+    }
+}
+
+void drawTileCover(const Tile& tile,const Workspace& workspace,
+                   const SDL_Rect& bounds,Color cornerFill) {
     const Color fallback=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
@@ -1378,6 +1399,10 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,const SDL_Rect& b
         text(titleLines[1],bounds.x+10,bounds.y+bounds.h-stripHeight+22,
              2,WHITE,bounds.x+bounds.w-10);
     }
+    // Texture rendering uses a rectangular clip; paint only the four corner
+    // wedges afterwards so the actual game artwork follows the tile's 10px
+    // rounded silhouette rather than exposing square image corners.
+    maskRoundedImageCorners(viewport,UiCornerRadius,cornerFill);
 }
 void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     SDL_Rect r=tileRect(t);
@@ -1388,7 +1413,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
-        drawTileCover(t,workspace,r);
+        drawTileCover(t,workspace,r,fill);
         if(selected) {
             outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
             outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
