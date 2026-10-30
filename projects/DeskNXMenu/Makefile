@@ -38,8 +38,6 @@ APP_JSON    = $(if $(TOPDIR),$(TOPDIR),$(CURDIR))/DeskNXMenu.json
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__ -DDESKNX_SYSTEM_APPLET
-# Current upstream libnx moved NACP language entries under lang_data.
-CFLAGS      += $(if $(filter 1,$(SL_LIBNX_MASTER)),-DSL_LIBNX_MASTER,)
 CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
