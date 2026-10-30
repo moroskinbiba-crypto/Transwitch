@@ -85,8 +85,8 @@ int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, deletePrompt=false, running=true;
-int recentIndex=0, lastWorkspaceTabTap=-1;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, workspaceMenu=false, deletePrompt=false, running=true;
+int recentIndex=0, workspaceMenuIndex=0, lastWorkspaceTabTap=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
 // action is delegated to the backend (PWR-03); in standalone we honour it
@@ -717,6 +717,10 @@ void drawScreen() {
         text(desks[static_cast<size_t>(idx)].name,x+12,109,1,active?WHITE:MUTED,x+tabW-8);
         x+=166;
     }
+    roundRect(1188,94,34,42,11,desks.size()<static_cast<size_t>(MAX_DESKS)?Color{45,49,59,255}:Color{34,36,42,255});
+    text("+",1199,105,2,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,1218);
+    roundRect(1226,94,34,42,11,Color{45,49,59,255});
+    text("...",1230,111,1,WHITE,1257);
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(d.tiles.empty()) {
         softCard(390,292,500,132,Color{27,30,37,238},Color{255,255,255,24});
@@ -869,6 +873,20 @@ void drawScreen() {
             std::to_string(catalogueNroCount)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
         text(counts,mx+28,my+mh-26,1,MUTED,mx+620);
+    }
+    if(workspaceMenu) {
+        rect(0,0,SW,SH,Color{0,0,0,190});
+        softCard(400,220,480,280,Color{31,33,39,255},Color{255,255,255,30});
+        text("WORKSPACE OPTIONS",438,244,3,WHITE,840);
+        const char* actions[]={"RENAME WORKSPACE","DELETE WORKSPACE"};
+        for(int i=0;i<2;++i) {
+            const int yy=302+i*58;
+            if(i==workspaceMenuIndex)roundRect(430,yy,420,48,11,Color{45,61,82,255});
+            text(actions[i],452,yy+15,2,i==workspaceMenuIndex?WHITE:MUTED,830);
+        }
+        roundRect(430,430,420,42,11,Color{54,57,66,255});
+        text("CANCEL",592,444,1,WHITE,700);
+        text("UP / DOWN SELECT     A OPEN     B CLOSE",438,482,1,MUTED,840);
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{0,0,0,190});
@@ -1101,6 +1119,18 @@ void launch(const Tile& t) {
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    if(workspaceMenu) {
+        if(keys&HidNpadButton_B){workspaceMenu=false;return;}
+        if(keys&HidNpadButton_Up||keys&HidNpadButton_Down)
+            workspaceMenuIndex=1-workspaceMenuIndex;
+        if(keys&HidNpadButton_A) {
+            const int action=workspaceMenuIndex;
+            workspaceMenu=false;
+            if(action==0)renameDesk();
+            else deleteDesk();
+        }
+        return;
+    }
     if(recentOpen) {
         if(keys&HidNpadButton_B){recentOpen=false;return;}
         if(recentLaunches.empty())return;
@@ -1226,6 +1256,19 @@ void touchSelect(int x,int y) {
 }
 int tabStart(){return std::max(0,std::min(deskIndex-3,static_cast<int>(desks.size())-7));}
 void touchInput(const SDL_Event&e) {
+    if(e.type==SDL_FINGERDOWN && workspaceMenu) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=430&&x<=850&&y>=302&&y<350) {
+            workspaceMenu=false;
+            renameDesk();
+        } else if(x>=430&&x<=850&&y>=360&&y<408) {
+            workspaceMenu=false;
+            deleteDesk();
+        } else if(x>=430&&x<=850&&y>=430&&y<=472) {
+            workspaceMenu=false;
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && deletePrompt) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=366&&y<=414&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
@@ -1307,6 +1350,15 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(deletePrompt)return;
+        if(y>=92&&y<=140&&x>=1188&&x<1222) {
+            newDesk();
+            return;
+        }
+        if(y>=92&&y<=140&&x>=1226&&x<1260) {
+            workspaceMenu=true;
+            workspaceMenuIndex=0;
+            return;
+        }
         if(y>=92&&y<=140){
             int idx=tabStart()+(x-28)/166;
             const int tabX=28+(idx-tabStart())*166;
