@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    user-select: none;
+    touch-action: manipulation;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+  }
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Pulse highlight for focused controller item */
+@keyframes switch-focus-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 3px #007aff, 0 0 25px rgba(0, 122, 255, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 4.5px #38a5ff, 0 0 35px rgba(0, 122, 255, 0.85);
+  }
+}
+
+.switch-focused {
+  animation: switch-focus-pulse 1.8s infinite ease-in-out;
+  transform: scale(1.02);
+  z-index: 20;
+}
+
+/* Authentic Smooth iOS Springboard Jiggle in Edit Mode */
+@keyframes ios-jiggle {
+  0% {
+    transform: rotate(-0.7deg) translateY(-0.4px);
+  }
+  50% {
+    transform: rotate(0.75deg) translateY(0.4px);
+  }
+  100% {
+    transform: rotate(-0.7deg) translateY(-0.4px);
+  }
+}
+
+@keyframes ios-jiggle-alt {
+  0% {
+    transform: rotate(0.75deg) translateY(0.4px);
+  }
+  50% {
+    transform: rotate(-0.7deg) translateY(-0.4px);
+  }
+  100% {
+    transform: rotate(0.75deg) translateY(0.4px);
+  }
+}
+
+.tile-jiggle {
+  animation: ios-jiggle 0.34s infinite cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: 50% 50%;
+}
+
+.tile-jiggle-alt {
+  animation: ios-jiggle-alt 0.38s infinite cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: 50% 50%;
+}
+
+/* iOS Frosted Glass & Squircle Styling */
+.ios-glass {
+  background: rgba(25, 25, 35, 0.65);
+  backdrop-filter: blur(40px) saturate(190%);
+  -webkit-backdrop-filter: blur(40px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-top: 1px solid rgba(255, 255, 255, 0.32);
+}
+
+.ios-glass-dock {
+  background: rgba(20, 20, 28, 0.55);
+  backdrop-filter: blur(50px) saturate(210%);
+  -webkit-backdrop-filter: blur(50px) saturate(210%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-top: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.ios-squircle {
+  border-radius: 28px;
+}
+
+.ios-widget-squircle {
+  border-radius: 32px;
+}
+
+/* Optional CRT / Scanline overlay */
+.scanlines-overlay {
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.25) 50%
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+}
+
+/* Seamless Workspace Slide Transitions */
+@keyframes desk-slide-right {
+  0% {
+    opacity: 0.15;
+    transform: translateX(45px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes desk-slide-left {
+  0% {
+    opacity: 0.15;
+    transform: translateX(-45px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.animate-slide-from-right {
+  animation: desk-slide-right 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-slide-from-left {
+  animation: desk-slide-left 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

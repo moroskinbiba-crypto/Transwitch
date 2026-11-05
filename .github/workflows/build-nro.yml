@@ -1,0 +1,59 @@
+name: Build Nintendo Switch NRO
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-nro:
+    name: Compile & Package desknx.nro
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 📦 Install web dependencies
+        run: npm install
+
+      - name: ⚡ Build Web Client (Vite + React)
+        run: npm run build
+
+      - name: 🗂️ Prepare RomFS for Nintendo Switch
+        run: node scripts/prepare-romfs.js
+
+      - name: 🎮 Build desknx.nro (devkitA64 & libnx)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            devkitpro/devkita64:latest \
+            make -f Makefile.switch
+
+      - name: 📤 Upload desknx.nro Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desknx-switch-nro
+          path: desknx.nro
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 🚀 Publish GitHub Release (on tag or manual release)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desknx.nro
+          generate_release_notes: true
+          name: "DeskNX Nintendo Switch ${{ github.ref_name }}"

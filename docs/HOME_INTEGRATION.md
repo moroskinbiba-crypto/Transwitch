@@ -7,7 +7,7 @@ DeskNX currently has two build paths:
 1. **Standalone NRO** — compiles in the standard devkitPro Switch container and can be launched from Homebrew Menu.
 2. **Experimental HOME backend + library applet** — source scaffolding is present under projects/sSystem/ and projects/DeskNXMenu/. The applet uses ECS to be served into a selected library-applet slot; the backend is designed to own HOME lifecycle and title launching.
 
-The standard CI builds the standalone NRO and the library applet. A separate workflow, Build experimental DeskNX HOME backend, attempts a full compile with selected libnx and Atmosphère refs (default: Atmosphère 1.12.1 and a pinned libnx commit). Even if that job passes, it only verifies compilation against that toolchain; it does not validate the firmware on a real console or make the build production-ready. Do not interpret the source tree or a generated package as proof that qlaunch replacement is operational. The first real-console acceptance sequence is documented in [the stage 1 smoke test](STAGE_1_SMOKE_TEST.md).
+The standard CI builds the standalone NRO and the library applet. A separate workflow, Build experimental DeskNX HOME backend, attempts a full compile with selected libnx and Atmosphère refs (default: Atmosphère 1.12.1 and a pinned libnx commit). Even if that job passes, it only verifies compilation against that toolchain; it does not validate the firmware on a real console or make the build production-ready. Do not interpret the source tree or a generated package as proof that qlaunch replacement is operational.
 
 ## Architecture (based on public sLaunch patterns)
 
@@ -19,7 +19,7 @@ The standard CI builds the standalone NRO and the library applet. A separate wor
 - **Workspace storage** — the UI persists its layout to sdmc:/switch/DeskNX/layout.tsv.
 - **Logs** — backend log: sdmc:/switch/DeskNX/logs/daemon.log; ECS log: sdmc:/switch/DeskNX/logs/ecs.log.
 - **Installer/recovery** — guarded scripts require explicit risk acknowledgement, create a manifest, check ownership markers and compare current qlaunch files with stored SHA-256 checksums before uninstalling. Transaction stage/rollback paths include the process id to avoid collisions with stale files or parallel operations.
-- **Custom takeover slot** — an optional `switch/DeskNX/config/takeover.txt` may contain one known Shop or Offline Web applet program ID (for example, `0x0100000000001042`). DeskNX tries it first and then falls back through every built-in candidate. A slot is not launched unless ECS registration succeeds for every program ID associated with that firmware-sensitive slot; partial registrations are rolled back and skipped. Invalid, unknown, and unsupported applet IDs are ignored.
+- **Custom takeover slot** — an optional `switch/DeskNX/config/takeover.txt` may contain one known Shop or Offline Web applet program ID (for example, `0x0100000000001042`). DeskNX tries it first and then falls back to the built-in candidates. Invalid, unknown, and unsupported applet IDs are ignored.
 
 The upstream sLaunch repository contains significantly more functionality and years of firmware-specific hardening. DeskNX is not a drop-in replacement for sLaunch and is not yet at its reliability level.
 
@@ -87,18 +87,6 @@ Before trying any system install:
 - Controller setup, selected-user behavior, suspended-title lifecycle, service initialization, failure recovery and qlaunch NPDM need an expert code review before release.
 - The installer is conservative, but it cannot guarantee recovery if the SD contents are corrupted or the console has unrelated boot problems.
 
-### Foreground handoff safety
-
-The backend checks the result of `appletUnlockForeground()` before starting a
-title and checks the subsequent application-foreground request. A failed
-handoff is rolled back through the normal verified application teardown path;
-it is not reported as a successful game launch. Focus bookkeeping changes
-only after successful AM requests. If returning from HOME to a suspended game
-fails on the first attempt, the system backend retries at a bounded 500 ms
-cadence while it remains in the game-running state. A failed request to bring
-the system forward aborts the HOME takeover instead of opening a second
-foreground applet over an unchanged title.
-
 ### Process termination safety
 
 The backend treats `pmshell` as optional at startup, but it no longer treats
@@ -108,31 +96,9 @@ Only Atmosphere PM's explicit `ProcessNotFound` result counts as confirmation;
 other PM query errors preserve the holder and abort a replacement launch. A
 zero PID is rejected. The backend checks the result of forced termination.
 When `pmshell` initialization fails, it gives the title a short graceful-exit
-window and uses AM's direct application-termination command. After a successful
-termination request, it joins the AM application accessor before closing it;
-the command being accepted is not treated as proof that teardown is complete.
-If AM does not publish the final result, the join remains blocked rather than
-launching over a possibly live title.
-
-Natural game exit detection also uses the explicit PM `ProcessNotFound`
-result. The application state-change event is not sufficient because it can
-also be signalled by focus/suspend transitions. If `pmshell` is unavailable,
-the backend deliberately retains the holder instead of guessing that a
-suspended game has exited. It retries service initialization every five
-seconds, so a transient startup failure does not permanently disable
-automatic return-to-menu. If PM remains unavailable, natural-exit detection
-remains unavailable too. This path still requires validation on a physical
-console and matching firmware.
-
-### Library-applet teardown safety
-
-DeskNX retains the library-applet holder until its state-change event confirms
-completion. libnx's `appletHolderRequestExitOrTerminate()` can return after a
-forced-terminate command is accepted, without waiting for process exit. The
-backend therefore performs a separate bounded wait before releasing the
-accessor or changing ECS mappings. Failed waits keep the holder, suppress
-duplicate stop commands during a short retry window, and prevent a second
-library applet from being launched over a possibly live one.
+window and uses AM's direct application-termination command. If termination is not confirmed, the
+application holder is kept open and a replacement title is not launched over it.
+This path still requires validation on a physical console and matching firmware.
 
 ## Licensing
 

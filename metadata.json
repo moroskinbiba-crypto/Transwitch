@@ -1,0 +1,8 @@
+{
+  "name": "DeskNX / Transwitch",
+  "description": "Custom Nintendo Switch desktop and launcher interface featuring a 6x3 customizable workspace grid, installed games and homebrew NRO catalog, dynamic widgets, five color themes, and system IPC diagnostics simulator.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
