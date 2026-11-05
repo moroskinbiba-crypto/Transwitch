@@ -1,0 +1,8 @@
+node_modules/
+dist/
+build/
+.playwright-cli/
+.aistudio/
+*.bundle
+release/
+.DS_Store

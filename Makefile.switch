@@ -1,0 +1,85 @@
+#---------------------------------------------------------------------------------
+# DeskNX - Nintendo Switch devkitA64 Makefile
+# Builds self-contained desknx.nro with embedded RomFS
+#---------------------------------------------------------------------------------
+.SUFFIXES:
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. Example: export DEVKITPRO=/opt/devkitpro")
+endif
+
+include $(DEVKITPRO)/libnx/switch_rules
+
+#---------------------------------------------------------------------------------
+# TARGET CONFIGURATION
+#---------------------------------------------------------------------------------
+TARGET      := desknx
+BUILD       := build
+SOURCES     := src-switch
+ROMFS       := romfs
+
+# NRO Metadata
+APP_TITLE   := DeskNX Launcher
+APP_AUTHOR  := Transwitch Team
+APP_VERSION := 1.0.0
+APP_ICON    := icon.png
+
+# Compiler Flags
+ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+CFLAGS      := -g -Wall -O2 -ffunction-sections $(ARCH) $(DEFINES)
+CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
+ASFLAGS     := -g $(ARCH)
+LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+
+LIBS        := -lnx
+
+#---------------------------------------------------------------------------------
+ifneq ($(BUILD),$(notdir $(CURDIR)))
+#---------------------------------------------------------------------------------
+
+export OUTPUT   := $(CURDIR)/$(TARGET)
+export TOPDIR   := $(CURDIR)
+
+export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
+export DEPSDIR  := $(CURDIR)/$(BUILD)
+
+CFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+CPPFILES    := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+SFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+
+export OFILES   := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+
+.PHONY: all clean nro
+
+all: $(BUILD)
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.switch
+
+$(BUILD):
+	@mkdir -p $@
+
+clean:
+	@echo "[DeskNX] Cleaning build..."
+	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp
+
+else
+#---------------------------------------------------------------------------------
+# Inside build directory
+#---------------------------------------------------------------------------------
+
+DEPENDS := $(OFILES:.o=.d)
+
+$(OUTPUT).nro: $(OUTPUT).elf $(TOPDIR)/$(ROMFS)
+	@echo "[DeskNX] Creating NRO package with embedded RomFS..."
+	@elf2nro $< $@ --icon=$(TOPDIR)/$(APP_ICON) --name="$(APP_TITLE)" --author="$(APP_AUTHOR)" --version="$(APP_VERSION)" --romfsdir=$(TOPDIR)/$(ROMFS)
+	@echo "============================================="
+	@echo " SUCCESS: Built $(OUTPUT).nro"
+	@echo " Copy to SD card: sdmc:/switch/desknx/desknx.nro"
+	@echo "============================================="
+
+$(OUTPUT).elf: $(OFILES)
+	@echo "[DeskNX] Linking ELF: $@"
+	@$(CXX) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
+
+-include $(DEPENDS)
+
+endif
