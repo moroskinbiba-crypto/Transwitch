@@ -13,7 +13,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 # TARGET CONFIGURATION
 #---------------------------------------------------------------------------------
-TARGET      := desknx
+TARGET      := DeskNX
 BUILD       := build
 SOURCES     := src-switch
 ROMFS       := romfs
@@ -71,6 +71,7 @@ DEPENDS := $(OFILES:.o=.d)
 $(OUTPUT).nro: $(OUTPUT).elf $(TOPDIR)/$(ROMFS)
 	@echo "[DeskNX] Creating NRO package with embedded RomFS..."
 	@elf2nro $< $@ --icon=$(TOPDIR)/$(APP_ICON) --name="$(APP_TITLE)" --author="$(APP_AUTHOR)" --version="$(APP_VERSION)" --romfsdir=$(TOPDIR)/$(ROMFS)
+	@cp -f $@ $(TOPDIR)/desknx.nro 2>/dev/null || true
 	@echo "============================================="
 	@echo " SUCCESS: Built $(OUTPUT).nro"
 	@echo " Copy to SD card: sdmc:/switch/desknx/desknx.nro"

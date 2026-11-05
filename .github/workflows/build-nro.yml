@@ -23,7 +23,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: 📦 Install web dependencies
         run: npm install
@@ -46,14 +45,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desknx-switch-nro
-          path: desknx.nro
-          if-no-files-found: error
+          path: |
+            DeskNX.nro
+            desknx.nro
+          if-no-files-found: warn
           retention-days: 30
 
       - name: 🚀 Publish GitHub Release (on tag or manual release)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: desknx.nro
+          files: |
+            DeskNX.nro
+            desknx.nro
           generate_release_notes: true
           name: "DeskNX Nintendo Switch ${{ github.ref_name }}"
