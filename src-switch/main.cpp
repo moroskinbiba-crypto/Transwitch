@@ -5,8 +5,8 @@
  * Functions:
  * 1. Safe boot override with R-button failsafe (holds R on startup to bypass into stock qlaunch)
  * 2. Mounts RomFS containing compiled DeskNX web bundle (HTML5/React/Tailwind)
- * 3. Launches Hardware Accelerated Offline Web Applet (web:a / web:d)
- * 4. Bridges hardware services: psm (battery), pdm:qry (playtime), ns/am (launch games), hid (controllers)
+ * 3. Launches Hardware Accelerated Offline Web Applet (WebCommonConfig)
+ * 4. Bridges hardware services: psm (battery), pdm:qry (playtime), hid (controllers)
  */
 
 #include <stdio.h>
@@ -59,7 +59,7 @@ int main(int argc, char* argv[]) {
     rc = pdmqryInitialize();
 
     // 6. Configure and Launch the Nintendo Switch WebKit Applet
-    WebOfflineConfig config;
+    WebCommonConfig config;
     WebCommonReturnValue returnValue;
     memset(&returnValue, 0, sizeof(returnValue));
 
@@ -68,15 +68,15 @@ int main(int argc, char* argv[]) {
 
     if (R_SUCCEEDED(rc)) {
         // Configure WebKit flags for the best full-screen console experience:
-        webOfflineConfigSetBootDisplayKind(&config, WebBootDisplayKind_White);
-        webOfflineConfigSetFooter(&config, false);                     // Hide stock web browser footer
-        webOfflineConfigSetTouchEnabledOnSelect(&config, true);        // Full 10-point capacitive touch
-        webOfflineConfigSetJsExtension(&config, true);                 // Enable extended JavaScript support
-        webOfflineConfigSetMediaPlayerSpeedControl(&config, true);     // Media video support for game trailers
-        webOfflineConfigSetLeftStickMode(&config, WebLeftStickMode_Cursor); // Left stick cursor/dpad
+        webConfigSetBootDisplayKind(&config, WebBootDisplayKind_White);
+        webConfigSetFooter(&config, false);                     // Hide stock web browser footer
+        webConfigSetTouchEnabledOnContents(&config, true);       // Full 10-point capacitive touch
+        webConfigSetJsExtension(&config, true);                 // Enable extended JavaScript support
+        webConfigSetMediaPlayerSpeedControl(&config, true);     // Media video support for game trailers
+        webConfigSetLeftStickMode(&config, WebLeftStickMode_Cursor); // Left stick cursor/dpad
 
         // Launch the DeskNX user interface!
-        rc = webOfflineShow(&config, &returnValue);
+        rc = webConfigShow(&config, &returnValue);
     }
 
     // 7. Cleanup Hardware Services on Exit
