@@ -60,8 +60,8 @@ int main(int argc, char* argv[]) {
 
     // 6. Configure and Launch the Nintendo Switch WebKit Applet
     WebCommonConfig config;
-    WebCommonReturnValue returnValue;
-    memset(&returnValue, 0, sizeof(returnValue));
+    WebCommonReply reply;
+    memset(&reply, 0, sizeof(reply));
 
     // Create offline web view pointing to the bundled RomFS index.html
     rc = webOfflineCreate(&config, WebDocumentKind_OfflineHtmlPage, 0, "html-document/index.html");
@@ -76,7 +76,7 @@ int main(int argc, char* argv[]) {
         webConfigSetLeftStickMode(&config, WebLeftStickMode_Cursor); // Left stick cursor/dpad
 
         // Launch the DeskNX user interface!
-        rc = webConfigShow(&config, &returnValue);
+        rc = webConfigShow(&config, &reply);
     }
 
     // 7. Cleanup Hardware Services on Exit
