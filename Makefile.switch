@@ -1,14 +1,15 @@
 #---------------------------------------------------------------------------------
 # DeskNX - Nintendo Switch devkitA64 Makefile
-# Builds self-contained desknx.nro with embedded RomFS
+# Builds self-contained DeskNX.nro with embedded RomFS
 #---------------------------------------------------------------------------------
-.SUFFIXES:
-
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "Please set DEVKITPRO in your environment. Example: export DEVKITPRO=/opt/devkitpro")
 endif
 
-include $(DEVKITPRO)/libnx/switch_rules
+LIBNX    := $(DEVKITPRO)/libnx
+PORTLIBS := $(DEVKITPRO)/portlibs/switch
+
+include $(LIBNX)/switch_rules
 
 #---------------------------------------------------------------------------------
 # TARGET CONFIGURATION
@@ -16,22 +17,25 @@ include $(DEVKITPRO)/libnx/switch_rules
 TARGET      := DeskNX
 BUILD       := build
 SOURCES     := src-switch
+INCLUDES    := include
 ROMFS       := romfs
 
 # NRO Metadata
-APP_TITLE   := DeskNX Launcher
+APP_TITLE   := DeskNX
 APP_AUTHOR  := Transwitch Team
 APP_VERSION := 1.0.0
-APP_ICON    := icon.png
+APP_ICON    := $(CURDIR)/icon.png
 
 # Compiler Flags
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
-CFLAGS      := -g -Wall -O2 -ffunction-sections $(ARCH) $(DEFINES)
-CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
+CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
+CFLAGS      += $(INCLUDE)
+CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
-LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
 
 LIBS        := -lnx
+LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 #---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
@@ -47,7 +51,26 @@ CFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES    := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 
-export OFILES   := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+ifeq ($(strip $(CPPFILES)),)
+export LD := $(CC)
+else
+export LD := $(CXX)
+endif
+
+export OFILES_SRC := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+export OFILES   := $(OFILES_SRC)
+
+export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
+                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
+                   -I$(CURDIR)/$(BUILD)
+export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+
+export APP_TITLE APP_AUTHOR APP_VERSION
+export ROMFS
+ifneq ($(strip $(ROMFS)),)
+export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
+endif
+export APP_ICON
 
 .PHONY: all clean nro
 
@@ -59,7 +82,7 @@ $(BUILD):
 
 clean:
 	@echo "[DeskNX] Cleaning build..."
-	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp
+	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp desknx.nro
 
 else
 #---------------------------------------------------------------------------------
@@ -68,18 +91,17 @@ else
 
 DEPENDS := $(OFILES:.o=.d)
 
-$(OUTPUT).nro: $(OUTPUT).elf $(TOPDIR)/$(ROMFS)
-	@echo "[DeskNX] Creating NRO package with embedded RomFS..."
-	@elf2nro $< $@ --icon=$(TOPDIR)/$(APP_ICON) --name="$(APP_TITLE)" --author="$(APP_AUTHOR)" --version="$(APP_VERSION)" --romfsdir=$(TOPDIR)/$(ROMFS)
-	@cp -f $@ $(TOPDIR)/desknx.nro 2>/dev/null || true
+.PHONY: all
+
+all: $(OUTPUT).nro
+	@cp -f $(OUTPUT).nro $(TOPDIR)/desknx.nro 2>/dev/null || true
 	@echo "============================================="
-	@echo " SUCCESS: Built $(OUTPUT).nro"
-	@echo " Copy to SD card: sdmc:/switch/desknx/desknx.nro"
+	@echo " SUCCESS: Built $(OUTPUT).nro and desknx.nro"
 	@echo "============================================="
 
+$(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp
+
 $(OUTPUT).elf: $(OFILES)
-	@echo "[DeskNX] Linking ELF: $@"
-	@$(CXX) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
 
 -include $(DEPENDS)
 

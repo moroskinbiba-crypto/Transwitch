@@ -38,6 +38,8 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
+            -e DEVKITPRO=/opt/devkitpro \
+            -e DEVKITA64=/opt/devkitpro/devkitA64 \
             devkitpro/devkita64:latest \
             make -f Makefile.switch
 
@@ -48,7 +50,7 @@ jobs:
           path: |
             DeskNX.nro
             desknx.nro
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
       - name: 🚀 Publish GitHub Release (on tag or manual release)
