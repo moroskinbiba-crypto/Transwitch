@@ -52,21 +52,30 @@ public:
     bool load(WorkspaceProvider& provider, WorkspaceLoadInfo* info = nullptr) const {
         WorkspaceLoadInfo loaded{};
         std::string layoutText;
-        if (!readBounded(m_paths.layout, 1024 * 1024, layoutText)) {
+        WorkspaceProvider candidate;
+
+        // A primary file can exist and still be truncated/corrupt. Validate it
+        // before deciding whether the last known-good backup is required.
+        const bool primaryReadable = readBounded(m_paths.layout, 1024 * 1024, layoutText);
+        const bool primaryValid = primaryReadable && candidate.loadSerialized(layoutText);
+        if (!primaryValid) {
             if (!readBounded(m_paths.layoutBackup, 1024 * 1024, layoutText))
                 return false;
+            WorkspaceProvider backupCandidate;
+            if (!backupCandidate.loadSerialized(layoutText))
+                return false;
+            candidate = std::move(backupCandidate);
             loaded.restoredLayoutBackup = true;
         }
 
-        WorkspaceProvider candidate;
+        // A sidecar is valid only for the exact workspace shape it was saved
+        // against. Prefer the primary marker, then a matching backup marker.
         std::string activeText;
-        const bool hasActive = readBounded(m_paths.active, 512, activeText);
-        if (!candidate.loadSerialized(layoutText, hasActive ? activeText : std::string()))
-            return false;
-
         int sidecarIndex = 0;
-        if (hasActive && layout::parseActiveWorkspaceState(
+        if (readBounded(m_paths.active, 512, activeText) &&
+            layout::parseActiveWorkspaceState(
                 activeText, candidate.workspaces(), sidecarIndex)) {
+            candidate.switchTo(sidecarIndex);
             loaded.usedActiveSidecar = true;
         } else {
             std::string backupActiveText;
@@ -84,7 +93,6 @@ public:
             *info = loaded;
         return true;
     }
-
     bool save(const WorkspaceProvider& provider,
               const CommitCallback& commit = {}) const {
         const std::string layoutText = provider.serializeLayout();
