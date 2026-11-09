@@ -71,6 +71,13 @@ jobs:
             -o /tmp/desknx-homenx-workspace-projection-test
           /tmp/desknx-homenx-workspace-projection-test
 
+      - name: Test HomeNX independent workspace provider
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/homenx_workspace_provider_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-homenx-workspace-provider-test
+          /tmp/desknx-homenx-workspace-provider-test
+
       - name: Test IPC protocol validation boundaries
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
