@@ -133,3 +133,38 @@ Only after this passes host tests should the HomeNX menu adapter be introduced. 
 ## 7. Audit status
 
 This is a source-level design audit, not a completed integration. The HomeNX standalone build is being retried with a local xmake package-test override for the Switch-specific curl/libnx link probe. No claim is made here that its NRO has built or that the combined system menu works.
+
+
+## 8. Implemented platform-neutral workspace adapter
+
+The first source-level integration layer now exists in Transwitch:
+
+- `include/desknx/HomeNXWorkspaceAdapter.hpp` validates and projects one Transwitch workspace into a 6×3 HomeNX-facing cell array.
+- Each tile becomes an explicit typed entry. Only an installed-game entry carries a native title ID. Homebrew paths are validated as SD-card `.nro` files; synthetic widget/system entries are never misrepresented as installed titles.
+- Multi-cell tiles are projected as one primary cell plus continuation cells. Empty cells remain explicit.
+- The projection preserves workspace appearance metadata and stable item keys that do not change when a tile moves to another cell.
+- `tests/homenx_workspace_projection_test.cpp` exercises geometry, continuation cells, paths, title IDs, metadata and rejection of malformed layouts.
+
+## 9. Implemented independent workspace provider
+
+`include/desknx/HomeNXWorkspaceProvider.hpp` is the next platform-neutral layer:
+
+- owns the independent workspace collection and active workspace index;
+- loads existing Transwitch layout formats through the existing `Layout` parser;
+- restores the active workspace from the independently signed sidecar, falling back to the primary layout's active index if the sidecar is stale or invalid;
+- exports both persistence payloads without depending on the Switch filesystem;
+- switches forward/backward or to a selected workspace;
+- creates, renames and deletes workspaces with the existing 12-workspace bound;
+- moves tiles across workspaces without losing a tile when the destination is full;
+- places items in explicit or first-free cells;
+- returns the active workspace through the validated HomeNX projection.
+
+The provider deliberately does not write files itself. The eventual Switch adapter will own the SD-card paths, durable writes, backup and rollback. This keeps host tests deterministic and avoids adding filesystem assumptions to the model.
+
+Host CI now compiles and runs both test suites with `-Wall -Wextra -Werror`:
+- `tests/homenx_workspace_projection_test.cpp`
+- `tests/homenx_workspace_provider_test.cpp`
+
+The provider tests cover load/recovery, sidecar fallback, navigation, create/rename/delete, first-free placement, cross-workspace moves, full-destination safety and the 12-workspace limit.
+
+**Integration boundary:** these two layers are now implemented and host-tested, but they are not yet wired into HomeNX's `WiiUMenuApp`. The next change must add the Switch persistence adapter and connect the active projection to HomeNX's menu composition, without replacing the HomeNX catalogue or launching a second system daemon.
