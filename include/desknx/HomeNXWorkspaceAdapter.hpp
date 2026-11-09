@@ -133,13 +133,12 @@ inline EntryKind projectedKind(model::Kind kind) {
     return EntryKind::Unsupported;
 }
 
-inline std::string entryKey(const model::Tile& tile) {
-    std::string key = model::typeCode(tile) + ":" + tile.data;
-    // The old Transwitch tile format does not carry an instance UUID for
-    // widgets. Include the origin cell so identical widget instances remain
-    // distinguishable in the active-workspace projection.
-    key += "@" + std::to_string(tile.x) + "," + std::to_string(tile.y);
-    return key;
+inline std::string entryKey(const model::Tile& tile, std::size_t sourceIndex) {
+    // Coordinates are deliberately not part of the key: a drag changes a
+    // tile's cell, not its identity. The source index disambiguates repeated
+    // widget/shortcut instances in the same persisted workspace.
+    return model::typeCode(tile) + ":" + tile.data + "#" +
+           std::to_string(sourceIndex);
 }
 
 inline bool projectWorkspace(const model::Workspace& workspace,
@@ -186,7 +185,7 @@ inline bool projectWorkspace(const model::Workspace& workspace,
         Entry entry;
         entry.kind = projectedKind(tile.kind);
         entry.sourceTileIndex = static_cast<int>(i);
-        entry.stableKey = entryKey(tile);
+        entry.stableKey = entryKey(tile, i);
         entry.title = tile.title;
         entry.data = tile.data;
         entry.unknownTypeCode = tile.unknownTypeCode;
