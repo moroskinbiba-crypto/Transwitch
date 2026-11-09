@@ -1,0 +1,66 @@
+name: Build pinned HomeNX base
+
+on:
+  push:
+    branches: [ "feature/**" ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  homenx-base:
+    name: Build HomeNX standalone NRO from pinned submodule
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64
+    steps:
+      - name: Checkout Transwitch and pinned submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install HomeNX build dependencies
+        run: |
+          apt-get update
+          apt-get -y install curl gcc g++ zip unzip zstd cmake python3
+
+      - name: Set xmake cache
+        run: echo "XMAKE_GLOBALDIR=${{ runner.temp }}/xmake-global" >> "$GITHUB_ENV"
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: branch@dev
+
+      - name: Update xmake package repositories
+        run: xmake repo -u --root
+        working-directory: vendor/HomeNX
+
+      - name: Configure HomeNX standalone homebrew build
+        run: |
+          xmake f --yes -p cross -m release -a aarch64 \
+            --toolchain=devkita64 --homebrew=y --backend=sdl2 --root
+        working-directory: vendor/HomeNX
+
+      - name: Build HomeNX NRO
+        run: xmake build -vD --root SwitchU
+        working-directory: vendor/HomeNX
+
+      - name: Verify and stage HomeNX NRO
+        run: |
+          test -s build/cross/aarch64/release/HomeNX.nro
+          mkdir -p ../../out/homenx-base
+          cp build/cross/aarch64/release/HomeNX.nro ../../out/homenx-base/HomeNX.nro
+          printf '%s\n' "8756d38ac037e7bcbfb9c42a3de8dde892afacb2" > ../../out/homenx-base/upstream-commit.txt
+        working-directory: vendor/HomeNX
+
+      - name: Upload HomeNX base artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: transwitch-homenx-base
+          path: out/homenx-base/*
+          if-no-files-found: error
+          retention-days: 30
