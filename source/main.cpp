@@ -8,6 +8,7 @@
 #include <desknx/SafeReplace.hpp>
 #include "../include/desknx/Model.hpp"
 #include "../include/desknx/WorkspaceOps.hpp"
+#include "../include/desknx/TouchGesture.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
 #include "../include/desknx/Diagnostics.hpp"
@@ -161,6 +162,7 @@ SDL_FingerID catalogueTouchFingerId=0;
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
 SDL_FingerID touchPressFingerId=0;
+desknx::touch::HoldToDrag touchHoldGesture;
 int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
@@ -2785,6 +2787,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             selectedX=selectedY=0;
             dragging=false;touchDragging=false;touchPressActive=false;
             touchPressFingerId=0;
+            touchHoldGesture.finish();
             touchDragOffsetX=touchDragOffsetY=0;
             touchDragTabStart=-1;
             if(saveNow())setStatus("WORKSPACE DELETED");
@@ -2934,6 +2937,19 @@ int tabStart(){
     return std::max(0,std::min(deskIndex-2,
         static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+void beginTouchHoldDrag() {
+    if(!touchPressActive || touchDragging || !editing)return;
+    const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    if(itemAt(desk,selectedX,selectedY)<0)return;
+    dragging=true;
+    touchDragging=true;
+    touchDragTabStart=tabStart();
+    setStatus("MOVE ICON - DROP ON A DESKTOP");
+}
+void updateTouchHoldDrag() {
+    if(touchPressActive && touchHoldGesture.tick(SDL_GetTicks()))
+        beginTouchHoldDrag();
+}
 void touchInput(const SDL_Event&e) {
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
@@ -2944,6 +2960,13 @@ void touchInput(const SDL_Event&e) {
        (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP) &&
        e.tfinger.fingerId!=catalogueTouchFingerId)return;
     if(e.type==SDL_FINGERDOWN && (touchPressActive||catalogueTouchActive))return;
+    if(touchPressActive && (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP)) {
+        const int x=static_cast<int>(e.tfinger.x*SW);
+        const int y=static_cast<int>(e.tfinger.y*SH);
+        const Uint32 now=SDL_GetTicks();
+        if(e.type==SDL_FINGERMOTION)touchHoldGesture.observeMotion(x,y,now);
+        updateTouchHoldDrag();
+    }
     if(e.type==SDL_FINGERDOWN && dragging && !touchDragging) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
@@ -3218,7 +3241,6 @@ void touchInput(const SDL_Event&e) {
             }
         }
         if(y>=TOP&&y<TOP+ROWS*(CH+GY)) {
-            const int oldX=selectedX,oldY=selectedY;
             if(!touchSelect(x,y))return;
             Workspace& d=desks[static_cast<size_t>(deskIndex)];
             const int i=itemAt(d,selectedX,selectedY);
@@ -3226,8 +3248,7 @@ void touchInput(const SDL_Event&e) {
                 if(i>=0) {
                     touchPressActive=true;
                     touchPressFingerId=e.tfinger.fingerId;
-                    touchPressStartX=x;
-                    touchPressStartY=y;
+                    touchHoldGesture.begin(x,y,SDL_GetTicks());
                     desknx::workspace_ops::CellPoint grab{};
                     if(desknx::workspace_ops::cellFromPoint(
                            x,y,LEFT,TOP,CW,CH,GX,GY,true,grab)) {
@@ -3235,11 +3256,6 @@ void touchInput(const SDL_Event&e) {
                         touchDragOffsetY=grab.y-selectedY;
                     } else {
                         touchDragOffsetX=touchDragOffsetY=0;
-                    }
-                    if(oldX==selectedX&&oldY==selectedY) {
-                        dragging=true;
-                        touchDragging=true;
-                        touchDragTabStart=tabStart();
                     }
                 } else {
                     openList();
@@ -3272,23 +3288,8 @@ void touchInput(const SDL_Event&e) {
         catalogueTouchMoved=false;
         catalogueTouchFingerId=0;
     } else if(e.type==SDL_FINGERMOTION&&touchPressActive&&!touchDragging) {
-        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(std::abs(x-touchPressStartX)+std::abs(y-touchPressStartY)>=12) {
-            dragging=true;
-            touchDragging=true;
-            touchDragTabStart=tabStart();
-            if(y>=638&&y<=694&&x>=DeskTabX) {
-                const int start=tabStart();
-                const int slot=(x-DeskTabX)/DeskTabStep;
-                const int target=start+slot;
-                const int tabX=DeskTabX+slot*DeskTabStep;
-                if(slot>=0&&slot<VisibleDeskTabs&&x<tabX+DeskTabWidth&&
-                   target>=0&&target<static_cast<int>(desks.size()))
-                    moveToDesk(target);
-            } else {
-                (void)touchSelect(x,y);
-            }
-        }
+        // Movement before the hold threshold cancels dragging. The tile remains
+        // selected, so a short press is a normal tap rather than an accidental move.
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=638&&y<=694&&x>=DeskTabX) {
@@ -3306,6 +3307,7 @@ void touchInput(const SDL_Event&e) {
         const bool moved=touchDragging;
         touchPressActive=false;
         touchPressFingerId=0;
+        touchHoldGesture.finish();
         touchDragging=false;
         touchDragOffsetX=touchDragOffsetY=0;
         touchDragTabStart=-1;
@@ -3556,6 +3558,7 @@ int main(int,char**) {
         }
         pumpPlayStatsQuery();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        updateTouchHoldDrag();
         const Uint32 renderStarted=SDL_GetTicks();
         drawScreen();
         // Present already waits for the display when VSync is active. Sleeping
