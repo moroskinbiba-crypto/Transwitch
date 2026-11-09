@@ -58,6 +58,18 @@ int main() {
     assert(loaded.count() == 2 && loaded.activeIndex() == 1);
     assert(loaded.activeWorkspace()->name == "Homebrew");
 
+    // A desktop switch only replaces the active sidecar; the larger layout
+    // remains untouched and the sidecar is enough to restore the selection.
+    const std::string layoutBeforeSwitch = readFile(paths.layout);
+    assert(loaded.switchTo(0));
+    assert(store.saveActiveState(loaded, commit));
+    assert(readFile(paths.layout) == layoutBeforeSwitch);
+    WorkspaceProvider switchedReload;
+    assert(store.load(switchedReload));
+    assert(switchedReload.activeIndex() == 0);
+    assert(switchedReload.activeWorkspace()->name == "Games");
+    assert(loaded.switchTo(1));
+
     // Replacing the active sidecar is optional because the main layout also
     // contains the active index. Failed pre-commit must not change either file.
     const std::string originalLayout = readFile(paths.layout);
