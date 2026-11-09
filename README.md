@@ -28,7 +28,11 @@ HomeNX закреплён как Git submodule в `vendor/HomeNX`. Получи�
 git submodule update --init --recursive
 ```
 
-Workflow **Build pinned HomeNX base** отдельно собирает standalone `HomeNX.nro` из зафиксированной версии upstream. Это проверка воспроизводимости системной основы, а не готовая объединённая замена HOME. Архитектура интеграции и лицензионные границы описаны в [docs/HOMENX_INTEGRATION.md](docs/HOMENX_INTEGRATION.md).
+Workflow **Build pinned HomeNX base** собирает standalone `HomeNX.nro` из зафиксированной версии upstream. Последняя проверенная сборка HomeNX завершилась успешно; артефакт публикуется отдельно и не является объединённой заменой HOME.
+
+В Transwitch уже добавлены и подключены к host CI два платформенно-независимых слоя: `HomeNXWorkspaceAdapter.hpp` (проекция плиток в 6×3 сетку HomeNX) и `HomeNXWorkspaceProvider.hpp` (независимая коллекция рабочих столов, активный стол, сохранение/восстановление и перенос плиток). Они покрыты отдельными host-тестами. Пока это **не подключённый к WiiUMenuApp frontend-порт**: следующий шаг — адаптировать SD persistence и связать проекцию с композицией меню HomeNX.
+
+Подробности: [аудит архитектуры HomeNX/Transwitch](docs/HOMENX_SOURCE_AUDIT.md), [границы и лицензии интеграции](docs/HOMENX_INTEGRATION.md).
 
 ## Сборка standalone NRO
 
