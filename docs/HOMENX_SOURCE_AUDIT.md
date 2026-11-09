@@ -132,7 +132,7 @@ Only after this passes host tests should the HomeNX menu adapter be introduced. 
 
 ## 7. Audit status
 
-This is a source-level design audit, not a completed integration. The HomeNX standalone build is being retried with a local xmake package-test override for the Switch-specific curl/libnx link probe. No claim is made here that its NRO has built or that the combined system menu works.
+This is a source-level design audit, not a completed integration. HomeNX standalone NRO has successfully built in CI from the pinned submodule at least once; the build workflow also cross-compiles the Transwitch adapter/provider/file-store headers for AArch64. Repeated builds are still being used to validate the latest changes. This does not prove that the combined system menu works.
 
 
 ## 8. Implemented platform-neutral workspace adapter
@@ -168,3 +168,22 @@ Host CI now compiles and runs both test suites with `-Wall -Wextra -Werror`:
 The provider tests cover load/recovery, sidecar fallback, navigation, create/rename/delete, first-free placement, cross-workspace moves, full-destination safety and the 12-workspace limit.
 
 **Integration boundary:** these two layers are now implemented and host-tested, but they are not yet wired into HomeNX's `WiiUMenuApp`. The next change must add the Switch persistence adapter and connect the active projection to HomeNX's menu composition, without replacing the HomeNX catalogue or launching a second system daemon.
+
+
+## 10. Implemented transactional workspace file store
+
+`include/desknx/HomeNXWorkspaceFileStore.hpp` now connects the platform-neutral provider to a configurable file layout:
+
+- default Transwitch paths under `sdmc:/switch/DeskNX/` for the primary layout, active-workspace marker, temporary files and backups;
+- bounded file reads and writes;
+- primary-layout parsing before backup fallback, including recovery from corrupt or oversized primaries;
+- active-workspace sidecar validation against the exact workspace shape;
+- backup-marker fallback when the primary marker is missing or invalid;
+- transactional replacement through the existing `desknx::safeio::replaceFilePreservingOnFailure` helper;
+- optional durable-commit callback so the eventual HomeNX adapter can invoke its SD commit primitive without coupling the host-testable store to HomeNX headers.
+
+The save order publishes the active marker before the full layout. The marker includes the workspace shape signature, so an interrupted layout replacement cannot apply a stale active index to a different workspace collection.
+
+`tests/homenx_workspace_file_store_test.cpp` covers save/load, backup generation, rollback on failed commit, corrupt-primary recovery, oversized-primary recovery, and preservation of the in-memory provider on unrecoverable load. It runs in the system backend's host-test job with warnings treated as errors.
+
+**Verified at source/CI level:** projection, provider and file-store host tests passed together in Actions run `42651789939`. The target AArch64 smoke compile of these headers and `Layout.cpp` passed in HomeNX base run `42651790108`. These checks do not mean the store has been wired to `WiiUMenuApp` yet.
