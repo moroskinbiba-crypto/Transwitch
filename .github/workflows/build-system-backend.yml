@@ -64,6 +64,13 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/touch_gesture_test.cpp -o /tmp/desknx-touch-gesture-test
           /tmp/desknx-touch-gesture-test
 
+      - name: Test HomeNX workspace projection adapter
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/homenx_workspace_projection_test.cpp \
+            -o /tmp/desknx-homenx-workspace-projection-test
+          /tmp/desknx-homenx-workspace-projection-test
+
       - name: Test IPC protocol validation boundaries
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
