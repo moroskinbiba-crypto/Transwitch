@@ -82,8 +82,16 @@ int main() {
     assert(recovered.count() == 2);
     assert(recovered.workspaces()[0].name == "Games");
 
-    // Oversized and empty files are rejected without replacing live state.
+    // An oversized primary is treated as corrupt and recovered from the
+    // valid backup. Without a backup, load fails without replacing live state.
     writeFile(paths.layout, std::string(1024 * 1024 + 1, 'x'));
+    WorkspaceProvider oversizedRecovery;
+    WorkspaceLoadInfo oversizedInfo{};
+    assert(store.load(oversizedRecovery, &oversizedInfo));
+    assert(oversizedInfo.restoredLayoutBackup);
+    assert(oversizedRecovery.workspaces()[0].name == "Games");
+
+    std::remove(paths.layoutBackup.c_str());
     WorkspaceProvider untouched;
     assert(!store.load(untouched));
     assert(untouched.count() == 1);
