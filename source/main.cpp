@@ -166,7 +166,7 @@ desknx::touch::HoldToDrag touchHoldGesture;
 bool workspaceTouchActive=false;
 SDL_FingerID workspaceTouchFingerId=0;
 desknx::touch::HorizontalPageSwipe workspaceSwipeGesture;
-bool workspaceTouchSwiped=false;
+bool workspaceTouchSwiped=false, workspaceTouchWasEditing=false;
 int workspaceTouchOriginDesk=-1, workspaceTouchTileIndex=-1;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
@@ -3252,29 +3252,26 @@ void touchInput(const SDL_Event&e) {
             if(!touchSelect(x,y))return;
             Workspace& d=desks[static_cast<size_t>(deskIndex)];
             const int i=itemAt(d,selectedX,selectedY);
-            if(editing) {
-                if(i>=0) {
-                    touchPressActive=true;
-                    touchPressFingerId=e.tfinger.fingerId;
-                    touchHoldGesture.begin(x,y,SDL_GetTicks());
-                    desknx::workspace_ops::CellPoint grab{};
-                    if(desknx::workspace_ops::cellFromPoint(
-                           x,y,LEFT,TOP,CW,CH,GX,GY,true,grab)) {
-                        touchDragOffsetX=grab.x-selectedX;
-                        touchDragOffsetY=grab.y-selectedY;
-                    } else {
-                        touchDragOffsetX=touchDragOffsetY=0;
-                    }
+            if(editing && i>=0) {
+                touchPressActive=true;
+                touchPressFingerId=e.tfinger.fingerId;
+                touchHoldGesture.begin(x,y,SDL_GetTicks());
+                desknx::workspace_ops::CellPoint grab{};
+                if(desknx::workspace_ops::cellFromPoint(
+                       x,y,LEFT,TOP,CW,CH,GX,GY,true,grab)) {
+                    touchDragOffsetX=grab.x-selectedX;
+                    touchDragOffsetY=grab.y-selectedY;
                 } else {
-                    openList();
+                    touchDragOffsetX=touchDragOffsetY=0;
                 }
             } else {
-                // Defer the tap action until finger-up so a horizontal gesture
-                // can switch desktops without accidentally launching an icon.
+                // On the empty grid (including edit mode), defer the tap action
+                // until finger-up so a horizontal gesture can still change pages.
                 workspaceTouchActive=true;
                 workspaceTouchFingerId=e.tfinger.fingerId;
                 workspaceSwipeGesture.begin(x,y);
                 workspaceTouchSwiped=false;
+                workspaceTouchWasEditing=editing;
                 workspaceTouchOriginDesk=deskIndex;
                 workspaceTouchTileIndex=i;
             }
@@ -3295,18 +3292,21 @@ void touchInput(const SDL_Event&e) {
         }
     } else if(e.type==SDL_FINGERUP&&workspaceTouchActive) {
         const bool swiped=workspaceTouchSwiped;
+        const bool wasEditing=workspaceTouchWasEditing;
         const int originDesk=workspaceTouchOriginDesk;
         const int tileIndex=workspaceTouchTileIndex;
         workspaceTouchActive=false;
         workspaceTouchFingerId=0;
         workspaceSwipeGesture.finish();
         workspaceTouchSwiped=false;
+        workspaceTouchWasEditing=false;
         workspaceTouchOriginDesk=-1;
         workspaceTouchTileIndex=-1;
         if(!swiped && originDesk==deskIndex &&
            originDesk>=0 && originDesk<static_cast<int>(desks.size())) {
             Workspace& tappedDesk=desks[static_cast<size_t>(originDesk)];
-            if(tileIndex>=0 && tileIndex<static_cast<int>(tappedDesk.tiles.size()))
+            if(!wasEditing && tileIndex>=0 &&
+               tileIndex<static_cast<int>(tappedDesk.tiles.size()))
                 launch(tappedDesk.tiles[static_cast<size_t>(tileIndex)]);
             else
                 openList();
