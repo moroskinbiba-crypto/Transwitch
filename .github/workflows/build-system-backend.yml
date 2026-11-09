@@ -78,6 +78,13 @@ jobs:
             -o /tmp/desknx-homenx-workspace-provider-test
           /tmp/desknx-homenx-workspace-provider-test
 
+      - name: Test HomeNX workspace file store and rollback
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/homenx_workspace_file_store_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-homenx-workspace-file-store-test
+          /tmp/desknx-homenx-workspace-file-store-test
+
       - name: Test IPC protocol validation boundaries
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
