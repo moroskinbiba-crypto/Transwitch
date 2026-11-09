@@ -20,6 +20,16 @@ DeskNX — кастомный рабочий стол для Nintendo Switch. В
 
 Руководство по пользовательским фонам, шрифтам, icon pack, виджетам и ограничениям текущей версии: [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md).
 
+## Интеграция HomeNX
+
+HomeNX закреплён как Git submodule в `vendor/HomeNX`. Получить его исходники и вложенные зависимости:
+
+```sh
+git submodule update --init --recursive
+```
+
+Workflow **Build pinned HomeNX base** отдельно собирает standalone `HomeNX.nro` из зафиксированной версии upstream. Это проверка воспроизводимости системной основы, а не готовая объединённая замена HOME. Архитектура интеграции и лицензионные границы описаны в [docs/HOMENX_INTEGRATION.md](docs/HOMENX_INTEGRATION.md).
+
 ## Сборка standalone NRO
 
 Требуются devkitPro, devkitA64, libnx и SDL2 for Switch.
