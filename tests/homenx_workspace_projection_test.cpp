@@ -72,6 +72,10 @@ int main() {
     assert(projectWorkspace(duplicate, view));
     assert(view.entries.size() == 2);
     assert(view.entries[0].stableKey != view.entries[1].stableKey);
+    const std::string firstWidgetKey = view.entries[0].stableKey;
+    duplicate.tiles[0].x = 4; // moving a tile must not change its identity
+    assert(projectWorkspace(duplicate, view));
+    assert(view.entries[0].stableKey == firstWidgetKey);
 
     // Invalid title IDs and paths must never reach the HomeNX app model.
     Workspace invalidGame{"Bad game", {}};
