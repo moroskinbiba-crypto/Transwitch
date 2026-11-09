@@ -32,6 +32,19 @@ int main() {
     assert(gesture.dragging());
     gesture.finish();
 
+    // A horizontal swipe changes one desktop; vertical movement and short
+    // taps never trigger page navigation, and one gesture cannot skip pages.
+    desknx::touch::HorizontalPageSwipe swipe;
+    swipe.begin(200, 300);
+    assert(swipe.observe(245, 304) == 0);
+    assert(swipe.observe(120, 365) == 0); // not sufficiently horizontal
+    assert(swipe.observe(120, 300) == 1); // left = next desktop
+    assert(swipe.observe(20, 300) == 0);  // one page per gesture
+    swipe.finish();
+    swipe.begin(200, 300);
+    assert(swipe.observe(280, 300) == -1); // right = previous desktop
+    swipe.finish();
+
     // Unsigned elapsed-time arithmetic remains valid across SDL tick wraparound.
     const std::uint32_t nearWrap = std::numeric_limits<std::uint32_t>::max() - 100;
     gesture.begin(0, 0, nearWrap);
