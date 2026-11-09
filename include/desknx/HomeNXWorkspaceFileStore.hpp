@@ -143,6 +143,35 @@ public:
         return true;
     }
 
+    bool saveActiveState(const WorkspaceProvider& provider,
+                         const CommitCallback& commit = {}) const {
+        const std::string activeText = provider.serializeActiveState();
+        if (activeText.empty())
+            return false;
+
+        std::error_code ec;
+        std::filesystem::create_directories(m_paths.directory, ec);
+        if (ec || !writeBounded(m_paths.activeTemp, activeText)) {
+            removeTemps();
+            return false;
+        }
+
+        if (commit && !commit()) {
+            removeTemps();
+            return false;
+        }
+
+        const auto status = safeio::replaceFilePreservingOnFailure(
+            m_paths.activeTemp.c_str(), m_paths.active.c_str(),
+            m_paths.activeBackup.c_str(), true);
+        if (status != safeio::ReplaceStatus::Success) {
+            removeTemps();
+            return false;
+        }
+
+        return !commit || commit();
+    }
+
 private:
     static bool readBounded(const std::string& path, std::size_t limit,
                             std::string& output) {
