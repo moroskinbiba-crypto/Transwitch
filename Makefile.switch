@@ -1,6 +1,6 @@
 #---------------------------------------------------------------------------------
-# DeskNX - Nintendo Switch devkitA64 Makefile
-# Builds self-contained DeskNX.nro with embedded RomFS
+# Transwitch - native SDL2 launcher for Nintendo Switch
+# Builds the real C++ workspace UI as a standalone NRO.
 #---------------------------------------------------------------------------------
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "Please set DEVKITPRO in your environment. Example: export DEVKITPRO=/opt/devkitpro")
@@ -8,43 +8,51 @@ endif
 
 LIBNX    := $(DEVKITPRO)/libnx
 PORTLIBS := $(DEVKITPRO)/portlibs/switch
+export PKG_CONFIG_PATH := $(PORTLIBS)/lib/pkgconfig:$(PKG_CONFIG_PATH)
+export PATH := $(PORTLIBS)/bin:$(PATH)
+
+SDL2_CFLAGS      := $(shell pkg-config --cflags SDL2 2>/dev/null)
+SDL2_IMAGE_CFLAGS:= $(shell pkg-config --cflags SDL2_image 2>/dev/null)
+SDL2_TTF_CFLAGS  := $(shell pkg-config --cflags SDL2_ttf 2>/dev/null)
+SDL2_LIBS        := $(shell pkg-config --static --libs SDL2 2>/dev/null)
+SDL2_IMAGE_LIBS  := $(shell pkg-config --static --libs SDL2_image 2>/dev/null)
+SDL2_TTF_LIBS    := $(shell pkg-config --static --libs SDL2_ttf 2>/dev/null)
+
+ifeq ($(strip $(SDL2_LIBS)),)
+SDL2_LIBS := -lSDL2
+endif
+ifeq ($(strip $(SDL2_IMAGE_LIBS)),)
+SDL2_IMAGE_LIBS := -lSDL2_image
+endif
+ifeq ($(strip $(SDL2_TTF_LIBS)),)
+SDL2_TTF_LIBS := -lSDL2_ttf
+endif
 
 include $(LIBNX)/switch_rules
 
-#---------------------------------------------------------------------------------
-# TARGET CONFIGURATION
-#---------------------------------------------------------------------------------
 TARGET      := DeskNX
 BUILD       := build
-SOURCES     := src-switch
-INCLUDES    := include
-ROMFS       := romfs
+SOURCES     := source
+INCLUDES    := include projects/common/include
 
-# NRO Metadata
 APP_TITLE   := DeskNX
 APP_AUTHOR  := Transwitch Team
-APP_VERSION := 1.0.0
+APP_VERSION := 0.2.0
 APP_ICON    := $(CURDIR)/icon.png
 
-# Compiler Flags
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
-CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
-CFLAGS      += $(INCLUDE)
+CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
+CFLAGS      += $(SDL2_CFLAGS) $(SDL2_IMAGE_CFLAGS) $(SDL2_TTF_CFLAGS) $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
-
-LIBS        := -lnx
+LIBS        := $(SDL2_IMAGE_LIBS) $(SDL2_TTF_LIBS) $(SDL2_LIBS) -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
-#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
-#---------------------------------------------------------------------------------
-
 export OUTPUT   := $(CURDIR)/$(TARGET)
 export TOPDIR   := $(CURDIR)
-
-export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
+export VPATH    := $(foreach dir,$(SOURCES),$(abspath $(CURDIR)/$(dir)))
 export DEPSDIR  := $(CURDIR)/$(BUILD)
 
 CFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
@@ -58,22 +66,16 @@ export LD := $(CXX)
 endif
 
 export OFILES_SRC := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
-export OFILES   := $(OFILES_SRC)
-
-export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
-                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
-                   -I$(CURDIR)/$(BUILD)
-export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+export OFILES     := $(OFILES_SRC)
+export INCLUDE    := $(foreach dir,$(INCLUDES),-I$(abspath $(CURDIR)/$(dir))) \
+                     $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
+                     -I$(CURDIR)/$(BUILD)
+export LIBPATHS   := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export APP_TITLE APP_AUTHOR APP_VERSION
-export ROMFS
-ifneq ($(strip $(ROMFS)),)
-export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
-endif
 export APP_ICON
 
 .PHONY: all clean nro
-
 all: $(BUILD)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.switch
 
@@ -81,26 +83,21 @@ $(BUILD):
 	@mkdir -p $@
 
 clean:
-	@echo "[DeskNX] Cleaning build..."
+	@echo "[Transwitch] Cleaning native NRO build..."
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp desknx.nro
 
 else
-#---------------------------------------------------------------------------------
-# Inside build directory
-#---------------------------------------------------------------------------------
 
 DEPENDS := $(OFILES:.o=.d)
 
 .PHONY: all
-
 all: $(OUTPUT).nro
-	@cp -f $(OUTPUT).nro $(TOPDIR)/desknx.nro 2>/dev/null || true
+	@cp -f $(OUTPUT).nro $(TOPDIR)/desknx.nro
 	@echo "============================================="
-	@echo " SUCCESS: Built $(OUTPUT).nro and desknx.nro"
+	@echo " SUCCESS: Built native $(OUTPUT).nro"
 	@echo "============================================="
 
 $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp
-
 $(OUTPUT).elf: $(OFILES)
 
 -include $(DEPENDS)
