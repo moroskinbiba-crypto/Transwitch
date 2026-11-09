@@ -56,11 +56,14 @@ jobs:
           cp -a "$GITHUB_WORKSPACE/include/desknx" /tmp/transwitch-adapter/include/
           cp "$GITHUB_WORKSPACE/source/Layout.cpp" /tmp/transwitch-adapter/source/Layout.cpp
           cat > /tmp/transwitch-adapter/workspace_smoke.cpp <<'EOF'
-          #include <desknx/HomeNXWorkspaceProvider.hpp>
+          #include <desknx/HomeNXWorkspaceFileStore.hpp>
           int main() {
               desknx::homenx::WorkspaceProvider provider;
               desknx::homenx::WorkspaceProjection projection;
-              return provider.projectActive(projection) ? 0 : 1;
+              desknx::homenx::WorkspaceFileStore store;
+              const bool projected = provider.projectActive(projection);
+              (void)store;
+              return projected ? 0 : 1;
           }
           EOF
           CXX="$DEVKITPRO/devkitA64/bin/aarch64-none-elf-g++"
@@ -71,6 +74,7 @@ jobs:
             -o /tmp/transwitch-adapter/layout.o
           "$CXX" -std=gnu++20 -Wall -Wextra -Werror \
             -I/tmp/transwitch-adapter/include \
+            -I"$GITHUB_WORKSPACE/projects/common/include" \
             -c /tmp/transwitch-adapter/workspace_smoke.cpp \
             -o /tmp/transwitch-adapter/workspace-smoke.o
 
