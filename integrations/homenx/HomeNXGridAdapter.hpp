@@ -3,6 +3,7 @@
 #include "core/GridModel.hpp"
 #include "desknx/HomeNXWorkspaceAdapter.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <vector>
