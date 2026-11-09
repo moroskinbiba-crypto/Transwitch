@@ -55,15 +55,21 @@ jobs:
           mkdir -p /tmp/transwitch-adapter/include /tmp/transwitch-adapter/source
           cp -a "$GITHUB_WORKSPACE/include/desknx" /tmp/transwitch-adapter/include/
           cp "$GITHUB_WORKSPACE/source/Layout.cpp" /tmp/transwitch-adapter/source/Layout.cpp
+          cp "$GITHUB_WORKSPACE/integrations/homenx/HomeNXGridAdapter.hpp" /tmp/transwitch-adapter/
           cat > /tmp/transwitch-adapter/workspace_smoke.cpp <<'EOF'
           #include <desknx/HomeNXWorkspaceFileStore.hpp>
+          #include "HomeNXGridAdapter.hpp"
           int main() {
               desknx::homenx::WorkspaceProvider provider;
               desknx::homenx::WorkspaceProjection projection;
               desknx::homenx::WorkspaceFileStore store;
               const bool projected = provider.projectActive(projection);
+              std::vector<AppEntry> catalogue;
+              std::vector<switchu::widgets::Widget> widgets;
+              const GridModel grid = desknx::homenx::buildHomeNXGridModel(
+                  projection, catalogue, widgets);
               (void)store;
-              return projected ? 0 : 1;
+              return projected && grid.count() == 18 ? 0 : 1;
           }
           EOF
           CXX="$DEVKITPRO/devkitA64/bin/aarch64-none-elf-g++"
@@ -74,6 +80,8 @@ jobs:
             -o /tmp/transwitch-adapter/layout.o
           "$CXX" -std=gnu++20 -Wall -Wextra -Werror \
             -I/tmp/transwitch-adapter/include \
+            -I/tmp/transwitch-adapter \
+            -I"$GITHUB_WORKSPACE/vendor/HomeNX/projects/menu/src" \
             -I"$GITHUB_WORKSPACE/projects/common/include" \
             -c /tmp/transwitch-adapter/workspace_smoke.cpp \
             -o /tmp/transwitch-adapter/workspace-smoke.o
