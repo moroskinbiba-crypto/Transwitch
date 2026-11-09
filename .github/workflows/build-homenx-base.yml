@@ -82,6 +82,7 @@ jobs:
             -I/tmp/transwitch-adapter/include \
             -I/tmp/transwitch-adapter \
             -I"$GITHUB_WORKSPACE/vendor/HomeNX/projects/menu/src" \
+            -I"$GITHUB_WORKSPACE/vendor/HomeNX/lib/nxui/include" \
             -I"$GITHUB_WORKSPACE/projects/common/include" \
             -c /tmp/transwitch-adapter/workspace_smoke.cpp \
             -o /tmp/transwitch-adapter/workspace-smoke.o
