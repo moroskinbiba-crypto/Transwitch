@@ -59,6 +59,10 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include tests/menu_liveness_test.cpp -o /tmp/desknx-menu-liveness-test
           /tmp/desknx-menu-liveness-test
+      - name: Test Android-style touch hold-to-drag gesture
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/touch_gesture_test.cpp -o /tmp/desknx-touch-gesture-test
+          /tmp/desknx-touch-gesture-test
 
       - name: Test IPC protocol validation boundaries
         run: |
