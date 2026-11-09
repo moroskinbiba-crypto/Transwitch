@@ -163,6 +163,11 @@ bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
 SDL_FingerID touchPressFingerId=0;
 desknx::touch::HoldToDrag touchHoldGesture;
+bool workspaceTouchActive=false;
+SDL_FingerID workspaceTouchFingerId=0;
+desknx::touch::HorizontalPageSwipe workspaceSwipeGesture;
+bool workspaceTouchSwiped=false;
+int workspaceTouchOriginDesk=-1, workspaceTouchTileIndex=-1;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
@@ -2958,7 +2963,11 @@ void touchInput(const SDL_Event&e) {
     if(catalogueTouchActive &&
        (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP) &&
        e.tfinger.fingerId!=catalogueTouchFingerId)return;
-    if(e.type==SDL_FINGERDOWN && (touchPressActive||catalogueTouchActive))return;
+    if(workspaceTouchActive &&
+       (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP) &&
+       e.tfinger.fingerId!=workspaceTouchFingerId)return;
+    if(e.type==SDL_FINGERDOWN &&
+       (touchPressActive||catalogueTouchActive||workspaceTouchActive))return;
     if(touchPressActive && (e.type==SDL_FINGERMOTION||e.type==SDL_FINGERUP)) {
         const int x=static_cast<int>(e.tfinger.x*SW);
         const int y=static_cast<int>(e.tfinger.y*SH);
@@ -3259,12 +3268,48 @@ void touchInput(const SDL_Event&e) {
                 } else {
                     openList();
                 }
-            } else if(i>=0) {
-                launch(d.tiles[static_cast<size_t>(i)]);
             } else {
-                openList();
+                // Defer the tap action until finger-up so a horizontal gesture
+                // can switch desktops without accidentally launching an icon.
+                workspaceTouchActive=true;
+                workspaceTouchFingerId=e.tfinger.fingerId;
+                workspaceSwipeGesture.begin(x,y);
+                workspaceTouchSwiped=false;
+                workspaceTouchOriginDesk=deskIndex;
+                workspaceTouchTileIndex=i;
             }
             return;
+        }
+    } else if(e.type==SDL_FINGERMOTION&&workspaceTouchActive) {
+        const int x=static_cast<int>(e.tfinger.x*SW);
+        const int y=static_cast<int>(e.tfinger.y*SH);
+        const int step=workspaceSwipeGesture.observe(x,y);
+        if(step!=0) {
+            workspaceTouchSwiped=true;
+            const int count=static_cast<int>(desks.size());
+            const int target=(deskIndex+step+count)%count;
+            if(target!=deskIndex) {
+                deskIndex=target;
+                if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name,1200);
+            }
+        }
+    } else if(e.type==SDL_FINGERUP&&workspaceTouchActive) {
+        const bool swiped=workspaceTouchSwiped;
+        const int originDesk=workspaceTouchOriginDesk;
+        const int tileIndex=workspaceTouchTileIndex;
+        workspaceTouchActive=false;
+        workspaceTouchFingerId=0;
+        workspaceSwipeGesture.finish();
+        workspaceTouchSwiped=false;
+        workspaceTouchOriginDesk=-1;
+        workspaceTouchTileIndex=-1;
+        if(!swiped && originDesk==deskIndex &&
+           originDesk>=0 && originDesk<static_cast<int>(desks.size())) {
+            Workspace& tappedDesk=desks[static_cast<size_t>(originDesk)];
+            if(tileIndex>=0 && tileIndex<static_cast<int>(tappedDesk.tiles.size()))
+                launch(tappedDesk.tiles[static_cast<size_t>(tileIndex)]);
+            else
+                openList();
         }
     } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
         const int y=static_cast<int>(e.tfinger.y*SH);
