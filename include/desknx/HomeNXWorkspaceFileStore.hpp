@@ -118,18 +118,22 @@ public:
             return false;
         }
 
-        const auto layoutStatus = safeio::replaceFilePreservingOnFailure(
-            m_paths.layoutTemp.c_str(), m_paths.layout.c_str(),
-            m_paths.layoutBackup.c_str(), true);
-        if (layoutStatus != safeio::ReplaceStatus::Success) {
-            removeTemps();
-            return false;
-        }
-
+        // Publish the active marker first. If publishing the full layout then
+        // fails, its shape hash prevents this marker from being applied to a
+        // different old layout; when only the active desk changed, the marker
+        // remains a valid and intentional update.
         const auto activeStatus = safeio::replaceFilePreservingOnFailure(
             m_paths.activeTemp.c_str(), m_paths.active.c_str(),
             m_paths.activeBackup.c_str(), true);
         if (activeStatus != safeio::ReplaceStatus::Success) {
+            removeTemps();
+            return false;
+        }
+
+        const auto layoutStatus = safeio::replaceFilePreservingOnFailure(
+            m_paths.layoutTemp.c_str(), m_paths.layout.c_str(),
+            m_paths.layoutBackup.c_str(), true);
+        if (layoutStatus != safeio::ReplaceStatus::Success) {
             removeTemps();
             return false;
         }
