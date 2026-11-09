@@ -1,0 +1,3 @@
+[submodule "vendor/HomeNX"]
+	path = vendor/HomeNX
+	url = https://github.com/ad3333m/homenx.git
