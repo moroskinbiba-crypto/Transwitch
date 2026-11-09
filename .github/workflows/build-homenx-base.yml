@@ -50,6 +50,30 @@ jobs:
         run: xmake repo -u --root
         working-directory: vendor/HomeNX
 
+      - name: Cross-compile Transwitch workspace adapter for Switch
+        run: |
+          mkdir -p /tmp/transwitch-adapter/include /tmp/transwitch-adapter/source
+          cp -a "$GITHUB_WORKSPACE/include/desknx" /tmp/transwitch-adapter/include/
+          cp "$GITHUB_WORKSPACE/source/Layout.cpp" /tmp/transwitch-adapter/source/Layout.cpp
+          cat > /tmp/transwitch-adapter/workspace_smoke.cpp <<'EOF'
+          #include <desknx/HomeNXWorkspaceProvider.hpp>
+          int main() {
+              desknx::homenx::WorkspaceProvider provider;
+              desknx::homenx::WorkspaceProjection projection;
+              return provider.projectActive(projection) ? 0 : 1;
+          }
+          EOF
+          CXX="$DEVKITPRO/devkitA64/bin/aarch64-none-elf-g++"
+          test -x "$CXX"
+          "$CXX" -std=gnu++20 -Wall -Wextra -Werror \
+            -I/tmp/transwitch-adapter/include \
+            -c /tmp/transwitch-adapter/source/Layout.cpp \
+            -o /tmp/transwitch-adapter/layout.o
+          "$CXX" -std=gnu++20 -Wall -Wextra -Werror \
+            -I/tmp/transwitch-adapter/include \
+            -c /tmp/transwitch-adapter/workspace_smoke.cpp \
+            -o /tmp/transwitch-adapter/workspace-smoke.o
+
       - name: Configure HomeNX standalone homebrew build
         run: |
           xmake f --yes -p cross -m release -a aarch64 \
