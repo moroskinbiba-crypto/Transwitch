@@ -25,6 +25,7 @@ on:
       - "THIRD_PARTY.md"
       - "README.md"
       - "source/**"
+      - "include/**"
       - "Makefile"
       - ".github/workflows/build-system-backend.yml"
 
