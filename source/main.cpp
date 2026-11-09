@@ -163,7 +163,6 @@ bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
 SDL_FingerID touchPressFingerId=0;
 desknx::touch::HoldToDrag touchHoldGesture;
-int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
