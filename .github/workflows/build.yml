@@ -2,6 +2,11 @@ name: Build DeskNX
 
 on:
   workflow_dispatch:
+  # Pull requests must run the host tests here: this is the only workflow that
+  # compiles the native sources and the C++ test binaries. Without it a PR can
+  # merge C++ that nobody ever built.
+  pull_request:
+    branches: [ main, master ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,6 +59,27 @@ jobs:
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
 
+      # Android-style workspace layer (platform-neutral, host-testable).
+      - name: Test hold-to-drag gesture
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/touch_gesture_test.cpp -o /tmp/desknx-touch-gesture-test
+          /tmp/desknx-touch-gesture-test
+
+      - name: Test HomeNX workspace projection adapter
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_projection_test.cpp -o /tmp/desknx-homenx-projection-test
+          /tmp/desknx-homenx-projection-test
+
+      - name: Test HomeNX independent workspace provider
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_provider_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-provider-test
+          /tmp/desknx-homenx-provider-test
+
+      - name: Test HomeNX workspace file store and rollback
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/homenx_workspace_file_store_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-file-store-test
+          /tmp/desknx-homenx-file-store-test
+
       - name: Build standalone Homebrew app
         env:
           DEVKITPRO: /opt/devkitpro
@@ -92,3 +118,5 @@ jobs:
             SdOut/switch/DeskNX/bin/Menu/main
             SdOut/switch/DeskNX/bin/Menu/main.npdm
           if-no-files-found: error
+
+{"content":"name: Build DeskNX\r\n\r\non:\r\n  workflow_dispatch:\r\n  # Pull requests must run the host tests here: this is the only workflow that\r\n  # compiles the native sources and the C++ test binaries. Without it a PR can\r\n  # merge C++ that nobody ever built.\r\n  pull_request:\r\n    branches: [ main, master ]\r\n\r\nconcurrency:\r\n  group: ${{ github.workflow }}-${{ github.ref }}\r\n  cancel-in-progress: true\r\n\r\npermissions:\r\n  contents: read\r\n\r\njobs:\r\n  build:\r\n    name: Build DeskNX NRO and HOME applet\r\n    runs-on: ubuntu-latest\r\n    container: devkitpro/devkita64:latest\r\n    steps:\r\n      - name: Checkout\r\n        uses: actions/checkout@v4\r\n\r\n      - name: Validate shell scripts\r\n        run: bash -n scripts/install-system.sh scripts/uninstall-system.sh tests/test-recovery.sh\r\n\r\n      - name: Run host model, layout and catalog-view unit tests\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test\r\n          /tmp/desknx-model-test\r\n\r\n      - name: Test IPC protocol validation boundaries\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test\r\n          /tmp/desknx-protocol-rules-test\r\n\r\n      - name: Test production menu liveness controller\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include tests/menu_liveness_test.cpp -o /tmp/desknx-menu-liveness-test\r\n          /tmp/desknx-menu-liveness-test\r\n\r\n      - name: Run host IPC parser tests (ТЗ IPC-01/02/04/07)\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \\\r\n            tests/protocol_parser_test.cpp source/ProtocolParser.cpp \\\r\n            -o /tmp/desknx-protocol-parser-test\r\n          /tmp/desknx-protocol-parser-test\r\n\r\n      - name: Run host backend state-machine tests (ТЗ §3.2/§3.3)\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \\\r\n            tests/backend_machine_test.cpp projects/common/source/BackendMachine.cpp \\\r\n            -o /tmp/desknx-backend-machine-test\r\n          /tmp/desknx-backend-machine-test\r\n\r\n      - name: Test install and recovery logic on a temporary fake SD card\r\n        run: bash tests/test-recovery.sh\r\n\r\n      # Android-style workspace layer (platform-neutral, host-testable).\r\n      - name: Test hold-to-drag gesture\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/touch_gesture_test.cpp -o /tmp/desknx-touch-gesture-test\r\n          /tmp/desknx-touch-gesture-test\r\n\r\n      - name: Test HomeNX workspace projection adapter\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_projection_test.cpp -o /tmp/desknx-homenx-projection-test\r\n          /tmp/desknx-homenx-projection-test\r\n\r\n      - name: Test HomeNX independent workspace provider\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_provider_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-provider-test\r\n          /tmp/desknx-homenx-provider-test\r\n\r\n      - name: Test HomeNX workspace file store and rollback\r\n        run: |\r\n          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/homenx_workspace_file_store_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-file-store-test\r\n          /tmp/desknx-homenx-file-store-test\r\n\r\n      - name: Build standalone Homebrew app\r\n        env:\r\n          DEVKITPRO: /opt/devkitpro\r\n        run: make -j2\r\n\r\n      - name: Build HOME library applet\r\n        env:\r\n          DEVKITPRO: /opt/devkitpro\r\n        run: make -C projects/DeskNXMenu -j2\r\n\r\n      - name: Prepare standalone SD-card package\r\n        run: |\r\n          mkdir -p dist/switch/DeskNX\r\n          cp DeskNX.nro dist/switch/DeskNX/DeskNX.nro\r\n          cp README.md dist/README-DeskNX.md\r\n\r\n      - name: Upload standalone NRO\r\n        uses: actions/upload-artifact@v4\r\n        with:\r\n          name: DeskNX-nro\r\n          path: DeskNX.nro\r\n          if-no-files-found: error\r\n\r\n      - name: Upload standalone SD-card package\r\n        uses: actions/upload-artifact@v4\r\n        with:\r\n          name: DeskNX-sdcard\r\n          path: dist/\r\n          if-no-files-found: error\r\n\r\n      - name: Upload HOME library applet build (not install-ready)\r\n        uses: actions/upload-artifact@v4\r\n        with:\r\n          name: DeskNX-menu-applet\r\n          path: |\r\n            SdOut/switch/DeskNX/bin/Menu/main\r\n            SdOut/switch/DeskNX/bin/Menu/main.npdm\r\n          if-no-files-found: error\r\n"}
