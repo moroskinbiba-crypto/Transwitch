@@ -9,6 +9,7 @@ import {
 import { INITIAL_WORKSPACES, sound } from './data/mockCatalog';
 import { THEME_CONFIGS, DEFAULT_SETTINGS, FONT_OPTIONS, serializeSettingsIni, parseSettingsIni } from './utils/desknxSettings';
 import { findFirstFree } from './utils/desknxLayout';
+import { resolvePlayStats } from './utils/playStats';
 import { SLauncherCacheEngine } from './utils/slauncherCache';
 import { DeskNXGrid } from './components/DeskNXGrid';
 import { TopBar } from './components/TopBar';
@@ -397,9 +398,7 @@ export function App() {
         w: tile.w,
         h: tile.h,
         color: tile.color,
-        playtimeSeconds: 3600 * 10,
-        lastPlayed: Date.now(),
-        launchCount: 15,
+        ...resolvePlayStats(tile),
         icon: tile.icon || '',
         banner: tile.banner || '',
         category: tile.kind === 'Game' ? 'Game' : tile.kind === 'Nro' ? 'Homebrew' : 'Widget',

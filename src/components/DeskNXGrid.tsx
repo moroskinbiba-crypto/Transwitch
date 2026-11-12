@@ -12,6 +12,7 @@ import {
   findFirstFree,
   isSupportedTileSize 
 } from '../utils/desknxLayout';
+import { resolvePlayStats } from '../utils/playStats';
 import { 
   WidgetClock, 
   WidgetBattery, 
@@ -392,9 +393,7 @@ export const DeskNXGrid: React.FC<DeskNXGridProps> = ({
       w: tile.w,
       h: tile.h,
       color: tile.color,
-      playtimeSeconds: 3600 * 12,
-      lastPlayed: Date.now(),
-      launchCount: 24,
+      ...resolvePlayStats(tile),
       icon: tile.icon || '',
       banner: tile.banner || '',
       category: tile.kind === 'Game' ? 'Game' : tile.kind === 'Nro' ? 'Homebrew' : 'Widget',
