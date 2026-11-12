@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { DeskNXSettings, Workspace, FontOption } from '../types/desknx';
 import { THEME_CONFIGS, FONT_OPTIONS, serializeSettingsIni, parseSettingsIni, DEFAULT_SETTINGS } from '../utils/desknxSettings';
-import { serializeLayout, parseLayout, PALETTE } from '../utils/desknxLayout';
+import { serializeLayout, parseLayout, PALETTE, cloneWorkspaces } from '../utils/desknxLayout';
 import { CATALOG_ITEMS, INITIAL_WORKSPACES, sound } from '../data/mockCatalog';
+import { notify } from '../ui/toast';
 import { 
   X, 
   Settings as SettingsIcon, 
@@ -161,12 +162,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleResetDefaults = () => {
-    if (confirm('Reset Transwitch layout and configuration to defaults?')) {
-      sound.playSelect();
-      onUpdateWorkspaces(INITIAL_WORKSPACES, 0);
-      onUpdateSettings(DEFAULT_SETTINGS);
-      setImportStatus('Restored factory layout.');
-    }
+    // `confirm()` blocks the single-threaded applet loop on Horizon OS, so the
+    // reset is applied immediately and reported through a toast instead.
+    sound.playSelect();
+    onUpdateWorkspaces(cloneWorkspaces(INITIAL_WORKSPACES), 0);
+    onUpdateSettings(DEFAULT_SETTINGS);
+    setImportStatus('Restored factory layout.');
+    notify('Layout reset to factory defaults.');
   };
 
   const wallpaperPresets = [
