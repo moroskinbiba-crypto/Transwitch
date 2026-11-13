@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Candidate, 
   DeskNXSettings, 
@@ -8,7 +8,7 @@ import {
 } from './types/desknx';
 import { INITIAL_WORKSPACES, sound } from './data/mockCatalog';
 import { THEME_CONFIGS, DEFAULT_SETTINGS, FONT_OPTIONS, serializeSettingsIni, parseSettingsIni } from './utils/desknxSettings';
-import { findFirstFree } from './utils/desknxLayout';
+import { findFirstFree, cloneWorkspaces } from './utils/desknxLayout';
 import { SLauncherCacheEngine } from './utils/slauncherCache';
 import { DeskNXGrid } from './components/DeskNXGrid';
 import { TopBar } from './components/TopBar';
@@ -23,15 +23,19 @@ import { UserProfileModal } from './components/UserProfileModal';
 import { AlbumModal } from './components/AlbumModal';
 import { SoftwareOptionsModal } from './components/SoftwareOptionsModal';
 import { ControllersModal } from './components/ControllersModal';
+import { Toaster } from './components/Toaster';
 import { useSwitchGamepad } from './hooks/useSwitchGamepad';
 
+import { notify } from './ui/toast';
+// Each profile gets its own deep copy: sharing the module-level array let a
+// rename or tile move on one desk mutate another user's default layout.
 const DEFAULT_USERS: UserProfile[] = [
   {
     id: 'user_mario',
     name: 'Mario',
     avatar: 'https://images.unsplash.com/photo-1566576912321-d58ddd7a6088?w=200&auto=format&fit=crop&q=80',
     color: '#e60012',
-    workspaces: INITIAL_WORKSPACES,
+    workspaces: cloneWorkspaces(INITIAL_WORKSPACES),
     activeDeskIndex: 0,
   },
   {
@@ -171,7 +175,7 @@ export function App() {
       name,
       avatar: avatarUrl,
       color: '#00b4e6',
-      workspaces: INITIAL_WORKSPACES,
+      workspaces: cloneWorkspaces(INITIAL_WORKSPACES),
       activeDeskIndex: 0,
     };
     const updated = [...users, newUser];
@@ -275,7 +279,7 @@ export function App() {
     const free = findFirstFree(targetDesk, tile.w, tile.h);
     if (!free) {
       sound.playBack();
-      alert(`Нет свободного места на столе "${targetDesk.name}" для плитки ${tile.w}×${tile.h}.`);
+      notify(`Нет свободного места на столе "${targetDesk.name}" для плитки ${tile.w}×${tile.h}.`);
       return;
     }
 
@@ -682,6 +686,9 @@ export function App() {
         onClose={() => setRunningCandidate(null)}
         systemMode={settings.homeInstalled}
       />
+
+      {/* Non-blocking notifications (notify() is unusable in the WebKit applet) */}
+      <Toaster />
     </div>
   );
 }

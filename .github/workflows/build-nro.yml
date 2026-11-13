@@ -30,6 +30,9 @@ jobs:
       - name: ⚡ Build Web Client (Vite + React)
         run: npm run build
 
+      - name: Check native/web tile-shape contract
+        run: node scripts/check-tile-contract.mjs
+
       - name: 🗂️ Prepare RomFS for Nintendo Switch
         run: node scripts/prepare-romfs.js
 
@@ -62,3 +65,5 @@ jobs:
             desknx.nro
           generate_release_notes: true
           name: "DeskNX Nintendo Switch ${{ github.ref_name }}"
+
+{"content":"name: Build Nintendo Switch NRO\r\n\r\non:\r\n  push:\r\n    branches: [ main, master ]\r\n  pull_request:\r\n    branches: [ main, master ]\r\n  workflow_dispatch:\r\n\r\npermissions:\r\n  contents: write\r\n\r\njobs:\r\n  build-nro:\r\n    name: Compile & Package desknx.nro\r\n    runs-on: ubuntu-latest\r\n\r\n    steps:\r\n      - name: 📥 Checkout repository\r\n        uses: actions/checkout@v4\r\n\r\n      - name: 🟢 Setup Node.js 20\r\n        uses: actions/setup-node@v4\r\n        with:\r\n          node-version: 20\r\n\r\n      - name: 📦 Install web dependencies\r\n        run: npm install\r\n\r\n      - name: ⚡ Build Web Client (Vite + React)\r\n        run: npm run build\r\n\r\n      - name: Check native/web tile-shape contract\r\n        run: node scripts/check-tile-contract.mjs\r\n\r\n      - name: 🗂️ Prepare RomFS for Nintendo Switch\r\n        run: node scripts/prepare-romfs.js\r\n\r\n      - name: 🎮 Build desknx.nro (devkitA64 & libnx)\r\n        run: |\r\n          docker run --rm \\\r\n            -v ${{ github.workspace }}:/workspace \\\r\n            -w /workspace \\\r\n            -e DEVKITPRO=/opt/devkitpro \\\r\n            -e DEVKITA64=/opt/devkitpro/devkitA64 \\\r\n            devkitpro/devkita64:latest \\\r\n            make -f Makefile.switch\r\n\r\n      - name: 📤 Upload desknx.nro Artifact\r\n        uses: actions/upload-artifact@v4\r\n        with:\r\n          name: desknx-switch-nro\r\n          path: |\r\n            DeskNX.nro\r\n            desknx.nro\r\n          if-no-files-found: error\r\n          retention-days: 30\r\n\r\n      - name: 🚀 Publish GitHub Release (on tag or manual release)\r\n        if: startsWith(github.ref, 'refs/tags/')\r\n        uses: softprops/action-gh-release@v2\r\n        with:\r\n          files: |\r\n            DeskNX.nro\r\n            desknx.nro\r\n          generate_release_notes: true\r\n          name: \"DeskNX Nintendo Switch ${{ github.ref_name }}\"\r\n"}

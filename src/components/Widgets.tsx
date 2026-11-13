@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { 
   Clock as ClockIcon, 
   Battery as BatteryIcon, 
@@ -23,6 +23,7 @@ import {
 import { Candidate, Tile } from '../types/desknx';
 import { CATALOG_ITEMS, sound } from '../data/mockCatalog';
 
+import { notify } from '../ui/toast';
 interface WidgetProps {
   tile: Tile;
   accentColor?: string;
@@ -664,7 +665,7 @@ export const WidgetSystemTools: React.FC<WidgetProps> = ({ tile, onOpenSystemAct
             e.stopPropagation();
             sound.playClick();
             if (onOpenSystemAction) onOpenSystemAction('sleep');
-            else alert('Nintendo Switch переходит в спящий режим');
+            else notify('Nintendo Switch переходит в спящий режим');
           }}
           className="rounded-xl flex flex-col items-center justify-center p-1 bg-black/40 hover:bg-purple-600/40 text-purple-300 transition-all"
           title="Спящий режим"
@@ -757,7 +758,7 @@ export const WidgetSystemTools: React.FC<WidgetProps> = ({ tile, onOpenSystemAct
             e.stopPropagation();
             sound.playClick();
             if (onOpenSystemAction) onOpenSystemAction('sleep');
-            else alert('Nintendo Switch переходит в спящий режим');
+            else notify('Nintendo Switch переходит в спящий режим');
           }}
           className="flex items-center gap-2 p-1.5 rounded-xl bg-black/35 hover:bg-purple-600/30 border border-white/10 transition-all text-white/80"
         >
