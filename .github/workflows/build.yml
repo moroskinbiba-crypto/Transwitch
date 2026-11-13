@@ -70,6 +70,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_projection_test.cpp -o /tmp/desknx-homenx-projection-test
           /tmp/desknx-homenx-projection-test
 
+      - name: Test HomeNX grid focus adapter
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_grid_adapter_test.cpp -o /tmp/desknx-homenx-grid-adapter-test
+          /tmp/desknx-homenx-grid-adapter-test
+
       - name: Test HomeNX independent workspace provider
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_provider_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-provider-test
