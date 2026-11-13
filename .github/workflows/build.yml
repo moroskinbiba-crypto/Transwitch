@@ -80,6 +80,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_provider_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-provider-test
           /tmp/desknx-homenx-provider-test
 
+      - name: Test drag-and-resize editing on the active desktop
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/homenx_grid_edit_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-grid-edit-test
+          /tmp/desknx-homenx-grid-edit-test
+
       - name: Test HomeNX workspace file store and rollback
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/homenx_workspace_file_store_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-file-store-test
