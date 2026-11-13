@@ -112,38 +112,52 @@ Drawer (search/sort/filter), shared dock, workspace overview thumbnails, per-wor
 widgets in the picker, two-step confirm for destructive actions, archive/delete flows
 routed through the backend instead of alerts.
 
-## 4a. Feature ports requested from HomeNX
+## 4a. Feature ports from HomeNX (requested backlog)
 
-Product features the user wants carried over. Both are backend-coupled, so they land after
-Phase 2 gives the native frontend a real data path.
+Every item below exists in HomeNX at the pinned commit and does **not** exist in Transwitch
+today. Ordering rule: a feature is scheduled by its dependency, not by how appealing it is.
+"Needs Phase 2" means it requires the native frontend's data path (installed titles, icons,
+session) instead of the mock catalogue.
 
-### Cover art via SteamGridDB
+| # | Feature | HomeNX source | Needs | Size |
+|---|---|---|---|---|
+| F1 | Green dots "playing right now" | `CardsActivity.cpp` — `m_players` filled every minute, per-title flag, dot drawn on the tile | Phase 2 + player-count source (§F2) | S |
+| F2 | "{n} players online in Nextendo" pill + Settings toggle | `CardsActivity.cpp` — `m_playersTotal`, `kTopPlayers` hit area, `toggle("Nextendo players", ...)` | Phase 2 + network + opt-out state | M |
+| F3 | SteamGridDB cover art (+ picker) | `projects/menu/src/SteamGridDb{Manager,Backdrop,PickerScreen,Tab}.cpp`, `CardsActivity.cpp` (`steamGridDbKey`, `steamGridDbFind`) | Phase 2 + API key storage + cache | M |
+| F4 | Full music player (playlist, shuffle, repeat, visualiser) | `projects/cards/src/Audio.{hpp,cpp}` — SDL_mixer, `sdmc:/switch/SwitchU/sounds/wiiu/music`, `spectrum()` 48 bands | SDL_mixer in portlibs, audio device in the menu process | L |
+| F5 | Quick Settings overlay | `QuickSettingsOverlay.cpp` (+ `Audio::togglePause`, brightness/sleep actions) | Phase 2 UI shell | S |
+| F6 | Profile carousel | `ProfileCarouselScreen.cpp` | account service access | M |
+| F7 | Theme shop (catalogue, download, install) | `ThemeShopScreen.cpp`, `ThemeCatalogClient.cpp`, `ThemeHttp.cpp`, `ThemePackageInstaller.cpp` | HTTP + package install + theming pipeline | L |
+| F8 | Friends | `SocialScreen.cpp` + `friends/FriendStore.hpp` | friends service (`nfp`/`friends:`) | L |
+| F9 | Mii | `SocialScreen.cpp` + `social/MiiStore.hpp` | Mii database + rendering | M |
+| F10 | Discord rich presence | `social/DiscordService.hpp` | socket + app id + privacy switch | M |
+| F11 | Achievement packs | `projects/achievements/` — per-title packs (`packs/0100000000001000.txt`), memory watch, Tesla overlay | separate overlay app + cheat-db derived packs + DMNT access | XL |
+| F12 | Bluetooth audio sink (A2DP) | `projects/a2dp-sink/` (`avdtp`, `sdp`) | BT stack, btdrv services, profile bring-up | XL |
 
-HomeNX reference: `CardsActivity.cpp` — `steamGridDbKey()`, `steamGridDbFind(query, key, 12)`,
-`setSteamGridDbKey()`; the key is entered under Settings > Look (steamgriddb.com → Preferences →
-API). The artwork picker (button Y) can search a different name and choose a cover or backdrop.
-Resolution order per `cardsnx-release.md`: **SteamGridDB when a key is set → GameTDB → eShop
-banner (nlib.cc)**. Backdrop caching is described in `cards-artwork-performance.md`.
+### Delivery groups
 
-Work items: a settings row for the API key (stored on SD, never logged), a resolver with that
-three-step fallback, an artwork cache keyed by title ID using the same bounded/transactional
-write rules as `layout.tsv`, and an artwork picker in the desktop customiser.
+**Group A — data, after Phase 2.** F1 + F2 (they share one fetch), F3.
+Acceptance: with the console offline the UI shows no dots and no pill (never a fake zero);
+with a key set, a game without a SteamGridDB cover falls back to GameTDB and then the eShop
+banner exactly as HomeNX documents; the API key never appears in logs or in the layout file.
 
-### Online players via Prelude (Nextendo)
+**Group B — cheap UI on the existing shell.** F5, then F6, then F9.
+Acceptance: Quick Settings opens over any screen, never blocks the grid's input handler, and
+its volume/sleep actions go through the same code path as the physical buttons.
 
-HomeNX reference: `CardsActivity.cpp` — `m_players` refreshed roughly once a minute, per-title
-"played online now" green dots, a total pill reading "{n} players online in Nextendo", and a
-Settings toggle ("Nextendo players"). Network selection lives in `Library.hpp` (`nextendo`), the
-app path in `Config.hpp` (`sdmc:/switch/prelude.nro`). Prelude is downloaded from
-`https://github.com/NextendoNetwork/Prelude-Nextendo/releases/latest/download/nextendo.nro` and
-started through `openNextendo(mode)` — `0` = NINTENDO, `1` = NEXTENDO; it switches the network
-and restarts the console, and it only runs as an application, not as an applet. Endpoint base:
-`https://nextendo.network`.
+**Group C — large or independent.** F4 (audio), F7 (network + packages), F8 + F10 (social),
+F11 and F12 (separate processes; do not let them block the launcher).
+Acceptance per item is a working feature on a console with recovery prepared, because every
+one of these touches a service the system can refuse.
 
-Work items: a background player-count fetch on a minute cadence with a hard timeout that never
-blocks the UI thread, a per-title dot on the tile/card, a total in the status bar, an opt-out
-toggle, and an explicit "Nextendo not installed / not in NEXTENDO mode" state instead of a
-silent zero.
+### Hard rules for all of them
+
+1. No feature may invent data when its source is unavailable — show "not available", not `0`
+   (the F2 precedent: `utils/playStats.ts`).
+2. Nothing here may become a second lifecycle owner; they hang off the HomeNX daemon.
+3. Network calls run in the background with a hard timeout and never block the render thread.
+4. GPL-3.0 obligations apply to every ported file: keep upstream headers and update
+   `THIRD_PARTY.md` in the same change.
 
 ## 5. Open defect backlog (unchanged by Phase 0)
 
