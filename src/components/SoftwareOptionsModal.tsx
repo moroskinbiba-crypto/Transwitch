@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { Candidate, Workspace } from '../types/desknx';
 import { sound } from '../data/mockCatalog';
+
+import { notify } from '../ui/toast';
 import { 
   X, 
   Play, 
@@ -101,7 +103,7 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
     setTimeout(() => {
       sound.playSelect();
       setCloudSyncStatus('synced');
-      alert(`Резервная копия сохранений "${candidate.title}" успешно сохранена в /switch/JKSV/backups/`);
+      notify(`Резервная копия сохранений "${candidate.title}" успешно сохранена в /switch/JKSV/backups/`);
     }, 1000);
   };
 
@@ -328,7 +330,7 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
                   <button
                     onClick={() => {
                       sound.playSelect();
-                      alert('Данные программы уже находятся на карте памяти microSD.');
+                      notify('Данные программы уже находятся на карте памяти microSD.');
                     }}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white border border-white/15 transition-all shrink-0 ml-3"
                   >
@@ -350,7 +352,7 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
                       sound.playClick();
                       if (confirm(`Архивировать программу "${candidate.title}"? Данные сохранений будут сохранены.`)) {
                         sound.playSelect();
-                        alert(`Программа "${candidate.title}" архивирована.`);
+                        notify(`Программа "${candidate.title}" архивирована.`);
                       }
                     }}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all shrink-0 ml-3"
@@ -372,7 +374,7 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
                     onClick={() => {
                       sound.playBack();
                       if (confirm(`Вы действительно хотите полностью удалить "${candidate.title}"?`)) {
-                        alert(`Программа "${candidate.title}" удалена.`);
+                        notify(`Программа "${candidate.title}" удалена.`);
                       }
                     }}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-md shrink-0 ml-3"
@@ -427,7 +429,7 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
                   <button
                     onClick={() => {
                       sound.playSelect();
-                      alert('Создана локальная группа согласования версий поблизости...');
+                      notify('Создана локальная группа согласования версий поблизости...');
                     }}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white border border-white/15 transition-all shrink-0 ml-3"
                   >

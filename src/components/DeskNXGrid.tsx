@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Candidate, 
   Tile, 
@@ -10,7 +10,8 @@ import {
   PALETTE, 
   placeable, 
   findFirstFree,
-  isSupportedTileSize 
+  isSupportedTileSize,
+  TILE_SHAPES
 } from '../utils/desknxLayout';
 import { resolvePlayStats } from '../utils/playStats';
 import { 
@@ -22,7 +23,8 @@ import {
   WidgetCalendar 
 } from './Widgets';
 import { CATALOG_ITEMS, sound } from '../data/mockCatalog';
-import { 
+
+import { notify } from '../ui/toast';import { 
   MoreVertical, 
   Trash2, 
   Move, 
@@ -425,7 +427,7 @@ export const DeskNXGrid: React.FC<DeskNXGridProps> = ({
         sound.playClick();
       } else {
         sound.playBack();
-        alert(`Недостаточно свободного места на этом столе для плитки ${newW}×${newH}.`);
+        notify(`Недостаточно свободного места на этом столе для плитки ${newW}×${newH}.`);
       }
     }
     closeContextMenu();
@@ -939,13 +941,8 @@ export const DeskNXGrid: React.FC<DeskNXGridProps> = ({
           <div className="px-1 pt-1 pb-1.5 text-xs font-bold text-zinc-300 flex items-center gap-1.5">
             <Maximize2 className="w-4 h-4 text-blue-400" /> Размер виджета:
           </div>
-          <div className="grid grid-cols-4 gap-2 mb-3">
-            {[
-              { w: 1, h: 1, label: '1×1' },
-              { w: 2, h: 1, label: '2×1' },
-              { w: 2, h: 2, label: '2×2' },
-              { w: 2, h: 3, label: '2×3' },
-            ].map((size) => (
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            {TILE_SHAPES.map((size) => (
               <button
                 key={`${size.w}x${size.h}`}
                 onClick={() => handleChangeTileSize(size.w, size.h)}
@@ -955,7 +952,7 @@ export const DeskNXGrid: React.FC<DeskNXGridProps> = ({
                     : 'bg-black/40 text-zinc-300 hover:bg-white/10 border-white/10'
                 }`}
               >
-                {size.label}
+                {size.w}×{size.h}
               </button>
             ))}
           </div>
