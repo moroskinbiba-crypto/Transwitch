@@ -56,7 +56,11 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
   if (!isOpen || !candidate) return null;
 
   const hours = Math.floor(candidate.playtimeSeconds / 3600);
-  const playtimeFormatted = hours > 0 ? `${hours} ч. сыграно` : 'Менее часа';
+  // 0 means "no record", not "less than an hour": the web UI has no PDM access
+  // and must not present an invented playtime as measured.
+  const playtimeFormatted = candidate.playtimeSeconds > 0
+    ? `${hours} ч. сыграно`
+    : 'Нет данных о времени';
 
   // Simulate scanning for corrupt data (Nintendo Switch official verification)
   const handleStartDataScan = () => {
