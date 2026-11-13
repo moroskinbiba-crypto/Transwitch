@@ -11,6 +11,12 @@
 
 #include <memory>
 #include <cstring>
+#include <fstream>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <iostream>
+#include <cstdio>
+#include <cerrno>
 
 using namespace desknx;
 
@@ -22,12 +28,106 @@ std::unique_ptr<menu::input::TileInputHandler> g_inputHandler;
 std::unique_ptr<homenx::WorkspaceProvider> g_provider;
 
 const char* kLayoutPath = "sdmc:/switch/DeskNX/layout.tsv";
+const char* kTitleID = "0100000000001000";
+const char* kSaveDataPath = "sdmc:/01000000/00001000/";
+const char* kDeskNXPath = "sdmc:/switch/DeskNX/";
+const char* kDefaultLauncherMarker = "sdmc:/switch/DeskNX/.is_default_launcher";
+const char* kConfigPath = "sdmc:/01000000/00001000/config.json";
+
+// Create directory recursively (simple implementation)
+bool mkdirRecursive(const char* path) {
+    if (!path || strlen(path) == 0) return false;
+    
+    std::string pathStr(path);
+    size_t pos = 0;
+    
+    while ((pos = pathStr.find('/', pos + 1)) != std::string::npos) {
+        std::string dir = pathStr.substr(0, pos);
+        mkdir(dir.c_str(), 0755);
+    }
+    
+    return mkdir(pathStr.c_str(), 0755) == 0 || errno == EEXIST;
+}
+
+// Initialize directories and config
+void initializeAppDirectories() {
+    debugPrintf("DeskNX Title ID: %s\n", kTitleID);
+    debugPrintf("Initializing DeskNX directories...\n");
+    
+    // Create save data directory
+    if (mkdirRecursive(kSaveDataPath)) {
+        debugPrintf("Created save data directory: %s\n", kSaveDataPath);
+    } else {
+        debugPrintf("Warning: Could not create save data directory: %s\n", kSaveDataPath);
+    }
+    
+    // Create application data directory
+    if (mkdirRecursive(kDeskNXPath)) {
+        debugPrintf("Created application data directory: %s\n", kDeskNXPath);
+    } else {
+        debugPrintf("Warning: Could not create application data directory: %s\n", kDeskNXPath);
+    }
+    
+    // Create initial config.json if it doesn't exist
+    std::ifstream configTest(kConfigPath);
+    if (!configTest.good()) {
+        std::ofstream configFile(kConfigPath);
+        if (configFile.is_open()) {
+            configFile << "{\n";
+            configFile << "  \"isDefaultLauncher\": false,\n";
+            configFile << "  \"version\": \"0.2.0\",\n";
+            configFile << "  \"titleId\": \"" << kTitleID << "\"\n";
+            configFile << "}\n";
+            configFile.close();
+            debugPrintf("Created config file: %s\n", kConfigPath);
+        } else {
+            debugPrintf("Warning: Could not create config file: %s\n", kConfigPath);
+        }
+    } else {
+        configTest.close();
+        debugPrintf("Config file already exists: %s\n", kConfigPath);
+    }
+}
+
+// Check if this applet is registered as the default launcher
+bool isDefaultLauncherEnabled() {
+    std::ifstream markerFile(kDefaultLauncherMarker);
+    return markerFile.good();
+}
+
+// Toggle default launcher registration
+void toggleDefaultLauncher() {
+    if (isDefaultLauncherEnabled()) {
+        // Disable: remove marker
+        if (std::remove(kDefaultLauncherMarker) == 0) {
+            debugPrintf("Default launcher registration disabled\n");
+        }
+    } else {
+        // Enable: create marker
+        std::ofstream markerFile(kDefaultLauncherMarker);
+        if (markerFile.is_open()) {
+            markerFile << "DeskNX is registered as the default launcher\n";
+            markerFile.close();
+            debugPrintf("Default launcher registration enabled\n");
+        }
+    }
+}
 
 } // namespace
 
 int main(int argc, char* argv[]) {
     // Initialize Switch services
     socketInitializeDefault();
+    
+    // Initialize directories and configuration
+    initializeAppDirectories();
+    
+    // Log default launcher status
+    if (isDefaultLauncherEnabled()) {
+        debugPrintf("DeskNX is registered as the default launcher\n");
+    } else {
+        debugPrintf("DeskNX is NOT the default launcher\n");
+    }
     
     // Initialize SDL2
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -200,4 +300,4 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-{"content":"#include <switch.h>\n#include <SDL2/SDL.h>\n#include <desknx/Model.hpp>\n#include <desknx/HomeNXWorkspaceProvider.hpp>\n#include <desknx/HomeNXWorkspaceFileStore.hpp>\n\n#include \"GridRenderer.hpp\"\n#include \"TileInputHandler.hpp\"\n#include \"WidgetFactory.hpp\"\n#include \"LayoutStore.hpp\"\n\n#include <memory>\n#include <cstring>\n\nusing namespace desknx;\n\nnamespace {\n\n// Global renderer and input handler\nstd::unique_ptr<menu::renderer::GridRenderer> g_renderer;\nstd::unique_ptr<menu::input::TileInputHandler> g_inputHandler;\nstd::unique_ptr<homenx::WorkspaceProvider> g_provider;\n\nconst char* kLayoutPath = \"sdmc:/switch/DeskNX/layout.tsv\";\n\n} // namespace\n\nint main(int argc, char* argv[]) {\n    // Initialize Switch services\n    socketInitializeDefault();\n    \n    // Initialize SDL2\n    if (SDL_Init(SDL_INIT_VIDEO) < 0) {\n        return 1;\n    }\n\n    // Create window and renderer\n    SDL_Window* window = SDL_CreateWindow(\n        \"DeskNX Menu\",\n        SDL_WINDOWPOS_CENTERED,\n        SDL_WINDOWPOS_CENTERED,\n        1280, 720,\n        SDL_WINDOW_SHOWN);\n\n    if (!window) {\n        SDL_Quit();\n        return 1;\n    }\n\n    SDL_Renderer* renderer = SDL_CreateRenderer(\n        window, -1,\n        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);\n\n    if (!renderer) {\n        SDL_DestroyWindow(window);\n        SDL_Quit();\n        return 1;\n    }\n\n    // Initialize workspace provider\n    g_provider = std::make_unique<homenx::WorkspaceProvider>();\n    \n    // Load layout from SD card\n    if (!menu::storage::LayoutStore::load(*g_provider)) {\n        // No layout file; create a default workspace\n        g_provider->addWorkspace(\"Home\");\n    }\n\n    // Create renderer and input handler\n    g_renderer = std::unique_ptr<menu::renderer::GridRenderer>(\n        menu::renderer::createGridRenderer(renderer));\n    g_inputHandler = std::unique_ptr<menu::input::TileInputHandler>(\n        menu::input::createTileInputHandler());\n\n    // Add some default tiles if workspace is empty\n    if (auto* active = g_provider->activeWorkspaceForEditing()) {\n        if (active->tiles.empty()) {\n            // Add a clock widget\n            model::Tile clock = menu::widgets::WidgetFactory::createWidgetTile(\n                model::Kind::Clock, 2, 1);\n            clock.x = 0;\n            clock.y = 0;\n            if (model::placeable(*active, clock, 0, 0)) {\n                active->tiles.push_back(std::move(clock));\n            }\n            \n            // Add a battery widget\n            model::Tile battery = menu::widgets::WidgetFactory::createWidgetTile(\n                model::Kind::Battery, 2, 1);\n            battery.x = 2;\n            battery.y = 0;\n            if (model::placeable(*active, battery, 2, 0)) {\n                active->tiles.push_back(std::move(battery));\n            }\n            \n            // Add a recent games widget\n            model::Tile recent = menu::widgets::WidgetFactory::createWidgetTile(\n                model::Kind::Recent, 3, 2);\n            recent.x = 0;\n            recent.y = 1;\n            if (model::placeable(*active, recent, 0, 1)) {\n                active->tiles.push_back(std::move(recent));\n            }\n        }\n    }\n\n    // Main loop\n    bool running = true;\n    Uint32 lastTime = SDL_GetTicks();\n    Uint32 lastWidgetUpdate = lastTime;\n\n    while (running) {\n        Uint32 currentTime = SDL_GetTicks();\n        float dt = (currentTime - lastTime) / 1000.0f;\n        lastTime = currentTime;\n\n        SDL_Event event;\n        while (SDL_PollEvent(&event)) {\n            switch (event.type) {\n                case SDL_QUIT:\n                    running = false;\n                    break;\n\n                case SDL_KEYDOWN:\n                    // Map keyboard to button IDs for testing\n                    switch (event.key.keysym.sym) {\n                        case SDLK_ESCAPE:\n                            running = false;\n                            break;\n                        // TODO: Map other keys to HID buttons (D-pad, A, B, etc.)\n                        default:\n                            break;\n                    }\n                    break;\n\n                case SDL_MOUSEBUTTONDOWN: {\n                    menu::input::TileInputHandler::State state = g_inputHandler->getCurrentState();\n                    g_inputHandler->onTouchEvent(\n                        event.button.x, event.button.y, true, {});\n                    break;\n                }\n\n                case SDL_MOUSEBUTTONUP: {\n                    g_inputHandler->onTouchEvent(\n                        event.button.x, event.button.y, false, {});\n                    break;\n                }\n\n                case SDL_MOUSEMOTION: {\n                    // Update hover state\n                    if (g_renderer) {\n                        int gridX = g_renderer->screenToGridX(event.motion.x);\n                        int gridY = g_renderer->screenToGridY(event.motion.y);\n                        \n                        auto* workspace = g_provider->activeWorkspace();\n                        if (workspace) {\n                            int tileIdx = model::itemAt(*workspace, gridX, gridY);\n                            g_renderer->setHoveredTile(tileIdx);\n                        }\n                    }\n                    break;\n                }\n\n                default:\n                    break;\n            }\n        }\n\n        // Update input and workspace\n        if (auto* workspace = g_provider->activeWorkspaceForEditing()) {\n            g_inputHandler->update(*workspace, dt);\n        }\n\n        // Update widgets every second\n        if (currentTime - lastWidgetUpdate >= 1000) {\n            lastWidgetUpdate = currentTime;\n            // TODO: Update widget data (clock, battery, recent games)\n        }\n\n        // Render\n        if (auto* workspace = g_provider->activeWorkspace()) {\n            g_renderer->render(*workspace);\n        }\n\n        SDL_Delay(16);  // ~60 FPS\n    }\n\n    // Save layout before exiting\n    menu::storage::LayoutStore::save(*g_provider);\n\n    // Cleanup\n    g_inputHandler.reset();\n    g_renderer.reset();\n    SDL_DestroyRenderer(renderer);\n    SDL_DestroyWindow(window);\n    SDL_Quit();\n\n    socketExit();\n\n    return 0;\n}\n"}
+{"content":"#include <switch.h>\n#include <SDL2/SDL.h>\n#include <desknx/Model.hpp>\n#include <desknx/HomeNXWorkspaceProvider.hpp>\n#include <desknx/HomeNXWorkspaceFileStore.hpp>\n\n#include \"GridRenderer.hpp\"\n#include \"TileInputHandler.hpp\"\n#include \"WidgetFactory.hpp\"\n#include \"LayoutStore.hpp\"\n\n#include <memory>\n#include <cstring>\n#include <fstream>\n#include <sys/stat.h>\n#include <sys/types.h>\n#include <iostream>\n#include <cstdio>\n#include <cerrno>\n\nusing namespace desknx;\n\nnamespace {\n\n// Global renderer and input handler\nstd::unique_ptr<menu::renderer::GridRenderer> g_renderer;\nstd::unique_ptr<menu::input::TileInputHandler> g_inputHandler;\nstd::unique_ptr<homenx::WorkspaceProvider> g_provider;\n\nconst char* kLayoutPath = \"sdmc:/switch/DeskNX/layout.tsv\";\nconst char* kTitleID = \"0100000000001000\";\nconst char* kSaveDataPath = \"sdmc:/01000000/00001000/\";\nconst char* kDeskNXPath = \"sdmc:/switch/DeskNX/\";\nconst char* kDefaultLauncherMarker = \"sdmc:/switch/DeskNX/.is_default_launcher\";\nconst char* kConfigPath = \"sdmc:/01000000/00001000/config.json\";\n\n// Create directory recursively (simple implementation)\nbool mkdirRecursive(const char* path) {\n    if (!path || strlen(path) == 0) return false;\n    \n    std::string pathStr(path);\n    size_t pos = 0;\n    \n    while ((pos = pathStr.find('/', pos + 1)) != std::string::npos) {\n        std::string dir = pathStr.substr(0, pos);\n        mkdir(dir.c_str(), 0755);\n    }\n    \n    return mkdir(pathStr.c_str(), 0755) == 0 || errno == EEXIST;\n}\n\n// Initialize directories and config\nvoid initializeAppDirectories() {\n    debugPrintf(\"DeskNX Title ID: %s\\n\", kTitleID);\n    debugPrintf(\"Initializing DeskNX directories...\\n\");\n    \n    // Create save data directory\n    if (mkdirRecursive(kSaveDataPath)) {\n        debugPrintf(\"Created save data directory: %s\\n\", kSaveDataPath);\n    } else {\n        debugPrintf(\"Warning: Could not create save data directory: %s\\n\", kSaveDataPath);\n    }\n    \n    // Create application data directory\n    if (mkdirRecursive(kDeskNXPath)) {\n        debugPrintf(\"Created application data directory: %s\\n\", kDeskNXPath);\n    } else {\n        debugPrintf(\"Warning: Could not create application data directory: %s\\n\", kDeskNXPath);\n    }\n    \n    // Create initial config.json if it doesn't exist\n    std::ifstream configTest(kConfigPath);\n    if (!configTest.good()) {\n        std::ofstream configFile(kConfigPath);\n        if (configFile.is_open()) {\n            configFile << \"{\\n\";\n            configFile << \"  \\\"isDefaultLauncher\\\": false,\\n\";\n            configFile << \"  \\\"version\\\": \\\"0.2.0\\\",\\n\";\n            configFile << \"  \\\"titleId\\\": \\\"\" << kTitleID << \"\\\"\\n\";\n            configFile << \"}\\n\";\n            configFile.close();\n            debugPrintf(\"Created config file: %s\\n\", kConfigPath);\n        } else {\n            debugPrintf(\"Warning: Could not create config file: %s\\n\", kConfigPath);\n        }\n    } else {\n        configTest.close();\n        debugPrintf(\"Config file already exists: %s\\n\", kConfigPath);\n    }\n}\n\n// Check if this applet is registered as the default launcher\nbool isDefaultLauncherEnabled() {\n    std::ifstream markerFile(kDefaultLauncherMarker);\n    return markerFile.good();\n}\n\n// Toggle default launcher registration\nvoid toggleDefaultLauncher() {\n    if (isDefaultLauncherEnabled()) {\n        // Disable: remove marker\n        if (std::remove(kDefaultLauncherMarker) == 0) {\n            debugPrintf(\"Default launcher registration disabled\\n\");\n        }\n    } else {\n        // Enable: create marker\n        std::ofstream markerFile(kDefaultLauncherMarker);\n        if (markerFile.is_open()) {\n            markerFile << \"DeskNX is registered as the default launcher\\n\";\n            markerFile.close();\n            debugPrintf(\"Default launcher registration enabled\\n\");\n        }\n    }\n}\n\n} // namespace\n\nint main(int argc, char* argv[]) {\n    // Initialize Switch services\n    socketInitializeDefault();\n    \n    // Initialize directories and configuration\n    initializeAppDirectories();\n    \n    // Log default launcher status\n    if (isDefaultLauncherEnabled()) {\n        debugPrintf(\"DeskNX is registered as the default launcher\\n\");\n    } else {\n        debugPrintf(\"DeskNX is NOT the default launcher\\n\");\n    }\n    \n    // Initialize SDL2\n    if (SDL_Init(SDL_INIT_VIDEO) < 0) {\n        return 1;\n    }\n\n    // Create window and renderer\n    SDL_Window* window = SDL_CreateWindow(\n        \"DeskNX Menu\",\n        SDL_WINDOWPOS_CENTERED,\n        SDL_WINDOWPOS_CENTERED,\n        1280, 720,\n        SDL_WINDOW_SHOWN);\n\n    if (!window) {\n        SDL_Quit();\n        return 1;\n    }\n\n    SDL_Renderer* renderer = SDL_CreateRenderer(\n        window, -1,\n        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);\n\n    if (!renderer) {\n        SDL_DestroyWindow(window);\n        SDL_Quit();\n        return 1;\n    }\n\n    // Initialize workspace provider\n    g_provider = std::make_unique<homenx::WorkspaceProvider>();\n    \n    // Load layout from SD card\n    if (!menu::storage::LayoutStore::load(*g_provider)) {\n        // No layout file; create a default workspace\n        g_provider->addWorkspace(\"Home\");\n    }\n\n    // Create renderer and input handler\n    g_renderer = std::unique_ptr<menu::renderer::GridRenderer>(\n        menu::renderer::createGridRenderer(renderer));\n    g_inputHandler = std::unique_ptr<menu::input::TileInputHandler>(\n        menu::input::createTileInputHandler());\n\n    // Add some default tiles if workspace is empty\n    if (auto* active = g_provider->activeWorkspaceForEditing()) {\n        if (active->tiles.empty()) {\n            // Add a clock widget\n            model::Tile clock = menu::widgets::WidgetFactory::createWidgetTile(\n                model::Kind::Clock, 2, 1);\n            clock.x = 0;\n            clock.y = 0;\n            if (model::placeable(*active, clock, 0, 0)) {\n                active->tiles.push_back(std::move(clock));\n            }\n            \n            // Add a battery widget\n            model::Tile battery = menu::widgets::WidgetFactory::createWidgetTile(\n                model::Kind::Battery, 2, 1);\n            battery.x = 2;\n            battery.y = 0;\n            if (model::placeable(*active, battery, 2, 0)) {\n                active->tiles.push_back(std::move(battery));\n            }\n            \n            // Add a recent games widget\n            model::Tile recent = menu::widgets::WidgetFactory::createWidgetTile(\n                model::Kind::Recent, 3, 2);\n            recent.x = 0;\n            recent.y = 1;\n            if (model::placeable(*active, recent, 0, 1)) {\n                active->tiles.push_back(std::move(recent));\n            }\n        }\n    }\n\n    // Main loop\n    bool running = true;\n    Uint32 lastTime = SDL_GetTicks();\n    Uint32 lastWidgetUpdate = lastTime;\n\n    while (running) {\n        Uint32 currentTime = SDL_GetTicks();\n        float dt = (currentTime - lastTime) / 1000.0f;\n        lastTime = currentTime;\n\n        SDL_Event event;\n        while (SDL_PollEvent(&event)) {\n            switch (event.type) {\n                case SDL_QUIT:\n                    running = false;\n                    break;\n\n                case SDL_KEYDOWN:\n                    // Map keyboard to button IDs for testing\n                    switch (event.key.keysym.sym) {\n                        case SDLK_ESCAPE:\n                            running = false;\n                            break;\n                        // TODO: Map other keys to HID buttons (D-pad, A, B, etc.)\n                        default:\n                            break;\n                    }\n                    break;\n\n                case SDL_MOUSEBUTTONDOWN: {\n                    menu::input::TileInputHandler::State state = g_inputHandler->getCurrentState();\n                    g_inputHandler->onTouchEvent(\n                        event.button.x, event.button.y, true, {});\n                    break;\n                }\n\n                case SDL_MOUSEBUTTONUP: {\n                    g_inputHandler->onTouchEvent(\n                        event.button.x, event.button.y, false, {});\n                    break;\n                }\n\n                case SDL_MOUSEMOTION: {\n                    // Update hover state\n                    if (g_renderer) {\n                        int gridX = g_renderer->screenToGridX(event.motion.x);\n                        int gridY = g_renderer->screenToGridY(event.motion.y);\n                        \n                        auto* workspace = g_provider->activeWorkspace();\n                        if (workspace) {\n                            int tileIdx = model::itemAt(*workspace, gridX, gridY);\n                            g_renderer->setHoveredTile(tileIdx);\n                        }\n                    }\n                    break;\n                }\n\n                default:\n                    break;\n            }\n        }\n\n        // Update input and workspace\n        if (auto* workspace = g_provider->activeWorkspaceForEditing()) {\n            g_inputHandler->update(*workspace, dt);\n        }\n\n        // Update widgets every second\n        if (currentTime - lastWidgetUpdate >= 1000) {\n            lastWidgetUpdate = currentTime;\n            // TODO: Update widget data (clock, battery, recent games)\n        }\n\n        // Render\n        if (auto* workspace = g_provider->activeWorkspace()) {\n            g_renderer->render(*workspace);\n        }\n\n        SDL_Delay(16);  // ~60 FPS\n    }\n\n    // Save layout before exiting\n    menu::storage::LayoutStore::save(*g_provider);\n\n    // Cleanup\n    g_inputHandler.reset();\n    g_renderer.reset();\n    SDL_DestroyRenderer(renderer);\n    SDL_DestroyWindow(window);\n    SDL_Quit();\n\n    socketExit();\n\n    return 0;\n}\n"}
