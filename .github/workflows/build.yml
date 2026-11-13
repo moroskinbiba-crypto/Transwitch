@@ -2,6 +2,11 @@ name: Build DeskNX
 
 on:
   workflow_dispatch:
+  # Pull requests must run the host tests here: this is the only workflow that
+  # compiles the native sources and the C++ test binaries. Without it a PR can
+  # merge C++ that nobody ever built.
+  pull_request:
+    branches: [ main, master ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -58,6 +63,37 @@ jobs:
 
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
+
+      # Android-style workspace layer (platform-neutral, host-testable).
+      - name: Test hold-to-drag and page-swipe gestures
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/touch_gesture_test.cpp -o /tmp/desknx-touch-gesture-test
+          /tmp/desknx-touch-gesture-test
+
+      - name: Test HomeNX workspace projection adapter
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_projection_test.cpp -o /tmp/desknx-homenx-projection-test
+          /tmp/desknx-homenx-projection-test
+
+      - name: Test HomeNX grid focus adapter
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_grid_adapter_test.cpp -o /tmp/desknx-homenx-grid-adapter-test
+          /tmp/desknx-homenx-grid-adapter-test
+
+      - name: Test HomeNX independent workspace provider
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/homenx_workspace_provider_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-provider-test
+          /tmp/desknx-homenx-provider-test
+
+      - name: Test HomeNX workspace file store and rollback
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/homenx_workspace_file_store_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-file-store-test
+          /tmp/desknx-homenx-file-store-test
+
+      - name: Test drag, resize and remove on the active desktop
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/homenx_grid_edit_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-grid-edit-test
+          /tmp/desknx-homenx-grid-edit-test
 
       - name: Build standalone Homebrew app
         env:
