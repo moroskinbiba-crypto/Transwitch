@@ -23,6 +23,8 @@ struct Touch {};
 enum class EditMode {
     Browse,  ///< Normal navigation; D-pad moves focus cursor.
     Drag,    ///< Tile grabbed; D-pad moves the tile preview.
+    Resize,  ///< Tile resizing; D-pad adjusts size.
+    Marked,  ///< Tile marked for deletion; waiting for X again to confirm.
 };
 
 /// Result returned from commitDrop().
@@ -43,6 +45,12 @@ public:
         enum Type { None = 0, Right = 1, Bottom = 2, RightBottom = 3 };
     };
 
+    /// Supported tile sizes: (w, h) pairs from tile-shape contract.
+    static constexpr std::pair<int, int> SupportedSizes[] = {
+        {1, 1}, {2, 1}, {3, 1}, {2, 2}, {3, 2}
+    };
+    static constexpr int NumSupportedSizes = 5;
+
     virtual ~TileInputHandler() = default;
 
     /// Update per-frame: increment hold timer, handle transitions. dt in seconds.
@@ -60,6 +68,19 @@ public:
     /// Call when A-hold threshold is reached.
     virtual void enterDrag(int tileIdx, int ox, int oy) = 0;
 
+    /// Enter resize mode for the tile at index `tileIdx`.
+    /// Call when Y-button pressed on focused tile.
+    virtual void enterResize(int tileIdx, const model::Workspace& workspace) = 0;
+
+    /// Mark tile for deletion. Double X-press confirms.
+    virtual void markForDelete(int tileIdx) = 0;
+
+    /// Confirm deletion (second X-press within timeout).
+    virtual bool confirmDelete(model::Workspace& workspace) = 0;
+
+    /// Cancel mark/delete.
+    virtual void cancelMark() = 0;
+
     /// Feed the current A-button held state each frame.
     virtual void setAHeld(bool held) = 0;
 
@@ -69,10 +90,32 @@ public:
     /// Frames A has been held (useful for showing a hold-progress indicator).
     virtual int getAHoldFrames() const = 0;
 
-    /// Feed the current B-button pressed-this-frame state.
-    virtual void setBPressed(bool pressed) = 0;
+    /// Notify Y-button pressed (to enter resize mode).
+    virtual void setYPressed(bool pressed) = 0;
 
-    /// Get current drag/drop mode.
+    /// Notify X-button pressed (to mark/delete tiles).
+    virtual void setXPressed(bool pressed) = 0;
+
+    /// Get current resize target tile, or -1.
+    virtual int getResizeTileIndex() const = 0;
+
+    /// Get current resize target dimensions (w, h).
+    virtual std::pair<int, int> getResizeTargetSize() const = 0;
+
+    /// Check if resize target is valid (no overlap/overflow).
+    virtual bool isResizeValid() const = 0;
+
+    /// Move to next/prev supported size in resize mode.
+    virtual void cycleResizeSize(int delta, const model::Workspace& workspace) = 0;
+
+    /// Commit or cancel resize.
+    virtual bool commitResize(model::Workspace& workspace) = 0;
+    virtual void cancelResize() = 0;
+
+    /// Get marked-for-delete tile index, or -1.
+    virtual int getMarkedTileIndex() const = 0;
+
+    /// Get current drag/drop/resize/remove mode.
     virtual EditMode getEditMode() const = 0;
 
     /// Index of the tile currently being dragged, or -1.
@@ -108,4 +151,4 @@ TileInputHandler* createTileInputHandler();
 
 } // namespace desknx::menu::input
 
-{"content":"#pragma once\n\n// Copyright contributors to the DeskNX project.\n// SPDX-License-Identifier: MIT\n\n#include <desknx/Model.hpp>\n#include <desknx/TouchGesture.hpp>\n#include <cstdint>\n\nnamespace desknx::menu::input {\n\n// Minimal touch gesture stub (matches existing code structure)\nnamespace gesture {\nstruct Touch {};\n} // namespace gesture\n\n/// Edit-mode state machine for drag/drop.\n///\n///   BROWSE ──(A held ≥15 frames)──► DRAG ──(A released, valid)──► BROWSE\n///                                        └──(A released, invalid)─► BROWSE  (bounce back)\n///                                        └──(B pressed)───────────► BROWSE  (cancel)\n///\nenum class EditMode {\n    Browse,  ///< Normal navigation; D-pad moves focus cursor.\n    Drag,    ///< Tile grabbed; D-pad moves the tile preview.\n};\n\n/// Result returned from commitDrop().\nenum class DropResult {\n    Committed,   ///< Move applied, workspace modified.\n    Invalid,     ///< Destination blocked; tile bounced back.\n    Cancelled,   ///< User cancelled (B button).\n    NothingDragged,\n};\n\n/// Handles drag, resize, and selection input on tiles.\nclass TileInputHandler {\npublic:\n    // Legacy state enum kept for backward compat (used by touch path).\n    enum class State { Idle, Selected, Dragging, Resizing };\n\n    struct ResizeEdge {\n        enum Type { None = 0, Right = 1, Bottom = 2, RightBottom = 3 };\n    };\n\n    virtual ~TileInputHandler() = default;\n\n    /// Update per-frame: increment hold timer, handle transitions. dt in seconds.\n    /// Returns true if the workspace was modified.\n    virtual bool update(model::Workspace& workspace, float dt) = 0;\n\n    /// Notify of touch event. Returns true if consumed.\n    virtual bool onTouchEvent(int screenX, int screenY, bool pressed,\n                              const gesture::Touch& gesture) = 0;\n\n    /// Notify of raw button press (HID bitmask). Returns true if consumed.\n    virtual bool onButtonPress(uint32_t buttonId) = 0;\n\n    /// Enter drag mode for the tile at index `tileIdx`, currently at (ox, oy).\n    /// Call when A-hold threshold is reached.\n    virtual void enterDrag(int tileIdx, int ox, int oy) = 0;\n\n    /// Feed the current A-button held state each frame.\n    virtual void setAHeld(bool held) = 0;\n\n    /// A-hold threshold in frames (≈250 ms @ 60 fps).\n    static constexpr int kAHoldThreshold = 15;\n\n    /// Frames A has been held (useful for showing a hold-progress indicator).\n    virtual int getAHoldFrames() const = 0;\n\n    /// Feed the current B-button pressed-this-frame state.\n    virtual void setBPressed(bool pressed) = 0;\n\n    /// Get current drag/drop mode.\n    virtual EditMode getEditMode() const = 0;\n\n    /// Index of the tile currently being dragged, or -1.\n    virtual int getDraggedTileIndex() const = 0;\n\n    /// Original grid position of dragged tile (valid while Drag mode).\n    virtual int getDragOriginX() const = 0;\n    virtual int getDragOriginY() const = 0;\n\n    /// Preview (cursor) position for the drag destination.\n    virtual int getDragDestX() const = 0;\n    virtual int getDragDestY() const = 0;\n\n    /// True if the current drag destination is a valid drop target.\n    virtual bool isDragDestValid() const = 0;\n\n    /// Move the drag destination by (dx, dy); validates bounds + collision.\n    virtual void moveDragDest(int dx, int dy,\n                               const model::Workspace& workspace) = 0;\n\n    /// Commit or cancel the pending drop.\n    virtual DropResult commitDrop(model::Workspace& workspace) = 0;\n    virtual DropResult cancelDrop() = 0;\n\n    // ── Legacy interface (kept for touch path) ───────────────────────────────\n    virtual State getCurrentState() const = 0;\n    virtual int   getSelectedTileIndex() const = 0;\n    virtual void  reset() = 0;\n};\n\n/// Factory: create platform-specific input handler.\nTileInputHandler* createTileInputHandler();\n\n} // namespace desknx::menu::input\n"}
+{"content":"#pragma once\n\n// Copyright contributors to the DeskNX project.\n// SPDX-License-Identifier: MIT\n\n#include <desknx/Model.hpp>\n#include <desknx/TouchGesture.hpp>\n#include <cstdint>\n\nnamespace desknx::menu::input {\n\n// Minimal touch gesture stub (matches existing code structure)\nnamespace gesture {\nstruct Touch {};\n} // namespace gesture\n\n/// Edit-mode state machine for drag/drop.\n///\n///   BROWSE ──(A held ≥15 frames)──► DRAG ──(A released, valid)──► BROWSE\n///                                        └──(A released, invalid)─► BROWSE  (bounce back)\n///                                        └──(B pressed)───────────► BROWSE  (cancel)\n///\nenum class EditMode {\n    Browse,  ///< Normal navigation; D-pad moves focus cursor.\n    Drag,    ///< Tile grabbed; D-pad moves the tile preview.\n    Resize,  ///< Tile resizing; D-pad adjusts size.\n    Marked,  ///< Tile marked for deletion; waiting for X again to confirm.\n};\n\n/// Result returned from commitDrop().\nenum class DropResult {\n    Committed,   ///< Move applied, workspace modified.\n    Invalid,     ///< Destination blocked; tile bounced back.\n    Cancelled,   ///< User cancelled (B button).\n    NothingDragged,\n};\n\n/// Handles drag, resize, and selection input on tiles.\nclass TileInputHandler {\npublic:\n    // Legacy state enum kept for backward compat (used by touch path).\n    enum class State { Idle, Selected, Dragging, Resizing };\n\n    struct ResizeEdge {\n        enum Type { None = 0, Right = 1, Bottom = 2, RightBottom = 3 };\n    };\n\n    /// Supported tile sizes: (w, h) pairs from tile-shape contract.\n    static constexpr std::pair<int, int> SupportedSizes[] = {\n        {1, 1}, {2, 1}, {3, 1}, {2, 2}, {3, 2}\n    };\n    static constexpr int NumSupportedSizes = 5;\n\n    virtual ~TileInputHandler() = default;\n\n    /// Update per-frame: increment hold timer, handle transitions. dt in seconds.\n    /// Returns true if the workspace was modified.\n    virtual bool update(model::Workspace& workspace, float dt) = 0;\n\n    /// Notify of touch event. Returns true if consumed.\n    virtual bool onTouchEvent(int screenX, int screenY, bool pressed,\n                              const gesture::Touch& gesture) = 0;\n\n    /// Notify of raw button press (HID bitmask). Returns true if consumed.\n    virtual bool onButtonPress(uint32_t buttonId) = 0;\n\n    /// Enter drag mode for the tile at index `tileIdx`, currently at (ox, oy).\n    /// Call when A-hold threshold is reached.\n    virtual void enterDrag(int tileIdx, int ox, int oy) = 0;\n\n    /// Enter resize mode for the tile at index `tileIdx`.\n    /// Call when Y-button pressed on focused tile.\n    virtual void enterResize(int tileIdx, const model::Workspace& workspace) = 0;\n\n    /// Mark tile for deletion. Double X-press confirms.\n    virtual void markForDelete(int tileIdx) = 0;\n\n    /// Confirm deletion (second X-press within timeout).\n    virtual bool confirmDelete(model::Workspace& workspace) = 0;\n\n    /// Cancel mark/delete.\n    virtual void cancelMark() = 0;\n\n    /// Feed the current A-button held state each frame.\n    virtual void setAHeld(bool held) = 0;\n\n    /// A-hold threshold in frames (≈250 ms @ 60 fps).\n    static constexpr int kAHoldThreshold = 15;\n\n    /// Frames A has been held (useful for showing a hold-progress indicator).\n    virtual int getAHoldFrames() const = 0;\n\n    /// Notify Y-button pressed (to enter resize mode).\n    virtual void setYPressed(bool pressed) = 0;\n\n    /// Notify X-button pressed (to mark/delete tiles).\n    virtual void setXPressed(bool pressed) = 0;\n\n    /// Get current resize target tile, or -1.\n    virtual int getResizeTileIndex() const = 0;\n\n    /// Get current resize target dimensions (w, h).\n    virtual std::pair<int, int> getResizeTargetSize() const = 0;\n\n    /// Check if resize target is valid (no overlap/overflow).\n    virtual bool isResizeValid() const = 0;\n\n    /// Move to next/prev supported size in resize mode.\n    virtual void cycleResizeSize(int delta, const model::Workspace& workspace) = 0;\n\n    /// Commit or cancel resize.\n    virtual bool commitResize(model::Workspace& workspace) = 0;\n    virtual void cancelResize() = 0;\n\n    /// Get marked-for-delete tile index, or -1.\n    virtual int getMarkedTileIndex() const = 0;\n\n    /// Get current drag/drop/resize/remove mode.\n    virtual EditMode getEditMode() const = 0;\n\n    /// Index of the tile currently being dragged, or -1.\n    virtual int getDraggedTileIndex() const = 0;\n\n    /// Original grid position of dragged tile (valid while Drag mode).\n    virtual int getDragOriginX() const = 0;\n    virtual int getDragOriginY() const = 0;\n\n    /// Preview (cursor) position for the drag destination.\n    virtual int getDragDestX() const = 0;\n    virtual int getDragDestY() const = 0;\n\n    /// True if the current drag destination is a valid drop target.\n    virtual bool isDragDestValid() const = 0;\n\n    /// Move the drag destination by (dx, dy); validates bounds + collision.\n    virtual void moveDragDest(int dx, int dy,\n                               const model::Workspace& workspace) = 0;\n\n    /// Commit or cancel the pending drop.\n    virtual DropResult commitDrop(model::Workspace& workspace) = 0;\n    virtual DropResult cancelDrop() = 0;\n\n    // ── Legacy interface (kept for touch path) ───────────────────────────────\n    virtual State getCurrentState() const = 0;\n    virtual int   getSelectedTileIndex() const = 0;\n    virtual void  reset() = 0;\n};\n\n/// Factory: create platform-specific input handler.\nTileInputHandler* createTileInputHandler();\n\n} // namespace desknx::menu::input\n"}
