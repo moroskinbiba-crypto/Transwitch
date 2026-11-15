@@ -8,6 +8,21 @@
 #include <string.h>
 #include <unistd.h>
 #include <switch.h>
+#include "../include/desknx/Diagnostics.hpp"
+
+extern "C" void userAppInit(void) {
+    // libnx calls this after its default services and SD mount, before main().
+    struct stat sdRoot{};
+    const bool sdMounted = stat("sdmc:/", &sdRoot) == 0;
+    desknx::diag::Initialize(sdMounted);
+    desknx::diag::Write("standalone", "libnx_init_complete",
+        "sd_mounted=%d applet_type=%u", sdMounted ? 1 : 0,
+        static_cast<unsigned int>(appletGetAppletType()));
+}
+
+extern "C" void userAppExit(void) {
+    desknx::diag::Write("standalone", "libnx_exit", "orderly_exit=1");
+}
 
 // Failsafe check: If User holds physical 'R' shoulder button at boot, skip custom launcher
 static bool checkFailsafeHoldR(PadState* pad) {
@@ -62,82 +77,96 @@ static void showDiagnosticScreen(const char* title, Result rc, bool isAppletMode
 }
 
 int main(int argc, char* argv[]) {
-    Result rc = 0;
+    (void)argv;
+    desknx::diag::Write("standalone", "main_enter", "argc=%d", argc);
 
-    // 1. Initialize Horizon OS Hardware Input
-    rc = hidInitialize();
-    if (R_FAILED(rc)) {
+    // libnx normally initializes HID before this entry point. Keep the
+    // reference-counted init for the controller fail-safe and log failures.
+    Result rc = hidInitialize();
+    desknx::diag::Write("standalone", "hid_init", "rc=0x%08X",
+                        static_cast<unsigned int>(rc));
+    if (R_FAILED(rc)) return 1;
+
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState pad{};
+    padInitializeDefault(&pad);
+
+    if (checkFailsafeHoldR(&pad)) {
+        desknx::diag::Write("standalone", "failsafe_r", "held=1");
+        hidExit();
         return 0;
     }
 
-    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-    PadState pad;
-    padInitializeDefault(&pad);
-
-    // 2. Check Failsafe: Hold 'R' button on boot to exit safely
-    if (checkFailsafeHoldR(&pad)) {
-        hidExit();
-        return 0; // Return immediately to allow stock OS fallback
-    }
-
-    // 3. Initialize RomFS (Self-contained within the .nro package)
-    Result romfsRc = romfsInit();
-
-    // 4. Check if launched in Applet Mode (Album) vs Title Override (Game)
-    AppletType appletType = appletGetAppletType();
-    bool isAppletMode = (appletType != AppletType_Application);
+    const AppletType appletType = appletGetAppletType();
+    const bool isAppletMode = (appletType != AppletType_Application);
+    desknx::diag::Write("standalone", "applet_mode",
+        "applet_type=%u is_applet=%d", static_cast<unsigned int>(appletType),
+        isAppletMode ? 1 : 0);
 
     if (isAppletMode) {
         showDiagnosticScreen("Applet Mode Restriction", 0x2BA4, true);
-        if (R_SUCCEEDED(romfsRc)) romfsExit();
+        desknx::diag::Write("standalone", "applet_mode_exit", "title_override_required=1");
         hidExit();
         return 0;
     }
 
-    // 5. Initialize Power & Battery Service (psm)
-    psmInitialize();
-    
-    // 6. Initialize Play Data Management Service (pdm:qry)
-    pdmqryInitialize();
-
-    // 7. Configure and Launch the Nintendo Switch WebKit Applet
-    WebCommonConfig config;
-    WebCommonReply reply;
-    memset(&reply, 0, sizeof(reply));
-
-    // Try candidate RomFS document paths relative to html-document/
-    rc = webOfflineCreate(&config, WebDocumentKind_OfflineHtmlPage, 0, "app.htdocs/index.html");
-    if (R_FAILED(rc)) {
-        rc = webOfflineCreate(&config, WebDocumentKind_OfflineHtmlPage, 0, "index.html");
-    }
-    if (R_FAILED(rc)) {
-        rc = webOfflineCreate(&config, WebDocumentKind_OfflineHtmlPage, 0, ".htdocs/index.html");
+    const Result romfsRc = romfsInit();
+    desknx::diag::Write("standalone", "romfs_init", "rc=0x%08X",
+                        static_cast<unsigned int>(romfsRc));
+    if (R_FAILED(romfsRc)) {
+        showDiagnosticScreen("romfsInit failed (NRO has no embedded RomFS)", romfsRc, false);
+        hidExit();
+        return 0;
     }
 
-    if (R_SUCCEEDED(rc)) {
-        // Configure WebKit flags for the best full-screen console experience:
-        webConfigSetBootDisplayKind(&config, WebBootDisplayKind_White);
-        webConfigSetFooter(&config, false);                     // Hide stock web browser footer
-        webConfigSetTouchEnabledOnContents(&config, true);       // Full 10-point capacitive touch
-        webConfigSetJsExtension(&config, true);                 // Enable extended JavaScript support
-        webConfigSetMediaPlayerSpeedControl(&config, true);     // Media video support for game trailers
-        webConfigSetLeftStickMode(&config, WebLeftStickMode_Cursor); // Left stick cursor/dpad
-
-        // Launch the DeskNX user interface!
-        rc = webConfigShow(&config, &reply);
+    // Both documented paths contain ".htdocs/" and are relative to
+    // html-document/. A bare "index.html" is not a valid offline docPath.
+    WebCommonConfig config{};
+    WebCommonReply reply{};
+    const char* documentPaths[] = {
+        "app.htdocs/index.html",
+        ".htdocs/index.html",
+    };
+    for (const char* path : documentPaths) {
+        const Result pathRc = webOfflineCreate(
+            &config, WebDocumentKind_OfflineHtmlPage, 0, path);
+        desknx::diag::Write("standalone", "web_offline_create",
+            "path=%s rc=0x%08X", path, static_cast<unsigned int>(pathRc));
+        rc = pathRc;
+        if (R_SUCCEEDED(rc)) break;
     }
 
     if (R_FAILED(rc)) {
-        showDiagnosticScreen("webConfigShow Failure", rc, false);
-    }
-
-    // 8. Cleanup Hardware Services on Exit
-    pdmqryExit();
-    psmExit();
-    if (R_SUCCEEDED(romfsRc)) {
+        showDiagnosticScreen("webOfflineCreate failed", rc, false);
         romfsExit();
+        hidExit();
+        return 0;
     }
-    hidExit();
 
+    // These options are version-gated. Log optional failures but still try
+    // to display the offline document.
+#define DESKNX_WEB_OPTION(label, expression) do { \
+        const Result optionRc = (expression); \
+        if (R_FAILED(optionRc)) \
+            desknx::diag::Write("standalone", "web_option_failed", \
+                "option=%s rc=0x%08X", label, static_cast<unsigned int>(optionRc)); \
+    } while (0)
+    DESKNX_WEB_OPTION("boot_display", webConfigSetBootDisplayKind(&config, WebBootDisplayKind_White));
+    DESKNX_WEB_OPTION("footer", webConfigSetFooter(&config, false));
+    DESKNX_WEB_OPTION("touch", webConfigSetTouchEnabledOnContents(&config, true));
+    DESKNX_WEB_OPTION("js_extension", webConfigSetJsExtension(&config, true));
+    DESKNX_WEB_OPTION("media_speed_control", webConfigSetMediaPlayerSpeedControl(&config, true));
+    DESKNX_WEB_OPTION("left_stick", webConfigSetLeftStickMode(&config, WebLeftStickMode_Cursor));
+#undef DESKNX_WEB_OPTION
+
+    desknx::diag::Write("standalone", "web_show_begin", "launching_offline_page=1");
+    rc = webConfigShow(&config, &reply);
+    desknx::diag::Write("standalone", "web_show_end", "rc=0x%08X",
+                        static_cast<unsigned int>(rc));
+    if (R_FAILED(rc))
+        showDiagnosticScreen("webConfigShow failed", rc, false);
+
+    romfsExit();
+    hidExit();
     return 0;
 }

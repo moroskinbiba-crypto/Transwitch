@@ -61,9 +61,9 @@ Standalone-сборка не нуждается в Atmosphère. Чтобы по�
 
 ### Диагностика и обратная связь
 
-Standalone и system-applet сборки записывают технические журналы на SD-карту в `sdmc:/switch/DeskNX/`:
-- `diagnostics.log` (+ две ротируемые копии) — запуск, системные сервисы, SDL/renderer, запросы запуска приложений и задержки главного цикла;
-- `catalogue.log` (+ одна ротируемая копия) — обнаружение игр, NS, NACP, PDM, NRO и кэш.
+Standalone NRO и native HOME applet записывают технические журналы на SD-карту в `sdmc:/switch/DeskNX/`:
+- `diagnostics.log` (+ две ротируемые копии) — для NRO: ранний libnx startup hook, режим запуска, RomFS и вызовы WebKit; для native HOME applet: также SDL/renderer, системные сервисы и запуск игр;
+- `catalogue.log` (+ одна ротируемая копия) — обнаружение игр, NS, NACP, PDM, NRO и кэш в native HOME applet.
 
 После воспроизведения ошибки скопируйте все файлы `diagnostics.log*` и `catalogue.log*` и приложите их к сообщению. Не нужно присылать папку кэша или сами игры. Подробная инструкция и перечень собираемых данных: [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).
 
