@@ -53,12 +53,12 @@
 В этом commit:
 - очищен .gitignore;
 - удалены отслеживаемые .vite cache и устаревший ZIP;
-- добавлен scripts/check-repo-hygiene.mjs;
+- добавлен scripts/check-repo-hygiene.sh;
 - проверка hygiene включена в три Actions workflow;
 - README и HOME integration docs исправлены, чтобы не заявлять, будто legacy source/main.cpp входит в релиз;
 - добавлен этот журнал работ.
 
-Проверки после commit будут добавлены после получения результатов GitHub Actions.
+Проверки после commit вынесены в отдельную запись ниже.
 
 ### Следующие задачи (приоритет)
 

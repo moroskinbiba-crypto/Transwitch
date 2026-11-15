@@ -509,7 +509,7 @@ int main(int argc, char* argv[]) {
                                 auto result = g_inputHandler->commitDrop(*ws);
                                 g_renderer->endDragPreview();
                                 if (result == desknx::menu::input::DropResult::Committed) {
-                                    if (g_store) g_store->save();
+                                    (void)saveWorkspace("tile edit");
                                     debugPrintf("[Drop] committed & saved\n");
                                 } else {
                                     debugPrintf("[Drop] invalid, bounced back\n");
@@ -520,7 +520,7 @@ int main(int argc, char* argv[]) {
                         else if (g_inputHandler->getEditMode() == desknx::menu::input::EditMode::Resize) {
                             if (auto* ws = g_provider->activeWorkspaceForEditing()) {
                                 if (g_inputHandler->commitResize(*ws)) {
-                                    if (g_store) g_store->save();
+                                    (void)saveWorkspace("tile edit");
                                     debugPrintf("[Resize] committed & saved\n");
                                 }
                                 g_renderer->endResizePreview();
