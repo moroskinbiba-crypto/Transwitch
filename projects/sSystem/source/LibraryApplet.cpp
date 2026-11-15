@@ -76,13 +76,28 @@ Result StopMenu() {
         g_StopRequested = true;
     }
 
-    // Wait for actual state completion after either graceful exit or the
-    // forced-terminate command. Never drop the holder while the applet may
-    // still be running; a caller can safely retry this bounded wait.
-    const Result waitRc = eventWait(&g_MenuHolder.StateChangedEvent, 5'000'000'000ULL);
-    if (R_FAILED(waitRc)) {
-        g_StopRetryAfterTick = armGetSystemTick() + frequency * 2;
-        return waitRc;
+    // StateChangedEvent is not an exit event: it also fires for foreground
+    // and suspend transitions. Like HomeNX's library-applet runner, treat it
+    // only as a wake-up hint and verify appletHolderCheckFinished() after each
+    // wake. Never Join/Close a holder until AM confirms actual completion.
+    const u64 waitStarted = armGetSystemTick();
+    const u64 waitBudgetTicks = frequency * 5;
+    while (!appletHolderCheckFinished(&g_MenuHolder)) {
+        const u64 elapsed = armGetSystemTick() - waitStarted;
+        if (elapsed >= waitBudgetTicks) {
+            g_StopRetryAfterTick = armGetSystemTick() + frequency * 2;
+            return KERNELRESULT(TimedOut);
+        }
+
+        // Use a short bounded wait so a non-terminal state-change signal cannot
+        // turn the remaining timeout into an unbounded wait on a stale event.
+        const Result waitRc = eventWait(&g_MenuHolder.StateChangedEvent, 250'000'000ULL);
+        if (R_FAILED(waitRc) && waitRc != KERNELRESULT(TimedOut)) {
+            g_StopRetryAfterTick = armGetSystemTick() + frequency * 2;
+            return waitRc;
+        }
+        if (R_SUCCEEDED(waitRc) && !appletHolderCheckFinished(&g_MenuHolder))
+            svcSleepThread(10'000'000ULL);
     }
 
     appletHolderJoin(&g_MenuHolder);

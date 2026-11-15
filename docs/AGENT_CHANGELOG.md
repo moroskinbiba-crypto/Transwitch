@@ -307,3 +307,20 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
   validation on a Switch touchscreen.
 
 - Cleanup after wiring long-press: removed the obsolete immediate-drag start coordinates and previous-selection locals; the gesture helper now owns the press origin and timing.
+
+### HOME applet holder completion barrier — HomeNX lifecycle parity — 16 November 2026
+
+- Audit found that projects/sSystem/source/LibraryApplet.cpp waited once for
+  StateChangedEvent and then unconditionally called appletHolderJoin/Close. A
+  StateChangedEvent can represent foreground/suspend state changes; it is not, by
+  itself, proof that the library applet has finished.
+- StopMenu now loops until appletHolderCheckFinished() confirms terminal completion.
+  StateChangedEvent is only a wake-up hint. Each wait is bounded to 250 ms, the overall
+  completion budget is 5 s, unexpected wait errors preserve the holder and schedule a
+  retry, and a signalled-but-not-finished event backs off briefly rather than spinning.
+- appletHolderJoin/Close are reachable only after the explicit finished check succeeds.
+- scripts/check-home-applet-entrypoint.sh now guards the completion check.
+- This adopts the lifecycle invariant used by HomeNX's library_applet_runner, without
+  copying its GPL-3.0 source implementation.
+- Physical HOME/menu lifecycle validation: NOT RUN; this needs HOME/game switching on
+  a recoverable Switch setup.

@@ -15,7 +15,7 @@ grep -Fq 'COMMON_CPPFILES := $(notdir $(wildcard ../../source/*.cpp))' "$makefil
 grep -Fq 'CPPFILES := $(COMMON_CPPFILES) $(MENU_CPPFILES)' "$makefile" ||
   fail "production entry point must take precedence in the source list"
 
-for symbol in 'DESKNX_SYSTEM_APPLET' 'AppletType_LibraryApplet' 'SendMenuReady' 'SendHeartbeat' \
+for symbol in 'DESKNX_SYSTEM_APPLET' 'AppletType_LibraryApplet' 'appletHolderCheckFinished(&g_MenuHolder)' 'SendMenuReady' 'SendHeartbeat' \
               'SendLaunchTitle' 'SendLaunchHomebrew' 'heartbeatThreadMain' \
               'touchInput(const SDL_Event' 'void keyInput' \
               'fsdevCommitDevice("sdmc")' 'readHistoryFile(HISTORY_BAK_FILE' \
