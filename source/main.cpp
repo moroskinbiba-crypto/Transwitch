@@ -189,6 +189,20 @@ desknx::ipc::InitialState g_initialState{};
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
 }
+
+bool commitSdCard(const char* operation) {
+    if (!sdMounted) return false;
+    const Result rc = fsdevCommitDevice("sdmc");
+    if (R_FAILED(rc)) {
+        desknx::diag::Write("storage", "commit_failed",
+            "operation=%s rc=0x%08X", operation ? operation : "unknown",
+            static_cast<unsigned int>(rc));
+        return false;
+    }
+    desknx::diag::Write("storage", "commit_ok", "operation=%s",
+                        operation ? operation : "unknown");
+    return true;
+}
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
 void rect(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
@@ -335,11 +349,20 @@ bool saveLauncherSettings() {
        <<"iconpack="<<safeField(iconPackPath)<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
+    if(!commitSdCard("settings-temp")) {
+        std::remove(SETTINGS_TMP);
+        setStatus("SETTINGS SD COMMIT FAILED",3000);
+        return false;
+    }
     const auto rc=desknx::safeio::replaceFilePreservingOnFailure(
         SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,true);
     if(rc!=desknx::safeio::ReplaceStatus::Success) {
         std::remove(SETTINGS_TMP);
         setStatus("SETTINGS PUBLISH FAILED",3000);
+        return false;
+    }
+    if(!commitSdCard("settings-publish")) {
+        setStatus("SETTINGS COMMIT FAILED; BACKUP KEPT",4000);
         return false;
     }
     return true;
@@ -1002,15 +1025,23 @@ void saveHistory() {
     for(const auto& e:recentLaunches)out<<typeCode(e.kind)<<'\t'<<safeField(e.title)<<'\t'<<safeField(e.data)<<'\n';
     out.flush();bool good=out.good();out.close();
     if(!good){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY WRITE FAILED",3000);return;}
+    if(!commitSdCard("history-temp")) {
+        std::remove(HISTORY_TMP);
+        setStatus("RECENT HISTORY SD COMMIT FAILED",3000);
+        return;
+    }
     const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
-        HISTORY_TMP, HISTORY_FILE, HISTORY_BAK_FILE);
+        HISTORY_TMP, HISTORY_FILE, HISTORY_BAK_FILE, true);
     if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
         std::remove(HISTORY_TMP);
         if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed)
             setStatus("RECENT HISTORY RECOVERY NEEDED: KEEP recent.bak", 5000);
         else
             setStatus("RECENT HISTORY RENAME FAILED", 3000);
+        return;
     }
+    if(!commitSdCard("history-publish"))
+        setStatus("RECENT HISTORY COMMIT FAILED; BACKUP KEPT",4000);
 }
 void recordRecentLaunch(const Tile& tile) {
     if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;
@@ -1068,9 +1099,15 @@ bool saveActiveWorkspaceState() {
         std::remove(ACTIVE_WORKSPACE_TMP);
         return false;
     }
-    return desknx::safeio::replaceFilePreservingOnFailure(
-        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true)==
-        desknx::safeio::ReplaceStatus::Success;
+    if(!commitSdCard("active-workspace-temp")) {
+        std::remove(ACTIVE_WORKSPACE_TMP);
+        return false;
+    }
+    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
+        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
+    if(replaceStatus != desknx::safeio::ReplaceStatus::Success)
+        return false;
+    return commitSdCard("active-workspace-publish");
 }
 
 bool loadActiveWorkspaceState() {
@@ -1128,6 +1165,11 @@ bool saveLayout() {
     f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
     f.flush();const bool good=f.good();f.close();
     if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return false;}
+    if(!commitSdCard("layout-temp")) {
+        std::remove(CFG_TMP);
+        setStatus("LAYOUT SD COMMIT FAILED; OLD FILE KEPT",4000);
+        return false;
+    }
     const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
         CFG_TMP, CFG_FILE, CFG_BAK_FILE, true);
     if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
@@ -1138,6 +1180,11 @@ bool saveLayout() {
         } else {
             setStatus("SAVE FAILED: RENAME ERROR", 3500);
         }
+        return false;
+    }
+    if(!commitSdCard("layout-publish")) {
+        layoutSaveBlocked = true; // retain layout.bak as the last known-good copy
+        setStatus("LAYOUT COMMIT FAILED; KEEP layout.bak",5000);
         return false;
     }
     persistedLayoutShapeHash=shapeHash;
