@@ -7,7 +7,10 @@ fail() {
 }
 
 command -v git >/dev/null 2>&1 || fail "git is required"
-tracked="$(git ls-files)" || fail "git ls-files failed; run from repository root"
+repo_root="$(pwd -P)"
+# Docker-based devkitPro jobs run Git as a different uid than the checkout.
+# Trust only this exact workspace path for this read-only index query.
+tracked="$(git -c safe.directory="$repo_root" ls-files)" || fail "git ls-files failed; run from repository root"
 forbidden="$(printf '%s\n' "$tracked" | grep -E '^(desknx-release\.zip|\.vite/|node_modules/|dist/|SdOut/)|(^|/)\.cache/' || true)"
 [[ -z "$forbidden" ]] || fail "generated/local files are tracked:\n$forbidden"
 
