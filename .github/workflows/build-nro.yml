@@ -13,47 +13,29 @@ permissions:
 
 jobs:
   build-nro:
-    name: Compile & Package desknx.nro
+    name: Compile & Package native DeskNX.nro
     runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
 
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
 
-      - name: 🟢 Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Verify native standalone entry point
+        run: bash scripts/check-standalone-entrypoint.sh
 
-      - name: 📦 Install web dependencies
-        run: npm ci
+      - name: Build native SDL2 NRO
+        env:
+          DEVKITPRO: /opt/devkitpro
+        run: make -j2
 
-      - name: ⚡ Build Web Client (Vite + React)
-        run: npm run build
-
-      - name: Check native/web tile-shape contract
-        run: node scripts/check-tile-contract.mjs
-
-      - name: 🗂️ Prepare RomFS for Nintendo Switch
-        run: node scripts/prepare-romfs.js
-
-      - name: 🎮 Build desknx.nro (devkitA64 & libnx)
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            -e DEVKITPRO=/opt/devkitpro \
-            -e DEVKITA64=/opt/devkitpro/devkitA64 \
-            devkitpro/devkita64:latest \
-            make -f Makefile.switch
-
-      - name: ✅ Verify embedded NACP and RomFS
+      - name: Verify NRO metadata and absence of RomFS
         run: python3 scripts/check-nro-assets.py DeskNX.nro
 
-      - name: 📤 Upload desknx.nro Artifact
+      - name: Upload native NRO artifact
         uses: actions/upload-artifact@v4
         with:
           name: desknx-switch-nro
@@ -61,11 +43,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: 🚀 Publish GitHub Release (on tag or manual release)
+      - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            DeskNX.nro
+          files: DeskNX.nro
           generate_release_notes: true
           name: "DeskNX Nintendo Switch ${{ github.ref_name }}"

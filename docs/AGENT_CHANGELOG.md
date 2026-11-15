@@ -173,3 +173,36 @@ CI и физическая проверка для этого изменения
 - Изменения runtime/source и README/diagnostics docs находятся в commit `5e16a64ae21cfb4f8c984f364c0eb621d091314f`. В исходном commit `3fc11bfb054c9d64b7982b2c63dd5811dd2c8adf` закрыт основной packaging bug.
 - Hardware test: NOT RUN после этих исправлений. Не утверждать, что запуск на Switch подтверждён, пока пользователь не проверит новый NRO.
 
+
+
+## Phase 0 — native standalone NRO, удаление HTML/WebKit — 16 ноября 2026
+
+Цель: убрать зависимость standalone приложения от Nintendo Offline Web Applet и
+использовать единый native C++/SDL2 интерфейс для NRO и HOME library applet.
+
+Что изменено:
+- `Makefile.switch` теперь собирает production `source/main.cpp` и тот же набор
+  supporting modules, что и HOME applet; prototype entry point исключён.
+- Standalone target не определяет `DESKNX_SYSTEM_APPLET`: IPC/heartbeat остаются
+  только в HOME applet режиме.
+- Удаляются `src/`, `src-switch/`, `romfs/`, React/TypeScript/Vite/package files,
+  HTML entrypoint и scripts подготовки/сверки web bundle.
+- Оба основных build workflow и system-backend workflow собирают native NRO;
+  npm/Vite/RomFS шаги удалены.
+- `scripts/check-standalone-entrypoint.sh` проверяет выбор production main,
+  SDL2 dependencies и отсутствие WebKit API в standalone runtime.
+- `scripts/check-nro-assets.py` требует NRO0/ASET/NACP и запрещает RomFS section.
+- `scripts/check-repo-hygiene.sh` запрещает повторное добавление web runtime/build files.
+- Обновлены README, feature inventory, native frontend roadmap и diagnostics;
+  добавлен `docs/AUDIT_2026-11-16.md`.
+
+Статус проверок на момент записи:
+- GitHub Actions cross-build/host tests: NOT RUN (ожидают push ветки).
+- NRO asset validation: NOT RUN (запускается после сборки).
+- Реальная Switch: NOT RUN. Устранение `2808-1037` нельзя считать подтверждённым,
+  пока новый NRO не проверен на устройстве.
+- Системный qlaunch backend по-прежнему experimental; этот этап его не устанавливает.
+
+Следующий этап по плану: после успешного CI проверить standalone NRO на физической
+Switch, затем продолжить Phase 1/2.3 — аудит базового controller flow и long-press
+touch drag. Не начинать qlaunch takeover до стабилизации standalone NRO.

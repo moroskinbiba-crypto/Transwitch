@@ -54,6 +54,9 @@ jobs:
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
 
+      - name: Verify native standalone entry point
+        run: bash scripts/check-standalone-entrypoint.sh
+
       - name: Verify production HOME applet entry point
         run: bash scripts/check-home-applet-entrypoint.sh
 
@@ -111,9 +114,10 @@ jobs:
           cp -a "$ATMOSPHERE_DIR/libraries/libvapours/include/." "$DEVKITPRO/AtmosphereLibs/include/"
           find "$ATMOSPHERE_DIR/libraries/libstratosphere" -type f -name "*.a" -exec cp -f {} "$DEVKITPRO/AtmosphereLibs/lib/" \;
 
-      - name: Build standalone NRO and library applet
+      - name: Build standalone native NRO and library applet
         run: |
           make -j2
+          python3 scripts/check-nro-assets.py DeskNX.nro
           make -C projects/DeskNXMenu -j2 LIBNX="$SL_LIBNX"
 
       - name: Build target-aware hbloader

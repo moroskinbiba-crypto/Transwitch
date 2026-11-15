@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Fail CI when a Switch NRO omits its embedded NACP or RomFS assets."""
+"""Validate NRO0 + ASET + NACP and reject an embedded RomFS in the native build."""
 from __future__ import annotations
+
 import struct
 import sys
 from pathlib import Path
@@ -17,10 +18,14 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def read_section(data: bytes, base: int, field: int, label: str) -> tuple[int, int]:
+def read_section(
+    data: bytes, base: int, field: int, label: str, *, required: bool = True
+) -> tuple[int, int]:
     offset, size = struct.unpack_from("<QQ", data, base + field)
     if size == 0:
-        fail(f"{label} section is empty")
+        if required:
+            fail(f"{label} section is empty")
+        return offset, size
     if offset < ASET_HEADER_SIZE:
         fail(f"{label} offset points inside ASET header: 0x{offset:X}")
     if offset > len(data) - base or size > len(data) - base - offset:
@@ -48,9 +53,16 @@ def main() -> None:
     version = struct.unpack_from("<I", data, base + 4)[0]
     if version != 0:
         fail(f"unsupported ASET version: {version}")
+
     _, nacp_size = read_section(data, base, NACP_FIELD_OFFSET, "NACP")
-    _, romfs_size = read_section(data, base, ROMFS_FIELD_OFFSET, "RomFS")
-    print(f"[NRO asset check] OK: {path} (NRO={len(data)} bytes, NACP={nacp_size} bytes, RomFS={romfs_size} bytes)")
+    _, romfs_size = read_section(data, base, ROMFS_FIELD_OFFSET, "RomFS", required=False)
+    if romfs_size != 0:
+        fail(f"native standalone NRO must not contain RomFS (found {romfs_size} bytes)")
+
+    print(
+        f"[NRO asset check] OK: {path} "
+        f"(NRO={len(data)} bytes, NACP={nacp_size} bytes, RomFS=absent)"
+    )
 
 
 if __name__ == "__main__":
