@@ -216,3 +216,13 @@ touch drag. Не начинать qlaunch takeover до стабилизации
 - Guard исправлен: при проверке Makefile комментарии исключаются; проверяется именно активное определение system-applet macro, ROMFS variable или `--romfsdir`. Запрос WebKit API проверяется отдельно в native source.
 - Повторные CI результаты для исправленного commit ещё не получены на момент записи.
 - Аппаратная проверка NRO по-прежнему NOT RUN.
+
+
+### Исправление native include paths после фактической CI-компиляции — 16 ноября 2026
+
+- Повторный CI после guard fix прошёл repo hygiene и standalone entrypoint checks.
+- Host tests workspace/persistence и другие предыдущие unit-test steps в Build DeskNX завершились успешно.
+- Native NRO cross-build остановился на `source/slaunch_applications.hpp:5`: `fatal error: switch.h: No such file or directory`. Это показало, что отдельный standalone Makefile не добавлял include-пути libnx в фактические C/C++ compile flags.
+- Исправлен `Makefile.switch`: include-пути формируются относительно экспортированного `TOPDIR` до вычисления `CFLAGS/CXXFLAGS`, включая devkitPro libnx и Switch portlibs. Это также исключает ошибочную зависимость от `CURDIR`, который меняется при рекурсивной сборке из каталога `build/`.
+- Результат новой cross-build проверки ожидается. Не считать native NRO собранным, пока Actions не подтвердит compile/link и NRO asset checker.
+- Физическая Switch: NOT RUN.
