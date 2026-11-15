@@ -104,7 +104,7 @@ jobs:
 
       - name: Test persistence JSON round-trip without exceptions
         run: |
-          c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
+          c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
 
       - name: Build standalone Homebrew app
