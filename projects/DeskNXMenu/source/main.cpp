@@ -24,6 +24,9 @@
 #include <cstdio>
 #include <cerrno>
 
+// Local debug output for the HOME applet; libnx does not expose printf-style logging here.
+#define debugPrintf(...) std::fprintf(stderr, __VA_ARGS__)
+
 using namespace desknx;
 
 namespace {
@@ -384,9 +387,9 @@ int main(int argc, char* argv[]) {
                         // Y — enter resize mode on focused tile
                         case SDLK_y:
                             if (!g_settings->isActive() && g_renderer && g_inputHandler) {
-                                const int focusedIdx = g_renderer->focusedTileIndex();
-                                if (focusedIdx >= 0) {
-                                    if (auto* ws = g_provider->activeWorkspace()) {
+                                if (auto* ws = g_provider->activeWorkspace()) {
+                                    const int focusedIdx = g_renderer->focusedTileIndex(*ws);
+                                    if (focusedIdx >= 0) {
                                         g_inputHandler->enterResize(focusedIdx, *ws);
                                         const auto& tile = ws->tiles[static_cast<size_t>(focusedIdx)];
                                         g_renderer->beginResizePreview(focusedIdx, tile.w, tile.h,
@@ -399,9 +402,9 @@ int main(int argc, char* argv[]) {
                         // X — mark/delete focused tile (single press = immediate delete)
                         case SDLK_x:
                             if (!g_settings->isActive() && g_renderer && g_inputHandler) {
-                                const int focusedIdx = g_renderer->focusedTileIndex();
-                                if (focusedIdx >= 0) {
-                                    if (auto* ws = g_provider->activeWorkspaceForEditing()) {
+                                if (auto* ws = g_provider->activeWorkspaceForEditing()) {
+                                    const int focusedIdx = g_renderer->focusedTileIndex(*ws);
+                                    if (focusedIdx >= 0) {
                                         // Immediate delete (no double-press, faster)
                                         ws->tiles.erase(ws->tiles.begin() + focusedIdx);
                                         if (g_store) g_store->save();

@@ -84,6 +84,9 @@ public:
     /// Feed the current A-button held state each frame.
     virtual void setAHeld(bool held) = 0;
 
+    /// Feed the current B-button held state; cancels an active drag.
+    virtual void setBPressed(bool pressed) = 0;
+
     /// A-hold threshold in frames (≈250 ms @ 60 fps).
     static constexpr int kAHoldThreshold = 15;
 

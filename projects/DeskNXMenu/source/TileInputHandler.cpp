@@ -66,7 +66,7 @@ public:
 
     int getAHoldFrames() const override { return m_aHoldFrames; }
 
-    void setBPressed(bool pressed) {
+    void setBPressed(bool pressed) override {
         m_bPressed = pressed;
     }
 
