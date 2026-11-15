@@ -290,3 +290,18 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
    and host fallback, only after the system backend build and hardware recovery tests.
 4. Wire the existing HoldToDrag helper into the SDL touch path instead of starting a
    tile drag after a 12-pixel movement. Preserve the current gesture unit tests.
+
+### Native touch: wire the tested long-press gesture into SDL input — 16 November 2026
+
+- source/main.cpp now uses the existing desknx::touch::HoldToDrag helper; a stationary
+  420 ms hold starts a tile drag, while movement beyond the tested 12-pixel threshold
+  before the hold cancels the drag candidate. The SDL frame loop polls the hold timer
+  so a finger does not need to move again after the hold delay.
+- Drag motion and finger release are now bound to the initiating SDL_FingerID, avoiding
+  a second finger moving or committing the first finger's tile.
+- A short touch in edit mode selects a tile without immediately switching to drag.
+- scripts/check-standalone-entrypoint.sh checks that the production SDL source actually
+  calls both HoldToDrag::tick and observeMotion; tests/touch_gesture_test.cpp remains
+  the host-tested behavior contract.
+- Physical touchscreen test: NOT RUN; long-press timing and finger-ID behavior require
+  validation on a Switch touchscreen.

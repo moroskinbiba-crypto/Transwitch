@@ -19,7 +19,7 @@ grep -Fq 'SDL2_TTF_LIBS' "$makefile" || fail "SDL2_ttf is not linked"
 grep -Fq -- '--nacp=$(OUTPUT).nacp' "$makefile" || fail "NACP metadata is not embedded"
 
 for symbol in 'int main(int,char**)' 'fsdevMountSdmc()' 'SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)' \
-              'SDL_CreateWindow' 'SDL_CreateRenderer' 'SDL_PollEvent' 'touchInput(const SDL_Event'; do
+              'SDL_CreateWindow' 'SDL_CreateRenderer' 'SDL_PollEvent' 'touchInput(const SDL_Event' 'tileHoldGesture.tick(SDL_GetTicks())' 'tileHoldGesture.observeMotion'; do
   grep -Fq "$symbol" "$main" || fail "native UI entry point is missing $symbol"
 done
 
