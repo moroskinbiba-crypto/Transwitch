@@ -1,38 +1,10 @@
 #include "AppCatalogManager.hpp"
 
 #include <algorithm>
-#include <cstdio>
 #include <filesystem>
-#include <system_error>
-#include <utility>
+#include <cstdio>
 
 namespace desknx::catalog {
-namespace {
-
-bool parseTitleId(const std::string& value, std::uint64_t& titleId) {
-    if (value.size() != 16)
-        return false;
-
-    titleId = 0;
-    for (unsigned char ch : value) {
-        unsigned int digit = 0;
-        if (ch >= '0' && ch <= '9') {
-            digit = ch - '0';
-        } else if (ch >= 'a' && ch <= 'f') {
-            digit = ch - 'a' + 10;
-        } else if (ch >= 'A' && ch <= 'F') {
-            digit = ch - 'A' + 10;
-        } else {
-            titleId = 0;
-            return false;
-        }
-        titleId = (titleId << 4) | digit;
-    }
-
-    return titleId != 0;
-}
-
-} // namespace
 
 bool AppCatalogManager::scan() {
     m_games.clear();
@@ -53,54 +25,44 @@ bool AppCatalogManager::scanAtmosphereContents() {
     std::error_code ec;
 
     if (!std::filesystem::is_directory(contentPath, ec)) {
-        if (ec) {
-            fprintf(stderr, "[catalog] cannot inspect %s: %s\n",
-                    contentPath.c_str(), ec.message().c_str());
-        } else {
-            fprintf(stderr, "[catalog] %s does not exist or is not a directory\n",
-                    contentPath.c_str());
-        }
+        fprintf(stderr, "[catalog] %s does not exist or is not a directory\n", contentPath.c_str());
         return false;
     }
 
-    std::filesystem::directory_iterator it(contentPath, ec);
-    const std::filesystem::directory_iterator end;
-    if (ec) {
-        fprintf(stderr, "[catalog] cannot enumerate %s: %s\n",
-                contentPath.c_str(), ec.message().c_str());
-        return false;
-    }
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(contentPath, ec)) {
+            if (!entry.is_directory())
+                continue;
 
-    while (it != end) {
-        const std::filesystem::directory_entry entry = *it;
-        std::error_code entryError;
-        const bool isDirectory = entry.is_directory(entryError);
-
-        if (entryError) {
-            fprintf(stderr, "[catalog] cannot inspect entry in %s: %s\n",
-                    contentPath.c_str(), entryError.message().c_str());
-        } else if (isDirectory) {
             const std::string dirName = entry.path().filename().string();
-            std::uint64_t titleId = 0;
-            if (parseTitleId(dirName, titleId)) {
-                GameEntry game;
-                game.titleId = titleId;
-                game.title = dirName;
-                game.isHomebrew = false;
-                m_games.push_back(std::move(game));
-            }
-        }
+            if (dirName.size() != 16)
+                continue;  // Title IDs are 16 hex chars
 
-        ec.clear();
-        it.increment(ec);
-        if (ec) {
-            fprintf(stderr, "[catalog] enumeration stopped in %s: %s\n",
-                    contentPath.c_str(), ec.message().c_str());
-            return false;
+            // Parse title ID
+            std::uint64_t titleId = 0;
+            try {
+                titleId = std::stoull(dirName, nullptr, 16);
+            } catch (...) {
+                continue;
+            }
+
+            if (titleId == 0)
+                continue;
+
+            // For now, just record that this title is installed.
+            // In a full implementation, you'd read the exefs/main and get metadata.
+            GameEntry game;
+            game.titleId = titleId;
+            game.title = dirName;  // Fallback to title ID
+            game.isHomebrew = false;
+            m_games.push_back(std::move(game));
         }
+    } catch (const std::exception& e) {
+        fprintf(stderr, "[catalog] scanAtmosphereContents exception: %s\n", e.what());
+        return false;
     }
 
-    return true;
+    return !m_games.empty();
 }
 
 bool AppCatalogManager::scanHomebrewFolder() {
@@ -108,73 +70,55 @@ bool AppCatalogManager::scanHomebrewFolder() {
     std::error_code ec;
 
     if (!std::filesystem::is_directory(switchPath, ec)) {
-        if (ec) {
-            fprintf(stderr, "[catalog] cannot inspect %s: %s\n",
-                    switchPath.c_str(), ec.message().c_str());
-            return false;
-        }
-        fprintf(stderr, "[catalog] %s does not exist or is not a directory\n",
-                switchPath.c_str());
-        return true;
+        fprintf(stderr, "[catalog] %s does not exist or is not a directory\n", switchPath.c_str());
+        return true;  // Not an error if switch folder doesn't exist
     }
 
-    std::filesystem::directory_iterator it(switchPath, ec);
-    const std::filesystem::directory_iterator end;
-    if (ec) {
-        fprintf(stderr, "[catalog] cannot enumerate %s: %s\n",
-                switchPath.c_str(), ec.message().c_str());
-        return false;
-    }
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(switchPath, ec)) {
+            if (!entry.is_regular_file())
+                continue;
 
-    while (it != end) {
-        const std::filesystem::directory_entry entry = *it;
-        std::error_code entryError;
-        const bool isRegularFile = entry.is_regular_file(entryError);
-
-        if (entryError) {
-            fprintf(stderr, "[catalog] cannot inspect entry in %s: %s\n",
-                    switchPath.c_str(), entryError.message().c_str());
-        } else if (isRegularFile) {
             const std::string filename = entry.path().filename().string();
-            if (filename.size() >= 4 &&
-                filename.compare(filename.size() - 4, 4, ".nro") == 0) {
-                const std::string title = filename.substr(0, filename.size() - 4);
+            const std::string ext = filename.size() >= 4 ? filename.substr(filename.size() - 4) : "";
 
-                GameEntry game;
-                game.titleId = 0;
-                game.title = title;
-                game.nroPath = entry.path().string();
-                game.isHomebrew = true;
-                m_games.push_back(std::move(game));
-            }
-        }
+            if (ext != ".nro")
+                continue;
 
-        ec.clear();
-        it.increment(ec);
-        if (ec) {
-            fprintf(stderr, "[catalog] enumeration stopped in %s: %s\n",
-                    switchPath.c_str(), ec.message().c_str());
-            return false;
+            // Extract title from filename (without .nro extension)
+            std::string title = filename.substr(0, filename.size() - 4);
+
+            GameEntry game;
+            game.titleId = 0;  // Homebrew has no title ID
+            game.title = title;
+            game.nroPath = entry.path().string();
+            game.isHomebrew = true;
+            m_games.push_back(std::move(game));
         }
+    } catch (const std::exception& e) {
+        fprintf(stderr, "[catalog] scanHomebrewFolder exception: %s\n", e.what());
+        return false;
     }
 
     return true;
 }
 
 const GameEntry* AppCatalogManager::findByTitleId(std::uint64_t titleId) const {
-    const auto it = std::find_if(m_games.begin(), m_games.end(),
+    auto it = std::find_if(m_games.begin(), m_games.end(),
         [titleId](const GameEntry& game) { return game.titleId == titleId; });
     return it != m_games.end() ? &*it : nullptr;
 }
 
 int AppCatalogManager::gameCount() const {
     return static_cast<int>(std::count_if(m_games.begin(), m_games.end(),
-        [](const GameEntry& game) { return !game.isHomebrew; }));
+        [](const GameEntry& g) { return !g.isHomebrew; }));
 }
 
 int AppCatalogManager::homebrewCount() const {
     return static_cast<int>(std::count_if(m_games.begin(), m_games.end(),
-        [](const GameEntry& game) { return game.isHomebrew; }));
+        [](const GameEntry& g) { return g.isHomebrew; }));
 }
 
-} // namespace desknx::catalog
+}  // namespace desknx::catalog
+
+{"content":"#include \"AppCatalogManager.hpp\"\n\n#include <algorithm>\n#include <filesystem>\n#include <cstdio>\n\nnamespace desknx::catalog {\n\nbool AppCatalogManager::scan() {\n    m_games.clear();\n\n    if (!scanAtmosphereContents())\n        fprintf(stderr, \"[catalog] /atmosphere/contents/ scan had issues\\n\");\n\n    if (!scanHomebrewFolder())\n        fprintf(stderr, \"[catalog] /switch/ homebrew scan had issues\\n\");\n\n    fprintf(stderr, \"[catalog] scan complete: %d games, %d homebrew\\n\",\n            gameCount(), homebrewCount());\n    return !m_games.empty();\n}\n\nbool AppCatalogManager::scanAtmosphereContents() {\n    const std::string contentPath = \"sdmc:/atmosphere/contents\";\n    std::error_code ec;\n\n    if (!std::filesystem::is_directory(contentPath, ec)) {\n        fprintf(stderr, \"[catalog] %s does not exist or is not a directory\\n\", contentPath.c_str());\n        return false;\n    }\n\n    try {\n        for (const auto& entry : std::filesystem::directory_iterator(contentPath, ec)) {\n            if (!entry.is_directory())\n                continue;\n\n            const std::string dirName = entry.path().filename().string();\n            if (dirName.size() != 16)\n                continue;  // Title IDs are 16 hex chars\n\n            // Parse title ID\n            std::uint64_t titleId = 0;\n            try {\n                titleId = std::stoull(dirName, nullptr, 16);\n            } catch (...) {\n                continue;\n            }\n\n            if (titleId == 0)\n                continue;\n\n            // For now, just record that this title is installed.\n            // In a full implementation, you'd read the exefs/main and get metadata.\n            GameEntry game;\n            game.titleId = titleId;\n            game.title = dirName;  // Fallback to title ID\n            game.isHomebrew = false;\n            m_games.push_back(std::move(game));\n        }\n    } catch (const std::exception& e) {\n        fprintf(stderr, \"[catalog] scanAtmosphereContents exception: %s\\n\", e.what());\n        return false;\n    }\n\n    return !m_games.empty();\n}\n\nbool AppCatalogManager::scanHomebrewFolder() {\n    const std::string switchPath = \"sdmc:/switch\";\n    std::error_code ec;\n\n    if (!std::filesystem::is_directory(switchPath, ec)) {\n        fprintf(stderr, \"[catalog] %s does not exist or is not a directory\\n\", switchPath.c_str());\n        return true;  // Not an error if switch folder doesn't exist\n    }\n\n    try {\n        for (const auto& entry : std::filesystem::directory_iterator(switchPath, ec)) {\n            if (!entry.is_regular_file())\n                continue;\n\n            const std::string filename = entry.path().filename().string();\n            const std::string ext = filename.size() >= 4 ? filename.substr(filename.size() - 4) : \"\";\n\n            if (ext != \".nro\")\n                continue;\n\n            // Extract title from filename (without .nro extension)\n            std::string title = filename.substr(0, filename.size() - 4);\n\n            GameEntry game;\n            game.titleId = 0;  // Homebrew has no title ID\n            game.title = title;\n            game.nroPath = entry.path().string();\n            game.isHomebrew = true;\n            m_games.push_back(std::move(game));\n        }\n    } catch (const std::exception& e) {\n        fprintf(stderr, \"[catalog] scanHomebrewFolder exception: %s\\n\", e.what());\n        return false;\n    }\n\n    return true;\n}\n\nconst GameEntry* AppCatalogManager::findByTitleId(std::uint64_t titleId) const {\n    auto it = std::find_if(m_games.begin(), m_games.end(),\n        [titleId](const GameEntry& game) { return game.titleId == titleId; });\n    return it != m_games.end() ? &*it : nullptr;\n}\n\nint AppCatalogManager::gameCount() const {\n    return static_cast<int>(std::count_if(m_games.begin(), m_games.end(),\n        [](const GameEntry& g) { return !g.isHomebrew; }));\n}\n\nint AppCatalogManager::homebrewCount() const {\n    return static_cast<int>(std::count_if(m_games.begin(), m_games.end(),\n        [](const GameEntry& g) { return g.isHomebrew; }));\n}\n\n}  // namespace desknx::catalog\n"}
