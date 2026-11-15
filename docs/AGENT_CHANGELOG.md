@@ -246,3 +246,47 @@ CI после первого include-path изменения выявил ещё
 
 CI native cross-build и NRO checker после этого исправления: ожидаются.
 Физическая Switch: NOT RUN.
+
+## HomeNX architecture audit and launch-path parity — 16 November 2026
+
+Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
+(GPL-3.0; see docs/HOMENX_PORT_AUDIT_2026-11-16.md).
+
+### Changes in this commit
+- source/main.cpp: explicitly exports __nx_applet_type as AppletType_Application
+  for standalone NRO and AppletType_LibraryApplet for the system HOME frontend.
+  Startup diagnostic records the selected applet type. HomeNX uses the same process
+  contract. We leave __nx_heap_size dynamic for now: unlike HomeNX's fixed 208 MiB
+  heap, our launch environment may provide a heap override or a smaller applet budget;
+  forcing a fixed allocation can abort during libnx initialization before diagnostics.
+- projects/sSystem/source/main.cpp: fixed qlaunch build failure at the SD bootstrap
+  log. The Stratosphere ams::Result has an explicit GetValue() accessor and cannot
+  be directly cast to unsigned int with the selected libnx ref.
+- scripts/check-standalone-entrypoint.sh: asserts Application applet type.
+- scripts/check-home-applet-entrypoint.sh: asserts LibraryApplet applet type.
+- Added docs/HOMENX_PORT_AUDIT_2026-11-16.md: current upstream architecture, port map,
+  licensing constraints and future integration plan.
+
+### CI evidence before this change
+- Standalone NRO build + NRO structure checker: run 43768488600 success.
+- Host tests + native NRO + HOME library applet build: run 43768488594 success.
+- Experimental HOME backend run 43768481615 failed in Build qlaunch backend:
+  projects/sSystem/source/main.cpp:1615:15 invalid static_cast from const ams::Result
+  to unsigned int. This is the failure fixed here.
+
+### Verification state after this change
+- New cross-build and host tests: pending; not yet run for this commit.
+- Physical Switch launch: NOT RUN. Explicit Application applet type is taken from
+  HomeNX's standalone build; it must still be tested with the actual launcher/forwarder.
+- Do not mark the original startup exit as fixed until a new artifact has launched on
+  physical hardware and its diagnostics log confirms the full startup path.
+
+### Next HomeNX-derived tasks
+1. Complete lifecycle comparison/port: event-driven applet wait, ApplicationSession
+   bounded join/terminate, menu holder lazy event initialization and safe retry.
+2. Move more catalogue ownership to the daemon only if system backend is enabled;
+   keep standalone catalogue path as a separately tested fallback.
+3. Implement/test the full-memory Homebrew host-title + ECS route, including cleanup
+   and host fallback, only after the system backend build and hardware recovery tests.
+4. Wire the existing HoldToDrag helper into the SDL touch path instead of starting a
+   tile drag after a 12-pixel movement. Preserve the current gesture unit tests.

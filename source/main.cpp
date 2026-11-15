@@ -1,4 +1,14 @@
 #include <switch.h>
+
+// Match HomeNX's process contract: standalone is an Application;
+// the experimental HOME frontend is loaded as a LibraryApplet.
+extern "C" {
+#ifdef DESKNX_SYSTEM_APPLET
+u32 __nx_applet_type = AppletType_LibraryApplet;
+#else
+u32 __nx_applet_type = AppletType_Application;
+#endif
+}
 #include <switch/applets/hid_la.h>
 #include <switch/applets/album_la.h>
 #include <switch/applets/friends_la.h>
@@ -3451,8 +3461,9 @@ int main(int,char**) {
 #else
     constexpr const char* buildMode = "standalone-nro";
 #endif
-    desknx::diag::Write("session", "start", "mode=%s sd_mounted=%d sd_mount_rc=0x%08X",
-        buildMode, sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
+    desknx::diag::Write("session", "start", "mode=%s applet_type=%u sd_mounted=%d sd_mount_rc=0x%08X",
+        buildMode, static_cast<unsigned int>(__nx_applet_type),
+        sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){
         desknx::diag::Write("startup", "sdl_init_failed", "error=%s", SDL_GetError());
         if(sdMountedByDeskNX) fsdevUnmountDevice("sdmc");

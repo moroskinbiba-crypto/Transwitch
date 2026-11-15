@@ -1612,7 +1612,7 @@ void InitializeSystemModule() {
     remove(kPrevLogPath);
     rename(kLogPath, kPrevLogPath);
     DaemonLog("backend: bootstrap reached sd_mount_rc=0x%08X",
-              static_cast<unsigned int>(sdMountRc));
+              static_cast<unsigned int>(sdMountRc.GetValue()));
 
     // libnx chooses IPC command/layouts by HOS version. Discover the installed
     // firmware before initializing account/ns/applet services.

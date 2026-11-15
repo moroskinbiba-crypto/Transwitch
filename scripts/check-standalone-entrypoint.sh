@@ -30,6 +30,7 @@ if printf '%s\n' "$active_makefile" | grep -Eq 'DESKNX_SYSTEM_APPLET|^[[:space:]
   fail "standalone target must not define system-applet mode or package a RomFS"
 fi
 
+grep -Fq 'u32 __nx_applet_type = AppletType_Application;' "$main" || fail "standalone NRO must explicitly use Application applet type"
 grep -Fq 'extern "C" void userAppInit(void)' "$main" || fail "early standalone NRO diagnostics hook is missing"
 grep -Fq 'if(sdMountedByDeskNX)fsdevUnmountDevice("sdmc");' "$main" || fail "standalone cleanup must not unmount libnx-owned SD"
 
