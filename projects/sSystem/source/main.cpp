@@ -826,7 +826,10 @@ void DrainMenuCommands() {
 
     for (int n = 0; n < 16; ++n) {
         AppletStorage storage{};
-        const Result rc = la::PopOutData(&storage);
+        // v2 uses HomeNX's interactive output queue/readiness event. Drain
+        // the regular queue second so an older v1 frontend still works.
+        Result rc = la::PopInteractiveOutData(&storage);
+        if (R_FAILED(rc)) rc = la::PopOutData(&storage);
         if (R_FAILED(rc)) break;
         ParseMenuCommand(storage);
         appletStorageClose(&storage);
@@ -1506,7 +1509,24 @@ void RunMainLoop() {
         }
 
         CheckEmergencyRollback();
-        svcSleepThread(16'666'666ULL);
+
+        // Wake immediately when a v2 interactive command or AM applet message
+        // arrives. Keep the bounded 16 ms fallback for state-machine deadlines,
+        // watchdogs and recovery-chord sampling.
+        Waiter waiters[2]{};
+        s32 waiterCount = 0;
+        if (Event* commandEvent = la::CommandEvent())
+            waiters[waiterCount++] = waiterForEvent(commandEvent);
+        if (Event* messageEvent = appletGetMessageEvent())
+            waiters[waiterCount++] = waiterForEvent(messageEvent);
+        if (waiterCount == 0) {
+            svcSleepThread(16'666'666ULL);
+        } else {
+            s32 signalledIndex = -1;
+            const Result waitRc = waitObjects(&signalledIndex, waiters, waiterCount, 16'666'666ULL);
+            if (R_FAILED(waitRc) && waitRc != KERNELRESULT(TimedOut))
+                svcSleepThread(10'000'000ULL);
+        }
     }
 }
 

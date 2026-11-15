@@ -359,3 +359,32 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
   RequestExitOrTerminate. Логика не потеряла обязательную проверку завершения.
 - Guard теперь проверяет сам API-вызов appletHolderCheckFinished() в
   projects/sSystem/source/LibraryApplet.cpp и не привязывается к форме цикла/if.
+
+### HomeNX SMI interactive IPC transport — 16 November 2026
+
+HomeNX's audited projects/menu/src/smi_commands.hpp uses appletPushInteractiveOutData();
+the daemon reads appletHolderPopInteractiveOutData() and waits on the lazily acquired
+PopInteractiveOutDataEvent. Transwitch previously used ordinary appletPushOutData()
+and polled appletHolderPopOutData() every 16 ms.
+
+Changes:
+- Protocol.hpp adds a thread-safe transport switch. A valid v2 InitialState enables
+  interactive command storage; missing/legacy state retains the normal output queue.
+- The system applet consumes InitialState before it sends MenuReady, so MenuReady and
+  the first heartbeat cannot race ahead of transport negotiation.
+- LibraryApplet exposes interactive pop and lazily gets PopInteractiveOutDataEvent.
+  On acquisition failure it returns null; a handle-zero event is never awaited.
+- Backend drains interactive commands first and then the legacy normal queue, so a
+  new qlaunch backend can still accept a previously built v1 menu binary.
+- Backend main loop waits on the command-ready event and AM applet-message event, with
+  a bounded 16 ms timer fallback for liveness deadlines, app state and recovery chord.
+- InitialState and backend-to-menu notifications stay on the original normal input
+  queue in this commit; only menu-to-daemon command messages change transport.
+- Static guard checks both ends of the protocol and the event wait.
+
+Compatibility:
+- New UI + new backend: interactive v2 path.
+- New UI + old backend: no v2 InitialState => normal output queue.
+- Old UI + new backend: backend drains both interactive and normal queues.
+
+CI for this commit: queued. Physical HOME/command handoff test: NOT RUN.

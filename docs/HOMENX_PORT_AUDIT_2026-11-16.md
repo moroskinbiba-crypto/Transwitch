@@ -98,3 +98,12 @@ AppletType_LibraryApplet. These prevent the two modes from silently drifting.
   because ams::Result was cast directly to an unsigned integer. Fixed in this pass.
 - Physical Switch: NOT RUN. The latest NRO must be installed and launched on the user's
   console; the old 2808-1037 / startup-exit issue is not marked resolved until that test.
+
+## Interactive SMI transport port
+
+HomeNX sends daemon commands through appletPushInteractiveOutData() and has the
+daemon wait on appletHolderGetPopInteractiveOutDataEvent(). Transwitch now uses
+the same v2 interactive transport after a valid v2 InitialState handshake. A normal
+storage queue remains as a compatibility fallback for older frontends/backends.
+Initial state and backend-to-menu notifications remain on the original non-interactive
+queue in this change, so startup state and notification semantics are unchanged.

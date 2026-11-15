@@ -8,12 +8,16 @@ AppletHolder g_MenuHolder{};
 bool g_MenuRunning = false;
 static bool g_StopRequested = false;
 static u64 g_StopRetryAfterTick = 0;
+static bool g_CommandEventInitialized = false;
+static bool g_CommandEventAvailable = false;
 
 Result LaunchMenu(AppletId applet_id, const void* initial_data, size_t initial_size) {
     if (g_MenuRunning)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
 
     std::memset(&g_MenuHolder, 0, sizeof(g_MenuHolder));
+    g_CommandEventInitialized = false;
+    g_CommandEventAvailable = false;
     Result rc = appletCreateLibraryApplet(&g_MenuHolder, applet_id, LibAppletMode_AllForeground);
     if (R_FAILED(rc))
         return rc;
@@ -31,6 +35,8 @@ Result LaunchMenu(AppletId applet_id, const void* initial_data, size_t initial_s
     if (R_FAILED(rc)) {
         appletHolderClose(&g_MenuHolder);
         std::memset(&g_MenuHolder, 0, sizeof(g_MenuHolder));
+        g_CommandEventInitialized = false;
+        g_CommandEventAvailable = false;
         return rc;
     }
 
@@ -46,8 +52,8 @@ Result StopMenu() {
     }
 
     // Retire an applet that completed between retries before issuing another
-    // request to its accessor. StateChangedEvent itself is not a completion
-    // barrier; the wait loop below verifies the terminal state explicitly.
+    // request to its accessor. For a LibraryApplet this StateChangedEvent is
+    // libnx's completion event, checked by appletHolderCheckFinished().
     if (appletHolderCheckFinished(&g_MenuHolder)) {
         appletHolderJoin(&g_MenuHolder);
         appletHolderClose(&g_MenuHolder);
@@ -96,6 +102,8 @@ Result StopMenu() {
     appletHolderJoin(&g_MenuHolder);
     appletHolderClose(&g_MenuHolder);
     std::memset(&g_MenuHolder, 0, sizeof(g_MenuHolder));
+    g_CommandEventInitialized = false;
+    g_CommandEventAvailable = false;
     g_MenuRunning = false;
     g_StopRequested = false;
     g_StopRetryAfterTick = 0;
@@ -110,6 +118,27 @@ Result PopOutData(AppletStorage* storage) {
     if (!storage || !g_MenuRunning)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     return appletHolderPopOutData(&g_MenuHolder, storage);
+}
+
+Result PopInteractiveOutData(AppletStorage* storage) {
+    if (!storage || !g_MenuRunning)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    return appletHolderPopInteractiveOutData(&g_MenuHolder, storage);
+}
+
+Event* CommandEvent() {
+    if (!g_MenuRunning) return nullptr;
+    if (!g_CommandEventInitialized) {
+        g_CommandEventInitialized = true;
+        Event* event = nullptr;
+        const Result rc = appletHolderGetPopInteractiveOutDataEvent(&g_MenuHolder, &event);
+        g_CommandEventAvailable = R_SUCCEEDED(rc) && event != nullptr;
+        if (!g_CommandEventAvailable) {
+            // A missing command-event handle must never be passed to waitObjects.
+            return nullptr;
+        }
+    }
+    return g_CommandEventAvailable ? &g_MenuHolder.PopInteractiveOutDataEvent : nullptr;
 }
 
 } // namespace desknx::system::la

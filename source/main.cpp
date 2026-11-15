@@ -931,8 +931,13 @@ void consumeInitialState() {
     const Result readRc=appletStorageRead(&storage,0,&state,sizeof(state));
     appletStorageClose(&storage);
     if(R_FAILED(readRc)) return;
-    if(state.magic!=desknx::ipc::Magic||state.header_size!=desknx::ipc::InitialStateSize)
-        return; // not our block (e.g. v1 backend): ignore, stay compatible
+    if(state.magic!=desknx::ipc::Magic||state.header_size!=desknx::ipc::InitialStateSize) {
+        desknx::ipc::SetInteractiveTransport(false);
+        return; // not our block (e.g. v1 backend): retain normal output transport
+    }
+    // Only a valid v2 InitialState proves the backend reads the interactive
+    // command queue; older backends continue using appletPushOutData.
+    desknx::ipc::SetInteractiveTransport(state.version>=desknx::ipc::Version);
     g_initialState=state;
     if(accountUidIsValid(&state.selected_user)) {
         g_backendUser=state.selected_user; g_backendHasUser=true;
@@ -3563,6 +3568,9 @@ int main(int,char**) {
 
     loadLauncherSettings();
     applyThemePalette();
+#ifdef DESKNX_SYSTEM_APPLET
+    consumeInitialState(); // select the v2 command transport before MenuReady
+#endif
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
     setStatus("STARTING DESKNX...",5000);
     drawScreen(); // first frame precedes application enumeration, SD recursion and font service init
@@ -3633,7 +3641,6 @@ int main(int,char**) {
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
 #ifdef DESKNX_SYSTEM_APPLET
         if(SDL_AtomicGet(&heartbeatError)){SDL_AtomicSet(&heartbeatError,0);setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);}
-        consumeInitialState(); // IPC-06: queued at backend launch, read once
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
         padUpdate(&pad);

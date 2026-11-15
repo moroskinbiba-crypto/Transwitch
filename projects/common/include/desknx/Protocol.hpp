@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 #include <desknx/ProtocolRules.hpp>
 
 namespace desknx::ipc {
@@ -80,6 +81,13 @@ struct LaunchHomebrewPayload {
 };
 static_assert(sizeof(LaunchHomebrewPayload) == 1024);
 
+// v2 backends opt into interactive applet storage through InitialState. It has
+// a readiness event; older backends retain the normal output-data transport.
+inline std::atomic<bool> g_InteractiveTransport{false};
+inline void SetInteractiveTransport(bool enabled) {
+    g_InteractiveTransport.store(enabled, std::memory_order_release);
+}
+
 inline Result Send(Command command, const void* payload = nullptr, size_t payload_size = 0) {
     if (!rules::IsValidPayloadSize(payload_size) ||
         (payload_size != 0 && payload == nullptr))
@@ -101,8 +109,12 @@ inline Result Send(Command command, const void* payload = nullptr, size_t payloa
     if (R_SUCCEEDED(rc) && payload_size != 0)
         rc = appletStorageWrite(&storage, sizeof(header), payload, payload_size);
 
-    if (R_SUCCEEDED(rc))
-        rc = appletPushOutData(&storage);
+    if (R_SUCCEEDED(rc)) {
+        if (g_InteractiveTransport.load(std::memory_order_acquire))
+            rc = appletPushInteractiveOutData(&storage);
+        else
+            rc = appletPushOutData(&storage);
+    }
 
     appletStorageClose(&storage);
     return rc;

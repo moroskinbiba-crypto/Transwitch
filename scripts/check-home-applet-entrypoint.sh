@@ -27,7 +27,17 @@ done
 library_applet="projects/sSystem/source/LibraryApplet.cpp"
 [[ -f "$library_applet" ]] || fail "system LibraryApplet lifecycle source is missing"
 grep -Fq 'appletHolderCheckFinished(&g_MenuHolder)' "$library_applet" ||
-  fail "menu holder must verify completion after state-change notifications"
+  fail "menu holder must verify completion before Join/Close"
+grep -Fq 'appletHolderPopInteractiveOutData' "$library_applet" ||
+  fail "v2 menu commands must use interactive applet output"
+grep -Fq 'appletHolderGetPopInteractiveOutDataEvent' "$library_applet" ||
+  fail "interactive command readiness event must be exposed"
+grep -Fq 'PopInteractiveOutData' "projects/sSystem/source/main.cpp" ||
+  fail "backend must drain interactive commands"
+grep -Fq 'CommandEvent()' "projects/sSystem/source/main.cpp" ||
+  fail "backend must wait on the interactive command event"
+grep -Fq 'appletPushInteractiveOutData(&storage)' projects/common/include/desknx/Protocol.hpp ||
+  fail "v2 UI command transport must use interactive storage"
 
 if grep -Fq 'g_store->save()' "$main"; then
   fail "production HOME UI must not save workspace state through legacy JSON store"
