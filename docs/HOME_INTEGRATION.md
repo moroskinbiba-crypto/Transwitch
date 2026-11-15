@@ -9,6 +9,17 @@ DeskNX currently has two build paths:
 
 The standard CI builds the standalone NRO and the library applet. A separate workflow, Build experimental DeskNX HOME backend, attempts a full compile with selected libnx and Atmosphère refs (default: Atmosphère 1.12.1 and a pinned libnx commit). Even if that job passes, it only verifies compilation against that toolchain; it does not validate the firmware on a real console or make the build production-ready. Do not interpret the source tree or a generated package as proof that qlaunch replacement is operational.
 
+## Build-path clarification
+
+The standalone NRO and the HOME library applet do not currently share one UI translation unit:
+
+- src-switch/main.cpp is the standalone NRO's WebKit host; the React UI is built from src/App.tsx and packaged in RomFS.
+- projects/DeskNXMenu/source/main.cpp is the native C++/SDL2 menu applet served by the system backend.
+- source/*.cpp contains shared native components compiled into the library applet, except source/main.cpp.
+- source/main.cpp is a legacy/experimental native UI file excluded by the current release Makefiles. Do not assume code in it is present in a delivered build.
+
+This split is an explicit audit item: future UI features must be implemented in the code path that ships, or the legacy UI must be deliberately reintegrated with migration and tests.
+
 ## Architecture (based on public sLaunch patterns)
 
 - **DeskNX menu applet** — draws the workspace and reads controller/touch input.

@@ -14,7 +14,7 @@ DeskNX — кастомный рабочий стол для Nintendo Switch. В
 - Пользовательские обложки игр по Title ID и Homebrew по имени NRO или резервному хешу пути.
 - Сенсорное и контроллерное управление, отдельные настройки лаунчера, сохранение состояния раскладки.
 - Сохранение раскладки в `sdmc:/switch/DeskNX/layout.tsv`, настроек — в `settings.ini`.
-- Native C++/SDL2 UI, сборка .nro через GitHub Actions.
+- Native C++/SDL2 UI для экспериментального HOME library applet; standalone NRO — отдельный WebKit-хост React UI, упакованного в RomFS.
 
 ## Персонализация и дополнительные возможности
 
@@ -69,7 +69,10 @@ Standalone и system-applet сборки записывают техническ
 
 ## Структура
 
-- source/main.cpp — общий UI; standalone и system-applet launch paths переключаются compile-time define.
+- src-switch/main.cpp — standalone NRO / WebKit host; src/App.tsx и romfs/ — React UI.
+- projects/DeskNXMenu/source/main.cpp — отдельный native HOME library-applet UI.
+- source/*.cpp — shared native-компоненты, собираемые в HOME applet (кроме source/main.cpp).
+- source/main.cpp — legacy/experimental UI translation unit; текущие release Makefile его не собирают, его код не входит в публикуемые NRO и HOME applet.
 - projects/common/include/desknx/Protocol.hpp — версионированный IPC между UI и системным процессом.
 - projects/DeskNXMenu/ — библиотечный applet и NPDM для запуска через backend.
 - projects/hbloader/ — target-aware загрузчик NRO, запускаемый backend через ECS.

@@ -20,6 +20,7 @@ on:
       - "projects/hbloader/**"
       - "projects/common/**"
       - "scripts/**"
+      - ".gitignore"
       - "tests/**"
       - "docs/**"
       - "THIRD_PARTY.md"
@@ -49,6 +50,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Check repository hygiene
+        run: node scripts/check-repo-hygiene.mjs
 
       - name: Run host model, layout and catalog-view unit tests
         run: |
