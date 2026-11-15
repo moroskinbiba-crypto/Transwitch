@@ -1,14 +1,168 @@
 #include "SteamGridDbCache.hpp"
 
-#include <algorithm>
-#include <filesystem>
-#include <fstream>
-#include <system_error>
 #include <cstdio>
 #include <cstdlib>
-#include <nlohmann/json.hpp>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <system_error>
 
 namespace desknx::steamgriddb {
+namespace {
+
+struct ArtworkMetadata {
+    std::uint64_t titleId{0};
+    bool hero{false};
+    bool logo{false};
+    bool icon{false};
+};
+
+void skipWhitespace(const std::string& text, std::size_t& position) {
+    while (position < text.size()) {
+        const char ch = text[position];
+        if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+            break;
+        ++position;
+    }
+}
+
+bool findValuePosition(const std::string& text, const char* key, std::size_t& position) {
+    if (key == nullptr)
+        return false;
+    const std::string quotedKey = std::string("\"") + key + "\"";
+    const std::size_t keyPosition = text.find(quotedKey);
+    if (keyPosition == std::string::npos)
+        return false;
+    position = text.find(':', keyPosition + quotedKey.size());
+    if (position == std::string::npos)
+        return false;
+    ++position;
+    skipWhitespace(text, position);
+    return position < text.size();
+}
+
+bool readBoolField(const std::string& text, const char* key, bool fallback) {
+    std::size_t position = 0;
+    if (!findValuePosition(text, key, position))
+        return fallback;
+    if (text.compare(position, 4, "true") == 0)
+        return true;
+    if (text.compare(position, 5, "false") == 0)
+        return false;
+    return fallback;
+}
+
+std::uint64_t readUnsignedField(const std::string& text, const char* key,
+                                std::uint64_t fallback) {
+    std::size_t position = 0;
+    if (!findValuePosition(text, key, position))
+        return fallback;
+    if (text[position] < '0' || text[position] > '9')
+        return fallback;
+
+    const char* start = text.c_str() + position;
+    char* end = nullptr;
+    const unsigned long long value = std::strtoull(start, &end, 10);
+    if (end == start || (*end != ',' && *end != '}' &&
+                         *end != ' ' && *end != '\t' &&
+                         *end != '\r' && *end != '\n'))
+        return fallback;
+    return static_cast<std::uint64_t>(value);
+}
+
+bool readMetadata(const std::string& path, ArtworkMetadata& metadata) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open())
+        return false;
+
+    const std::string text((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    if (file.bad())
+        return false;
+
+    metadata.titleId = readUnsignedField(text, "titleId", metadata.titleId);
+    metadata.hero = readBoolField(text, "hero", metadata.hero);
+    metadata.logo = readBoolField(text, "logo", metadata.logo);
+    metadata.icon = readBoolField(text, "icon", metadata.icon);
+    return true;
+}
+
+bool writeMetadata(const std::string& path, const ArtworkMetadata& metadata) {
+    const std::string temporary = path + ".tmp";
+    {
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+        if (!file.is_open())
+            return false;
+        file << "{\n"
+             << "  \"titleId\": " << metadata.titleId << ",\n"
+             << "  \"hero\": " << (metadata.hero ? "true" : "false") << ",\n"
+             << "  \"logo\": " << (metadata.logo ? "true" : "false") << ",\n"
+             << "  \"icon\": " << (metadata.icon ? "true" : "false") << "\n"
+             << "}\n";
+        file.flush();
+        if (!file.good()) {
+            file.close();
+            std::error_code cleanupError;
+            std::filesystem::remove(temporary, cleanupError);
+            return false;
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    if (ec) {
+        std::error_code cleanupError;
+        std::filesystem::remove(temporary, cleanupError);
+        return false;
+    }
+    ec.clear();
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) {
+        std::error_code cleanupError;
+        std::filesystem::remove(temporary, cleanupError);
+        return false;
+    }
+    return true;
+}
+
+bool copyFileToTemporary(const std::string& sourcePath, const std::string& temporaryPath) {
+    std::ifstream source(sourcePath, std::ios::binary);
+    if (!source.is_open()) {
+        fprintf(stderr, "[steamgriddb-cache] failed to open source: %s\n", sourcePath.c_str());
+        return false;
+    }
+
+    std::ofstream destination(temporaryPath, std::ios::binary | std::ios::trunc);
+    if (!destination.is_open()) {
+        fprintf(stderr, "[steamgriddb-cache] failed to open dest: %s\n", temporaryPath.c_str());
+        return false;
+    }
+
+    char buffer[64 * 1024];
+    while (true) {
+        source.read(buffer, static_cast<std::streamsize>(sizeof(buffer)));
+        const std::streamsize bytesRead = source.gcount();
+        if (bytesRead > 0)
+            destination.write(buffer, bytesRead);
+        if (!destination.good())
+            break;
+        if (bytesRead < static_cast<std::streamsize>(sizeof(buffer)))
+            break;
+    }
+
+    const bool copyOk = !source.bad() && destination.good();
+    destination.close();
+    if (!copyOk || !destination.good()) {
+        std::error_code ec;
+        std::filesystem::remove(temporaryPath, ec);
+        fprintf(stderr, "[steamgriddb-cache] artwork copy failed: %s\n", sourcePath.c_str());
+        return false;
+    }
+    return true;
+}
+
+} // namespace
 
 std::string SteamGridDbCache::titleDirectory(std::uint64_t titleId) {
     char buffer[32];
@@ -34,18 +188,15 @@ std::string SteamGridDbCache::metadataPath(std::uint64_t titleId) {
 
 bool SteamGridDbCache::ensureDirectories() {
     std::error_code ec;
-
-    // Create root cache directory
     std::filesystem::create_directories(kCacheRoot, ec);
     if (ec) {
         fprintf(stderr, "[steamgriddb-cache] failed to create root: %s\n", ec.message().c_str());
         return false;
     }
 
-    // Also create the main DeskNX folder structure
+    ec.clear();
     std::filesystem::create_directories("sdmc:/switch/DeskNX", ec);
-    if (ec && ec.value() != 0) {
-        // Ignore "already exists" errors
+    if (ec) {
         fprintf(stderr, "[steamgriddb-cache] warning creating /switch/DeskNX: %s\n",
                 ec.message().c_str());
     }
@@ -75,60 +226,36 @@ bool SteamGridDbCache::clearArtwork(std::uint64_t titleId, ArtworkKind kind) {
 
     std::error_code ec;
     bool removed = false;
-
     auto removeFile = [&](const std::string& path) {
-        if (std::filesystem::remove(path, ec)) {
-            removed = true;
-        }
         ec.clear();
+        if (std::filesystem::remove(path, ec))
+            removed = true;
+        if (ec)
+            fprintf(stderr, "[steamgriddb-cache] failed to remove %s: %s\n",
+                    path.c_str(), ec.message().c_str());
     };
 
-    // Clear requested artwork types
-    if (kind == ArtworkKind::Hero || kind == ArtworkKind::Hero) {
-        removeFile(heroPath(titleId));
-    }
-    if (kind == ArtworkKind::Logo || kind == ArtworkKind::Logo) {
-        removeFile(logoPath(titleId));
-    }
-    if (kind == ArtworkKind::Icon || kind == ArtworkKind::Icon) {
-        removeFile(iconPath(titleId));
-    }
-
-    // Update metadata
-    nlohmann::json metadata = nlohmann::json::object();
-    std::ifstream metaInput(metadataPath(titleId));
-    if (metaInput.is_open()) {
-        try {
-            metaInput >> metadata;
-        } catch (...) {
-            metadata = nlohmann::json::object();
-        }
-    }
+    ArtworkMetadata metadata;
+    readMetadata(metadataPath(titleId), metadata);
 
     if (kind == ArtworkKind::Hero) {
-        metadata["hero"] = false;
-        metadata.erase("selectedHeroId");
-    }
-    if (kind == ArtworkKind::Logo) {
-        metadata["logo"] = false;
-        metadata.erase("selectedLogoId");
-    }
-    if (kind == ArtworkKind::Icon) {
-        metadata["icon"] = false;
-        metadata.erase("selectedIconId");
+        removeFile(heroPath(titleId));
+        metadata.hero = false;
+    } else if (kind == ArtworkKind::Logo) {
+        removeFile(logoPath(titleId));
+        metadata.logo = false;
+    } else {
+        removeFile(iconPath(titleId));
+        metadata.icon = false;
     }
 
-    // If no artwork remains, remove the directory
-    const bool anyLeft = metadata.value("hero", false) || metadata.value("logo", false) ||
-                         metadata.value("icon", false);
+    const bool anyLeft = metadata.hero || metadata.logo || metadata.icon;
     if (!anyLeft) {
         removeFile(metadataPath(titleId));
+        ec.clear();
         std::filesystem::remove(titleDirectory(titleId), ec);
-    } else {
-        std::ofstream metaOutput(metadataPath(titleId), std::ios::trunc);
-        if (metaOutput.is_open()) {
-            metaOutput << metadata.dump(2);
-        }
+    } else if (!writeMetadata(metadataPath(titleId), metadata)) {
+        fprintf(stderr, "[steamgriddb-cache] warning: failed to update metadata after clear\n");
     }
 
     return removed;
@@ -151,74 +278,53 @@ bool SteamGridDbCache::saveArtworkFromFile(std::uint64_t titleId, ArtworkKind ki
     const std::string destPath = kind == ArtworkKind::Hero ? heroPath(titleId)
                                 : kind == ArtworkKind::Logo ? logoPath(titleId)
                                                             : iconPath(titleId);
+    const std::string temporaryPath = destPath + ".tmp";
 
-    // Copy file with temp → rename pattern
-    const std::string tempPath = destPath + ".tmp";
-    try {
-        std::ifstream src(sourceFile, std::ios::binary);
-        if (!src.is_open()) {
-            fprintf(stderr, "[steamgriddb-cache] failed to open source: %s\n", sourceFile.c_str());
-            return false;
-        }
+    if (!copyFileToTemporary(sourceFile, temporaryPath))
+        return false;
 
-        std::ofstream dst(tempPath, std::ios::binary | std::ios::trunc);
-        if (!dst.is_open()) {
-            fprintf(stderr, "[steamgriddb-cache] failed to open dest: %s\n", tempPath.c_str());
-            return false;
-        }
+    if (onProgress)
+        onProgress("Finalizing artwork...", 0.95f);
 
-        // Copy in chunks
-        std::vector<char> buffer(65536);
-        std::streamsize bytesRead;
-        while ((bytesRead = src.readsome(buffer.data(), buffer.size())) > 0) {
-            dst.write(buffer.data(), bytesRead);
-        }
-
-        src.close();
-        dst.close();
-
-        if (onProgress)
-            onProgress("Finalizing artwork...", 0.95f);
-
-        // Atomic rename
-        std::filesystem::remove(destPath, ec);
-        ec.clear();
-        std::filesystem::rename(tempPath, destPath, ec);
-        if (ec) {
-            fprintf(stderr, "[steamgriddb-cache] rename failed: %s\n", ec.message().c_str());
-            return false;
-        }
-
-        // Update metadata
-        nlohmann::json metadata = nlohmann::json::object();
-        std::ifstream metaInput(metadataPath(titleId));
-        if (metaInput.is_open()) {
-            try {
-                metaInput >> metadata;
-            } catch (...) {
-            }
-        }
-
-        metadata["titleId"] = titleId;
-        const char* flag = kind == ArtworkKind::Hero ? "hero" : kind == ArtworkKind::Logo ? "logo"
-                                                                                           : "icon";
-        metadata[flag] = true;
-
-        std::ofstream metaOutput(metadataPath(titleId), std::ios::trunc);
-        if (metaOutput.is_open()) {
-            metaOutput << metadata.dump(2);
-        }
-
-        if (onProgress)
-            onProgress("Artwork saved", 1.0f);
-
-        fprintf(stderr, "[steamgriddb-cache] saved %s for %016llX\n", flag,
-                static_cast<unsigned long long>(titleId));
-        return true;
-    } catch (const std::exception& e) {
-        fprintf(stderr, "[steamgriddb-cache] exception: %s\n", e.what());
+    ec.clear();
+    std::filesystem::remove(destPath, ec);
+    if (ec) {
+        std::error_code cleanupError;
+        std::filesystem::remove(temporaryPath, cleanupError);
+        fprintf(stderr, "[steamgriddb-cache] failed to replace artwork: %s\n",
+                ec.message().c_str());
         return false;
     }
+    ec.clear();
+    std::filesystem::rename(temporaryPath, destPath, ec);
+    if (ec) {
+        std::error_code cleanupError;
+        std::filesystem::remove(temporaryPath, cleanupError);
+        fprintf(stderr, "[steamgriddb-cache] rename failed: %s\n", ec.message().c_str());
+        return false;
+    }
+
+    ArtworkMetadata metadata;
+    readMetadata(metadataPath(titleId), metadata);
+    metadata.titleId = titleId;
+    if (kind == ArtworkKind::Hero)
+        metadata.hero = true;
+    else if (kind == ArtworkKind::Logo)
+        metadata.logo = true;
+    else
+        metadata.icon = true;
+
+    if (!writeMetadata(metadataPath(titleId), metadata))
+        fprintf(stderr, "[steamgriddb-cache] warning: artwork saved without updated metadata\n");
+
+    if (onProgress)
+        onProgress("Artwork saved", 1.0f);
+
+    const char* flag = kind == ArtworkKind::Hero ? "hero"
+                     : kind == ArtworkKind::Logo ? "logo" : "icon";
+    fprintf(stderr, "[steamgriddb-cache] saved %s for %016llX\n", flag,
+            static_cast<unsigned long long>(titleId));
+    return true;
 }
 
-}  // namespace desknx::steamgriddb
+} // namespace desknx::steamgriddb
