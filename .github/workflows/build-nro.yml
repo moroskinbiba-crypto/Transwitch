@@ -57,9 +57,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desknx-switch-nro
-          path: |
-            DeskNX.nro
-            desknx.nro
+          path: DeskNX.nro
           if-no-files-found: error
           retention-days: 30
 
@@ -69,6 +67,5 @@ jobs:
         with:
           files: |
             DeskNX.nro
-            desknx.nro
           generate_release_notes: true
           name: "DeskNX Nintendo Switch ${{ github.ref_name }}"

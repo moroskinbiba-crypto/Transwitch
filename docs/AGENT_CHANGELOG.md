@@ -160,3 +160,16 @@
 CI и физическая проверка для этого изменения: NOT RUN на момент создания записи.
 Остающийся риск: падение до выполнения системного init callback либо до монтирования SD
 по-прежнему не может оставить файл на карте; тогда нужны Atmosphère crash report и код ошибки.
+
+
+### Итог аудита и CI — commit 3fc11bf + 5e16a64
+
+- Подтверждённый root cause: в `Makefile.switch` передавался `--romfsdir`, но не `--nacp`/`--icon`/`--romfs`. `elf2nro` в таком случае выполнял ранний выход и не писал ASET. Оба старых NRO (208896 bytes) не содержали ни NACP, ни RomFS.
+- Исправление: `--nacp=$(OUTPUT).nacp` + `--romfsdir=$(TOPDIR)/romfs`; `build.yml` теперь перестраивает Vite UI и RomFS, как и отдельный NRO workflow.
+- Добавлен `scripts/check-nro-assets.py`; оба workflows падают, если в NRO нет NRO0, ASET v0, непустого NACP или RomFS, либо секции выходят за границы файла.
+- Реальный скачанный артефакт commit 5e16a64: NRO 2526432 bytes; ASET найден; NACP 16384 bytes; RomFS 2288808 bytes; end-offset RomFS точно совпадает с размером файла. В RomFS обнаруживается имя `index.html`.
+- CI: [Build DeskNX 43754783292](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43754783292) — success; [Build Nintendo Switch NRO 43754783303](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43754783303) — success; script validation passed in both.
+- Runtime NRO теперь пишет `diagnostics.log` из libnx `userAppInit`, а затем пишет каждый этап HID/applet mode/RomFS/webOfflineCreate/WebKit. Неверный bare `index.html` fallback удалён; конфиг WebCommonConfig обнуляется до заполнения; неиспользуемые PSM/PDMQRY init calls убраны.
+- Изменения runtime/source и README/diagnostics docs находятся в commit `5e16a64ae21cfb4f8c984f364c0eb621d091314f`. В исходном commit `3fc11bfb054c9d64b7982b2c63dd5811dd2c8adf` закрыт основной packaging bug.
+- Hardware test: NOT RUN после этих исправлений. Не утверждать, что запуск на Switch подтверждён, пока пользователь не проверит новый NRO.
+
