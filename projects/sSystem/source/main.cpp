@@ -135,6 +135,7 @@ void DaemonLog(const char* fmt, ...) {
     RotateLogIfNeeded();
     if (FILE* fp = std::fopen(kLogPath, "a")) {
         std::fwrite(line, 1, static_cast<size_t>(n), fp);
+        std::fflush(fp);
         std::fclose(fp);
     }
 }
@@ -1540,6 +1541,11 @@ size_t g_InitStepCount = 0;
 Result RecordInit(const char* name, Result rc, bool critical) {
     if (g_InitStepCount < sizeof(g_InitSteps) / sizeof(g_InitSteps[0]))
         g_InitSteps[g_InitStepCount++] = {name, rc, critical};
+    // Log each result immediately. If a later service init terminates the
+    // module, the preceding bootstrap steps are still visible on the SD card.
+    DaemonLog("service init: %s rc=0x%08X critical=%d",
+              name ? name : "unknown", static_cast<unsigned int>(rc),
+              critical ? 1 : 0);
     return rc;
 }
 
@@ -1580,8 +1586,33 @@ void InitializeSystemModule() {
     __nx_fs_num_sessions = 3;
 
     // sm/fs are prerequisites for every other service and for SD-backed logs.
-    R_ABORT_UNLESS(sm::Initialize());
-    R_ABORT_UNLESS(fsInitialize());
+    const Result smRc = sm::Initialize();
+    if (R_FAILED(smRc)) {
+        constexpr char message[] = "DeskNX backend: sm initialization failed before SD logging\\n";
+        svcOutputDebugString(message, sizeof(message) - 1);
+        R_ABORT_UNLESS(smRc);
+    }
+    const Result fsRc = fsInitialize();
+    if (R_FAILED(fsRc)) {
+        constexpr char message[] = "DeskNX backend: fs initialization failed before SD logging\\n";
+        svcOutputDebugString(message, sizeof(message) - 1);
+        R_ABORT_UNLESS(fsRc);
+    }
+
+    // Mount the SD card immediately after fsInitialize, before opening other
+    // Horizon services. This makes the boot log useful even when a later
+    // service initialization aborts the experimental qlaunch replacement.
+    const Result sdMountRc = fsdevMountSdmc();
+    if (R_FAILED(sdMountRc)) {
+        constexpr char message[] = "DeskNX backend: SD mount failed; no SD log can be written\\n";
+        svcOutputDebugString(message, sizeof(message) - 1);
+        R_ABORT_UNLESS(sdMountRc);
+    }
+    MakeDirectories();
+    remove(kPrevLogPath);
+    rename(kLogPath, kPrevLogPath);
+    DaemonLog("backend: bootstrap reached sd_mount_rc=0x%08X",
+              static_cast<unsigned int>(sdMountRc));
 
     // libnx chooses IPC command/layouts by HOS version. Discover the installed
     // firmware before initializing account/ns/applet services.
@@ -1606,21 +1637,9 @@ void InitializeSystemModule() {
     g_NextPmshellRetryTick = g_PmshellInitialized ? 0 :
         armGetSystemTick() + armGetSystemTickFreq() * 5;
 
-    // The SD card must be mounted before diagnostics can be persisted.
-    R_ABORT_UNLESS(fsdevMountSdmc());
-    MakeDirectories();
-    remove(kPrevLogPath);
-    rename(kLogPath, kPrevLogPath);
-
     DaemonLog("backend: firmware=%u.%u.%u",
               HOSVER_MAJOR(hosversionGet()), HOSVER_MINOR(hosversionGet()),
               HOSVER_MICRO(hosversionGet()));
-    for (size_t i = 0; i < g_InitStepCount; ++i) {
-        if (R_SUCCEEDED(g_InitSteps[i].rc)) continue;
-        DaemonLog("service init failed: %s rc=0x%08X%s",
-                  g_InitSteps[i].name, static_cast<unsigned int>(g_InitSteps[i].rc),
-                  g_InitSteps[i].critical ? " (critical)" : " (optional)");
-    }
     for (size_t i = 0; i < g_InitStepCount; ++i)
         if (g_InitSteps[i].critical)
             R_ABORT_UNLESS(g_InitSteps[i].rc);

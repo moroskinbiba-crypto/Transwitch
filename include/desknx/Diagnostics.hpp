@@ -39,6 +39,14 @@ inline void Initialize(bool sdMounted) {
                         "sdmc:/switch/DeskNX/diagnostics.log.2");
             std::rename(detail::File, "sdmc:/switch/DeskNX/diagnostics.log.1");
         }
+        // Create the file at Initialize(), not on the first later event. Its
+        // presence proves the applet reached its own main() and mounted SD.
+        if (FILE* file = std::fopen(detail::File, "a")) {
+            std::fprintf(file, "[%lld] [diagnostics] [logger_ready] sd_mounted=1\\n",
+                         static_cast<long long>(std::time(nullptr)));
+            std::fflush(file);
+            std::fclose(file);
+        }
     }
     detail::unlock();
 }
