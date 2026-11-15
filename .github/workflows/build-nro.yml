@@ -50,6 +50,9 @@ jobs:
             devkitpro/devkita64:latest \
             make -f Makefile.switch
 
+      - name: ✅ Verify embedded NACP and RomFS
+        run: python3 scripts/check-nro-assets.py DeskNX.nro
+
       - name: 📤 Upload desknx.nro Artifact
         uses: actions/upload-artifact@v4
         with:

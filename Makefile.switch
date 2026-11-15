@@ -9,6 +9,9 @@ endif
 LIBNX    := $(DEVKITPRO)/libnx
 PORTLIBS := $(DEVKITPRO)/portlibs/switch
 
+# switch_rules uses TOPDIR when resolving project assets in the recursive build.
+TOPDIR ?= $(CURDIR)
+
 include $(LIBNX)/switch_rules
 
 #---------------------------------------------------------------------------------
@@ -67,10 +70,14 @@ export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export APP_TITLE APP_AUTHOR APP_VERSION
 export ROMFS
-ifneq ($(strip $(ROMFS)),)
-export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
-endif
 export APP_ICON
+# elf2nro only emits an ASET header when --icon, --nacp or --romfs is passed.
+# --romfsdir by itself is not enough: switch-tools returns before writing ASET.
+# Embed the NACP as the trigger and the compiled Web UI as the RomFS section.
+export NROFLAGS += --nacp=$(OUTPUT).nacp
+ifneq ($(strip $(ROMFS)),)
+export NROFLAGS += --romfsdir=$(TOPDIR)/$(ROMFS)
+endif
 
 .PHONY: all clean nro
 
