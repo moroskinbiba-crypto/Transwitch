@@ -14,7 +14,7 @@ DeskNX — кастомный рабочий стол для Nintendo Switch. В
 - Пользовательские обложки игр по Title ID и Homebrew по имени NRO или резервному хешу пути.
 - Сенсорное и контроллерное управление, отдельные настройки лаунчера, сохранение состояния раскладки.
 - Сохранение раскладки в `sdmc:/switch/DeskNX/layout.tsv`, настроек — в `settings.ini`.
-- Native C++/SDL2 UI для экспериментального HOME library applet; standalone NRO — отдельный WebKit-хост React UI, упакованного в RomFS.
+- Native C++/SDL2 production HOME library applet (IPC/heartbeat/input/catalogue/launching); standalone NRO — отдельный WebKit-хост React UI, упакованного в RomFS.
 
 ## Персонализация и дополнительные возможности
 

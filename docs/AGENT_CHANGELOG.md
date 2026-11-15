@@ -23,10 +23,12 @@
    - projects/DeskNXMenu/source/main.cpp — simplified prototype UI entry point; release must exclude it while linking source/main.cpp.
    - src-switch/main.cpp — standalone web runtime host.
 2. HOME applet must use source/main.cpp plus supporting source/*.cpp and projects/DeskNXMenu/source/*.cpp (excluding the prototype main.cpp). The Makefile VPATH order matters because both directories contain a main.cpp. Standalone WebKit shell and C++ HOME applet are different UI paths.
-3. В репозитории несколько persistence слоёв:
-   - реальный HOME applet: projects/DeskNXMenu/source/LayoutStore.*, путь sdmc:/switch/DeskNX/layout.tsv;
-   - legacy/experimental source/main.cpp: layout.tsv, отдельный active-workspace marker, settings/history;
-   - source/PersistenceStore.*: JSON-хранилище с корнем sdmc:/01000000/00001000; host round-trip test проходит, но production UI call sites в текущих release Makefile paths не обнаружены. Не переключать production на него без миграции и integration tests.
+3. Production persistence реализован непосредственно в source/main.cpp:
+   - layout: sdmc:/switch/DeskNX/layout.tsv + layout.tmp + layout.bak;
+   - active desk: active-workspace.dat + .tmp + .bak;
+   - appearance: settings.ini + .tmp + .bak;
+   - launch history: recent.tsv + .tmp + .bak.
+   - source/PersistenceStore.* — отдельный JSON-модуль с round-trip host test; production HOME UI source/main.cpp сейчас его не вызывает. projects/DeskNXMenu/source/LayoutStore.* относится к prototype entry point, который исключён из release.
 4. System backend использует отдельные projects/sSystem lifecycle / ECS / hbloader компоненты. Нужна runtime-проверка запуска, возврата из игры/NRO, sleep/wake и recovery на железе.
 
 ## Ранее сделанные изменения (до текущего цикла)
@@ -56,7 +58,7 @@
 - удалены отслеживаемые .vite cache и устаревший ZIP;
 - добавлен scripts/check-repo-hygiene.sh;
 - проверка hygiene включена в три Actions workflow;
-- README и HOME integration docs исправлены, чтобы не заявлять, будто legacy source/main.cpp входит в релиз;
+- README и HOME integration docs исправлены: production source/main.cpp реально входит в HOME applet; prototype main исключён.
 - добавлен этот журнал работ.
 
 Проверки после commit вынесены в отдельную запись ниже.

@@ -11,14 +11,14 @@ The standard CI builds the standalone NRO and the library applet. A separate wor
 
 ## Build-path clarification
 
-The standalone NRO and the HOME library applet do not currently share one UI translation unit:
+The standalone NRO and the HOME library applet use different UI implementations:
 
-- src-switch/main.cpp is the standalone NRO's WebKit host; the React UI is built from src/App.tsx and packaged in RomFS.
-- projects/DeskNXMenu/source/main.cpp is the native C++/SDL2 menu applet served by the system backend.
-- source/*.cpp contains shared native components compiled into the library applet, except source/main.cpp.
-- source/main.cpp is a legacy/experimental native UI file excluded by the current release Makefiles. Do not assume code in it is present in a delivered build.
+- `src-switch/main.cpp` is the standalone NRO WebKit host. The web UI is built from `src/App.tsx` and packaged in RomFS.
+- `source/main.cpp` is the production native HOME UI. It owns MenuReady, heartbeat, backend IPC, title/NRO launch, controller and touch input, catalogue refresh, appearance settings, workspace layout, and diagnostics.
+- `projects/DeskNXMenu/source/main.cpp` is a simplified prototype entry point and is intentionally excluded from the release HOME applet.
+- The remaining `source/*.cpp` and `projects/DeskNXMenu/source/*.cpp` files provide supporting modules. `projects/DeskNXMenu/Makefile` puts `../../source` first in VPATH so its production `main.cpp` wins, then filters the prototype `main.cpp` out of the menu source list.
 
-This split is an explicit audit item: future UI features must be implemented in the code path that ships, or the legacy UI must be deliberately reintegrated with migration and tests.
+The build guard `scripts/check-home-applet-entrypoint.sh` verifies these source-order and feature requirements before compilation. Do not assume a file is shipped merely because it exists in the repository; check the release Makefile.
 
 ## Architecture (based on public sLaunch patterns)
 
