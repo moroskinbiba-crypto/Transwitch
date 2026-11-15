@@ -335,3 +335,5 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
   projects/sSystem/source/LibraryApplet.cpp.
 - Это не компиляционная ошибка и не ошибка самой логики; следующая CI-сборка
   должна проверить реальную компиляцию изменённого LibraryApplet.cpp и qlaunch backend.
+
+- Corrected the StopMenu comment so it no longer describes StateChangedEvent as a completion barrier; only appletHolderCheckFinished() confirms terminal exit.

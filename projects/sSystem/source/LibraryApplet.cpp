@@ -45,9 +45,9 @@ Result StopMenu() {
         return 0;
     }
 
-    // The applet's state event is the completion barrier. The helper below
-    // checks it first so an applet that exited between retries can be retired
-    // immediately without issuing another command to a stale accessor.
+    // Retire an applet that completed between retries before issuing another
+    // request to its accessor. StateChangedEvent itself is not a completion
+    // barrier; the wait loop below verifies the terminal state explicitly.
     if (appletHolderCheckFinished(&g_MenuHolder)) {
         appletHolderJoin(&g_MenuHolder);
         appletHolderClose(&g_MenuHolder);
