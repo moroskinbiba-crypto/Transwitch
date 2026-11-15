@@ -1,21 +1,438 @@
 #include "PersistenceStore.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <string>
 #include <system_error>
-#include <nlohmann/json.hpp>
+#include <utility>
 
 namespace desknx::persistence {
+namespace {
+
+struct JsonValue {
+    enum class Kind { Null, Boolean, Number, String, Array, Object };
+
+    Kind kind{Kind::Null};
+    std::string scalar;
+    std::vector<JsonValue> array;
+    std::vector<std::pair<std::string, JsonValue>> object;
+
+    bool isObject() const { return kind == Kind::Object; }
+    bool isArray() const { return kind == Kind::Array; }
+    bool isString() const { return kind == Kind::String; }
+    bool isNumber() const { return kind == Kind::Number; }
+
+    const JsonValue* get(const char* key) const {
+        if (!isObject() || key == nullptr)
+            return nullptr;
+        for (auto it = object.rbegin(); it != object.rend(); ++it) {
+            if (it->first == key)
+                return &it->second;
+        }
+        return nullptr;
+    }
+
+    std::string stringValue(const std::string& fallback = {}) const {
+        return isString() ? scalar : fallback;
+    }
+
+    long long signedValue(long long fallback) const {
+        if (!isNumber() || scalar.empty())
+            return fallback;
+        errno = 0;
+        char* end = nullptr;
+        const long long value = std::strtoll(scalar.c_str(), &end, 10);
+        if (errno == ERANGE || end == scalar.c_str() || *end != '\0')
+            return fallback;
+        return value;
+    }
+
+    unsigned long long unsignedValue(unsigned long long fallback) const {
+        if (!isNumber() || scalar.empty() || scalar[0] == '-')
+            return fallback;
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long value = std::strtoull(scalar.c_str(), &end, 10);
+        if (errno == ERANGE || end == scalar.c_str() || *end != '\0')
+            return fallback;
+        return value;
+    }
+};
+
+class JsonParser {
+public:
+    explicit JsonParser(const std::string& source) : m_source(source) {}
+
+    bool parse(JsonValue& value) {
+        skipWhitespace();
+        if (!parseValue(value, 0))
+            return false;
+        skipWhitespace();
+        return m_position == m_source.size();
+    }
+
+private:
+    static constexpr unsigned MaxDepth = 48;
+
+    void skipWhitespace() {
+        while (m_position < m_source.size()) {
+            const char ch = m_source[m_position];
+            if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+                break;
+            ++m_position;
+        }
+    }
+
+    bool consume(char expected) {
+        if (m_position >= m_source.size() || m_source[m_position] != expected)
+            return false;
+        ++m_position;
+        return true;
+    }
+
+    bool parseLiteral(const char* literal) {
+        for (const char* p = literal; *p != '\0'; ++p) {
+            if (m_position >= m_source.size() || m_source[m_position] != *p)
+                return false;
+            ++m_position;
+        }
+        return true;
+    }
+
+    static void appendUtf8(std::string& out, unsigned codepoint) {
+        if (codepoint <= 0x7Fu) {
+            out.push_back(static_cast<char>(codepoint));
+        } else if (codepoint <= 0x7FFu) {
+            out.push_back(static_cast<char>(0xC0u | (codepoint >> 6)));
+            out.push_back(static_cast<char>(0x80u | (codepoint & 0x3Fu)));
+        } else if (codepoint <= 0xFFFFu) {
+            out.push_back(static_cast<char>(0xE0u | (codepoint >> 12)));
+            out.push_back(static_cast<char>(0x80u | ((codepoint >> 6) & 0x3Fu)));
+            out.push_back(static_cast<char>(0x80u | (codepoint & 0x3Fu)));
+        } else {
+            out.push_back(static_cast<char>(0xF0u | (codepoint >> 18)));
+            out.push_back(static_cast<char>(0x80u | ((codepoint >> 12) & 0x3Fu)));
+            out.push_back(static_cast<char>(0x80u | ((codepoint >> 6) & 0x3Fu)));
+            out.push_back(static_cast<char>(0x80u | (codepoint & 0x3Fu)));
+        }
+    }
+
+    bool readHex4(unsigned& value) {
+        if (m_position + 4 > m_source.size())
+            return false;
+        value = 0;
+        for (unsigned i = 0; i < 4; ++i) {
+            const char ch = m_source[m_position++];
+            unsigned digit = 0;
+            if (ch >= '0' && ch <= '9')
+                digit = static_cast<unsigned>(ch - '0');
+            else if (ch >= 'a' && ch <= 'f')
+                digit = static_cast<unsigned>(ch - 'a' + 10);
+            else if (ch >= 'A' && ch <= 'F')
+                digit = static_cast<unsigned>(ch - 'A' + 10);
+            else
+                return false;
+            value = (value << 4) | digit;
+        }
+        return true;
+    }
+
+    bool parseString(std::string& value) {
+        if (!consume('"'))
+            return false;
+
+        value.clear();
+        while (m_position < m_source.size()) {
+            const unsigned char ch = static_cast<unsigned char>(m_source[m_position++]);
+            if (ch == '"')
+                return true;
+            if (ch < 0x20u)
+                return false;
+            if (ch != '\\') {
+                value.push_back(static_cast<char>(ch));
+                continue;
+            }
+
+            if (m_position >= m_source.size())
+                return false;
+            const char escaped = m_source[m_position++];
+            switch (escaped) {
+                case '"': value.push_back('"'); break;
+                case '\\': value.push_back('\\'); break;
+                case '/': value.push_back('/'); break;
+                case 'b': value.push_back('\b'); break;
+                case 'f': value.push_back('\f'); break;
+                case 'n': value.push_back('\n'); break;
+                case 'r': value.push_back('\r'); break;
+                case 't': value.push_back('\t'); break;
+                case 'u': {
+                    unsigned codepoint = 0;
+                    if (!readHex4(codepoint))
+                        return false;
+                    if (codepoint >= 0xD800u && codepoint <= 0xDBFFu) {
+                        if (m_position + 2 > m_source.size() ||
+                            m_source[m_position] != '\\' ||
+                            m_source[m_position + 1] != 'u')
+                            return false;
+                        m_position += 2;
+                        unsigned low = 0;
+                        if (!readHex4(low) || low < 0xDC00u || low > 0xDFFFu)
+                            return false;
+                        codepoint = 0x10000u + ((codepoint - 0xD800u) << 10) +
+                                    (low - 0xDC00u);
+                    } else if (codepoint >= 0xDC00u && codepoint <= 0xDFFFu) {
+                        return false;
+                    }
+                    appendUtf8(value, codepoint);
+                    break;
+                }
+                default:
+                    return false;
+            }
+        }
+        return false;
+    }
+
+    bool parseNumber(JsonValue& value) {
+        const std::size_t start = m_position;
+        if (m_position < m_source.size() && m_source[m_position] == '-')
+            ++m_position;
+        if (m_position >= m_source.size())
+            return false;
+
+        if (m_source[m_position] == '0') {
+            ++m_position;
+            if (m_position < m_source.size() &&
+                m_source[m_position] >= '0' && m_source[m_position] <= '9')
+                return false;
+        } else {
+            if (m_source[m_position] < '1' || m_source[m_position] > '9')
+                return false;
+            while (m_position < m_source.size() &&
+                   m_source[m_position] >= '0' && m_source[m_position] <= '9')
+                ++m_position;
+        }
+
+        if (m_position < m_source.size() && m_source[m_position] == '.') {
+            ++m_position;
+            const std::size_t fractionStart = m_position;
+            while (m_position < m_source.size() &&
+                   m_source[m_position] >= '0' && m_source[m_position] <= '9')
+                ++m_position;
+            if (fractionStart == m_position)
+                return false;
+        }
+
+        if (m_position < m_source.size() &&
+            (m_source[m_position] == 'e' || m_source[m_position] == 'E')) {
+            ++m_position;
+            if (m_position < m_source.size() &&
+                (m_source[m_position] == '+' || m_source[m_position] == '-'))
+                ++m_position;
+            const std::size_t exponentStart = m_position;
+            while (m_position < m_source.size() &&
+                   m_source[m_position] >= '0' && m_source[m_position] <= '9')
+                ++m_position;
+            if (exponentStart == m_position)
+                return false;
+        }
+
+        value.kind = JsonValue::Kind::Number;
+        value.scalar.assign(m_source, start, m_position - start);
+        return true;
+    }
+
+    bool parseArray(JsonValue& value, unsigned depth) {
+        if (!consume('['))
+            return false;
+        value.kind = JsonValue::Kind::Array;
+        value.array.clear();
+        skipWhitespace();
+        if (consume(']'))
+            return true;
+
+        while (true) {
+            JsonValue item;
+            if (!parseValue(item, depth + 1))
+                return false;
+            value.array.push_back(std::move(item));
+            skipWhitespace();
+            if (consume(']'))
+                return true;
+            if (!consume(','))
+                return false;
+            skipWhitespace();
+        }
+    }
+
+    bool parseObject(JsonValue& value, unsigned depth) {
+        if (!consume('{'))
+            return false;
+        value.kind = JsonValue::Kind::Object;
+        value.object.clear();
+        skipWhitespace();
+        if (consume('}'))
+            return true;
+
+        while (true) {
+            std::string key;
+            if (!parseString(key))
+                return false;
+            skipWhitespace();
+            if (!consume(':'))
+                return false;
+            skipWhitespace();
+            JsonValue item;
+            if (!parseValue(item, depth + 1))
+                return false;
+            value.object.emplace_back(std::move(key), std::move(item));
+            skipWhitespace();
+            if (consume('}'))
+                return true;
+            if (!consume(','))
+                return false;
+            skipWhitespace();
+        }
+    }
+
+    bool parseValue(JsonValue& value, unsigned depth) {
+        if (depth > MaxDepth || m_position >= m_source.size())
+            return false;
+        skipWhitespace();
+        if (m_position >= m_source.size())
+            return false;
+
+        const char ch = m_source[m_position];
+        if (ch == '{')
+            return parseObject(value, depth);
+        if (ch == '[')
+            return parseArray(value, depth);
+        if (ch == '"') {
+            value.kind = JsonValue::Kind::String;
+            return parseString(value.scalar);
+        }
+        if (ch == 't' && parseLiteral("true")) {
+            value.kind = JsonValue::Kind::Boolean;
+            value.scalar = "true";
+            return true;
+        }
+        if (ch == 'f' && parseLiteral("false")) {
+            value.kind = JsonValue::Kind::Boolean;
+            value.scalar = "false";
+            return true;
+        }
+        if (ch == 'n' && parseLiteral("null")) {
+            value.kind = JsonValue::Kind::Null;
+            return true;
+        }
+        return parseNumber(value);
+    }
+
+    const std::string& m_source;
+    std::size_t m_position{0};
+};
+
+bool readJsonFile(const char* path, JsonValue& root) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open())
+        return false;
+    const std::string input((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+    if (file.bad())
+        return false;
+    JsonParser parser(input);
+    return parser.parse(root) && root.isObject();
+}
+
+void appendQuoted(std::string& output, const std::string& value) {
+    static const char hex[] = "0123456789abcdef";
+    output.push_back('"');
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\b': output += "\\b"; break;
+            case '\f': output += "\\f"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default:
+                if (ch < 0x20u) {
+                    output += "\\u00";
+                    output.push_back(hex[(ch >> 4) & 0x0Fu]);
+                    output.push_back(hex[ch & 0x0Fu]);
+                } else {
+                    output.push_back(static_cast<char>(ch));
+                }
+                break;
+        }
+    }
+    output.push_back('"');
+}
+
+bool writeJsonFileAtomically(const char* path, const std::string& content) {
+    const std::string temporary = std::string(path) + ".tmp";
+    {
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+        if (!file.is_open())
+            return false;
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+        file.put('\n');
+        file.flush();
+        if (!file.good()) {
+            file.close();
+            std::error_code cleanupError;
+            std::filesystem::remove(temporary, cleanupError);
+            return false;
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    if (ec) {
+        std::error_code cleanupError;
+        std::filesystem::remove(temporary, cleanupError);
+        return false;
+    }
+    ec.clear();
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) {
+        std::error_code cleanupError;
+        std::filesystem::remove(temporary, cleanupError);
+        return false;
+    }
+    return true;
+}
+
+std::uint32_t readU32(const JsonValue* value, std::uint32_t fallback = 0) {
+    if (!value || !value->isNumber())
+        return fallback;
+    const auto number = value->unsignedValue(fallback);
+    return number > 0xFFFFFFFFull ? fallback : static_cast<std::uint32_t>(number);
+}
+
+int readInt(const JsonValue* value, int fallback) {
+    if (!value || !value->isNumber())
+        return fallback;
+    const long long number = value->signedValue(fallback);
+    if (number < static_cast<long long>(-2147483647 - 1) ||
+        number > static_cast<long long>(2147483647))
+        return fallback;
+    return static_cast<int>(number);
+}
+
+} // namespace
 
 bool PersistenceStore::load() {
-    // Try to load each component. If any fails, keep the defaults.
-    // Load in order: config, desktops, widgets
-    bool configOk = loadConfig();
-    bool desktopsOk = loadDesktops();
-    bool widgetsOk = loadWidgets();
+    const bool configOk = loadConfig();
+    const bool desktopsOk = loadDesktops();
+    const bool widgetsOk = loadWidgets();
 
-    // Log what loaded
     if (!configOk)
         fprintf(stderr, "[persistence] config.json not found or invalid\n");
     if (!desktopsOk)
@@ -23,115 +440,101 @@ bool PersistenceStore::load() {
     if (!widgetsOk)
         fprintf(stderr, "[persistence] widgets.json not found or invalid\n");
 
-    return configOk || desktopsOk || widgetsOk;  // Success if at least one loaded
+    return configOk || desktopsOk || widgetsOk;
 }
 
 bool PersistenceStore::loadConfig() {
-    std::ifstream file(kConfigPath);
-    if (!file.is_open())
+    JsonValue root;
+    if (!readJsonFile(kConfigPath, root))
         return false;
 
-    try {
-        nlohmann::json j;
-        file >> j;
+    if (const JsonValue* value = root.get("theme"))
+        m_appearance.theme = value->stringValue(m_appearance.theme);
+    if (const JsonValue* value = root.get("brightness"))
+        m_appearance.brightness = std::clamp(readInt(value, m_appearance.brightness), 0, 100);
+    if (const JsonValue* value = root.get("language"))
+        m_appearance.language = value->stringValue(m_appearance.language);
+    if (const JsonValue* value = root.get("steamGridDbApiKey"))
+        m_steamGridDbApiKey = value->stringValue(m_steamGridDbApiKey);
 
-        if (j.contains("theme"))
-            m_appearance.theme = j["theme"].get<std::string>();
-        if (j.contains("brightness"))
-            m_appearance.brightness = std::clamp(j["brightness"].get<int>(), 0, 100);
-        if (j.contains("language"))
-            m_appearance.language = j["language"].get<std::string>();
-        if (j.contains("steamGridDbApiKey"))
-            m_steamGridDbApiKey = j["steamGridDbApiKey"].get<std::string>();
-
-        return true;
-    } catch (const std::exception& e) {
-        fprintf(stderr, "[persistence] loadConfig parse error: %s\n", e.what());
-        return false;
-    }
+    return true;
 }
 
 bool PersistenceStore::loadDesktops() {
-    std::ifstream file(kDesktopsPath);
-    if (!file.is_open())
+    JsonValue root;
+    if (!readJsonFile(kDesktopsPath, root))
         return false;
 
-    try {
-        nlohmann::json j;
-        file >> j;
+    m_desktops.clear();
+    const JsonValue* desktops = root.get("desktops");
+    if (desktops && desktops->isArray()) {
+        for (const JsonValue& item : desktops->array) {
+            if (!item.isObject())
+                continue;
 
-        m_desktops.clear();
-        if (j.contains("desktops") && j["desktops"].is_array()) {
-            for (const auto& item : j["desktops"]) {
-                if (!item.is_object())
-                    continue;
-                DesktopLayout layout;
-                layout.id = item.value("id", 0u);
-                layout.name = item.value("name", std::string());
+            DesktopLayout layout;
+            layout.id = readU32(item.get("id"));
+            if (const JsonValue* name = item.get("name"))
+                layout.name = name->stringValue();
 
-                if (item.contains("tiles") && item["tiles"].is_array()) {
-                    for (const auto& tile : item["tiles"]) {
-                        if (tile.is_number_unsigned())
-                            layout.tileIds.push_back(tile.get<std::uint64_t>());
+            const JsonValue* tiles = item.get("tiles");
+            if (tiles && tiles->isArray()) {
+                for (const JsonValue& tile : tiles->array) {
+                    if (tile.isNumber()) {
+                        const auto id = tile.unsignedValue(0);
+                        if (id != 0)
+                            layout.tileIds.push_back(static_cast<std::uint64_t>(id));
                     }
                 }
-                if (layout.id > 0)
-                    m_desktops.push_back(std::move(layout));
             }
+            if (layout.id > 0)
+                m_desktops.push_back(std::move(layout));
         }
-        return !m_desktops.empty();
-    } catch (const std::exception& e) {
-        fprintf(stderr, "[persistence] loadDesktops parse error: %s\n", e.what());
-        return false;
     }
+    return !m_desktops.empty();
 }
 
 bool PersistenceStore::loadWidgets() {
-    std::ifstream file(kWidgetsPath);
-    if (!file.is_open())
+    JsonValue root;
+    if (!readJsonFile(kWidgetsPath, root))
         return false;
 
-    try {
-        nlohmann::json j;
-        file >> j;
+    m_widgets.clear();
+    const JsonValue* widgets = root.get("widgets");
+    if (widgets && widgets->isArray()) {
+        for (const JsonValue& item : widgets->array) {
+            if (!item.isObject())
+                continue;
 
-        m_widgets.clear();
-        if (j.contains("widgets") && j["widgets"].is_array()) {
-            for (const auto& item : j["widgets"]) {
-                if (!item.is_object())
-                    continue;
-                WidgetState widget;
-                widget.id = item.value("id", 0u);
-                widget.type = item.value("type", std::string());
-                widget.columns = item.value("columns", 1);
-                widget.rows = item.value("rows", 1);
-                widget.positionX = item.value("positionX", 0);
-                widget.positionY = item.value("positionY", 0);
-                widget.assetRef = item.value("asset", std::string());
-                if (widget.id > 0)
-                    m_widgets.push_back(std::move(widget));
-            }
+            WidgetState widget;
+            widget.id = readU32(item.get("id"));
+            if (const JsonValue* type = item.get("type"))
+                widget.type = type->stringValue();
+            widget.columns = readInt(item.get("columns"), 1);
+            widget.rows = readInt(item.get("rows"), 1);
+            widget.positionX = readInt(item.get("positionX"), 0);
+            widget.positionY = readInt(item.get("positionY"), 0);
+            if (const JsonValue* asset = item.get("asset"))
+                widget.assetRef = asset->stringValue();
+            if (widget.id > 0)
+                m_widgets.push_back(std::move(widget));
         }
-        return !m_widgets.empty();
-    } catch (const std::exception& e) {
-        fprintf(stderr, "[persistence] loadWidgets parse error: %s\n", e.what());
-        return false;
     }
+    return !m_widgets.empty();
 }
 
 bool PersistenceStore::save() {
-    // Create directories if they don't exist
     std::error_code ec;
     std::filesystem::create_directories(kDataDir, ec);
     if (ec) {
-        fprintf(stderr, "[persistence] failed to create data directory: %s\n", ec.message().c_str());
+        fprintf(stderr, "[persistence] failed to create data directory: %s\n",
+                ec.message().c_str());
         return false;
     }
 
-    // Save each component
-    bool configOk = saveConfig();
-    bool desktopsOk = saveDesktops();
-    bool widgetsOk = saveWidgets();
+    const bool configOk = saveConfig();
+    const bool desktopsOk = saveDesktops();
+    const bool widgetsOk = saveWidgets();
 
     if (!configOk)
         fprintf(stderr, "[persistence] failed to save config.json\n");
@@ -144,95 +547,59 @@ bool PersistenceStore::save() {
 }
 
 bool PersistenceStore::saveConfig() const {
-    nlohmann::json j;
-    j["version"] = 1;
-    j["theme"] = m_appearance.theme.empty() ? "Default Light" : m_appearance.theme;
-    j["brightness"] = m_appearance.brightness;
-    j["language"] = m_appearance.language.empty() ? "auto" : m_appearance.language;
-    if (!m_steamGridDbApiKey.empty())
-        j["steamGridDbApiKey"] = m_steamGridDbApiKey;
-
-    const std::string temp = std::string(kConfigPath) + ".tmp";
-    {
-        std::ofstream file(temp, std::ios::trunc);
-        if (!file.is_open())
-            return false;
-        file << j.dump(2) << '\n';
-        if (!file.good())
-            return false;
+    std::string json = "{\n  \"version\": 1,\n  \"theme\": ";
+    appendQuoted(json, m_appearance.theme.empty() ? "Default Light" : m_appearance.theme);
+    json += ",\n  \"brightness\": " + std::to_string(m_appearance.brightness);
+    json += ",\n  \"language\": ";
+    appendQuoted(json, m_appearance.language.empty() ? "auto" : m_appearance.language);
+    if (!m_steamGridDbApiKey.empty()) {
+        json += ",\n  \"steamGridDbApiKey\": ";
+        appendQuoted(json, m_steamGridDbApiKey);
     }
-
-    std::error_code ec;
-    std::filesystem::remove(kConfigPath, ec);
-    ec.clear();
-    std::filesystem::rename(temp, kConfigPath, ec);
-    return !ec;
+    json += "\n}";
+    return writeJsonFileAtomically(kConfigPath, json);
 }
 
 bool PersistenceStore::saveDesktops() const {
-    nlohmann::json j;
-    j["version"] = 1;
-    j["desktops"] = nlohmann::json::array();
-
-    for (const auto& layout : m_desktops) {
-        nlohmann::json item;
-        item["id"] = layout.id;
-        item["name"] = layout.name;
-        item["tiles"] = nlohmann::json::array();
-        for (std::uint64_t tileId : layout.tileIds)
-            item["tiles"].push_back(tileId);
-        j["desktops"].push_back(std::move(item));
+    std::string json = "{\n  \"version\": 1,\n  \"desktops\": [";
+    for (std::size_t i = 0; i < m_desktops.size(); ++i) {
+        const DesktopLayout& layout = m_desktops[i];
+        json += i == 0 ? "\n    {" : ",\n    {";
+        json += "\n      \"id\": " + std::to_string(layout.id) + ",\n      \"name\": ";
+        appendQuoted(json, layout.name);
+        json += ",\n      \"tiles\": [";
+        for (std::size_t tile = 0; tile < layout.tileIds.size(); ++tile) {
+            if (tile != 0)
+                json += ", ";
+            json += std::to_string(layout.tileIds[tile]);
+        }
+        json += "]\n    }";
     }
-
-    const std::string temp = std::string(kDesktopsPath) + ".tmp";
-    {
-        std::ofstream file(temp, std::ios::trunc);
-        if (!file.is_open())
-            return false;
-        file << j.dump(2) << '\n';
-        if (!file.good())
-            return false;
-    }
-
-    std::error_code ec;
-    std::filesystem::remove(kDesktopsPath, ec);
-    ec.clear();
-    std::filesystem::rename(temp, kDesktopsPath, ec);
-    return !ec;
+    if (!m_desktops.empty())
+        json += "\n  ";
+    json += "]\n}";
+    return writeJsonFileAtomically(kDesktopsPath, json);
 }
 
 bool PersistenceStore::saveWidgets() const {
-    nlohmann::json j;
-    j["version"] = 1;
-    j["widgets"] = nlohmann::json::array();
-
-    for (const auto& widget : m_widgets) {
-        nlohmann::json item;
-        item["id"] = widget.id;
-        item["type"] = widget.type;
-        item["columns"] = widget.columns;
-        item["rows"] = widget.rows;
-        item["positionX"] = widget.positionX;
-        item["positionY"] = widget.positionY;
-        item["asset"] = widget.assetRef;
-        j["widgets"].push_back(std::move(item));
+    std::string json = "{\n  \"version\": 1,\n  \"widgets\": [";
+    for (std::size_t i = 0; i < m_widgets.size(); ++i) {
+        const WidgetState& widget = m_widgets[i];
+        json += i == 0 ? "\n    {" : ",\n    {";
+        json += "\n      \"id\": " + std::to_string(widget.id) + ",\n      \"type\": ";
+        appendQuoted(json, widget.type);
+        json += ",\n      \"columns\": " + std::to_string(widget.columns);
+        json += ",\n      \"rows\": " + std::to_string(widget.rows);
+        json += ",\n      \"positionX\": " + std::to_string(widget.positionX);
+        json += ",\n      \"positionY\": " + std::to_string(widget.positionY);
+        json += ",\n      \"asset\": ";
+        appendQuoted(json, widget.assetRef);
+        json += "\n    }";
     }
-
-    const std::string temp = std::string(kWidgetsPath) + ".tmp";
-    {
-        std::ofstream file(temp, std::ios::trunc);
-        if (!file.is_open())
-            return false;
-        file << j.dump(2) << '\n';
-        if (!file.good())
-            return false;
-    }
-
-    std::error_code ec;
-    std::filesystem::remove(kWidgetsPath, ec);
-    ec.clear();
-    std::filesystem::rename(temp, kWidgetsPath, ec);
-    return !ec;
+    if (!m_widgets.empty())
+        json += "\n  ";
+    json += "]\n}";
+    return writeJsonFileAtomically(kWidgetsPath, json);
 }
 
-}  // namespace desknx::persistence
+} // namespace desknx::persistence
