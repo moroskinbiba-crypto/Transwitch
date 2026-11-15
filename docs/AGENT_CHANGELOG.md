@@ -337,3 +337,17 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
   должна проверить реальную компиляцию изменённого LibraryApplet.cpp и qlaunch backend.
 
 - Corrected the StopMenu comment so it no longer describes StateChangedEvent as a completion barrier; only appletHolderCheckFinished() confirms terminal exit.
+
+### Уточнение семантики libnx LibraryApplet StateChangedEvent — 16 ноября 2026
+
+- Дополнительно проверен исходник libnx: appletHolderCheckFinished() — zero-timeout
+  check LibraryApplet StateChangedEvent. appletHolderRequestExitOrTerminate()
+  посылает RequestExit, ждёт event и при timeout посылает Terminate, но не ждёт
+  последнего завершения после Terminate.
+- Предыдущая формулировка, будто LibraryApplet StateChangedEvent может быть обычной
+  сменой foreground/suspend, была слишком широкой и исправлена. Это относится к
+  отдельному IApplicationAccessor event в Application.cpp; там проверяется IsCompleted.
+- StopMenu теперь ждёт завершение после fallback Terminate и перепроверяет
+  appletHolderCheckFinished() перед Join/Close. Убран лишний цикл 250-мс polling.
+- Основание: libnx applet.h API contract и applet.c implementation для
+  appletHolderRequestExitOrTerminate(), appletHolderCheckFinished() и appletHolderJoin().

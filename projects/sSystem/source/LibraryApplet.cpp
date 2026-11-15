@@ -76,28 +76,21 @@ Result StopMenu() {
         g_StopRequested = true;
     }
 
-    // StateChangedEvent is not an exit event: it also fires for foreground
-    // and suspend transitions. Like HomeNX's library-applet runner, treat it
-    // only as a wake-up hint and verify appletHolderCheckFinished() after each
-    // wake. Never Join/Close a holder until AM confirms actual completion.
-    const u64 waitStarted = armGetSystemTick();
-    const u64 waitBudgetTicks = frequency * 5;
-    while (!appletHolderCheckFinished(&g_MenuHolder)) {
-        const u64 elapsed = armGetSystemTick() - waitStarted;
-        if (elapsed >= waitBudgetTicks) {
-            g_StopRetryAfterTick = armGetSystemTick() + frequency * 2;
-            return KERNELRESULT(TimedOut);
-        }
-
-        // Use a short bounded wait so a non-terminal state-change signal cannot
-        // turn the remaining timeout into an unbounded wait on a stale event.
-        const Result waitRc = eventWait(&g_MenuHolder.StateChangedEvent, 250'000'000ULL);
-        if (R_FAILED(waitRc) && waitRc != KERNELRESULT(TimedOut)) {
+    // libnx's appletHolderRequestExitOrTerminate() sends RequestExit and waits
+    // for StateChangedEvent; on timeout it sends Terminate but returns without
+    // waiting for the applet's final exit notification. Wait for the official
+    // finished event after that fallback too, then verify with the matching
+    // appletHolderCheckFinished() API before Join/Close.
+    if (!appletHolderCheckFinished(&g_MenuHolder)) {
+        const Result waitRc = eventWait(&g_MenuHolder.StateChangedEvent, 5'000'000'000ULL);
+        if (R_FAILED(waitRc)) {
             g_StopRetryAfterTick = armGetSystemTick() + frequency * 2;
             return waitRc;
         }
-        if (R_SUCCEEDED(waitRc) && !appletHolderCheckFinished(&g_MenuHolder))
-            svcSleepThread(10'000'000ULL);
+    }
+    if (!appletHolderCheckFinished(&g_MenuHolder)) {
+        g_StopRetryAfterTick = armGetSystemTick() + frequency * 2;
+        return KERNELRESULT(TimedOut);
     }
 
     appletHolderJoin(&g_MenuHolder);
