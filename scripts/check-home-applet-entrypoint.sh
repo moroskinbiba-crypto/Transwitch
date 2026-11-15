@@ -26,7 +26,7 @@ done
 # LibraryApplet lifecycle is implemented in the system backend, not in the UI main.
 library_applet="projects/sSystem/source/LibraryApplet.cpp"
 [[ -f "$library_applet" ]] || fail "system LibraryApplet lifecycle source is missing"
-grep -Fq 'while (!appletHolderCheckFinished(&g_MenuHolder))' "$library_applet" ||
+grep -Fq 'appletHolderCheckFinished(&g_MenuHolder)' "$library_applet" ||
   fail "menu holder must verify completion after state-change notifications"
 
 if grep -Fq 'g_store->save()' "$main"; then

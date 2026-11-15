@@ -351,3 +351,11 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
   appletHolderCheckFinished() перед Join/Close. Убран лишний цикл 250-мс polling.
 - Основание: libnx applet.h API contract и applet.c implementation для
   appletHolderRequestExitOrTerminate(), appletHolderCheckFinished() и appletHolderJoin().
+
+### Коррекция HOME lifecycle guard после уточнения libnx semantics — 16 ноября 2026
+
+- CI run 43774838316 остановился на guard, потому что он проверял старую форму
+  цикла `while (!appletHolderCheckFinished(...))`, заменённую на bounded wait после
+  RequestExitOrTerminate. Логика не потеряла обязательную проверку завершения.
+- Guard теперь проверяет сам API-вызов appletHolderCheckFinished() в
+  projects/sSystem/source/LibraryApplet.cpp и не привязывается к форме цикла/if.
