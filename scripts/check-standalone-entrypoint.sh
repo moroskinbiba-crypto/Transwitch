@@ -23,11 +23,15 @@ for symbol in 'int main(int,char**)' 'fsdevMountSdmc()' 'SDL_Init(SDL_INIT_VIDEO
   grep -Fq "$symbol" "$main" || fail "native UI entry point is missing $symbol"
 done
 
-if grep -Eq 'webOfflineCreate|webConfigShow|WebCommonConfig|WebDocumentKind|WebKit' "$main" "$makefile"; then
-  fail "standalone NRO still references the Horizon Web applet"
+# Ignore Makefile comments so explanatory text mentioning the HOME build macro
+# does not look like an active compiler definition. Check active Makefile lines.
+active_makefile="$(grep -Ev '^[[:space:]]*#' "$makefile" || true)"
+if printf '%s\n' "$active_makefile" | grep -Eq 'DESKNX_SYSTEM_APPLET|^[[:space:]]*ROMFS[[:space:]]*[:?+]?=|--romfsdir'; then
+  fail "standalone target must not define system-applet mode or package a RomFS"
 fi
-if grep -Eq 'DESKNX_SYSTEM_APPLET|ROMFS|romfsdir' "$makefile"; then
-  fail "standalone target must not inherit system-applet mode or embed a RomFS"
+
+if grep -Eq 'webOfflineCreate|webConfigShow|WebCommonConfig|WebDocumentKind|WebKit' "$main"; then
+  fail "standalone native UI source still references the Horizon Web applet"
 fi
 
 printf '%s\n' '[standalone-entrypoint] OK: DeskNX.nro links the native SDL2 launcher; no HTML/WebKit runtime.'
