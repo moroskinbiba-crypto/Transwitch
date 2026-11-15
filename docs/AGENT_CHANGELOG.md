@@ -46,7 +46,7 @@
 
 - .gitignore имел в конце сериализованный JSON-фрагмент {"content": ...}.
 - В Git отслеживались Vite machine-cache файлы .vite/deps/_metadata.json и .vite/deps/package.json, а также устаревший локальный desknx-release.zip.
-- README ошибочно описывал source/main.cpp как общий UI standalone/system applet. По реальным Makefile это не так: standalone собирает src-switch, а HOME applet использует projects/DeskNXMenu/source/main.cpp.
+- HOME Makefile исключал полноценный source/main.cpp и выбирал упрощённый prototype projects/DeskNXMenu/source/main.cpp без backend IPC, heartbeat и рабочего touch handler.
 - В проекте несколько persistence реализаций. Форматы и пути нельзя объединять без трассировки production call sites и миграционных тестов.
 
 ### Первый этап — repo hygiene и точность документации
@@ -63,12 +63,12 @@
 
 ### Следующие задачи (приоритет)
 
-1. P0 — проаудировать фактический HOME applet LayoutStore: atomic save, recovery/backup, schema validation, active desktop restore, migration; добавить host tests на production serializer.
-2. P0 — покрыть tests реальный lifecycle LibraryApplet::StopMenu, ECS registration/unregister, heartbeat, event/timeout handling и возврат к игре.
+1. P0 — завершить проверку experimental HOME backend: ECS register/unregister, HOME lifecycle, повторный возврат из игры и sleep/wake.
+2. P0 — добавить host tests для production parser/layout recovery/settings/history backup recovery и проверок fsdevCommitDevice fail points.
 3. P1 — проверить installer/uninstaller при прерывании на каждом шаге, повторное выполнение и безопасное обновление без потери резервной копии.
-4. P1 — профилировать каталог/artwork pipeline по времени и памяти; проверить lazy decode и texture eviction.
-5. P1 — проверить native HOME UI: focus, grid navigation, drag/drop, touch hitboxes, пустые ячейки, увеличенные плитки, persist рабочего стола.
-6. P2 — закрепить toolchain refs вместо плавающего devkitpro/devkita64:latest, не ломая target compatibility.
+4. P1 — профилировать catalogue/artwork pipeline по времени и памяти; проверить lazy decode и texture eviction под Switch memory budget.
+5. P1 — аудит touchInput/keyInput: edge cases multi-touch, drag/drop, modal focus, controller/touch handoff, управление пустыми ячейками.
+6. P2 — закрепить toolchain refs вместо плавающего devkitpro/devkita64:latest только после сравнения версий и совместимости.
 7. Hardware smoke test: cold boot, HOME open, launch title, HOME from game, launch NRO, HOME from NRO, repeated loops, sleep/wake, recovery. Записать HOS/Atmosphère/libnx/build ID и результат.
 
 ## Формат следующих записей
@@ -79,3 +79,54 @@
 ## Уточнение production HOME entry point — 15 ноября 2026
 
 В ходе аудита фактического build path обнаружено, что предыдущая запись о том, что source/main.cpp является неиспользуемой legacy-реализацией, была неверной. Это полноценный system-applet UI: в нём реализованы MenuReady, heartbeat, backend IPC, запуск Title/NRO, события, сенсорное управление, рабочие столы, фон/шрифты/иконки и диагностика. Упрощённый projects/DeskNXMenu/source/main.cpp не содержит этих протокольных вызовов; его onTouchEvent — заглушка. Исправление Makefile должно выбирать production source/main.cpp и исключать prototype entry point. Добавлен guard script, который проверяет оба набора символов и порядок VPATH.
+
+
+## Запись работ — 15 ноября 2026 (продолжение)
+
+### Commit 57400126dd42e7201cf6bd5bfa1b4903177a8102 — repo hygiene
+
+- Очищен .gitignore от сериализованного JSON-хвоста.
+- Удалены tracked generated files: .vite/deps/_metadata.json, .vite/deps/package.json, desknx-release.zip.
+- Добавлен scripts/check-repo-hygiene.mjs (затем заменён на bash-версию из-за отсутствия Node в devkitPro container).
+- README и docs/HOME_INTEGRATION.md получили уточнение build paths.
+- Workflow проверка была изначально ошибочной из-за отсутствия Node в контейнере; не считать этот commit прошедшим CI.
+
+### Commit 35e3cc9af66b7157c87399dd8b7736cf96e3aae4 — временная проба persistence prototype
+
+- Начата интеграция WorkspaceFileStore в projects/DeskNXMenu/source/main.cpp.
+- После дальнейшего аудита выяснилось, что это prototype entry point, а не production HOME UI; он не содержит IPC/heartbeat/запуска приложений. Его изменения отменены следующим переключением build path. Не ориентироваться на этот commit как на актуальную реализацию.
+
+### Commits 0024467ca3846bad7fd87cd681f5fc1cedd02642 и 228f4d67fee11866c6a26ff8e1b1d33d18d91bb5 — CI hygiene
+
+- Проверка переведена с Node script на scripts/check-repo-hygiene.sh.
+- git ls-files запускается с точечным -c safe.directory="$PWD" для чтения индекса Docker checkout; глобальная Git security policy не отключается.
+- Проверка hygiene и guard production entry point выполняются до компиляции.
+- Run 43746917772: Build DeskNX success; run 43746917774: standalone NRO success. Backend run был отменён новым commit.
+- Причина первых CI failures: Node отсутствовал в контейнере; затем Git отказал из-за dubious ownership. Исправлено.
+
+### Commit 2f9546499811b874c04c4690d287677c7b99443d — важное исправление HOME build path
+
+- projects/DeskNXMenu/Makefile теперь задаёт SOURCES := ../../source ./source и помещает COMMON_CPPFILES (включая production source/main.cpp) перед menu modules.
+- Prototype projects/DeskNXMenu/source/main.cpp исключён через filter-out main.cpp.
+- Добавлен scripts/check-home-applet-entrypoint.sh; проверяется наличие system IPC/heartbeat/title/NRO launch/touch handling.
+- README и docs/HOME_INTEGRATION.md исправлены.
+- CI: [Build DeskNX run 43747357944](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43747357944) — success; [NRO run 43747357968](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43747357968) — success. Это подтверждает компиляцию выбранного build path; physical Switch не тестировался.
+- Experimental backend run 43747358014 был на стадии Build Atmosphere libstratosphere и позже был superseded/cancelled.
+
+### Commit 43a8a41c49399e3f82b41a7d02d67895973bf583 — durable SD commit
+
+- source/main.cpp: добавлен commitSdCard() на основе fsdevCommitDevice("sdmc").
+- Для settings, recent history, active-workspace marker и layout выполняется commit temp file до atomic rename и commit нового состояния после rename.
+- Layout publish commit failure блокирует дальнейшую перезапись и сохраняет layout.bak как last-known-good copy.
+- CI на этом commit: [Build DeskNX 43748271652](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43748271652) и [NRO 43748271725](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43748271725) — success; backend workflow отменён при появлении следующего commit.
+
+### Commit 2896a1f4bf2f02e17d4dc0b7436a99860132e603 — recovery fallback
+
+- loadLauncherSettings() пытается settings.ini и settings.bak.
+- loadHistory() пытается recent.tsv и recent.bak; malformed/oversized files не загружаются в live state.
+- loadActiveWorkspaceState() пытается active-workspace.dat и .bak, принимая только marker, проходящий parseActiveWorkspaceState against loaded workspaces.
+- backupBrokenLayout() фиксирует rename испорченной раскладки через fsdevCommitDevice.
+- В scripts/check-home-applet-entrypoint.sh добавлена статическая защита наличия durable SD commit и backup fallback.
+- CI после этого commit: runs 43748420562 (NRO), 43748420602 (DeskNX), 43748420582 (experimental backend) — ожидают завершения на момент записи.
+- Hardware проверки: NOT RUN; необходим Switch с настроенной Atmosphère и возможностью восстановить stock qlaunch.
+
