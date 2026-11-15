@@ -30,6 +30,9 @@ if printf '%s\n' "$active_makefile" | grep -Eq 'DESKNX_SYSTEM_APPLET|^[[:space:]
   fail "standalone target must not define system-applet mode or package a RomFS"
 fi
 
+grep -Fq 'extern "C" void userAppInit(void)' "$main" || fail "early standalone NRO diagnostics hook is missing"
+grep -Fq 'if(sdMountedByDeskNX)fsdevUnmountDevice("sdmc");' "$main" || fail "standalone cleanup must not unmount libnx-owned SD"
+
 if grep -Eq 'webOfflineCreate|webConfigShow|WebCommonConfig|WebDocumentKind|WebKit' "$main"; then
   fail "standalone native UI source still references the Horizon Web applet"
 fi

@@ -174,7 +174,7 @@ Uint32 lastWorkspaceTabTapTick=0;
 // locally through the applet power APIs, which are available to NROs too.
 bool powerMenu=false;
 s32 powerIndex=0;
-bool sdMounted=false, psmReady=false, touchDragging=false;
+bool sdMounted=false, sdMountedByDeskNX=false, diagnosticsInitialized=false, psmReady=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   L3 TOOLS", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
 #ifdef DESKNX_SYSTEM_APPLET
@@ -3413,10 +3413,39 @@ void touchInput(const SDL_Event&e) {
 }
 } // namespace
 
+#ifndef DESKNX_SYSTEM_APPLET
+// libnx mounts sdmc for a normal NRO before calling this hook. Open diagnostics
+// immediately, then let main() detect the existing mount instead of mounting
+// the same device twice.
+extern "C" void userAppInit(void) {
+    struct stat sdRoot{};
+    if (stat("sdmc:/", &sdRoot) == 0) {
+        sdMounted = true;
+        desknx::diag::Initialize(true);
+        diagnosticsInitialized = true;
+        desknx::diag::Write("startup", "libnx_user_app_init", "sd_pre_mounted=1");
+    }
+}
+#endif
+
 int main(int,char**) {
-    const Result sdMountRc = fsdevMountSdmc();
-    if(R_SUCCEEDED(sdMountRc))sdMounted=true;
-    desknx::diag::Initialize(sdMounted);
+    Result sdMountRc = 0;
+    struct stat sdRoot{};
+    if (!sdMounted && stat("sdmc:/", &sdRoot) == 0) {
+        // Covers launchers which pre-mount the device without invoking the hook.
+        sdMounted = true;
+    }
+    if (!sdMounted) {
+        sdMountRc = fsdevMountSdmc();
+        if (R_SUCCEEDED(sdMountRc)) {
+            sdMounted = true;
+            sdMountedByDeskNX = true;
+        }
+    }
+    if (!diagnosticsInitialized) {
+        desknx::diag::Initialize(sdMounted);
+        diagnosticsInitialized = true;
+    }
 #ifdef DESKNX_SYSTEM_APPLET
     constexpr const char* buildMode = "system-applet";
 #else
@@ -3426,7 +3455,7 @@ int main(int,char**) {
         buildMode, sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){
         desknx::diag::Write("startup", "sdl_init_failed", "error=%s", SDL_GetError());
-        if(sdMounted) fsdevUnmountDevice("sdmc");
+        if(sdMountedByDeskNX) fsdevUnmountDevice("sdmc");
         return 1;
     }
     desknx::diag::Write("startup", "sdl_init_ok", "sdl_version=%u.%u.%u",
@@ -3435,14 +3464,14 @@ int main(int,char**) {
     window=SDL_CreateWindow("DeskNX",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
     if(!window){
         desknx::diag::Write("startup", "window_create_failed", "error=%s", SDL_GetError());
-        SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 2;
+        SDL_Quit();if(sdMountedByDeskNX)fsdevUnmountDevice("sdmc");return 2;
     }
     desknx::diag::Write("startup", "window_created", "logical_width=%d logical_height=%d", SW, SH);
     renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
     if(!renderer)renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
     if(!renderer){
         desknx::diag::Write("startup", "renderer_create_failed", "error=%s", SDL_GetError());
-        SDL_DestroyWindow(window);SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 3;
+        SDL_DestroyWindow(window);SDL_Quit();if(sdMountedByDeskNX)fsdevUnmountDevice("sdmc");return 3;
     }
     SDL_RendererInfo rendererInfo{};
     const int rendererInfoRc = SDL_GetRendererInfo(renderer, &rendererInfo);
@@ -3691,6 +3720,6 @@ int main(int,char**) {
     if (window) SDL_DestroyWindow(window);
     SDL_Quit();
     desknx::diag::Write("session", "end", "normal_exit=1");
-    if(sdMounted)fsdevUnmountDevice("sdmc");
+    if(sdMountedByDeskNX)fsdevUnmountDevice("sdmc");
     return 0;
 }

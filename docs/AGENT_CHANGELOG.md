@@ -226,3 +226,23 @@ touch drag. Не начинать qlaunch takeover до стабилизации
 - Исправлен `Makefile.switch`: include-пути формируются относительно экспортированного `TOPDIR` до вычисления `CFLAGS/CXXFLAGS`, включая devkitPro libnx и Switch portlibs. Это также исключает ошибочную зависимость от `CURDIR`, который меняется при рекурсивной сборке из каталога `build/`.
 - Результат новой cross-build проверки ожидается. Не считать native NRO собранным, пока Actions не подтвердит compile/link и NRO asset checker.
 - Физическая Switch: NOT RUN.
+
+
+### Исправление Makefile и безопасной инициализации SD для standalone NRO — 16 ноября 2026
+
+CI после первого include-path изменения выявил ещё две конкретные ошибки:
+1. Перенос переменной `INCLUDE` был синтаксически некорректен из-за экранирования переносов строк в Makefile; сборка остановилась на `Makefile.switch:47: missing separator`.
+2. Аудит libnx показал, что стандартный NRO runtime уже монтирует `sdmc` до входа в `main()`. Повторный вызов `fsdevMountSdmc()` в production UI мог завершиться ошибкой повторного mount. Libnx отклоняет повторное устройство с тем же именем; это опасно для диагностик, так как `sdMounted` мог оставаться false.
+
+Исправления в текущем изменении:
+- Include flags перенесены перед вычислением `CFLAGS/CXXFLAGS` и собраны в однострочное определение относительно `TOPDIR`; теперь путь `$(DEVKITPRO)/libnx/include` попадает непосредственно в compiler flags.
+- В standalone режиме добавлен `userAppInit`: если libnx уже смонтировал SD, hook сразу создаёт diagnostics log до `main()`.
+- В `main()` сначала проверяется `stat("sdmc:/")`, и только если устройство не смонтировано, вызывается `fsdevMountSdmc()`.
+- Добавлен отдельный флаг `sdMountedByDeskNX`: при завершении приложение размонтирует только устройство, которое оно само смонтировало, и не снимает libnx-owned mount.
+- HOME applet compile mode не экспортирует standalone-only `userAppInit` hook.
+- Обновлён standalone guard для проверки раннего hook и безопасного владения SD mount.
+
+Источники фактического поведения libnx: `fsdevMountDevice` отвергает уже смонтированное устройство с тем же именем; `fsdevMountSdmc` преобразует такой отказ в ошибку. Дополнительный libnx example подтверждает, что сообщение «already mounted by libnx» является нормальным для NRO startup.
+
+CI native cross-build и NRO checker после этого исправления: ожидаются.
+Физическая Switch: NOT RUN.
