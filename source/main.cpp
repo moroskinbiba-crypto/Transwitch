@@ -301,12 +301,28 @@ bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
 
 void loadLauncherSettings() {
     if(!sdMounted){applyThemePalette();return;}
-    struct stat st{};
-    if(stat(SETTINGS_FILE,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>4096) {
+    std::string selectedPath;
+    const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
+    for(const char* candidate:candidates) {
+        struct stat st{};
+        if(stat(candidate,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>4096)
+            continue;
+        std::ifstream in(candidate,std::ios::binary);
+        std::string header;
+        if(in && std::getline(in,header) && header=="DESKNXSET1") {
+            selectedPath=candidate;
+            break;
+        }
+    }
+    if(selectedPath.empty()) {
         applyThemePalette();
         return;
     }
-    std::ifstream in(SETTINGS_FILE,std::ios::binary);
+    if(selectedPath!=SETTINGS_FILE) {
+        desknx::diag::Write("settings","backup_restored","path=%s",selectedPath.c_str());
+        setStatus("APPEARANCE SETTINGS RESTORED FROM BACKUP",4000);
+    }
+    std::ifstream in(selectedPath,std::ios::binary);
     std::string line;
     if(!std::getline(in,line)||line!="DESKNXSET1") {
         applyThemePalette();
@@ -319,7 +335,7 @@ void loadLauncherSettings() {
         if(key=="theme") {
             char* end=nullptr;
             const long valueLong=std::strtol(value.c_str(),&end,10);
-            if(end&&*end=='\0'&&valueLong>=0&&valueLong<=4)
+            if(end&&*end=='\\0'&&valueLong>=0&&valueLong<=4)
                 themeIndex=static_cast<int>(valueLong);
         } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
             wallpaperPath=value;
@@ -327,10 +343,9 @@ void loadLauncherSettings() {
             fontPath=value;
         } else if(key=="iconpack") {
             struct stat packStat{};
-            if(value.compare(0,(std::string(MEDIA_ROOT)+"/iconpacks/").size(),
-                    std::string(MEDIA_ROOT)+"/iconpacks/")==0 &&
-               value.find("..")==std::string::npos && value.size()<240 &&
-               stat(value.c_str(),&packStat)==0 && S_ISDIR(packStat.st_mode))
+            const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
+            if(value.compare(0,prefix.size(),prefix)==0&&value.find("..")==std::string::npos&&
+               value.size()<240&&stat(value.c_str(),&packStat)==0&&S_ISDIR(packStat.st_mode))
                 iconPackPath=value;
         }
     }
@@ -994,16 +1009,18 @@ bool isSafeNroPath(const std::string& path) {
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
-void loadHistory() {
-    if(!sdMounted)return;
+bool readHistoryFile(const char* path,std::vector<HistoryEntry>& output) {
     struct stat historyStat{};
     constexpr size_t MaxHistoryBytes=64*1024;
-    if(stat(HISTORY_FILE,&historyStat)!=0||!S_ISREG(historyStat.st_mode)||
-       historyStat.st_size<=0||static_cast<uint64_t>(historyStat.st_size)>MaxHistoryBytes)return;
-    std::ifstream input(HISTORY_FILE,std::ios::binary);
+    if(!path||stat(path,&historyStat)!=0||!S_ISREG(historyStat.st_mode)||
+       historyStat.st_size<=0||static_cast<uint64_t>(historyStat.st_size)>MaxHistoryBytes)
+        return false;
+    std::ifstream input(path,std::ios::binary);
     std::string line;
-    if(!input||!std::getline(input,line)||line.size()>32||line!="DESKNXH1")return;
-    while(std::getline(input,line)&&recentLaunches.size()<10) {
+    if(!input||!std::getline(input,line)||line.size()>32||line!="DESKNXH1")
+        return false;
+    std::vector<HistoryEntry> parsed;
+    while(std::getline(input,line)&&parsed.size()<10) {
         if(line.size()>2048)continue;
         auto fields=splitTabs(line);
         if(fields.size()!=3||fields[0].size()>16||fields[1].empty()||
@@ -1012,7 +1029,24 @@ void loadHistory() {
         if(kind!=Kind::Game&&kind!=Kind::Nro)continue;
         if(kind==Kind::Game&&!desknx::model::isTitleId(fields[2]))continue;
         if(kind==Kind::Nro&&!isSafeNroPath(fields[2]))continue;
-        recentLaunches.push_back({kind,fields[1],fields[2]});
+        parsed.push_back({kind,fields[1],fields[2]});
+    }
+    if(input.bad())return false;
+    output=std::move(parsed);
+    return true;
+}
+
+void loadHistory() {
+    if(!sdMounted)return;
+    std::vector<HistoryEntry> loaded;
+    if(readHistoryFile(HISTORY_FILE,loaded)) {
+        recentLaunches=std::move(loaded);
+    } else if(readHistoryFile(HISTORY_BAK_FILE,loaded)) {
+        recentLaunches=std::move(loaded);
+        desknx::diag::Write("history","backup_restored","path=%s",HISTORY_BAK_FILE);
+        setStatus("RECENT HISTORY RESTORED FROM BACKUP",4000);
+    } else {
+        return;
     }
     if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
 }
@@ -1074,6 +1108,10 @@ bool backupBrokenLayout() {
         struct stat existing{};
         if (stat(dest, &existing) == 0) continue;
         if (std::rename(CFG_FILE, dest) == 0) {
+            if(!commitSdCard("corrupt-layout-preserve")) {
+                setStatus("LAYOUT BACKUP CREATED BUT COMMIT FAILED",5000);
+                return false;
+            }
             setStatus("INVALID LAYOUT PRESERVED", 4500);
             return true;
         }
@@ -1112,22 +1150,33 @@ bool saveActiveWorkspaceState() {
 
 bool loadActiveWorkspaceState() {
     if(!sdMounted || desks.empty()) return false;
-    struct stat st{};
-    if(stat(ACTIVE_WORKSPACE_FILE,&st)!=0 || !S_ISREG(st.st_mode) ||
-       st.st_size<=0 || st.st_size>512) return false;
-    std::ifstream in(ACTIVE_WORKSPACE_FILE,std::ios::binary);
-    if(!in) return false;
-    std::ostringstream contents;
-    contents<<in.rdbuf();
-    if(in.bad()) return false;
-    int restored=deskIndex;
-    if(!desknx::layout::parseActiveWorkspaceState(contents.str(),desks,restored))
-        return false;
-    deskIndex=restored;
-    selectedX=selectedY=0;
-    desknx::diag::Write("layout","active_workspace_restored",
-        "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
-    return true;
+    const char* candidates[]={ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK};
+    for(std::size_t candidateIndex=0;candidateIndex<2;++candidateIndex) {
+        const char* path=candidates[candidateIndex];
+        struct stat st{};
+        if(stat(path,&st)!=0 || !S_ISREG(st.st_mode) ||
+           st.st_size<=0 || st.st_size>512) continue;
+        std::ifstream in(path,std::ios::binary);
+        if(!in)continue;
+        std::ostringstream contents;
+        contents<<in.rdbuf();
+        if(in.bad())continue;
+        int restored=deskIndex;
+        if(!desknx::layout::parseActiveWorkspaceState(contents.str(),desks,restored))
+            continue;
+        deskIndex=restored;
+        selectedX=selectedY=0;
+        if(candidateIndex!=0) {
+            desknx::diag::Write("layout","active_workspace_backup_restored",
+                "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
+            setStatus("ACTIVE DESKTOP RESTORED FROM BACKUP",4000);
+        } else {
+            desknx::diag::Write("layout","active_workspace_restored",
+                "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
+        }
+        return true;
+    }
+    return false;
 }
 
 bool saveLayout() {
