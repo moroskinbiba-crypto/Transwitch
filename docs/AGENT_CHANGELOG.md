@@ -305,3 +305,5 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
   the host-tested behavior contract.
 - Physical touchscreen test: NOT RUN; long-press timing and finger-ID behavior require
   validation on a Switch touchscreen.
+
+- Cleanup after wiring long-press: removed the obsolete immediate-drag start coordinates and previous-selection locals; the gesture helper now owns the press origin and timing.

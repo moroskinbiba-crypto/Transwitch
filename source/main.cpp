@@ -173,7 +173,6 @@ SDL_FingerID catalogueTouchFingerId=0;
 bool catalogueTouchActive=false, catalogueTouchMoved=false;
 bool touchPressActive=false;
 SDL_FingerID touchPressFingerId=0;
-int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
@@ -3326,7 +3325,6 @@ void touchInput(const SDL_Event&e) {
             }
         }
         if(y>=TOP&&y<TOP+ROWS*(CH+GY)) {
-            const int oldX=selectedX,oldY=selectedY;
             if(!touchSelect(x,y))return;
             Workspace& d=desks[static_cast<size_t>(deskIndex)];
             const int i=itemAt(d,selectedX,selectedY);
@@ -3338,8 +3336,6 @@ void touchInput(const SDL_Event&e) {
                     if(touchPressActive&&touchPressFingerId!=e.tfinger.fingerId)return;
                     touchPressActive=true;
                     touchPressFingerId=e.tfinger.fingerId;
-                    touchPressStartX=x;
-                    touchPressStartY=y;
                     tileHoldGesture.begin(x,y,SDL_GetTicks());
                     desknx::workspace_ops::CellPoint grab{};
                     if(desknx::workspace_ops::cellFromPoint(
