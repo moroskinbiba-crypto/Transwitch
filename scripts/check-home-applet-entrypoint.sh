@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+fail() { printf '[home-entrypoint] FAIL: %s\n' "$*" >&2; exit 1; }
+
+makefile="projects/DeskNXMenu/Makefile"
+main="source/main.cpp"
+[[ -f "$makefile" && -f "$main" ]] || fail "required HOME applet sources are missing"
+
+grep -Fq 'SOURCES     := ../../source ./source' "$makefile" ||
+  fail "VPATH must search the shared production source directory first"
+grep -Fq 'MENU_CPPFILES := $(filter-out main.cpp,' "$makefile" ||
+  fail "the prototype menu main.cpp must be excluded"
+grep -Fq 'COMMON_CPPFILES := $(notdir $(wildcard ../../source/*.cpp))' "$makefile" ||
+  fail "shared production sources must include source/main.cpp"
+grep -Fq 'CPPFILES := $(COMMON_CPPFILES) $(MENU_CPPFILES)' "$makefile" ||
+  fail "production entry point must take precedence in the source list"
+
+for symbol in 'DESKNX_SYSTEM_APPLET' 'SendMenuReady' 'SendHeartbeat' \
+              'SendLaunchTitle' 'SendLaunchHomebrew' 'heartbeatThreadMain' \
+              'touchInput(const SDL_Event' 'void keyInput'; do
+  grep -Fq "$symbol" "$main" || fail "production HOME UI is missing $symbol"
+done
+
+if grep -Fq 'g_store->save()' "$main"; then
+  fail "production HOME UI must not save workspace state through legacy JSON store"
+fi
+printf '%s\n' '[home-entrypoint] OK: system HOME UI with IPC, heartbeat, touch and title/NRO launch is selected.'

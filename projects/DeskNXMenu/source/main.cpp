@@ -7,6 +7,7 @@
 #include "GridRenderer.hpp"
 #include "TileInputHandler.hpp"
 #include "WidgetFactory.hpp"
+#include "LayoutStore.hpp"
 #include "SettingsScreen.hpp"
 
 // Persistence layer includes
@@ -34,11 +35,11 @@ namespace {
 std::unique_ptr<menu::renderer::GridRenderer> g_renderer;
 std::unique_ptr<menu::input::TileInputHandler> g_inputHandler;
 std::unique_ptr<homenx::WorkspaceProvider> g_provider;
-std::unique_ptr<desknx::persistence::PersistenceStore> g_store; // read-only legacy import; never writes workspace state
-std::unique_ptr<homenx::WorkspaceFileStore> g_workspaceStore;
+std::unique_ptr<desknx::persistence::PersistenceStore> g_store;
 std::unique_ptr<desknx::catalog::AppCatalogManager> g_catalog;
 std::unique_ptr<menu::settings::SettingsScreen> g_settings;
 
+const char* kLayoutPath = "sdmc:/switch/DeskNX/layout.tsv";
 const char* kTitleID = "0100000000001000";
 const char* kSaveDataPath = "sdmc:/01000000/00001000/";
 const char* kDeskNXPath = "sdmc:/switch/DeskNX/";
@@ -98,32 +99,6 @@ void initializeAppDirectories() {
         configTest.close();
         debugPrintf("Config file already exists: %s\n", kConfigPath);
     }
-}
-
-bool saveWorkspace(const char* reason) {
-    if (!g_workspaceStore || !g_provider) {
-        debugPrintf("[workspace] save skipped (%s): store/provider not ready\n",
-                    reason ? reason : "unspecified");
-        return false;
-    }
-
-    // fsdevCommitDevice is required on Switch after filesystem writes. The
-    // WorkspaceFileStore invokes this before publishing temp files and after
-    // atomic renames, so both file data and directory metadata are committed.
-    const auto commitSdCard = []() {
-        const Result rc = fsdevCommitDevice("sdmc");
-        if (R_FAILED(rc)) {
-            debugPrintf("[workspace] SD commit failed rc=0x%08X\n",
-                        static_cast<unsigned int>(rc));
-            return false;
-        }
-        return true;
-    };
-
-    const bool saved = g_workspaceStore->save(*g_provider, commitSdCard);
-    debugPrintf("[workspace] save %s (%s)\n",
-                saved ? "ok" : "FAILED", reason ? reason : "unspecified");
-    return saved;
 }
 
 // Check if this applet is registered as the default launcher
@@ -219,70 +194,24 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // The workspace provider owns the exact grid state shown by the UI.
-    // Persist that provider directly; the older PersistenceStore only had
-    // desktop names/title IDs and could not round-trip positions or tile sizes.
+    // Initialize workspace provider
     g_provider = std::make_unique<homenx::WorkspaceProvider>();
-    g_workspaceStore = std::make_unique<homenx::WorkspaceFileStore>();
-    homenx::WorkspaceLoadInfo workspaceLoadInfo{};
-    const bool layoutLoaded = g_workspaceStore->load(*g_provider, &workspaceLoadInfo);
-    if (layoutLoaded) {
-        debugPrintf("[workspace] layout loaded: %zu workspaces, active=%d backup=%d active_backup=%d\n",
-                    g_provider->count(), g_provider->activeIndex(),
-                    workspaceLoadInfo.restoredLayoutBackup ? 1 : 0,
-                    workspaceLoadInfo.restoredActiveBackup ? 1 : 0);
-    } else {
-        debugPrintf("[workspace] no valid layout/backup; checking legacy workspace JSON\n");
-    }
-
-    // One-time import of pre-existing JSON workspace names and Title IDs.
-    // The JSON format never stored positions or dimensions, so imported games
-    // are placed into the first free 1x1 cells. The old files are left intact.
-    bool importedLegacyWorkspaces = false;
-    if (!layoutLoaded && g_store && !g_store->desktops().empty()) {
-        std::vector<model::Workspace> imported;
-        imported.reserve(g_store->desktops().size());
-        std::size_t desktopNumber = 0;
-        for (const auto& legacyDesktop : g_store->desktops()) {
-            ++desktopNumber;
-            std::string name = legacyDesktop.name;
-            if (name.empty()) name = "Desktop " + std::to_string(desktopNumber);
-            bool duplicateName = false;
-            for (const auto& existing : imported)
-                if (existing.name == name) duplicateName = true;
-            if (duplicateName)
-                name = "Desktop " + std::to_string(desktopNumber);
-
-            model::Workspace workspace{name, {}};
-            for (const std::uint64_t titleId : legacyDesktop.tileIds) {
-                if (titleId == 0 || !g_catalog) continue;
-                for (const auto& entry : g_catalog->games()) {
-                    if (entry.isHomebrew || entry.titleId != titleId) continue;
-                    model::Tile tile;
-                    tile.kind = model::Kind::Game;
-                    tile.title = entry.title.empty() ? "Unknown" : entry.title;
-                    char titleIdText[17]{};
-                    std::snprintf(titleIdText, sizeof(titleIdText), "%016llX",
-                                  static_cast<unsigned long long>(titleId));
-                    tile.data = titleIdText;
-                    tile.w = 1;
-                    tile.h = 1;
-                    int x = 0, y = 0;
-                    if (model::firstFree(workspace, tile, x, y)) {
-                        tile.x = x;
-                        tile.y = y;
-                        tile.color = static_cast<int>(titleId % 8);
-                        workspace.tiles.push_back(std::move(tile));
-                    }
-                    break;
-                }
-            }
-            imported.push_back(std::move(workspace));
+    
+    // 4. Populate workspaces from persisted layouts
+    const auto& desktops = g_store->desktops();
+    if (!desktops.empty()) {
+        // Load workspaces from persistence
+        for (const auto& desktop : desktops) {
+            g_provider->addWorkspace(desktop.name);
         }
-        importedLegacyWorkspaces = !imported.empty() && g_provider->load(imported, 0);
-        if (importedLegacyWorkspaces)
-            debugPrintf("[workspace] imported %zu legacy desktops (old JSON files preserved)\n",
-                        imported.size());
+        debugPrintf("Loaded %zu workspaces from persistence\n", desktops.size());
+    } else {
+        // Load legacy layout or create default
+        if (!menu::storage::LayoutStore::load(*g_provider)) {
+            // No layout file; create a default workspace
+            g_provider->addWorkspace("Home");
+            debugPrintf("Created default workspace\n");
+        }
     }
 
     // Create renderer, input handler, and settings screen
@@ -300,7 +229,7 @@ int main(int argc, char* argv[]) {
 
     // Populate workspace with real discovered apps if empty
     if (auto* active = g_provider->activeWorkspaceForEditing()) {
-        if (!layoutLoaded && !importedLegacyWorkspaces && active->tiles.empty() && g_catalog) {
+        if (active->tiles.empty() && g_catalog) {
             const auto& games = g_catalog->games();
             int x = 0, y = 0;
             
@@ -342,14 +271,6 @@ int main(int argc, char* argv[]) {
             
             debugPrintf("Populated %zu tiles from catalog\n", active->tiles.size());
         }
-    }
-
-    // First-run defaults and one-time legacy imports are persisted before the
-    // UI begins accepting edits. An intentionally empty saved desktop is never
-    // auto-populated, because layoutLoaded is true for valid saved layouts.
-    if (!layoutLoaded && !saveWorkspace(importedLegacyWorkspaces
-            ? "legacy workspace migration" : "first-run defaults")) {
-        debugPrintf("[workspace] initial save failed; keeping in-memory state\n");
     }
 
     // Main loop
@@ -486,7 +407,7 @@ int main(int argc, char* argv[]) {
                                     if (focusedIdx >= 0) {
                                         // Immediate delete (no double-press, faster)
                                         ws->tiles.erase(ws->tiles.begin() + focusedIdx);
-                                        (void)saveWorkspace("tile edit");
+                                        if (g_store) g_store->save();
                                         debugPrintf("[Remove] deleted tile %d\n", focusedIdx);
                                         g_renderer->initFocus(*ws); // Re-init focus after delete
                                     }
@@ -509,7 +430,7 @@ int main(int argc, char* argv[]) {
                                 auto result = g_inputHandler->commitDrop(*ws);
                                 g_renderer->endDragPreview();
                                 if (result == desknx::menu::input::DropResult::Committed) {
-                                    (void)saveWorkspace("tile edit");
+                                    if (g_store) g_store->save();
                                     debugPrintf("[Drop] committed & saved\n");
                                 } else {
                                     debugPrintf("[Drop] invalid, bounced back\n");
@@ -520,7 +441,7 @@ int main(int argc, char* argv[]) {
                         else if (g_inputHandler->getEditMode() == desknx::menu::input::EditMode::Resize) {
                             if (auto* ws = g_provider->activeWorkspaceForEditing()) {
                                 if (g_inputHandler->commitResize(*ws)) {
-                                    (void)saveWorkspace("tile edit");
+                                    if (g_store) g_store->save();
                                     debugPrintf("[Resize] committed & saved\n");
                                 }
                                 g_renderer->endResizePreview();
@@ -640,15 +561,20 @@ int main(int argc, char* argv[]) {
         SDL_Delay(16);  // ~60 FPS
     }
 
-    // Persist the provider that actually owns the visible grid. This includes
-    // every workspace, tile coordinate/size, appearance field and active desk.
-    debugPrintf("Saving workspace state before applet exit\n");
-    (void)saveWorkspace("applet exit");
+    // 5. On exit: save all persisted state atomically
+    debugPrintf("Saving application state before exit\n");
+    if (g_store && !g_store->save()) {
+        debugPrintf("Warning: Failed to save persisted state\n");
+    } else if (g_store) {
+        debugPrintf("Persisted state saved successfully\n");
+    }
+    
+    // Legacy layout save (backward compatibility)
+    menu::storage::LayoutStore::save(*g_provider);
 
     // Cleanup
     g_settings.reset();
     g_store.reset();
-    g_workspaceStore.reset();
     g_catalog.reset();
     g_inputHandler.reset();
     g_renderer.reset();

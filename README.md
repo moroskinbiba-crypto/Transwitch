@@ -70,9 +70,9 @@ Standalone и system-applet сборки записывают техническ
 ## Структура
 
 - src-switch/main.cpp — standalone NRO / WebKit host; src/App.tsx и romfs/ — React UI.
-- projects/DeskNXMenu/source/main.cpp — отдельный native HOME library-applet UI.
-- source/*.cpp — shared native-компоненты, собираемые в HOME applet (кроме source/main.cpp).
-- source/main.cpp — legacy/experimental UI translation unit; текущие release Makefile его не собирают, его код не входит в публикуемые NRO и HOME applet.
+- source/main.cpp — production native HOME UI: controller/touch input, workspaces, catalogue, IPC, heartbeat, game/NRO launch and diagnostics; compiled into the library applet.
+- projects/DeskNXMenu/source/main.cpp — older simplified prototype entry point, intentionally excluded from the release applet.
+- projects/DeskNXMenu/source/*.cpp (except main.cpp) and source/*.cpp are supporting modules linked into the HOME applet.
 - projects/common/include/desknx/Protocol.hpp — версионированный IPC между UI и системным процессом.
 - projects/DeskNXMenu/ — библиотечный applet и NPDM для запуска через backend.
 - projects/hbloader/ — target-aware загрузчик NRO, запускаемый backend через ECS.

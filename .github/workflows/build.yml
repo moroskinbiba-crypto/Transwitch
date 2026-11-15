@@ -29,6 +29,9 @@ jobs:
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
 
+      - name: Verify production HOME applet entry point
+        run: bash scripts/check-home-applet-entrypoint.sh
+
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:

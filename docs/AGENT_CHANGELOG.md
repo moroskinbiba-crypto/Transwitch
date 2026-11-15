@@ -19,9 +19,10 @@
 1. В репозитории есть несколько разных UI/build paths:
    - src/App.tsx + romfs/ — React/Web UI, упаковываемый через Vite.
    - src-switch/main.cpp + Makefile.switch — standalone NRO-хост для offline WebKit UI.
-   - projects/DeskNXMenu/source/main.cpp — отдельный native C++ UI library applet для system HOME.
-   - source/main.cpp — большой legacy/experimental native UI translation unit. Он НЕ собирается текущими release Makefile: Makefile.switch собирает src-switch, а projects/DeskNXMenu/Makefile исключает source/main.cpp. Не считать его код поставляемой функциональностью.
-2. Shared C++ файлы source/*.cpp (кроме source/main.cpp) собираются в HOME applet через projects/DeskNXMenu/Makefile. Standalone WebKit shell и C++ HOME applet — разные интерфейсные реализации.
+   - source/main.cpp — intended production native HOME UI: implements protocol IPC, heartbeat, input/touch, catalogue and launching; it must be compiled into system library applet.
+   - projects/DeskNXMenu/source/main.cpp — simplified prototype UI entry point; release must exclude it while linking source/main.cpp.
+   - src-switch/main.cpp — standalone web runtime host.
+2. HOME applet must use source/main.cpp plus supporting source/*.cpp and projects/DeskNXMenu/source/*.cpp (excluding the prototype main.cpp). The Makefile VPATH order matters because both directories contain a main.cpp. Standalone WebKit shell and C++ HOME applet are different UI paths.
 3. В репозитории несколько persistence слоёв:
    - реальный HOME applet: projects/DeskNXMenu/source/LayoutStore.*, путь sdmc:/switch/DeskNX/layout.tsv;
    - legacy/experimental source/main.cpp: layout.tsv, отдельный active-workspace marker, settings/history;
@@ -73,3 +74,8 @@
 ## Формат следующих записей
 
 Для каждого завершённого этапа записывать дату, commit SHA, список файлов, причину, тесты/CI со ссылками, открытые риски и hardware checks (passed / not run). Предыдущие записи не удалять.
+
+
+## Уточнение production HOME entry point — 15 ноября 2026
+
+В ходе аудита фактического build path обнаружено, что предыдущая запись о том, что source/main.cpp является неиспользуемой legacy-реализацией, была неверной. Это полноценный system-applet UI: в нём реализованы MenuReady, heartbeat, backend IPC, запуск Title/NRO, события, сенсорное управление, рабочие столы, фон/шрифты/иконки и диагностика. Упрощённый projects/DeskNXMenu/source/main.cpp не содержит этих протокольных вызовов; его onTouchEvent — заглушка. Исправление Makefile должно выбирать production source/main.cpp и исключать prototype entry point. Добавлен guard script, который проверяет оба набора символов и порядок VPATH.

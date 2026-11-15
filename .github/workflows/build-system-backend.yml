@@ -54,6 +54,9 @@ jobs:
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
 
+      - name: Verify production HOME applet entry point
+        run: bash scripts/check-home-applet-entrypoint.sh
+
       - name: Run host model, layout and catalog-view unit tests
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
