@@ -27,7 +27,7 @@ include $(LIBNX)/switch_rules
 
 TARGET      := DeskNXMenu
 BUILD       := build
-SOURCES     := ../../source ./source
+SOURCES     := ./source ../../source
 INCLUDES    := ../../include ../../projects/common/include
 APP_TITLE   := DeskNX
 APP_AUTHOR  := DeskNX contributors
@@ -53,7 +53,9 @@ export APP_JSON := $(CURDIR)/DeskNXMenu.json
 export OUTDIR := $(CURDIR)/../../SdOut/switch/DeskNX/bin/Menu
 export VPATH := $(foreach dir,$(SOURCES),$(abspath $(CURDIR)/$(dir)))
 export DEPSDIR := $(CURDIR)/$(BUILD)
-CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+MENU_CPPFILES := $(notdir $(wildcard ./source/*.cpp))
+COMMON_CPPFILES := $(filter-out main.cpp,$(notdir $(wildcard ../../source/*.cpp)))
+CPPFILES := $(MENU_CPPFILES) $(COMMON_CPPFILES)
 CFILES   := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 SFILES   := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 ifeq ($(strip $(CPPFILES)),)
