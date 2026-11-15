@@ -107,3 +107,8 @@ the same v2 interactive transport after a valid v2 InitialState handshake. A nor
 storage queue remains as a compatibility fallback for older frontends/backends.
 Initial state and backend-to-menu notifications remain on the original non-interactive
 queue in this change, so startup state and notification semantics are unchanged.
+
+Compatibility refinement: interactive transport is enabled only when
+`InitialState.backend_version >= 0x000201` as well as the v2 block format. Earlier
+Transwitch v2 backends used normal output storage and advertise `0x000200`, so they
+continue working without a frontend/backend transport mismatch.

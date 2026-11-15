@@ -479,7 +479,7 @@ desknx::ipc::InitialState BuildInitialState() {
     state.magic = desknx::ipc::Magic;
     state.version = desknx::ipc::Version;
     state.header_size = desknx::ipc::InitialStateSize;
-    state.backend_version = 0x000200u; // 0.2.0
+    state.backend_version = 0x000201u; // 0.2.1: interactive menu-to-daemon command transport
     if (app::g_AppRunning) {
         const bool foreground = app::g_AppHasFocus && la::IsMenuAlive() == false;
         state.app_state = (la::IsMenuAlive() || !foreground) ? 3u : 2u;

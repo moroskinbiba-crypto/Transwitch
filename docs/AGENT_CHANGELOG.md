@@ -388,3 +388,16 @@ Compatibility:
 - Old UI + new backend: backend drains both interactive and normal queues.
 
 CI for this commit: queued. Physical HOME/command handoff test: NOT RUN.
+
+### IPC transport capability marker — preserve compatibility with previous v2 backends — 16 November 2026
+
+- Previous Transwitch backend releases already used protocol format Version=2 but
+  still read commands from normal applet output storage. Therefore checking only the
+  InitialState format version would incorrectly switch a new frontend to interactive
+  storage when paired with an older v2 backend.
+- Added a backend feature/build marker: new backend sets InitialState.backend_version
+  to 0x000201; frontend opts into interactive transport only when both InitialState
+  format is v2+ and backend_version >= 0x000201. Existing v2 backend marker 0x000200
+  continues using normal output storage.
+- This is a transport capability marker, not a binary protocol-layout change; the
+  Header Version stays 2 and legacy command parsing remains unchanged.

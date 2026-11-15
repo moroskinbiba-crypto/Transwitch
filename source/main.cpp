@@ -937,7 +937,8 @@ void consumeInitialState() {
     }
     // Only a valid v2 InitialState proves the backend reads the interactive
     // command queue; older backends continue using appletPushOutData.
-    desknx::ipc::SetInteractiveTransport(state.version>=desknx::ipc::Version);
+    desknx::ipc::SetInteractiveTransport(state.version>=desknx::ipc::Version &&
+        state.backend_version>=0x000201u);
     g_initialState=state;
     if(accountUidIsValid(&state.selected_user)) {
         g_backendUser=state.selected_user; g_backendHasUser=true;
