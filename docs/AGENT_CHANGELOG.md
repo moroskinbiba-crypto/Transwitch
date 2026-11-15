@@ -324,3 +324,14 @@ Upstream audited: ad3333m/homenx@c744796cf686ab3886ffc7c432af7bdf4411bacd
   copying its GPL-3.0 source implementation.
 - Physical HOME/menu lifecycle validation: NOT RUN; this needs HOME/game switching on
   a recoverable Switch setup.
+
+### Коррекция guard для проверки Menu holder lifecycle — 16 ноября 2026
+
+- CI runs 43774029088 (Build DeskNX) и 43774024893 (experimental HOME backend)
+  остановились на статической проверке: guard искал appletHolderCheckFinished() в
+  source/main.cpp, хотя исправление находится в projects/sSystem/source/LibraryApplet.cpp.
+- Исправлен scope проверки: HOME UI guard продолжает проверять AppletType_LibraryApplet
+  в source/main.cpp, а условие завершения holder теперь проверяется в
+  projects/sSystem/source/LibraryApplet.cpp.
+- Это не компиляционная ошибка и не ошибка самой логики; следующая CI-сборка
+  должна проверить реальную компиляцию изменённого LibraryApplet.cpp и qlaunch backend.

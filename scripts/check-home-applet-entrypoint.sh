@@ -15,13 +15,19 @@ grep -Fq 'COMMON_CPPFILES := $(notdir $(wildcard ../../source/*.cpp))' "$makefil
 grep -Fq 'CPPFILES := $(COMMON_CPPFILES) $(MENU_CPPFILES)' "$makefile" ||
   fail "production entry point must take precedence in the source list"
 
-for symbol in 'DESKNX_SYSTEM_APPLET' 'AppletType_LibraryApplet' 'appletHolderCheckFinished(&g_MenuHolder)' 'SendMenuReady' 'SendHeartbeat' \
+for symbol in 'DESKNX_SYSTEM_APPLET' 'AppletType_LibraryApplet' 'SendMenuReady' 'SendHeartbeat' \
               'SendLaunchTitle' 'SendLaunchHomebrew' 'heartbeatThreadMain' \
               'touchInput(const SDL_Event' 'void keyInput' \
               'fsdevCommitDevice("sdmc")' 'readHistoryFile(HISTORY_BAK_FILE' \
               'ACTIVE_WORKSPACE_BAK'; do
   grep -Fq "$symbol" "$main" || fail "production HOME UI is missing $symbol"
 done
+
+# LibraryApplet lifecycle is implemented in the system backend, not in the UI main.
+library_applet="projects/sSystem/source/LibraryApplet.cpp"
+[[ -f "$library_applet" ]] || fail "system LibraryApplet lifecycle source is missing"
+grep -Fq 'while (!appletHolderCheckFinished(&g_MenuHolder))' "$library_applet" ||
+  fail "menu holder must verify completion after state-change notifications"
 
 if grep -Fq 'g_store->save()' "$main"; then
   fail "production HOME UI must not save workspace state through legacy JSON store"
