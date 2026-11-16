@@ -104,6 +104,20 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
 
+      - name: Test drag-and-drop tile input handler
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include -Iprojects/DeskNXMenu/source \
+            tests/drag_drop_test.cpp projects/DeskNXMenu/source/TileInputHandler.cpp \
+            -o /tmp/desknx-drag-drop-test
+          /tmp/desknx-drag-drop-test
+
+      - name: Test quick settings and feature domain headers (F7-F12)
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/quick_settings_test.cpp -o /tmp/desknx-quick-settings-test
+          /tmp/desknx-quick-settings-test
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/features_f7_f12_test.cpp -o /tmp/desknx-features-f7-f12-test
+          /tmp/desknx-features-f7-f12-test
+
       - name: Build standalone native Homebrew NRO
         run: |
           make -j2

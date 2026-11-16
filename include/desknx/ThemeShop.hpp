@@ -6,6 +6,7 @@
 // Mirrors HomeNX ThemeShopScreen + ThemePackageInstaller + ThemeCatalogClient.
 // No HTTP, no file I/O, no rendering.
 
+#include <algorithm>  // std::remove_if used below
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -176,5 +177,3 @@ struct CatalogState {
 };
 
 } // namespace desknx::themeshop
-
-#include <algorithm>  // std::remove_if used above
