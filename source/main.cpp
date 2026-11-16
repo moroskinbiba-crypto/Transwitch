@@ -251,12 +251,12 @@ void outline(int x,int y,int w,int h,Color c) {
 
 void applyThemePalette() {
     switch(themeIndex) {
-        case 1: // Frosted glass
-            BG={63,69,78,255}; THEME_TOP={74,79,89,255}; THEME_BOTTOM={45,91,137,255};
-            MUTED={215,222,231,255}; BLUE={193,147,255,255};
-            GREEN={73,173,12,255}; RED={255,115,123,255};
-            COLORS={{{110,151,207,255},{99,172,180,255},{163,138,206,255},{220,158,126,255},
-                     {205,123,150,255},{104,162,199,255},{142,176,116,255},{135,143,159,255}}};
+        case 1: // Frosted Glass — cool graphite with a clear blue accent
+            BG={16,23,36,255}; THEME_TOP={13,22,37,255}; THEME_BOTTOM={24,43,66,255};
+            MUTED={166,183,204,255}; BLUE={112,184,255,255};
+            GREEN={104,224,180,255}; RED={255,117,130,255};
+            COLORS={{{83,145,218,255},{54,177,171,255},{151,128,221,255},{223,157,103,255},
+                     {218,112,145,255},{79,169,211,255},{145,183,116,255},{126,145,169,255}}};
             break;
         case 2: // Graphite
             BG={15,17,21,255}; THEME_TOP={34,37,43,255}; THEME_BOTTOM={12,14,18,255};
@@ -635,10 +635,13 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
         SDL_RenderDrawLine(renderer,left,y+h-1-row,right,y+h-1-row);
     }
 }
-void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
-    roundRect(x,y+5,w,h,UiCornerRadius,Color{0,0,0,54});
+void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,24}) {
+    // One shared surface style keeps drawers, toolbars and dialogs visually related:
+    // a restrained drop shadow, a clean fill and a real hairline outline.
+    roundRect(x,y+6,w,h,UiCornerRadius,Color{0,0,0,66});
     roundRect(x,y,w,h,UiCornerRadius,fill);
-    roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
+    outline(x,y,w,h,edge);
+    if(w>32)rect(x+16,y+1,w-32,1,Color{255,255,255,18});
 }
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
@@ -1591,21 +1594,40 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
              bounds.y+(bounds.h-7*scale)/2,scale,WHITE,bounds.x+bounds.w-8);
     }
 
+    // Artwork stays edge-to-edge. A small type chip gives context without
+    // competing with the cover itself or the title label.
+    const bool homebrew=tile.kind==Kind::Nro;
+    const int chipWidth=homebrew?72:50;
+    roundRect(viewport.x+10,viewport.y+9,chipWidth,18,8,Color{5,10,18,190});
+    text(homebrew?"HOMEBREW":"GAME",viewport.x+17,viewport.y+13,1,
+         Color{232,240,250,245},viewport.x+chipWidth+4);
+
     const size_t maxChars=static_cast<size_t>(std::max(8,(bounds.w-20)/12));
     const auto& titleLines=cachedTileTitleLines(tile.title,maxChars);
     const int stripHeight=titleLines.size()>1?44:32;
     const int overlay=std::max(0,std::min(255,workspace.labelOpacity));
-    if(overlay>0)
-        rect(viewport.x,viewport.y+viewport.h-stripHeight,viewport.w,stripHeight,
-             Color{5,9,16,static_cast<Uint8>(overlay)});
+    if(overlay>0) {
+        const Uint8 alpha=static_cast<Uint8>(overlay);
+        const int baseY=viewport.y+viewport.h-stripHeight;
+        const int upper=std::max(1,stripHeight/3);
+        const int middle=std::max(1,stripHeight/3);
+        rect(viewport.x,baseY,viewport.w,upper,
+             Color{5,9,16,static_cast<Uint8>(alpha/3)});
+        rect(viewport.x,baseY+upper,viewport.w,middle,
+             Color{5,9,16,static_cast<Uint8>((alpha*2)/3)});
+        rect(viewport.x,baseY+upper+middle,viewport.w,
+             stripHeight-upper-middle,Color{5,9,16,alpha});
+    }
     if(titleLines.size()==1) {
-        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+8,
-             2,WHITE,bounds.x+bounds.w-10);
+        const int titleY=bounds.y+bounds.h-stripHeight+8;
+        text(titleLines[0],bounds.x+11,titleY+1,2,Color{0,0,0,180},bounds.x+bounds.w-9);
+        text(titleLines[0],bounds.x+10,titleY,2,WHITE,bounds.x+bounds.w-10);
     } else {
-        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+3,
-             2,WHITE,bounds.x+bounds.w-10);
-        text(titleLines[1],bounds.x+10,bounds.y+bounds.h-stripHeight+22,
-             2,WHITE,bounds.x+bounds.w-10);
+        const int titleY=bounds.y+bounds.h-stripHeight+3;
+        text(titleLines[0],bounds.x+11,titleY+1,2,Color{0,0,0,180},bounds.x+bounds.w-9);
+        text(titleLines[0],bounds.x+10,titleY,2,WHITE,bounds.x+bounds.w-10);
+        text(titleLines[1],bounds.x+11,titleY+19,2,Color{0,0,0,180},bounds.x+bounds.w-9);
+        text(titleLines[1],bounds.x+10,titleY+18,2,WHITE,bounds.x+bounds.w-10);
     }
     // Texture rendering uses a rectangular clip; paint only the four corner
     // wedges afterwards so the actual game artwork follows the tile's 10px
@@ -1618,8 +1640,10 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
+    if(selected)
+        roundRect(r.x-3,r.y-3,r.w+6,r.h+6,UiCornerRadius,Color{55,133,218,28});
     softCard(r.x,r.y,r.w,r.h,fill,
-             selected?Color{92,164,255,210}:Color{255,255,255,18});
+             selected?Color{112,184,255,230}:Color{255,255,255,28});
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,workspace,r,fill);
         if(selected) {
@@ -1737,9 +1761,9 @@ void drawScreen() {
     else
         drawWallpaper();
 
-    // Compact, labelled system toolbar. Each control has a generous touch
-    // target and a visible name; the same tools are available from the gamepad.
-    softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
+    // Compact glass toolbar: icon controls sit to the left, DeskNX identity
+    // anchors the centre, and time / battery form a quiet system cluster.
+    softCard(56,16,1168,64,Color{12,20,34,226},Color{255,255,255,36});
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
         {4,listOpen,"LIBRARY"},{0,appSettingsMenu,"SETTINGS"},
@@ -1749,34 +1773,51 @@ void drawScreen() {
     for(int i=0;i<ToolbarButtonCount;++i) {
         const auto& item=headerTools[i];
         const int x=toolbarButtonX(i);
-        roundRect(x,24,ToolbarButtonWidth,48,13,
-            item.active?Color{48,82,124,255}:Color{37,47,62,230});
-        if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
-        drawSystemIcon(item.icon,x+27,27,20,item.active?WHITE:Color{204,214,228,255});
+        roundRect(x,23,ToolbarButtonWidth,50,12,
+            item.active?Color{42,91,148,245}:Color{255,255,255,12});
+        if(item.active)outline(x,23,ToolbarButtonWidth,50,Color{132,194,255,155});
+        drawSystemIcon(item.icon,x+27,26,22,
+            item.active?WHITE:Color{196,211,230,255});
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
         text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),55,1,
              item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
     }
-    text("DESKNX",660,29,3,WHITE,900);
-    text("PERSONAL WORKSPACE",662,56,1,MUTED,900);
-    roundRect(1022,24,180,48,18,Color{32,43,59,235});
+    roundRect(660,29,34,34,10,Color{42,111,181,255});
+    roundRect(667,36,8,8,3,Color{240,247,255,255});
+    roundRect(679,36,8,8,3,Color{184,220,255,255});
+    roundRect(667,48,8,8,3,Color{184,220,255,255});
+    roundRect(679,48,8,8,3,Color{240,247,255,255});
+    text("DeskNX",706,27,2,WHITE,930);
+    text("YOUR CONSOLE  /  YOUR SPACE",708,51,1,MUTED,950);
+    roundRect(1022,24,180,48,16,Color{25,39,58,245});
     text(clockText(),1040,37,3,WHITE,1136);
-    rect(1148,34,1,26,Color{255,255,255,30});
+    rect(1148,34,1,26,Color{255,255,255,34});
     text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
          battery>=20?GREEN:RED,1198);
 
-    // Single desktop surface under the tiles and widgets.
-    softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
+    // The active desktop gets a quiet canvas instead of a heavy framed panel.
+    // Its heading gives the grid a clear identity and keeps the artwork in focus.
+    softCard(56,96,1168,454,Color{10,18,31,164},Color{255,255,255,25});
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    text("WORKSPACE",82,107,1,MUTED,360);
+    text(d.name,82,121,2,WHITE,540);
+    const std::string itemCount=std::to_string(d.tiles.size())+
+        (d.tiles.size()==1?" ITEM":" ITEMS");
+    roundRect(1050,113,146,28,10,Color{255,255,255,13});
+    roundRect(1062,123,7,7,4,BLUE);
+    text(itemCount,1078,121,1,MUTED,1184);
+    rect(82,143,1116,1,Color{255,255,255,22});
     if(d.tiles.empty()) {
-        softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
-        roundRect(390,302,46,46,14,Color{38,76,119,255});
+        softCard(360,278,560,154,Color{18,29,45,246},Color{255,255,255,34});
+        roundRect(390,302,46,46,14,Color{39,91,145,255});
         drawSystemIcon(4,402,314,22,WHITE);
-        text("A FRESH WORKSPACE",454,302,2,WHITE,880);
-        text("Your apps and tools will live here.",454,337,1,MUTED,880);
+        text("YOUR DESKTOP IS READY",454,301,2,WHITE,880);
+        text("Add games, homebrew and widgets to make it yours.",
+             454,336,1,MUTED,880);
         roundRect(454,370,176,38,12,Color{43,111,190,255});
-        text("Y  ADD APPS",493,383,1,WHITE,620);
-        text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
+        outline(454,370,176,38,Color{148,203,255,120});
+        text("Y  ADD TO DESKTOP",474,383,1,WHITE,620);
+        text("+  NEW WORKSPACE",650,384,1,MUTED,890);
     }
     if(editing)for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
         int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
@@ -1816,25 +1857,28 @@ void drawScreen() {
             text(hints[i].action,hx+56,581,1,MUTED,hx+144);
         }
     }
-    // Workspace switcher anchors the lower edge, matching a familiar
-    // console desktop rather than duplicating navigation in a second dock.
-    softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    // A light desktop dock keeps workspace navigation separate from the
+    // selected tile's contextual actions above it.
+    softCard(28,624,1224,82,Color{10,18,31,236},Color{255,255,255,32});
     const int deskStart=visibleStart();
     for(int i=0;i<VisibleDeskTabs&&deskStart+i<static_cast<int>(desks.size());++i) {
         const int index=deskStart+i;
         const int x=DeskTabX+i*DeskTabStep;
         const bool active=index==deskIndex;
         roundRect(x,641,DeskTabWidth,48,14,
-            active?Color{53,91,139,255}:Color{34,43,58,235});
-        if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
-        text(desks[static_cast<size_t>(index)].name,x+12,658,1,
-             active?WHITE:MUTED,x+DeskTabWidth-8);
+            active?Color{42,84,132,248}:Color{255,255,255,11});
+        if(active)outline(x,641,DeskTabWidth,48,Color{138,197,255,150});
+        text(desks[static_cast<size_t>(index)].name,x+12,657,1,
+             active?WHITE:Color{161,178,198,255},x+DeskTabWidth-8);
+        if(active)roundRect(x+DeskTabWidth/2-9,680,18,3,2,BLUE);
     }
     roundRect(770,641,52,48,14,desks.size()<static_cast<size_t>(MAX_DESKS)?
-        Color{35,70,105,255}:Color{34,43,58,235});
+        Color{34,75,119,255}:Color{255,255,255,11});
+    if(desks.size()<static_cast<size_t>(MAX_DESKS))
+        outline(770,641,52,48,Color{120,181,243,90});
     text("+",787,652,3,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,812);
-    roundRect(832,641,52,48,14,Color{34,43,58,235});
-    text("...",842,660,2,WHITE,876);
+    roundRect(832,641,52,48,14,Color{255,255,255,11});
+    text("...",842,660,2,Color{210,221,235,255},876);
     text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
          916,658,1,MUTED,1040);
     roundRect(1096,638,128,54,16,

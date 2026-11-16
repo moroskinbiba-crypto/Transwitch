@@ -401,3 +401,36 @@ CI for this commit: queued. Physical HOME/command handoff test: NOT RUN.
   continues using normal output storage.
 - This is a transport capability marker, not a binary protocol-layout change; the
   Header Version stays 2 and legacy command parsing remains unchanged.
+
+
+## Frontend visual refresh — 17 November 2026
+
+Scope: refine the existing native SDL2 frontend without changing the backend protocol,
+app discovery, launch flow, workspace persistence format, or input hit targets.
+
+Changes:
+- Reworked the default Frosted Glass palette into a cooler graphite / blue-glass
+  surface with clearer contrast and a consistent blue accent. Existing saved theme
+  indices remain valid; other theme presets are preserved.
+- Unified cards and dialogs around a restrained shadow, a real hairline outline,
+  and a subtle top highlight instead of the previous full-surface white tint.
+- Refined the top toolbar with a compact DeskNX mark, clearer title hierarchy,
+  quieter tool controls, and a more balanced clock / battery cluster.
+- Added an active workspace heading and item count above the grid, improving
+  orientation without changing tile coordinates or touch targets.
+- Refined full-bleed game / homebrew covers with small type chips, graduated
+  translucent title overlays, and a shadow behind title text for legibility.
+- Improved selected-tile emphasis and clarified the empty-workspace call to action.
+- Refined the lower workspace dock: selected desktop is clearer, inactive tabs
+  are quieter, and the active tab receives a small indicator.
+
+Files:
+- source/main.cpp — theme palette, shared card surface, cover treatment, home
+  header, workspace heading / empty state, workspace dock.
+- docs/AGENT_CHANGELOG.md — this record.
+
+Validation:
+- Source transformation checks: passed (all expected replacement blocks matched once).
+- Cross-compile / host tests: not yet run for this commit.
+- Physical Nintendo Switch visual / input test: NOT RUN.
+- No claim is made that this visual refresh has been tested on hardware.
