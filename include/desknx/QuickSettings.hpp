@@ -108,7 +108,7 @@ public:
     }
 
     void selectItem(ItemIndex item) {
-        if (static_cast<int>(item) >= 0 && static_cast<int>(item) < kItemCount)
+        if (static_cast<int>(item) < kItemCount)
             m_selectedItem = item;
     }
 
