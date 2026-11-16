@@ -427,7 +427,7 @@ Changes:
 Files:
 - source/main.cpp — theme palette, shared card surface, cover treatment, home
   header, workspace heading / empty state, workspace dock.
-- docs/AGENT_CHANGELOG.md — this record.
+- docs/CUSTOMIZATION.md — updated the default theme description and documented the new visual treatment.\n- docs/AGENT_CHANGELOG.md — this record.
 
 Validation:
 - Source transformation checks: passed (all expected replacement blocks matched once).
