@@ -431,6 +431,6 @@ Files:
 
 Validation:
 - Source transformation checks: passed (all expected replacement blocks matched once).
-- Cross-compile / host tests: not yet run for this commit.
+- Build DeskNX / host tests and native HOME applet compile: SUCCESS — [run 43970739383](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43970739383).\n- Standalone native NRO build and asset validation: SUCCESS — [run 43970739568](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43970739568); artifact `desknx-switch-nro` (ID `14278905557`).
 - Physical Nintendo Switch visual / input test: NOT RUN.
 - No claim is made that this visual refresh has been tested on hardware.
