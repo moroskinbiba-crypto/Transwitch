@@ -197,7 +197,7 @@ bool parse(const std::string& input, LoadResult& result) {
             tile.x = x; tile.y = y;
             tile.w = std::max(1, std::min(3, w));
             tile.h = std::max(1, std::min(2, h));
-            tile.color = std::max(0, std::min(7, color));
+            tile.color = std::max(0, std::min(11, color));
 
             // Normalize the dimensions to one of the four supported tile shapes.
             const int normalizedW = nearestAllowedDimension(tile.w, tile.h, true);
@@ -213,7 +213,7 @@ bool parse(const std::string& input, LoadResult& result) {
                 tile.x = nx;
                 tile.y = ny;
                 targetDesk.tiles.push_back(std::move(tile));
-                if (nx != x || ny != y || normalizedW != w || normalizedH != h || color < 0 || color > 7)
+                if (nx != x || ny != y || normalizedW != w || normalizedH != h || color < 0 || color > 11)
                     ++parsed.recoveredTiles;
             } else {
                 size_t recoveredIndex = 0;
