@@ -256,7 +256,7 @@ export function parseLayout(
       let y = parseInt(fields[6], 10) || 0;
       let w = parseInt(fields[7], 10) || 1;
       let h = parseInt(fields[8], 10) || 1;
-      const color = parseInt(fields[9], 10) || 0;
+      const color = clampInt(parseInt(fields[9], 10), 0, 11, 0);
 
       // Snap to a supported shape exactly like the native reader instead of
       // collapsing unknown sizes into a single cell.
