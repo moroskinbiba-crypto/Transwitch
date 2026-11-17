@@ -633,6 +633,26 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                   static_cast<unsigned int>(result.nsErrorCode));
     result.gameCount = games.size();
 
+    // Show installed games immediately after the fast NS enumeration/view query.
+    // Recursive SD discovery and per-title NACP/icon requests must not hold the
+    // whole library behind one slow file or service call.
+    if (!warmCacheAvailable && nsReady && result.nsErrorCode == 0 && !games.empty()) {
+        result.items.clear();
+        result.items.reserve(std::min(games.size(), MaxItems - GameReserve));
+        const size_t visibleGameLimit = MaxItems - GameReserve;
+        for (size_t i = 0; i < games.size() && i < visibleGameLimit; ++i) {
+            char hex[32]{};
+            std::snprintf(hex, sizeof(hex), "%016llX",
+                          static_cast<unsigned long long>(games[i].id));
+            result.items.push_back({Kind::Game, std::string("Game ") + hex, hex,
+                                    1, 1, static_cast<int>(i % 8), games[i].viewFlags});
+        }
+        if (games.size() > visibleGameLimit) result.truncated = true;
+        report(false);
+        LogDiagnostic("catalogue_publish phase=ns_enumeration games=%zu visible=%zu",
+                      games.size(), result.items.size());
+    }
+
     // If NS is unavailable, the already-published last-known-good catalogue is
     // sufficient for this session. Do not make the user wait for another SD
     // traversal just to rediscover the same cached NRO paths.
@@ -652,8 +672,14 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     }
 
     std::vector<NroFile> nros;
+    const auto nroScanStarted = std::chrono::steady_clock::now();
+    LogDiagnostic("nro_scan begin root=switch depth_limit=3");
     CollectNros("sdmc:/switch", 0, nros);
     result.nroCount = nros.size();
+    const auto nroScanElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - nroScanStarted).count();
+    LogDiagnostic("nro_scan end count=%zu elapsed_ms=%lld", nros.size(),
+                  static_cast<long long>(nroScanElapsed));
     LogDiagnostic("nro_scan root=switch depth_limit=3 count=%zu", nros.size());
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
         return a.path < b.path;
