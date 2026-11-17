@@ -1471,6 +1471,13 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
         }
         line(cx-size/3,cy+size/3,cx-size/4,cy+size/2);
         line(cx+size/3,cy+size/3,cx+size/4,cy+size/2);
+    } else if(kind==8) { // Tools / sliders
+        for(int row=0;row<3;++row) {
+            const int yy=y+size/4+row*(size/4);
+            line(x+5,yy,x+size-5,yy);
+            const int knobX=x+size*(row==0?1:row==1?2:3)/4;
+            roundRect(knobX-3,yy-4,7,8,3,c);
+        }
     }
 }
 void drawTileIcon(const Tile&t,int x,int y,int size) {
@@ -1709,9 +1716,13 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     } else if(t.kind==Kind::System) {
         roundRect(r.x+18,r.y+18,70,70,20,Color{37,61,91,255});
         drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
-        text("SYSTEM TOOLS",r.x+104,r.y+27,2,WHITE,r.x+r.w-12);
-        text("SETTINGS  /  CONTROLLERS",r.x+104,r.y+54,1,MUTED,r.x+r.w-12);
-        text("ALBUM  /  PROFILE  /  POWER",r.x+104,r.y+73,1,BLUE,r.x+r.w-12);
+        const u32 firmware=hosversionGet();
+        char firmwareText[48]{};
+        std::snprintf(firmwareText,sizeof(firmwareText),"FIRMWARE %u.%u.%u",
+            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+        text("SYSTEM INFO",r.x+104,r.y+27,2,WHITE,r.x+r.w-12);
+        text(firmwareText,r.x+104,r.y+54,1,MUTED,r.x+r.w-12);
+        text("TRANSWITCH LAUNCHER",r.x+104,r.y+73,1,BLUE,r.x+r.w-12);
     } else if(t.kind==Kind::Unsupported) {
         roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
         text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,r.x+r.w-12);
@@ -1811,7 +1822,7 @@ void drawScreen() {
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
         {2,false,"GALLERY"},{0,appSettingsMenu,"SETTINGS"},
-        {1,false,"PADS"},{5,systemMenu,"TOOLS"}
+        {1,false,"PADS"},{8,systemMenu,"TOOLS"}
     };
     for(int i=0;i<ToolbarButtonCount;++i) {
         const auto& item=headerTools[i];
@@ -2962,7 +2973,13 @@ void launch(const Tile& t) {
     if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
     else if(t.kind==Kind::Storage)setStatus("SD STORAGE WIDGET");
     else if(t.kind==Kind::Calendar)setStatus("CALENDAR WIDGET");
-    else if(t.kind==Kind::System){systemMenu=true;systemMenuIndex=0;}
+    else if(t.kind==Kind::System) {
+        const u32 firmware=hosversionGet();
+        char detail[64]{};
+        std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
+            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+        setStatus(detail,3500);
+    }
     else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
     else if(t.kind==Kind::Recent) {
         if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
