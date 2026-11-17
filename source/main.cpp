@@ -127,6 +127,8 @@ bool defaultLayoutPending = false;
 uint64_t persistedLayoutShapeHash = 0;
 bool persistedLayoutShapeKnown = false;
 bool layoutPrimaryNeedsRewrite = true;
+bool activeWorkspaceMarkerPending=false;
+Uint32 activeWorkspaceMarkerDue=0;
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
@@ -1145,7 +1147,30 @@ bool saveActiveWorkspaceState() {
         ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
     if(replaceStatus != desknx::safeio::ReplaceStatus::Success)
         return false;
-    return commitSdCard("active-workspace-publish");
+    const bool committed=commitSdCard("active-workspace-publish");
+    if(committed) {
+        activeWorkspaceMarkerPending=false;
+        activeWorkspaceMarkerDue=0;
+    }
+    return committed;
+}
+
+void scheduleActiveWorkspaceSave() {
+    if(!sdMounted || desks.empty() || deskIndex<0 ||
+       deskIndex>=static_cast<int>(desks.size())) return;
+    activeWorkspaceMarkerPending=true;
+    activeWorkspaceMarkerDue=SDL_GetTicks()+550;
+}
+
+bool flushActiveWorkspaceSave() {
+    if(!activeWorkspaceMarkerPending) return true;
+    if(saveActiveWorkspaceState()) return true;
+    // Do not let a transient SD error block navigation. Retry after a quiet
+    // interval; launch and shutdown still force a synchronous, checked save.
+    activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
+    desknx::diag::Write("layout","active_workspace_debounce_retry",
+                        "index=%d",deskIndex);
+    return false;
 }
 
 bool loadActiveWorkspaceState() {
@@ -1165,6 +1190,8 @@ bool loadActiveWorkspaceState() {
         if(!desknx::layout::parseActiveWorkspaceState(contents.str(),desks,restored))
             continue;
         deskIndex=restored;
+        activeWorkspaceMarkerPending=false;
+        activeWorkspaceMarkerDue=0;
         selectedX=selectedY=0;
         if(candidateIndex!=0) {
             desknx::diag::Write("layout","active_workspace_backup_restored",
@@ -2518,7 +2545,8 @@ void selectWorkspace(int target) {
         return;
     }
     deskIndex=target;
-    if(saveNow())setStatus(targetName);
+    scheduleActiveWorkspaceSave();
+    setStatus(targetName);
 }
 void openUserProfile() {
     AccountUid uid{};
@@ -2958,7 +2986,8 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(dragging) moveAcrossDesk(-1);
         else {
             deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
-            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            scheduleActiveWorkspaceSave();
+            setStatus(desks[static_cast<size_t>(deskIndex)].name);
         }
     } else if(keys&HidNpadButton_R) {
         if(dragging) moveAcrossDesk(1);
@@ -3276,7 +3305,8 @@ void touchInput(const SDL_Event&e) {
                     } else {
                         if(target!=deskIndex) {
                             deskIndex=target;
-                            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
+                            scheduleActiveWorkspaceSave();
+                            setStatus(desks[static_cast<size_t>(deskIndex)].name);
                         }
                         lastWorkspaceTabTap=target;
                         lastWorkspaceTabTapTick=now;
@@ -3652,6 +3682,10 @@ int main(int,char**) {
         }
         pumpPlayStatsQuery();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        const Uint32 persistenceNow=SDL_GetTicks();
+        if(activeWorkspaceMarkerPending &&
+           static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
+            (void)flushActiveWorkspaceSave();
         const Uint32 renderStarted=SDL_GetTicks();
         drawScreen();
         // Present already waits for the display when VSync is active. Sleeping
