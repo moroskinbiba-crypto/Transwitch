@@ -4,6 +4,7 @@
 #include "../include/desknx/StrictParse.hpp"
 #include "../include/desknx/CatalogPagination.hpp"
 #include <desknx/SafeReplace.hpp>
+#include <switchu/control_cache.hpp>
 
 #include <switch.h>
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cerrno>
 #include <cstdarg>
 #include <ctime>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -167,6 +169,12 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
         LogDiagnostic("ns_list ignored_invalid_ids count=%zu",
                       listedCount - installed.size());
     }
+
+    // Match HomeNX: stable ordering before the bulk live-view query.
+    std::sort(installed.begin(), installed.end(),
+        [](const NsApplicationRecord& a, const NsApplicationRecord& b) {
+            return a.application_id < b.application_id;
+        });
 
     std::vector<u64> titleIds;
     titleIds.reserve(installed.size());
@@ -690,8 +698,27 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     freshNameCache.reserve(games.size());
     bool fetchedControlData = false;
     size_t controlDataOk = 0, controlDataFailed = 0;
+    size_t metadataCacheHits = 0;
     std::uint32_t firstControlDataError = 0;
     size_t colorIndex = 0;
+
+    // Publish all installed Title IDs before per-title metadata or cover work.
+    // A title remains discoverable even if a later control-data request stalls.
+    for (const auto& record : games) {
+        char hex[32]{};
+        std::snprintf(hex, sizeof(hex), "%016llX",
+                      static_cast<unsigned long long>(record.id));
+        const auto cachedName = nameCache.find(record.id);
+        const std::string initialTitle = cachedName != nameCache.end()
+            ? cachedName->second : std::string("Game ") + hex;
+        freshNameCache.emplace(record.id, initialTitle);
+        result.items.push_back({Kind::Game, initialTitle, hex, 1, 1,
+                                static_cast<int>(colorIndex++ % 8), record.viewFlags});
+    }
+    report(false);
+    LogDiagnostic("catalogue_publish phase=installed_ids games=%zu", games.size());
+
+    colorIndex = 0;
     for (size_t i = 0; i < games.size(); ++i) {
         if (result.items.size() >= gameLimit) { result.truncated = true; break; }
         const u64 id = games[i].id;
@@ -701,19 +728,37 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         const auto cachedName = nameCache.find(id);
         const bool iconCached = HasCachedGameIcon(id);
         std::string title;
-        if (!forceRefresh && cachedName != nameCache.end()) {
-            // The title cache is independent of the icon cache. An app may
-            // legitimately have no icon; do not turn that into a repeated
-            // synchronous NS request for already-resolved metadata.
+        switchu::control_cache::Meta cachedMeta{};
+        const bool hasHomeNXMeta = !forceRefresh &&
+            switchu::control_cache::readMeta(id, cachedMeta);
+        if (hasHomeNXMeta && cachedMeta.name[0] != '\0') {
+            title = cachedMeta.name;
+            ++metadataCacheHits;
+        } else if (!forceRefresh && cachedName != nameCache.end()) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
             Result controlRc = 0;
+            const auto controlStarted = std::chrono::steady_clock::now();
+            LogDiagnostic("control_data begin index=%zu id=%s", i, hex);
             if (nsReady)
                 controlRc = desknx::slaunch::ReadControlData(id, control, actual);
+            const auto controlElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - controlStarted).count();
+            LogDiagnostic("control_data end index=%zu id=%s rc=0x%08X elapsed_ms=%lld bytes=%llu",
+                i, hex, static_cast<unsigned int>(controlRc),
+                static_cast<long long>(controlElapsed), static_cast<unsigned long long>(actual));
             if (nsReady && R_SUCCEEDED(controlRc)) {
                 ++controlDataOk;
                 title = desknx::slaunch::ResolveTitleName(control.nacp);
+                // HomeNX's cache also expands compressed NACP language tables.
+                if (switchu::control_cache::writeFromControlData(id, control,
+                        static_cast<size_t>(actual))) {
+                    switchu::control_cache::Meta refreshedMeta{};
+                    if (switchu::control_cache::readMeta(id, refreshedMeta) &&
+                        refreshedMeta.name[0] != '\0')
+                        title = refreshedMeta.name;
+                }
                 if (title.empty() && cachedName != nameCache.end())
                     title = cachedName->second;
                 if (forceRefresh || !iconCached) CacheGameIcon(id, control, actual);
@@ -722,9 +767,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                 ++controlDataFailed;
                 if (firstControlDataError == 0)
                     firstControlDataError = static_cast<std::uint32_t>(controlRc);
-                if (cachedName != nameCache.end()) {
-                    title = cachedName->second;
-                }
+                if (cachedName != nameCache.end()) title = cachedName->second;
             }
         }
 
@@ -732,16 +775,15 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
             title = std::string("Game ") + hex;
         }
-        freshNameCache.emplace(id, title);
-        Candidate game{Kind::Game, title, hex, 1, 1,
-                       static_cast<int>(colorIndex++ % 8), games[i].viewFlags};
-        result.items.push_back(std::move(game));
-        if ((i + 1) % 12 == 0) report(false);
+        freshNameCache[id] = title;
+        // Update the already-published placeholder in place.
+        if (i < result.items.size()) result.items[i].title = title;
+        if ((i + 1) % 4 == 0 || i + 1 == games.size()) report(false);
     }
     // Keep the per-title cache in sync with the installed set. If the only
     // change was an install/uninstall, existing names/icons are reused.
-    LogDiagnostic("control_data successful=%zu failed=%zu first_error=0x%08X cached_names=%zu",
-                  controlDataOk, controlDataFailed,
+    LogDiagnostic("control_data successful=%zu failed=%zu meta_cache_hits=%zu first_error=0x%08X cached_names=%zu",
+                  controlDataOk, controlDataFailed, metadataCacheHits,
                   static_cast<unsigned int>(firstControlDataError), nameCache.size());
     if (nsReady && result.nsErrorCode == 0 &&
         (fetchedControlData || freshNameCache.size() != nameCache.size())) {
@@ -751,13 +793,18 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     }
     report(false); // expose the installed-game part before scanning NRO assets
 
+    // Publish homebrew paths before parsing their embedded assets.
+    const size_t nroBase = result.items.size();
     for (const auto& nro : nros) {
         if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
-        Candidate item{Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
-                       static_cast<int>(result.items.size() % 8)};
-        CacheNroIconAndMetadata(nro, item, forceRefresh);
-        result.items.push_back(std::move(item));
-        if (result.items.size() % 12 == 0) report(false);
+        result.items.push_back({Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
+                                static_cast<int>(result.items.size() % 8)});
+    }
+    report(false);
+    const size_t publishedNros = result.items.size() - nroBase;
+    for (size_t i = 0; i < publishedNros; ++i) {
+        CacheNroIconAndMetadata(nros[i], result.items[nroBase + i], forceRefresh);
+        if ((i + 1) % 4 == 0 || i + 1 == publishedNros) report(false);
     }
     if (games.size() > gameLimit || nros.size() >= MaxItems) result.truncated = true;
     result.items.push_back({Kind::Clock, "Clock widget", "", 2, 1, 1});
