@@ -440,7 +440,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="space-y-6 max-w-2xl">
               <div>
                 <label className="block text-sm font-bold text-white mb-2">
-                  Wallpapers (sdmc:/switch/DeskNX/media/):
+                  Wallpapers and backgrounds:
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {wallpaperPresets.map((wp) => (
@@ -471,7 +471,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type="text"
                     value={customBgInput}
                     onChange={(e) => setCustomBgInput(e.target.value)}
-                    placeholder="https://... or sdmc:/switch/DeskNX/media/wallpaper.jpg"
+                    placeholder="https://… or SD card media file path"
                     className="flex-1 bg-black/50 border border-white/10 rounded-2xl px-4 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-400"
                   />
                   <button
