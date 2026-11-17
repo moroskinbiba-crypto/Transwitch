@@ -2761,11 +2761,6 @@ void selectConsoleUser(int index) {
 }
 
 void openUserProfile() {
-    if(!consoleUsersLoaded) loadConsoleUsers();
-    if(consoleUsers.empty()) {
-        setStatus("NO NINTENDO ACCOUNT PROFILES FOUND",3500);
-        return;
-    }
     if(!consoleUsersLoaded||!accountServiceReady) loadConsoleUsers();
     if(consoleUsers.empty()) {
         setStatus("ACCOUNT PROFILES UNAVAILABLE",3500);
