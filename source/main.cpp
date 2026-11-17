@@ -29,6 +29,7 @@ u32 __nx_applet_type = AppletType_Application;
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -158,10 +159,14 @@ bool playStatsPending=false;
 std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
-int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
-uint64_t sdFreeBytes=0, sdTotalBytes=0;
-Uint32 lastStorageUpdate=0;
-bool storageStatsAvailable=false;
+int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0;
+std::atomic<int> battery{-1};
+std::atomic<uint64_t> sdFreeBytes{0}, sdTotalBytes{0};
+std::atomic<bool> storageStatsAvailable{false};
+SDL_Thread* systemStatsThread=nullptr;
+Uint32 lastSystemStatsRequest=0;
+bool activeWorkspaceSavePending=false;
+Uint32 activeWorkspaceSaveDue=0;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
 bool widgetPickerMode=false;
@@ -185,7 +190,7 @@ Uint32 lastWorkspaceTabTapTick=0;
 // locally through the applet power APIs, which are available to NROs too.
 bool powerMenu=false;
 s32 powerIndex=0;
-bool sdMounted=false, sdMountedByDeskNX=false, diagnosticsInitialized=false, psmReady=false, touchDragging=false;
+bool sdMounted=false, sdMountedByDeskNX=false, diagnosticsInitialized=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   L3 TOOLS", lastLaunched="Nothing launched yet";
 Uint32 statusUntil=0, lastBatteryTick=0;
 #ifdef DESKNX_SYSTEM_APPLET
@@ -1165,7 +1170,23 @@ bool saveActiveWorkspaceState() {
         ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
     if(replaceStatus != desknx::safeio::ReplaceStatus::Success)
         return false;
-    return commitSdCard("active-workspace-publish");
+    const bool committed=commitSdCard("active-workspace-publish");
+    if(committed) activeWorkspaceSavePending=false;
+    return committed;}
+
+void scheduleActiveWorkspaceSave() {
+    activeWorkspaceSavePending=true;
+    activeWorkspaceSaveDue=SDL_GetTicks()+700;
+}
+
+void pumpActiveWorkspaceSave() {
+    if(!activeWorkspaceSavePending || SDL_GetTicks()<activeWorkspaceSaveDue) return;
+    activeWorkspaceSavePending=false;
+    if(!saveActiveWorkspaceState()) {
+        activeWorkspaceSavePending=true;
+        activeWorkspaceSaveDue=SDL_GetTicks()+1500;
+        desknx::diag::Write("storage","active_workspace_deferred_save_failed","retry_ms=1500");
+    }
 }
 
 bool loadActiveWorkspaceState() {
@@ -1312,26 +1333,43 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
     desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
 }
-void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
-    if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
-}
-void refreshStorageStats() {
-    const Uint32 now=SDL_GetTicks();
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
-    lastStorageUpdate=now;
+int systemStatsThreadMain(void*) {
+    int batteryValue=-1;
+    const Result psmRc=psmInitialize();
+    if(R_SUCCEEDED(psmRc)) {
+        u32 percentage=0;
+        if(R_SUCCEEDED(psmGetBatteryChargePercentage(&percentage)))
+            batteryValue=static_cast<int>(percentage);
+        psmExit();
+    }
     struct statvfs fs{};
+    uint64_t total=0,freeBytes=0;
+    bool available=false;
     if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
         const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
-        sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
-        sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0;
-    } else {
-        sdTotalBytes=0;
-        sdFreeBytes=0;
-        storageStatsAvailable=false;
+        total=static_cast<uint64_t>(fs.f_blocks)*blockSize;
+        freeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
+        available=total>0;
     }
+    battery.store(batteryValue);
+    sdTotalBytes.store(total);
+    sdFreeBytes.store(freeBytes);
+    storageStatsAvailable.store(available);
+    return 0;
+}
+
+void pumpSystemStats() {
+    const Uint32 now=SDL_GetTicks();
+    if(systemStatsThread) {
+        if(SDL_GetThreadStatus(systemStatsThread)==SDL_THREAD_STOPPED) {
+            SDL_WaitThread(systemStatsThread,nullptr);
+            systemStatsThread=nullptr;
+        } else return;
+    }
+    if(lastSystemStatsRequest!=0 && now-lastSystemStatsRequest<10000) return;
+    lastSystemStatsRequest=now==0?1:now;
+    systemStatsThread=SDL_CreateThread(systemStatsThreadMain,"DeskNX system stats",nullptr);
+    if(!systemStatsThread) lastSystemStatsRequest=0;
 }
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
@@ -1658,10 +1696,10 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         text("CLOCK",r.x+20,r.y+r.h-23,1,BLUE,r.x+r.w-12);
         } else if(t.kind==Kind::Battery) {
         text("BATTERY",r.x+20,r.y+14,1,MUTED,r.x+r.w-12);
-        text(battery>=0?std::to_string(battery)+"%":"N/A",r.x+20,r.y+38,4,WHITE,r.x+r.w-12);
-        int maxW=std::max(1,r.w-48),value=battery>=0?maxW*battery/100:4;
+        text(battery.load()>=0?std::to_string(battery.load())+"%":"N/A",r.x+20,r.y+38,4,WHITE,r.x+r.w-12);
+        int maxW=std::max(1,r.w-48),value=battery.load()>=0?maxW*battery.load()/100:4;
         roundRect(r.x+20,r.y+r.h-25,maxW,7,4,Color{54,66,84,255});
-        roundRect(r.x+20,r.y+r.h-25,std::max(4,value),7,4,battery>=20?GREEN:RED);
+        roundRect(r.x+20,r.y+r.h-25,std::max(4,value),7,4,battery.load()>=20?GREEN:RED);
     } else if(t.kind==Kind::System) {
         roundRect(r.x+18,r.y+18,70,70,20,Color{37,61,91,255});
         drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
@@ -1686,13 +1724,13 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         text("HISTORY ON THIS CONSOLE",r.x+18,r.y+r.h-18,1,BLUE,r.x+r.w-12);
     } else if(t.kind==Kind::Storage) {
         text("SD CARD STORAGE",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
-        if(storageStatsAvailable) {
-            const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
+        if(storageStatsAvailable.load()) {
+            const uint64_t used=sdTotalBytes.load()>sdFreeBytes.load()?sdTotalBytes.load()-sdFreeBytes.load():0;
             const int percent=static_cast<int>(std::min<uint64_t>(
-                100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)));
+                100,(used*100)/std::max<uint64_t>(1,sdTotalBytes.load())));
             char sizeText[64]{};
             std::snprintf(sizeText,sizeof(sizeText),"%.1f GB FREE",
-                static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
+                static_cast<double>(sdFreeBytes.load())/(1024.0*1024.0*1024.0));
             text(sizeText,r.x+18,r.y+37,3,WHITE,r.x+r.w-14);
             roundRect(r.x+18,r.y+r.h-29,r.w-36,9,5,Color{48,62,79,255});
             roundRect(r.x+18,r.y+r.h-29,std::max(3,(r.w-36)*percent/100),9,5,GREEN);
@@ -1743,8 +1781,7 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
-    refreshBattery();
-    refreshStorageStats();
+    pumpSystemStats();
     rect(0,0,SW,SH,BG);
     for(int band=0;band<24;++band) {
         const double t=static_cast<double>(band)/23.0;
@@ -1792,8 +1829,8 @@ void drawScreen() {
     roundRect(1022,24,180,48,16,Color{25,39,58,245});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,34});
-    text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
-         battery>=20?GREEN:RED,1198);
+    text(battery.load()>=0?std::to_string(battery.load())+"%":"BAT --",1158,43,1,
+         battery.load()>=20?GREEN:RED,1198);
 
     // The active desktop gets a quiet canvas instead of a heavy framed panel.
     // Its heading gives the grid a clear identity and keeps the artwork in focus.
@@ -1829,6 +1866,9 @@ void drawScreen() {
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h,d);
     if(editing&&dragging)text("MOVING",1040,118,1,BLUE,1260);
+    const bool modalOverlayOpen=listOpen||workspaceMenu||workspaceSettingsMenu||workspacePicker||
+        deletePrompt||recentOpen||systemMenu||appSettingsMenu||mediaPickerOpen||powerMenu;
+    if(!modalOverlayOpen) {
     softCard(28,558,1224,56,Color{18,26,39,238},Color{255,255,255,16});
     const bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
     roundRect(48,576,7,7,4,show?BLUE:GREEN);
@@ -1885,6 +1925,7 @@ void drawScreen() {
         editing?Color{53,100,156,255}:Color{34,46,64,255});
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
+    }
     if(listOpen) {
         rect(0,0,SW,SH,Color{3,7,14,194});
         const int mx=110,my=70,mw=1060,mh=570;
@@ -2579,7 +2620,8 @@ void selectWorkspace(int target) {
         return;
     }
     deskIndex=target;
-    if(saveNow())setStatus(targetName);
+    scheduleActiveWorkspaceSave();
+    setStatus(targetName);
 }
 void openUserProfile() {
     AccountUid uid{};
@@ -2767,7 +2809,7 @@ void launch(const Tile& t) {
 #endif
         return;
     }
-    if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
+    if(t.kind==Kind::Battery)setStatus(battery.load()>=0?"BATTERY: "+std::to_string(battery.load())+"%":"BATTERY STATUS UNAVAILABLE");
     else if(t.kind==Kind::Storage)setStatus("SD STORAGE WIDGET");
     else if(t.kind==Kind::Calendar)setStatus("CALENDAR WIDGET");
     else if(t.kind==Kind::System){systemMenu=true;systemMenuIndex=0;}
@@ -3019,13 +3061,15 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(dragging) moveAcrossDesk(-1);
         else {
             deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
-            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            scheduleActiveWorkspaceSave();
+            setStatus(desks[static_cast<size_t>(deskIndex)].name);
         }
     } else if(keys&HidNpadButton_R) {
         if(dragging) moveAcrossDesk(1);
         else {
             deskIndex=(deskIndex+1)%static_cast<int>(desks.size());
-            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            scheduleActiveWorkspaceSave();
+            setStatus(desks[static_cast<size_t>(deskIndex)].name);
         }
     }
     if(keys&HidNpadButton_Left){if(dragging)moveTile(-1,0);else updateCursor(-1,0);}
@@ -3337,7 +3381,8 @@ void touchInput(const SDL_Event&e) {
                     } else {
                         if(target!=deskIndex) {
                             deskIndex=target;
-                            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
+                            scheduleActiveWorkspaceSave();
+                            setStatus(desks[static_cast<size_t>(deskIndex)].name);
                         }
                         lastWorkspaceTabTap=target;
                         lastWorkspaceTabTapTick=now;
@@ -3730,6 +3775,7 @@ int main(int,char**) {
             }
         }
         pumpPlayStatsQuery();
+        pumpActiveWorkspaceSave();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         // SDL_FINGERMOTION is not guaranteed while a finger is stationary.
         // Poll the hold timer from the frame loop so long-press drag can start
@@ -3771,7 +3817,10 @@ int main(int,char**) {
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();
-    if(psmReady)psmExit();
+    if(systemStatsThread) {
+        SDL_WaitThread(systemStatsThread,nullptr);
+        systemStatsThread=nullptr;
+    }
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
