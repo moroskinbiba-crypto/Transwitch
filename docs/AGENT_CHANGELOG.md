@@ -434,3 +434,24 @@ Validation:
 - Build DeskNX / host tests and native HOME applet compile: SUCCESS — [run 43970739383](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43970739383).\n- Standalone native NRO build and asset validation: SUCCESS — [run 43970739568](https://github.com/moroskinbiba-crypto/Transwitch/actions/runs/43970739568); artifact `desknx-switch-nro` (ID `14278905557`).
 - Physical Nintendo Switch visual / input test: NOT RUN.
 - No claim is made that this visual refresh has been tested on hardware.
+
+
+## Catalogue responsiveness, HomeNX metadata cache and UI stalls — 17 November 2026
+
+### Findings from Switch diagnostics
+- NS enumeration returned 90–91 installed records and the bulk application-view query returned every requested view successfully.
+- The UI still reported `catalogue_ready=0` / `scan_complete=0`, while frame deltas reached multiple seconds. The uploaded log ended before `nro_scan` / control-data completion, so the initial delay could be in SD recursion as well as per-title metadata; diagnostics are added for both stages.
+- The WebKit startup messages in the same log are from an older NRO; the current execution uses SDL2.
+
+### Changes in this branch
+- Match HomeNX's deterministic ordering: sort installed Title IDs before querying views; do not filter valid installed IDs based on view flags.
+- Publish all discovered game Title IDs immediately after successful NS enumeration, before recursive SD discovery. Publish/update game rows while NACP and cover assets are processed in the background; publish homebrew NRO paths before parsing embedded assets.
+- Adapt HomeNX's GPL-3.0 per-title metadata cache, including modern compressed NACP language-table handling. Reuse existing files under `sdmc:/config/SwitchU/control_cache/` and store newly fetched control data there.
+- Add per-title control-data and recursive SD-scan timing diagnostics to identify any remaining blocking operation.
+- Move periodic PSM battery and SD `statvfs` queries to a worker thread; the render loop reads atomic snapshots rather than performing removable-SD I/O.
+- Debounce workspace-only marker saves after desktop switching; tile edits, game launch and shutdown keep immediate persistence.
+- Hide the persistent status/hints/dock chrome while modal menus are open to avoid the footer plaque and controls drawing over modal UI.
+
+### Verification
+- Source edits recorded in this branch; host tests and Switch cross-build are pending CI.
+- Physical Nintendo Switch validation is pending; CI does not prove runtime speed or visual correctness.
