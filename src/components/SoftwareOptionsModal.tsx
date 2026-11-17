@@ -198,7 +198,7 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
               { id: 'data', label: 'Управление данными', icon: HardDrive },
               { id: 'update', label: 'Обновление программы', icon: RefreshCw },
               { id: 'cloud', label: 'Сохранения и бэкап', icon: Cloud },
-              { id: 'custom', label: 'Размещение в DeskNX', icon: Sliders },
+              { id: 'custom', label: 'Размещение в Transwitch', icon: Sliders },
             ].map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -479,11 +479,11 @@ export const SoftwareOptionsModal: React.FC<SoftwareOptionsModalProps> = ({
               </div>
             )}
 
-            {/* 5. Tab: Размещение в DeskNX */}
+            {/* 5. Tab: Размещение в Transwitch */}
             {activeTab === 'custom' && (
               <div className="space-y-4 animate-in fade-in duration-150">
                 <h3 className="text-base font-black text-white flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-amber-400" /> Размещение на рабочих столах DeskNX
+                  <Sparkles className="w-5 h-5 text-amber-400" /> Размещение на рабочих столах Transwitch
                 </h3>
 
                 <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/10 space-y-3">
