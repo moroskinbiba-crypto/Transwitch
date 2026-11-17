@@ -31,7 +31,7 @@ struct Workspace {
     int backgroundFit{0};   // 0 = cover, 1 = contain, 2 = stretch
     int artworkMode{0};    // 0 = cover, 1 = contain, 2 = stretch
     int labelOpacity{196}; // 0..255
-    int accentColor{-1};   // -1 = tile default, 0..7 = palette entry
+    int accentColor{-1};   // -1 = tile default, 0..11 = palette entry
 };
 
 struct Candidate {
@@ -133,7 +133,7 @@ inline bool isValidWorkspaceAppearance(const Workspace& workspace) {
            workspace.backgroundFit >= 0 && workspace.backgroundFit <= 2 &&
            workspace.artworkMode >= 0 && workspace.artworkMode <= 2 &&
            workspace.labelOpacity >= 0 && workspace.labelOpacity <= 255 &&
-           workspace.accentColor >= -1 && workspace.accentColor <= 7;
+           workspace.accentColor >= -1 && workspace.accentColor <= 11;
 }
 
 inline bool isSupportedTileSize(int w, int h) {
