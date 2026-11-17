@@ -129,6 +129,12 @@ bool persistedLayoutShapeKnown = false;
 bool layoutPrimaryNeedsRewrite = true;
 bool activeWorkspaceMarkerPending=false;
 Uint32 activeWorkspaceMarkerDue=0;
+struct ConsoleUserProfile { AccountUid uid{}; std::string nickname; };
+std::vector<ConsoleUserProfile> consoleUsers;
+bool consoleUsersLoaded=false, userPickerOpen=false, uiHasSelectedUser=false;
+int userPickerIndex=0;
+AccountUid uiSelectedUser{};
+std::string selectedUserLabel="SELECT PLAYER";
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
@@ -927,6 +933,8 @@ void consumeInitialState() {
     g_initialState=state;
     if(accountUidIsValid(&state.selected_user)) {
         g_backendUser=state.selected_user; g_backendHasUser=true;
+        uiSelectedUser=state.selected_user;
+        uiHasSelectedUser=true;
     }
     if(state.app_state>=2&&state.app_title_id!=0) g_backendAppTitle=state.app_title_id;
     else g_backendAppTitle=0;
@@ -2234,6 +2242,35 @@ void drawScreen() {
         text("EXECUTE",674,445,2,WHITE,820);
         text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
     }
+    if(userPickerOpen) {
+        rect(0,0,SW,SH,Color{3,7,14,210});
+        softCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
+        text("SELECT PLAYER",374,142,3,WHITE,900);
+        text("The selected profile is used for games that request a player account.",
+             376,180,1,MUTED,914);
+        roundRect(844,136,76,34,10,Color{54,57,66,255});
+        text("B BACK",856,147,1,WHITE,912);
+        if(consoleUsers.empty()) {
+            text("NO NINTENDO ACCOUNT PROFILES FOUND",382,268,2,WHITE,906);
+            text("Create a user in System Settings, then reopen this menu.",
+                 382,306,1,MUTED,906);
+        } else {
+            for(size_t i=0;i<consoleUsers.size();++i) {
+                const int yy=214+static_cast<int>(i)*46;
+                const bool active=uiHasSelectedUser&&
+                    sameAccountUid(consoleUsers[i].uid,uiSelectedUser);
+                if(static_cast<int>(i)==userPickerIndex)
+                    roundRect(370,yy,540,40,10,Color{42,74,111,255});
+                else if(active)
+                    roundRect(370,yy,540,40,10,Color{28,47,66,255});
+                drawSystemIcon(7,386,yy+8,24,active?BLUE:MUTED);
+                text(consoleUsers[i].nickname,424,yy+13,2,
+                     static_cast<int>(i)==userPickerIndex?WHITE:MUTED,790);
+                if(active)text("ACTIVE",816,yy+14,1,GREEN,898);
+            }
+        }
+        text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
+    }
     SDL_RenderPresent(renderer);
 }
 bool saveNow(){return saveLayout();}
@@ -2548,39 +2585,119 @@ void selectWorkspace(int target) {
     scheduleActiveWorkspaceSave();
     setStatus(targetName);
 }
-void openUserProfile() {
-    AccountUid uid{};
-    bool haveUser=false;
+bool sameAccountUid(const AccountUid& a,const AccountUid& b) {
+    return a.uid[0]==b.uid[0]&&a.uid[1]==b.uid[1];
+}
+
+void loadConsoleUsers() {
+    consoleUsers.clear();
+    consoleUsersLoaded=true;
+    AccountUid users[8]{};
+    s32 actual=0;
+    const Result listRc=accountListAllUsers(users,8,&actual);
+    if(R_FAILED(listRc)||actual<=0) {
+        selectedUserLabel="SELECT PLAYER";
+        desknx::diag::Write("account","list_users_failed",
+                            "rc=0x%08X count=%d",
+                            static_cast<unsigned int>(listRc),actual);
+        return;
+    }
+    const s32 count=std::min<s32>(actual,8);
+    for(s32 i=0;i<count;++i) {
+        if(!accountUidIsValid(&users[i])) continue;
+        ConsoleUserProfile entry{};
+        entry.uid=users[i];
+        entry.nickname="Player "+std::to_string(i+1);
+        AccountProfile profile{};
+        if(R_SUCCEEDED(accountGetProfile(&profile,users[i]))) {
+            AccountProfileBase base{};
+            AccountUserData data{};
+            if(R_SUCCEEDED(accountProfileGet(&profile,&data,&base))) {
+                size_t length=0;
+                while(length<sizeof(base.nickname)&&base.nickname[length]!='\\0') ++length;
+                if(length>0) entry.nickname.assign(base.nickname,length);
+            }
+            accountProfileClose(&profile);
+        }
+        consoleUsers.push_back(std::move(entry));
+    }
 #ifdef DESKNX_SYSTEM_APPLET
     if(g_backendHasUser&&accountUidIsValid(&g_backendUser)) {
-        uid=g_backendUser;
-        haveUser=true;
+        uiSelectedUser=g_backendUser;
+        uiHasSelectedUser=true;
     }
 #endif
-    if(!haveUser) {
-        const Result selectedRc=accountGetPreselectedUser(&uid);
-        haveUser=R_SUCCEEDED(selectedRc)&&accountUidIsValid(&uid);
+    if(!uiHasSelectedUser) {
+        AccountUid preselected{};
+        if(R_SUCCEEDED(accountGetPreselectedUser(&preselected))&&
+           accountUidIsValid(&preselected)) {
+            uiSelectedUser=preselected;
+            uiHasSelectedUser=true;
+        } else if(!consoleUsers.empty()) {
+            uiSelectedUser=consoleUsers.front().uid;
+            uiHasSelectedUser=true;
+        }
     }
-    if(!haveUser) {
-        AccountUid users[8]{};
-        s32 actual=0;
-        const Result listRc=accountListAllUsers(users,8,&actual);
-        if(R_SUCCEEDED(listRc)) {
-            for(s32 i=0;i<std::min<s32>(actual,8);++i) {
-                if(accountUidIsValid(&users[i])) {
-                    uid=users[i];
-                    haveUser=true;
-                    break;
-                }
+#ifdef DESKNX_SYSTEM_APPLET
+    if(!g_backendHasUser&&uiHasSelectedUser) {
+        g_backendUser=uiSelectedUser;
+        g_backendHasUser=true;
+    }
+#endif
+    selectedUserLabel="SELECT PLAYER";
+    for(const auto& user:consoleUsers) {
+        if(uiHasSelectedUser&&sameAccountUid(user.uid,uiSelectedUser)) {
+            selectedUserLabel=user.nickname;
+            break;
+        }
+    }
+    desknx::diag::Write("account","profiles_loaded","count=%zu active=%s",
+                        consoleUsers.size(),selectedUserLabel.c_str());
+}
+
+void selectConsoleUser(int index) {
+    if(index<0||index>=static_cast<int>(consoleUsers.size())) return;
+    const ConsoleUserProfile selected=consoleUsers[static_cast<size_t>(index)];
+    if(!accountUidIsValid(&selected.uid)) {
+        setStatus("INVALID USER PROFILE",3000);
+        return;
+    }
+#ifdef DESKNX_SYSTEM_APPLET
+    const Result rc=sendIpc([&]{return desknx::ipc::SendSelectUser(selected.uid);});
+    if(R_FAILED(rc)) {
+        setStatus("USER SELECTION FAILED",3500);
+        desknx::diag::Write("account","select_user_failed","rc=0x%08X",
+                            static_cast<unsigned int>(rc));
+        return;
+    }
+    g_backendUser=selected.uid;
+    g_backendHasUser=true;
+#endif
+    uiSelectedUser=selected.uid;
+    uiHasSelectedUser=true;
+    selectedUserLabel=selected.nickname;
+    userPickerOpen=false;
+    setStatus("PLAYER: "+selected.nickname,3000);
+    desknx::diag::Write("account","selected_user","profile=%s",
+                        selected.nickname.c_str());
+}
+
+void openUserProfile() {
+    if(!consoleUsersLoaded) loadConsoleUsers();
+    if(consoleUsers.empty()) {
+        setStatus("NO NINTENDO ACCOUNT PROFILES FOUND",3500);
+        return;
+    }
+    userPickerIndex=0;
+    if(uiHasSelectedUser) {
+        for(size_t i=0;i<consoleUsers.size();++i) {
+            if(sameAccountUid(consoleUsers[i].uid,uiSelectedUser)) {
+                userPickerIndex=static_cast<int>(i);
+                break;
             }
         }
     }
-    if(!haveUser) {
-        setStatus("NO NINTENDO ACCOUNT PROFILE",3000);
-        return;
-    }
-    if(R_FAILED(friendsLaShowMyProfile(uid)))
-        setStatus("PROFILE APPLET UNAVAILABLE",3000);
+    userPickerOpen=true;
 }
 void activateWorkspaceAppearance(int action) {
     if(deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return;
@@ -2749,6 +2866,18 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(userPickerOpen) {
+        if(keys&HidNpadButton_B){userPickerOpen=false;return;}
+        if(!consoleUsers.empty()) {
+            if(keys&HidNpadButton_Up)
+                userPickerIndex=(userPickerIndex-1+static_cast<int>(consoleUsers.size()))%
+                    static_cast<int>(consoleUsers.size());
+            if(keys&HidNpadButton_Down)
+                userPickerIndex=(userPickerIndex+1)%static_cast<int>(consoleUsers.size());
+            if(keys&HidNpadButton_A)selectConsoleUser(userPickerIndex);
+        }
+        return;
+    }
     if(mediaPickerOpen) {
         if(keys&HidNpadButton_B){mediaPickerBack();return;}
         if(!mediaPickerEntries.empty()) {
@@ -3060,6 +3189,20 @@ int tabStart(){
         static_cast<int>(desks.size())-VisibleDeskTabs));
 }
 void touchInput(const SDL_Event&e) {
+    if(userPickerOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=844&&x<=920&&y>=136&&y<=170) {
+                userPickerOpen=false;
+            } else if(!consoleUsers.empty()&&x>=370&&x<=910&&y>=214&&
+                      y<214+static_cast<int>(consoleUsers.size())*46) {
+                userPickerIndex=std::max(0,std::min(
+                    static_cast<int>(consoleUsers.size())-1,(y-214)/46));
+                selectConsoleUser(userPickerIndex);
+            }
+        }
+        return;
+    }
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
     if(touchPressActive &&
@@ -3607,6 +3750,7 @@ int main(int,char**) {
         setStatus("BACKGROUND SCAN UNAVAILABLE",3000);
         publishCatalogue(desknx::catalog::Scan());
     }
+    if(!consoleUsersLoaded) loadConsoleUsers();
     Uint32 previousFrameTick = SDL_GetTicks();
     Uint32 lastSlowFrameLog = 0;
     while(running&&appletMainLoop()) {
@@ -3637,6 +3781,7 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
         if(SDL_AtomicGet(&heartbeatError)){SDL_AtomicSet(&heartbeatError,0);setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);}
         consumeInitialState(); // IPC-06: queued at backend launch, read once
+        if(!consoleUsersLoaded) loadConsoleUsers();
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
         padUpdate(&pad);
