@@ -2622,16 +2622,23 @@ bool sameAccountUid(const AccountUid& a,const AccountUid& b) {
     return a.uid[0]==b.uid[0]&&a.uid[1]==b.uid[1];
 }
 
+bool initializeAccountService() {
+    if(accountServiceReady) return true;
+#ifdef DESKNX_SYSTEM_APPLET
+    const Result rc=accountInitialize(AccountServiceType_System);
+#else
+    const Result rc=accountInitialize(AccountServiceType_Application);
+#endif
+    accountServiceReady=R_SUCCEEDED(rc);
+    desknx::diag::Write("account","service_init",
+                        "rc=0x%08X ready=%d",
+                        static_cast<unsigned int>(rc),accountServiceReady?1:0);
+    return accountServiceReady;
+}
+
 void loadConsoleUsers() {
     consoleUsers.clear();
-    if(!accountServiceReady) {
-        const Result rc=accountInitialize(AccountServiceType_Application);
-        accountServiceReady=R_SUCCEEDED(rc);
-        desknx::diag::Write("account","service_init",
-                            "rc=0x%08X ready=%d",
-                            static_cast<unsigned int>(rc),accountServiceReady?1:0);
-    }
-    if(!accountServiceReady) {
+    if(!initializeAccountService()) {
         consoleUsersLoaded=false;
         selectedUserLabel="SELECT PLAYER";
         return;
@@ -3735,15 +3742,7 @@ int main(int,char**) {
         setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
     }
 
-#ifdef DESKNX_SYSTEM_APPLET
-    const Result accountRc=accountInitialize(AccountServiceType_System);
-#else
-    const Result accountRc=accountInitialize(AccountServiceType_Application);
-#endif
-    accountServiceReady=R_SUCCEEDED(accountRc);
-    desknx::diag::Write("startup","account_service",
-                        "rc=0x%08X ready=%d",
-                        static_cast<unsigned int>(accountRc),accountServiceReady?1:0);
+    (void)initializeAccountService();
     loadLauncherSettings();
     applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
