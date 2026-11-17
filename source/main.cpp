@@ -2784,11 +2784,27 @@ void launch(const Tile& t) {
         // Persist the user's workspace before sending a launch request that
         // closes this HOME applet. Never discard unsaved edits on the way out.
         if(!saveLayout())return;
-        // LNC-02/LNC-03: pass the selected user only when we actually have a
-        // valid uid; zero uid means "backend decides" (kept v1-compatible).
-        // HasUser forces the preselection even if NACP would skip it.
-        const AccountUid uid=g_backendHasUser?g_backendUser:AccountUid{};
-        const u64 flags=g_backendHasUser?desknx::ipc::LaunchFlagHasUser:0;
+        // Use the profile selected in the launcher. Respect NACP's explicit
+        // "no user" value; unknown metadata keeps the safe legacy behavior and
+        // receives the selected profile.
+        const AccountUid uid=(g_backendHasUser&&accountUidIsValid(&g_backendUser))
+            ?g_backendUser:(uiHasSelectedUser?uiSelectedUser:AccountUid{});
+        NsApplicationControlData launchControl{};
+        u64 launchControlSize=0;
+        const Result launchControlRc=desknx::slaunch::ReadControlData(
+            id,launchControl,launchControlSize);
+        const bool appManagesPlayers=R_SUCCEEDED(launchControlRc)&&
+            launchControl.nacp.startup_user_account==0;
+        const bool hasChosenUser=accountUidIsValid(&uid);
+        const u64 flags=appManagesPlayers
+            ?desknx::ipc::LaunchFlagNoPreuser
+            :(hasChosenUser?desknx::ipc::LaunchFlagHasUser:0);
+        desknx::diag::Write("launch","player_policy",
+            "title_id=%016llX nacp_rc=0x%08X startup_user=%u has_user=%d flags=0x%llX",
+            static_cast<unsigned long long>(id),
+            static_cast<unsigned int>(launchControlRc),
+            R_SUCCEEDED(launchControlRc)?launchControl.nacp.startup_user_account:255,
+            hasChosenUser?1:0,static_cast<unsigned long long>(flags));
         desknx::diag::Write("launch", "game_ipc_begin", "title_id=%016llX",
                             static_cast<unsigned long long>(id));
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id,flags,uid);});
@@ -2810,7 +2826,22 @@ void launch(const Tile& t) {
         if(R_FAILED(initRc)){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
         desknx::diag::Write("launch", "game_request_begin", "title_id=%016llX",
                             static_cast<unsigned long long>(id));
-        const Result rc=appletRequestLaunchApplication(id,nullptr);
+        NsApplicationControlData launchControl{};
+        u64 launchControlSize=0;
+        const Result launchControlRc=desknx::slaunch::ReadControlData(
+            id,launchControl,launchControlSize);
+        const bool appManagesPlayers=R_SUCCEEDED(launchControlRc)&&
+            launchControl.nacp.startup_user_account==0;
+        const AccountUid selectedUser=uiHasSelectedUser?uiSelectedUser:AccountUid{};
+        const AccountUid* launchUser=(!appManagesPlayers&&
+            accountUidIsValid(&selectedUser))?&selectedUser:nullptr;
+        desknx::diag::Write("launch","player_policy",
+            "title_id=%016llX nacp_rc=0x%08X startup_user=%u has_user=%d",
+            static_cast<unsigned long long>(id),
+            static_cast<unsigned int>(launchControlRc),
+            R_SUCCEEDED(launchControlRc)?launchControl.nacp.startup_user_account:255,
+            launchUser?1:0);
+        const Result rc=appletRequestLaunchApplication(id,launchUser);
         desknx::diag::Write("launch", "game_request_end", "rc=0x%08X",
                             static_cast<unsigned int>(rc));
         nsExit();
