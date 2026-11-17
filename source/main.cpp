@@ -165,6 +165,7 @@ std::atomic<uint64_t> sdFreeBytes{0}, sdTotalBytes{0};
 std::atomic<bool> storageStatsAvailable{false};
 SDL_Thread* systemStatsThread=nullptr;
 Uint32 lastSystemStatsRequest=0;
+SDL_Thread* activeWorkspaceSaveThread=nullptr;
 bool activeWorkspaceSavePending=false;
 Uint32 activeWorkspaceSaveDue=0;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
@@ -192,7 +193,7 @@ bool powerMenu=false;
 s32 powerIndex=0;
 bool sdMounted=false, sdMountedByDeskNX=false, diagnosticsInitialized=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   L3 TOOLS", lastLaunched="Nothing launched yet";
-Uint32 statusUntil=0, lastBatteryTick=0;
+Uint32 statusUntil=0;
 #ifdef DESKNX_SYSTEM_APPLET
 // Backend -> menu state (IPC-06/§4.4). The menu keeps no app state of its own:
 // everything here comes from the initial block or live events.
@@ -1146,7 +1147,44 @@ bool backupBrokenLayout() {
     return false;
 }
 
+struct ActiveWorkspaceSaveRequest { std::string serialized; };
+
+void waitActiveWorkspaceSaveThread() {
+    if(!activeWorkspaceSaveThread) return;
+    SDL_WaitThread(activeWorkspaceSaveThread,nullptr);
+    activeWorkspaceSaveThread=nullptr;
+}
+
+int activeWorkspaceSaveThreadMain(void* context) {
+    auto* request=static_cast<ActiveWorkspaceSaveRequest*>(context);
+    if(!request) return 0;
+    const std::string state=std::move(request->serialized);
+    delete request;
+    if(!sdMounted || state.empty()) return 0;
+    std::ofstream out(ACTIVE_WORKSPACE_TMP,std::ios::binary|std::ios::trunc);
+    if(!out) return 0;
+    out.write(state.data(),static_cast<std::streamsize>(state.size()));
+    out.flush();
+    const bool good=out.good();
+    out.close();
+    if(!good) {
+        std::remove(ACTIVE_WORKSPACE_TMP);
+        return 0;
+    }
+    if(!commitSdCard("active-workspace-temp")) {
+        std::remove(ACTIVE_WORKSPACE_TMP);
+        return 0;
+    }
+    const auto replaceStatus=desknx::safeio::replaceFilePreservingOnFailure(
+        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
+    if(replaceStatus!=desknx::safeio::ReplaceStatus::Success) return 0;
+    return commitSdCard("active-workspace-publish")?1:0;
+}
+
 bool saveActiveWorkspaceState() {
+    // Synchronous callers (launch/shutdown/layout migration) must not race a
+    // previously queued marker writer using the same temporary path.
+    waitActiveWorkspaceSaveThread();
     if(!sdMounted || desks.empty() || deskIndex<0 ||
        deskIndex>=static_cast<int>(desks.size())) return false;
     const std::string state=
@@ -1180,12 +1218,34 @@ void scheduleActiveWorkspaceSave() {
 }
 
 void pumpActiveWorkspaceSave() {
-    if(!activeWorkspaceSavePending || SDL_GetTicks()<activeWorkspaceSaveDue) return;
+    const Uint32 now=SDL_GetTicks();
+    if(activeWorkspaceSaveThread) {
+        if(SDL_GetThreadStatus(activeWorkspaceSaveThread)!=SDL_THREAD_STOPPED) return;
+        int status=0;
+        SDL_WaitThread(activeWorkspaceSaveThread,&status);
+        activeWorkspaceSaveThread=nullptr;
+        if(status==0 && !activeWorkspaceSavePending) {
+            activeWorkspaceSavePending=true;
+            activeWorkspaceSaveDue=now+1500;
+            desknx::diag::Write("storage","active_workspace_deferred_save_failed","retry_ms=1500");
+        }
+    }
+    if(!activeWorkspaceSavePending || now<activeWorkspaceSaveDue) return;
+    const std::string state=desknx::layout::serializeActiveWorkspaceState(desks,deskIndex);
+    if(state.empty()) {
+        activeWorkspaceSavePending=false;
+        desknx::diag::Write("storage","active_workspace_deferred_save_skipped","reason=empty_snapshot");
+        return;
+    }
+    auto* request=new ActiveWorkspaceSaveRequest{state};
     activeWorkspaceSavePending=false;
-    if(!saveActiveWorkspaceState()) {
+    activeWorkspaceSaveThread=SDL_CreateThread(activeWorkspaceSaveThreadMain,
+                                                "DeskNX workspace save",request);
+    if(!activeWorkspaceSaveThread) {
+        delete request;
         activeWorkspaceSavePending=true;
-        activeWorkspaceSaveDue=SDL_GetTicks()+1500;
-        desknx::diag::Write("storage","active_workspace_deferred_save_failed","retry_ms=1500");
+        activeWorkspaceSaveDue=now+1500;
+        desknx::diag::Write("storage","active_workspace_worker_start_failed","retry_ms=1500");
     }
 }
 
@@ -3800,6 +3860,7 @@ int main(int,char**) {
 #endif
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
         (void)saveLayout();
+    waitActiveWorkspaceSaveThread();
     for(auto& entry:workspaceBackgroundTextures)
         if(entry.texture)SDL_DestroyTexture(entry.texture);
     workspaceBackgroundTextures.clear();
