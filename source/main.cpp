@@ -136,6 +136,7 @@ bool layoutLoaded = false, layoutNeedsMigration = false, catalogueWarningShown =
 bool layoutSaveBlocked = false;
 bool layoutUserModified = false;
 bool defaultLayoutPending = false;
+bool defaultLayoutCreatedFromPartial = false;
 uint64_t persistedLayoutShapeHash = 0;
 bool persistedLayoutShapeKnown = false;
 bool layoutPrimaryNeedsRewrite = true;
@@ -1392,6 +1393,17 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Recent,"Recent launches","",0,1,3,1,6});
     desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
     desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
+}
+
+void refreshCatalogueTileTitles() {
+    const auto available=catalogueSnapshot();
+    for(auto& desk:desks) for(auto& tile:desk.tiles) {
+        if(tile.kind!=Kind::Game && tile.kind!=Kind::Nro) continue;
+        const auto found=std::find_if(available.begin(),available.end(),[&](const Candidate& c) {
+            return c.kind==tile.kind && c.data==tile.data;
+        });
+        if(found!=available.end()) tile.title=found->title;
+    }
 }
 int systemStatsThreadMain(void*) {
     int batteryValue=-1;
@@ -3776,17 +3788,33 @@ int main(int,char**) {
                 "delta_ms=%u catalogue_ready=%d scan_complete=%d",
                 frameDelta, ready ? 1 : 0, complete ? 1 : 0);
         }
-        if(complete&&defaultLayoutPending) {
-            // On first launch the default desks are populated only after the
-            // catalogue is ready. Saving an active workspace switch must not
-            // cancel this population; actual content edits must be preserved.
+        if(ready&&defaultLayoutPending) {
+            // The initial NS enumeration is enough to populate the Games desk;
+            // do not keep the first-run launcher empty while SD/NACP enrichment
+            // continues. The catalogue worker will later provide real names and
+            // homebrew paths, at which point the default desks can be finalized.
             if(!layoutUserModified)defaultLayout();
-            const bool saved=saveLayout();
-            // Finalize the first-run decision even if SD is read-only. Keep the
-            // in-memory desks intact and do not rebuild them every frame.
             layoutLoaded=true;
             defaultLayoutPending=false;
-            if(saved)setStatus("DESKNX READY - Y ADD  X EDIT",4000);
+            defaultLayoutCreatedFromPartial=!complete;
+            if(complete) {
+                const bool saved=saveLayout();
+                if(saved)setStatus("DESKNX READY - Y ADD  X EDIT",4000);
+            }
+        }
+        if(complete&&defaultLayoutCreatedFromPartial) {
+            const int previousDesk=deskIndex;
+            if(!layoutUserModified) {
+                defaultLayout();
+                deskIndex=std::min(previousDesk,static_cast<int>(desks.size())-1);
+            } else {
+                // Keep manual tile edits, but replace any provisional Game-ID
+                // names once the scanner has resolved the real NACP titles.
+                refreshCatalogueTileTitles();
+            }
+            const bool saved=saveLayout();
+            defaultLayoutCreatedFromPartial=false;
+            if(saved)setStatus("DESKNX READY - CATALOGUE UPDATED",3500);
         }
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
 #ifdef DESKNX_SYSTEM_APPLET
