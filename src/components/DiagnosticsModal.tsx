@@ -35,7 +35,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
       timestamp: '12:44:02.108',
       level: 'INFO',
       source: 'diagnostics',
-      message: '[Init] DeskNX SDL2 UI initialized. Renderer: accelerated VSync 60fps.',
+      message: '[Init] Transwitch native UI initialized. Renderer: accelerated VSync 60fps.',
     },
     {
       id: '2',
@@ -156,7 +156,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
           <div className="flex items-center gap-3">
             <Activity className="w-6 h-6 text-emerald-400" />
             <div>
-              <h2 className="text-lg font-bold tracking-wide">DeskNX Diagnostics & System Lab</h2>
+              <h2 className="text-lg font-bold tracking-wide">Transwitch Diagnostics & System Lab</h2>
               <p className="text-xs text-zinc-400">
                 Atmosphère qlaunch backend · Protocol v2 IPC · SDMC Logs · Recovery
               </p>
@@ -305,7 +305,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
                   <strong className="block text-amber-300 font-semibold mb-1">
                     Atmosphère Emergency Recovery Combo (README §4):
                   </strong>
-                  If DeskNX fails to launch any HOME applet slots and no title is active, holding 
+                  If the launcher fails to launch any HOME applet slots and no title is active, holding 
                   <code className="text-white bg-black/40 px-1 py-0.5 rounded mx-1">
                     L + R + ZL + ZR + Plus + Minus + D-Pad Down
                   </code> 
@@ -356,7 +356,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
           {activeTab === 'audit' && (
             <div className="space-y-4 max-w-2xl font-mono text-xs text-zinc-300">
               <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-2">
-                <h4 className="font-bold text-cyan-400">DeskNX 2026 Technical Audit Report</h4>
+                <h4 className="font-bold text-cyan-400">Transwitch 2026 Technical Audit Report</h4>
                 <div className="text-zinc-400">Atmosphère Target: 1.12.1 · libnx Ref: Fixed release</div>
                 <ul className="list-disc pl-5 space-y-1 text-zinc-300">
                   <li><strong>Memory & VSync:</strong> VSync renderer runs uninterrupted; software delay active only when fallback without hardware sync.</li>
