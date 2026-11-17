@@ -165,8 +165,11 @@ std::atomic<int> battery{-1};
 std::atomic<uint64_t> sdFreeBytes{0}, sdTotalBytes{0};
 std::atomic<bool> storageStatsAvailable{false};
 SDL_Thread* systemStatsThread=nullptr;
+std::atomic<bool> systemStatsThreadDone{true};
 Uint32 lastSystemStatsRequest=0;
 SDL_Thread* activeWorkspaceSaveThread=nullptr;
+std::atomic<bool> activeWorkspaceSaveDone{true};
+std::atomic<int> activeWorkspaceSaveResult{1};
 bool activeWorkspaceSavePending=false;
 Uint32 activeWorkspaceSaveDue=0;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
@@ -1156,7 +1159,7 @@ void waitActiveWorkspaceSaveThread() {
     activeWorkspaceSaveThread=nullptr;
 }
 
-int activeWorkspaceSaveThreadMain(void* context) {
+int activeWorkspaceSaveThreadRun(void* context) {
     auto* request=static_cast<ActiveWorkspaceSaveRequest*>(context);
     if(!request) return 0;
     const std::string state=std::move(request->serialized);
@@ -1180,6 +1183,13 @@ int activeWorkspaceSaveThreadMain(void* context) {
         ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
     if(replaceStatus!=desknx::safeio::ReplaceStatus::Success) return 0;
     return commitSdCard("active-workspace-publish")?1:0;
+}
+
+int activeWorkspaceSaveThreadMain(void* context) {
+    const int result=activeWorkspaceSaveThreadRun(context);
+    activeWorkspaceSaveResult.store(result);
+    activeWorkspaceSaveDone.store(true);
+    return result;
 }
 
 bool saveActiveWorkspaceState() {
@@ -1221,9 +1231,9 @@ void scheduleActiveWorkspaceSave() {
 void pumpActiveWorkspaceSave() {
     const Uint32 now=SDL_GetTicks();
     if(activeWorkspaceSaveThread) {
-        if(SDL_GetThreadStatus(activeWorkspaceSaveThread)!=SDL_THREAD_STOPPED) return;
-        int status=0;
-        SDL_WaitThread(activeWorkspaceSaveThread,&status);
+        if(!activeWorkspaceSaveDone.load()) return;
+        const int status=activeWorkspaceSaveResult.load();
+        SDL_WaitThread(activeWorkspaceSaveThread,nullptr);
         activeWorkspaceSaveThread=nullptr;
         if(status==0 && !activeWorkspaceSavePending) {
             activeWorkspaceSavePending=true;
@@ -1240,10 +1250,13 @@ void pumpActiveWorkspaceSave() {
     }
     auto* request=new ActiveWorkspaceSaveRequest{state};
     activeWorkspaceSavePending=false;
+    activeWorkspaceSaveResult.store(0);
+    activeWorkspaceSaveDone.store(false);
     activeWorkspaceSaveThread=SDL_CreateThread(activeWorkspaceSaveThreadMain,
                                                 "DeskNX workspace save",request);
     if(!activeWorkspaceSaveThread) {
         delete request;
+        activeWorkspaceSaveDone.store(true);
         activeWorkspaceSavePending=true;
         activeWorkspaceSaveDue=now+1500;
         desknx::diag::Write("storage","active_workspace_worker_start_failed","retry_ms=1500");
@@ -1427,21 +1440,25 @@ int systemStatsThreadMain(void*) {
     sdTotalBytes.store(total);
     sdFreeBytes.store(freeBytes);
     storageStatsAvailable.store(available);
+    systemStatsThreadDone.store(true);
     return 0;
 }
 
 void pumpSystemStats() {
     const Uint32 now=SDL_GetTicks();
     if(systemStatsThread) {
-        if(SDL_GetThreadStatus(systemStatsThread)==SDL_THREAD_STOPPED) {
-            SDL_WaitThread(systemStatsThread,nullptr);
-            systemStatsThread=nullptr;
-        } else return;
+        if(!systemStatsThreadDone.load()) return;
+        SDL_WaitThread(systemStatsThread,nullptr);
+        systemStatsThread=nullptr;
     }
     if(lastSystemStatsRequest!=0 && now-lastSystemStatsRequest<10000) return;
     lastSystemStatsRequest=now==0?1:now;
+    systemStatsThreadDone.store(false);
     systemStatsThread=SDL_CreateThread(systemStatsThreadMain,"DeskNX system stats",nullptr);
-    if(!systemStatsThread) lastSystemStatsRequest=0;
+    if(!systemStatsThread) {
+        systemStatsThreadDone.store(true);
+        lastSystemStatsRequest=0;
+    }
 }
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
