@@ -1197,10 +1197,11 @@ bool saveActiveWorkspaceState() {
         std::remove(ACTIVE_WORKSPACE_TMP);
         return false;
     }
-    if(!commitSdCard("active-workspace-temp")) {
-        std::remove(ACTIVE_WORKSPACE_TMP);
-        return false;
-    }
+    // This is a tiny, replaceable navigation marker. Flushing the temp file
+    // to the SD controller and then committing it before rename caused two
+    // expensive synchronous SD commits for every desktop switch. The atomic
+    // replace retains the previous marker as .bak; one commit after publish
+    // makes the new marker durable without blocking the UI twice.
     const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
         ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
     if(replaceStatus != desknx::safeio::ReplaceStatus::Success)
