@@ -33,7 +33,7 @@ export interface Workspace {
   backgroundFit: number; // 0 = cover, 1 = contain, 2 = stretch
   artworkMode: number; // 0 = cover, 1 = contain, 2 = stretch
   labelOpacity: number; // 0..255
-  accentColor: number; // -1 = default, 0..7 = palette entry
+  accentColor: number; // -1 = default, 0..11 = palette entry
   bgBlur?: number; // 0..20 px blur
   bgBrightness?: number; // 20..100%
   cardStyle?: 'glass' | 'matte' | 'border' | 'cyber';
@@ -64,7 +64,7 @@ export interface Candidate {
 export type FontOption = 'inter' | 'chakra' | 'jetbrains' | 'system' | 'rounded';
 
 export interface DeskNXSettings {
-  theme: 'frosted_glass' | 'graphite' | 'violet' | 'sunset' | 'ocean' | 'ulauncher_dark';
+  theme: 'frosted_glass' | 'graphite' | 'violet' | 'sunset' | 'ocean' | 'ulauncher_dark' | 'emerald' | 'rose' | 'arctic';
   iconPack: string;
   backgroundPath: string;
   backgroundFit: number;
