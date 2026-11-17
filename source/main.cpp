@@ -10,6 +10,7 @@
 #include "../include/desknx/WorkspaceOps.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
+#include "slaunch_applications.hpp"
 #include "../include/desknx/Diagnostics.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
@@ -136,6 +137,7 @@ bool consoleUsersLoaded=false, userPickerOpen=false, uiHasSelectedUser=false;
 int userPickerIndex=0;
 AccountUid uiSelectedUser{};
 std::string selectedUserLabel="SELECT PLAYER";
+bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
@@ -373,7 +375,7 @@ void loadLauncherSettings() {
         if(key=="theme") {
             char* end=nullptr;
             const long valueLong=std::strtol(value.c_str(),&end,10);
-            if(end&&*end=='\\0'&&valueLong>=0&&valueLong<=7)
+            if(end&&*end=='\0'&&valueLong>=0&&valueLong<=7)
                 themeIndex=static_cast<int>(valueLong);
         } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
             wallpaperPath=value;
@@ -2644,8 +2646,7 @@ void loadConsoleUsers() {
             AccountUserData data{};
             if(R_SUCCEEDED(accountProfileGet(&profile,&data,&base))) {
                 size_t length=0;
-                while(length<sizeof(base.nickname)&&base.nickname[length]!='\\0') ++length;
-                if(length>0) entry.nickname.assign(base.nickname,length);
+                if(base.nickname[0]!='\0') entry.nickname=base.nickname;
             }
             accountProfileClose(&profile);
         }
@@ -3157,7 +3158,8 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(dragging) moveAcrossDesk(1);
         else {
             deskIndex=(deskIndex+1)%static_cast<int>(desks.size());
-            if(saveNow())setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            scheduleActiveWorkspaceSave();
+            setStatus(desks[static_cast<size_t>(deskIndex)].name);
         }
     }
     if(keys&HidNpadButton_Left){if(dragging)moveTile(-1,0);else updateCursor(-1,0);}
