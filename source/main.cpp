@@ -3735,7 +3735,11 @@ int main(int,char**) {
         setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
     }
 
+#ifdef DESKNX_SYSTEM_APPLET
+    const Result accountRc=accountInitialize(AccountServiceType_System);
+#else
     const Result accountRc=accountInitialize(AccountServiceType_Application);
+#endif
     accountServiceReady=R_SUCCEEDED(accountRc);
     desknx::diag::Write("startup","account_service",
                         "rc=0x%08X ready=%d",
