@@ -286,7 +286,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               onOpenLauncherSettings();
             }}
             className="p-2 rounded-full text-white/40 hover:text-white hover:bg-white/15 transition-all active:scale-95 ml-1"
-            title="Настройки DeskNX лаунчера"
+            title="Настройки Transwitch"
           >
             <Sliders className="w-5 h-5" />
           </button>
