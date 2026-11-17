@@ -231,7 +231,7 @@ export function parseLayout(
         labelOp = clampInt(parseInt(fields[5], 10), 0, 255, 196);
         // `parseInt(...) ?? -1` let NaN through: NaN is not nullish, and a NaN
         // accent colour poisons the serializer on the next save.
-        accent = clampInt(parseInt(fields[6], 10), -1, 7, -1);
+        accent = clampInt(parseInt(fields[6], 10), -1, 11, -1);
       }
 
       workspaces.push({
