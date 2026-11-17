@@ -2251,12 +2251,12 @@ void drawScreen() {
              mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
              mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
              264,88,3,WHITE,1000);
-        text(mediaPickerDirectory,266,128,1,MUTED,1000);
+        const bool browsingAlbum=mediaPickerDirectory.compare(
+            0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0;
+        text(browsingAlbum?"NINTENDO ALBUM":"MEDIA LIBRARY",266,128,1,MUTED,1000);
         if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
-            const bool browsingAlbum=mediaPickerDirectory.compare(
-                0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0;
             roundRect(782,86,132,34,10,Color{38,76,119,255});
-            text(browsingAlbum?"MEDIA":"NINTENDO ALBUM",794,98,1,WHITE,908);
+            text(browsingAlbum?"MEDIA":"ALBUM",808,98,1,WHITE,908);
         }
         roundRect(930,86,92,34,10,Color{54,57,66,255});
         text("B  BACK",944,98,1,WHITE,1012);
@@ -2692,7 +2692,6 @@ void loadConsoleUsers() {
             AccountProfileBase base{};
             AccountUserData data{};
             if(R_SUCCEEDED(accountProfileGet(&profile,&data,&base))) {
-                size_t length=0;
                 if(base.nickname[0]!='\0') entry.nickname=base.nickname;
             }
             accountProfileClose(&profile);
