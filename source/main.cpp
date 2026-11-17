@@ -40,7 +40,7 @@ using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
 constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
-constexpr int ToolbarStartX=72, ToolbarButtonWidth=74, ToolbarButtonStep=80, ToolbarButtonCount=7;
+constexpr int ToolbarStartX=64, ToolbarButtonWidth=82, ToolbarButtonStep=90, ToolbarButtonCount=4;
 constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarButtonStep; }
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
@@ -70,9 +70,10 @@ constexpr Color WHITE{246,248,252,255};
 Color MUTED{145,158,180,255}, BLUE{83,157,255,255};
 Color GREEN{52,211,153,255}, RED{255,99,112,255};
 Color THEME_TOP{16,27,44,255}, THEME_BOTTOM{9,17,31,255};
-std::array<Color,8> COLORS{{
+std::array<Color,12> COLORS{{
     {91,145,226,255},{53,169,151,255},{155,116,226,255},{222,151,83,255},
-    {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255}
+    {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255},
+    {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}
 }};
 int themeIndex=1;
 std::string wallpaperPath, fontPath, iconPackPath;
@@ -248,33 +249,61 @@ void outline(int x,int y,int w,int h,Color c) {
 
 void applyThemePalette() {
     switch(themeIndex) {
-        case 1: // Frosted glass
-            BG={63,69,78,255}; THEME_TOP={74,79,89,255}; THEME_BOTTOM={45,91,137,255};
-            MUTED={215,222,231,255}; BLUE={193,147,255,255};
-            GREEN={73,173,12,255}; RED={255,115,123,255};
-            COLORS={{{110,151,207,255},{99,172,180,255},{163,138,206,255},{220,158,126,255},
-                     {205,123,150,255},{104,162,199,255},{142,176,116,255},{135,143,159,255}}};
+                case 1: // Frosted glass
+                    BG={63,69,78,255}; THEME_TOP={74,79,89,255}; THEME_BOTTOM={45,91,137,255};
+                    MUTED={215,222,231,255}; BLUE={193,147,255,255};
+                    GREEN={73,173,12,255}; RED={255,115,123,255};
+                    COLORS={{{110,151,207,255},{99,172,180,255},{163,138,206,255},{220,158,126,255},
+                             {205,123,150,255},{104,162,199,255},{142,176,116,255},{135,143,159,255},
+                             {222,111,102,255},{86,190,177,255},{203,128,171,255},{230,190,112,255}}};
+                    break;
+                case 2: // Graphite
+                    BG={15,17,21,255}; THEME_TOP={34,37,43,255}; THEME_BOTTOM={12,14,18,255};
+                    MUTED={164,169,180,255}; BLUE={187,151,255,255};
+                    GREEN={120,209,148,255}; RED={255,118,128,255};
+                    COLORS={{{142,151,166,255},{105,160,173,255},{153,132,194,255},{187,148,112,255},
+                             {177,121,143,255},{115,160,180,255},{148,169,126,255},{118,126,142,255},
+                             {190,91,91,255},{80,164,151,255},{170,116,157,255},{190,167,107,255}}};
+                    break;
+                case 3: // Violet
+                    BG={17,12,27,255}; THEME_TOP={48,27,68,255}; THEME_BOTTOM={12,17,39,255};
+                    MUTED={174,160,193,255}; BLUE={200,153,255,255};
+                    GREEN={127,222,181,255}; RED={255,116,147,255};
+                    COLORS={{{148,103,212,255},{80,155,169,255},{187,114,221,255},{209,140,111,255},
+                             {209,102,153,255},{83,154,205,255},{133,175,127,255},{127,118,160,255},
+                             {231,101,132,255},{75,202,183,255},{194,127,236,255},{235,190,116,255}}};
+                    break;
+                case 4: // Sunset
+                    BG={25,17,20,255}; THEME_TOP={70,37,44,255}; THEME_BOTTOM={29,36,61,255};
+                    MUTED={198,172,168,255}; BLUE={255,172,133,255};
+                    GREEN={153,210,119,255}; RED={255,105,105,255};
+                    COLORS={{{218,128,104,255},{104,168,145,255},{177,129,190,255},{235,162,95,255},
+                             {217,110,126,255},{113,171,196,255},{170,180,101,255},{145,130,136,255},
+                             {239,99,79,255},{70,195,174,255},{223,111,150,255},{246,196,105,255}}};
+                    break;
+        case 5: // Emerald
+            BG={7,20,17,255}; THEME_TOP={10,47,39,255}; THEME_BOTTOM={5,18,18,255};
+            MUTED={150,190,176,255}; BLUE={91,226,177,255};
+            GREEN={82,220,150,255}; RED={255,105,123,255};
+            COLORS={{{47,157,112,255},{52,190,155,255},{96,162,133,255},{190,174,91,255},
+                     {190,111,132,255},{74,168,188,255},{144,184,103,255},{111,143,130,255},
+                     {231,97,94,255},{45,212,191,255},{193,120,181,255},{231,194,91,255}}};
             break;
-        case 2: // Graphite
-            BG={15,17,21,255}; THEME_TOP={34,37,43,255}; THEME_BOTTOM={12,14,18,255};
-            MUTED={164,169,180,255}; BLUE={187,151,255,255};
-            GREEN={120,209,148,255}; RED={255,118,128,255};
-            COLORS={{{142,151,166,255},{105,160,173,255},{153,132,194,255},{187,148,112,255},
-                     {177,121,143,255},{115,160,180,255},{148,169,126,255},{118,126,142,255}}};
+        case 6: // Rose
+            BG={24,12,20,255}; THEME_TOP={61,25,43,255}; THEME_BOTTOM={23,12,27,255};
+            MUTED={202,165,184,255}; BLUE={255,139,182,255};
+            GREEN={112,213,171,255}; RED={255,99,132,255};
+            COLORS={{{192,91,140,255},{86,166,153,255},{164,115,195,255},{212,147,112,255},
+                     {227,101,151,255},{111,153,207,255},{151,174,115,255},{143,121,143,255},
+                     {255,112,132,255},{63,196,178,255},{219,132,209,255},{239,184,124,255}}};
             break;
-        case 3: // Violet
-            BG={17,12,27,255}; THEME_TOP={48,27,68,255}; THEME_BOTTOM={12,17,39,255};
-            MUTED={174,160,193,255}; BLUE={200,153,255,255};
-            GREEN={127,222,181,255}; RED={255,116,147,255};
-            COLORS={{{148,103,212,255},{80,155,169,255},{187,114,221,255},{209,140,111,255},
-                     {209,102,153,255},{83,154,205,255},{133,175,127,255},{127,118,160,255}}};
-            break;
-        case 4: // Sunset
-            BG={25,17,20,255}; THEME_TOP={70,37,44,255}; THEME_BOTTOM={29,36,61,255};
-            MUTED={198,172,168,255}; BLUE={255,172,133,255};
-            GREEN={153,210,119,255}; RED={255,105,105,255};
-            COLORS={{{218,128,104,255},{104,168,145,255},{177,129,190,255},{235,162,95,255},
-                     {217,110,126,255},{113,171,196,255},{170,180,101,255},{145,130,136,255}}};
+        case 7: // Arctic
+            BG={8,18,28,255}; THEME_TOP={18,48,66,255}; THEME_BOTTOM={7,18,34,255};
+            MUTED={164,195,212,255}; BLUE={117,208,255,255};
+            GREEN={100,220,191,255}; RED={255,119,138,255};
+            COLORS={{{73,150,208,255},{70,177,184,255},{140,135,213,255},{203,164,103,255},
+                     {210,116,144,255},{85,187,220,255},{144,185,129,255},{122,150,171,255},
+                     {244,110,128,255},{55,207,204,255},{183,142,236,255},{231,204,130,255}}};
             break;
         default: // Ocean
             themeIndex=0;
@@ -282,7 +311,8 @@ void applyThemePalette() {
             MUTED={145,158,180,255}; BLUE={83,157,255,255};
             GREEN={52,211,153,255}; RED={255,99,112,255};
             COLORS={{{91,145,226,255},{53,169,151,255},{155,116,226,255},{222,151,83,255},
-                     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255}}};
+                     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255},
+                     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}}};
             break;
     }
 }
@@ -343,7 +373,7 @@ void loadLauncherSettings() {
         if(key=="theme") {
             char* end=nullptr;
             const long valueLong=std::strtol(value.c_str(),&end,10);
-            if(end&&*end=='\\0'&&valueLong>=0&&valueLong<=4)
+            if(end&&*end=='\\0'&&valueLong>=0&&valueLong<=7)
                 themeIndex=static_cast<int>(valueLong);
         } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
             wallpaperPath=value;
@@ -1760,9 +1790,8 @@ void drawScreen() {
     softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
-        {4,listOpen,"LIBRARY"},{0,appSettingsMenu,"SETTINGS"},
-        {1,false,"PADS"},{2,false,"ALBUM"},{3,powerMenu,"POWER"},
-        {6,recentOpen,"RECENT"},{5,systemMenu,"TOOLS"}
+        {2,false,"GALLERY"},{0,appSettingsMenu,"SETTINGS"},
+        {1,false,"PADS"},{5,systemMenu,"TOOLS"}
     };
     for(int i=0;i<ToolbarButtonCount;++i) {
         const auto& item=headerTools[i];
@@ -1770,13 +1799,15 @@ void drawScreen() {
         roundRect(x,24,ToolbarButtonWidth,48,13,
             item.active?Color{48,82,124,255}:Color{37,47,62,230});
         if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
-        drawSystemIcon(item.icon,x+27,27,20,item.active?WHITE:Color{204,214,228,255});
+        drawSystemIcon(item.icon,x+12,31,24,item.active?WHITE:Color{204,214,228,255});
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
-        text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),55,1,
+        text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),56,1,
              item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
     }
-    text("DESKNX",660,29,3,WHITE,900);
-    text("PERSONAL WORKSPACE",662,56,1,MUTED,900);
+    softCard(470,24,392,48,Color{32,43,59,235},Color{255,255,255,24});
+    drawSystemIcon(7,486,34,27,Color{215,228,246,255});
+    text(selectedUserLabel,526,41,2,WHITE,760);
+    text("CHANGE",780,43,1,BLUE,850);
     roundRect(1022,24,180,48,18,Color{32,43,59,235});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,30});
@@ -1790,8 +1821,8 @@ void drawScreen() {
         softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
         roundRect(390,302,46,46,14,Color{38,76,119,255});
         drawSystemIcon(4,402,314,22,WHITE);
-        text("A FRESH WORKSPACE",454,302,2,WHITE,880);
-        text("Your apps and tools will live here.",454,337,1,MUTED,880);
+        text("THIS DESKTOP IS EMPTY",454,302,2,WHITE,880);
+        text("Add games, homebrew and widgets to get started.",454,337,1,MUTED,880);
         roundRect(454,370,176,38,12,Color{43,111,190,255});
         text("Y  ADD APPS",493,383,1,WHITE,620);
         text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
@@ -2118,7 +2149,7 @@ void drawScreen() {
                 const auto& entry=recentLaunches[static_cast<size_t>(row)];
                 const int yy=190+row*39;
                 if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
-                Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%8};
+                Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
                 drawTileIcon(iconTile,290,yy+4,27);
                 text(entry.title,330,yy+8,2,row==recentIndex?WHITE:MUTED,850);
                 text(entry.kind==Kind::Game?"GAME":"HOMEBREW",870,yy+11,1,
@@ -2130,22 +2161,21 @@ void drawScreen() {
     if(systemMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
-        text("SYSTEM TOOLS",146,130,3,WHITE,1020);
-        text("Your console shortcuts, collected in one place.",
+        text("TOOLS",146,130,3,WHITE,1020);
+        text("Library, recent apps, widgets and system actions.",
              148,168,1,MUTED,1020);
         struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
-            {154,218,0,"SETTINGS","DESKNX OPTIONS"},
-            {398,218,1,"CONTROLLERS","PAIR / CHANGE CONTROLLERS"},
-            {642,218,2,"ALBUM","SCREENSHOTS AND VIDEOS"},
-            {886,218,7,"PROFILE","NINTENDO ACCOUNT"},
-            {154,382,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
-            {398,382,5,"EDIT MODE","MOVE AND RESIZE TILES"},
-            {642,382,6,"RECENT","RECENTLY LAUNCHED APPS"}
+            {156,218,4,"APP LIBRARY","INSTALLED GAMES AND HOMEBREW"},
+            {496,218,6,"RECENT","RECENTLY LAUNCHED APPS"},
+            {836,218,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
+            {156,382,5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
+            {496,382,0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
+            {836,382,4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
-            softCard(item.x,item.y,210,136,systemMenuIndex==static_cast<int>(toolIndex)?
+            softCard(item.x,item.y,288,136,systemMenuIndex==static_cast<int>(toolIndex)?
                 Color{34,63,98,255}:Color{23,32,46,255},
                 systemMenuIndex==static_cast<int>(toolIndex)?
                 Color{91,157,238,115}:Color{255,255,255,18});
@@ -2153,8 +2183,8 @@ void drawScreen() {
                 systemMenuIndex==static_cast<int>(toolIndex)?
                 Color{54,108,171,255}:Color{38,51,71,255});
             drawSystemIcon(item.icon,item.x+25,item.y+25,32,WHITE);
-            text(item.title,item.x+80,item.y+23,2,WHITE,item.x+202);
-            text(item.subtitle,item.x+16,item.y+91,1,MUTED,item.x+202);
+            text(item.title,item.x+82,item.y+23,2,WHITE,item.x+278);
+            text(item.subtitle,item.x+16,item.y+91,1,MUTED,item.x+278);
         }
         roundRect(1058,136,82,34,10,Color{54,57,66,255});
         text("B BACK",1074,147,1,WHITE,1130);
@@ -2163,7 +2193,7 @@ void drawScreen() {
     if(appSettingsMenu) {
         rect(0,0,SW,SH,Color{3,7,14,198});
         softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
-        text("DESKNX SETTINGS",344,130,3,WHITE,930);
+        text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
         text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
         roundRect(842,132,92,32,10,Color{54,57,66,255});
         text("B  BACK",856,143,1,WHITE,926);
@@ -2180,7 +2210,7 @@ void drawScreen() {
             const int yy=216+i*38;
             if(i==appSettingsIndex)roundRect(340,yy,600,33,9,Color{35,61,93,255});
             text(actions[i],362,yy+9,2,i==appSettingsIndex?WHITE:MUTED,918);
-            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/5",790,yy+11,1,BLUE,920);
+            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+11,1,BLUE,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -2713,7 +2743,7 @@ void activateWorkspaceAppearance(int action) {
             desk.labelOpacity=steps[next];
             break;
         }
-        case 4: desk.accentColor=desk.accentColor>=7?-1:desk.accentColor+1; break;
+        case 4: desk.accentColor=desk.accentColor>=static_cast<int>(COLORS.size())-1?-1:desk.accentColor+1; break;
         case 5:
             desk.backgroundPath.clear();desk.backgroundFit=0;desk.artworkMode=0;
             desk.labelOpacity=196;desk.accentColor=-1;break;
@@ -2731,7 +2761,7 @@ void activateAppSettings(int action) {
         case 1: openMediaPicker(MediaPickerType::Font); break;
         case 2: openMediaPicker(MediaPickerType::IconPack); break;
         case 3:
-            themeIndex=(themeIndex+1)%5;
+            themeIndex=(themeIndex+1)%8;
             applyThemePalette();
             if(saveLauncherSettings())
                 setStatus("THEME "+std::to_string(themeIndex+1)+" APPLIED");
@@ -2941,51 +2971,25 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(systemMenu) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
-        if(systemMenuIndex<0||systemMenuIndex>6)systemMenuIndex=0;
-        if(keys&HidNpadButton_Left) {
-            if(systemMenuIndex==0)systemMenuIndex=3;
-            else if(systemMenuIndex==4)systemMenuIndex=6;
-            else --systemMenuIndex;
-        }
-        if(keys&HidNpadButton_Right) {
-            if(systemMenuIndex==3)systemMenuIndex=0;
-            else if(systemMenuIndex==6)systemMenuIndex=4;
-            else ++systemMenuIndex;
-        }
-        if(keys&HidNpadButton_Up) {
-            if(systemMenuIndex>=4)systemMenuIndex-=4;
-            else systemMenuIndex=(systemMenuIndex==3)?6:systemMenuIndex+4;
-        }
-        if(keys&HidNpadButton_Down) {
-            if(systemMenuIndex<4)systemMenuIndex+=(systemMenuIndex==3)?3:4;
-            else systemMenuIndex-=4;
-        }
+        if(systemMenuIndex<0||systemMenuIndex>5)systemMenuIndex=0;
+        int row=systemMenuIndex/3;
+        int column=systemMenuIndex%3;
+        if(keys&HidNpadButton_Left)column=(column+2)%3;
+        if(keys&HidNpadButton_Right)column=(column+1)%3;
+        if(keys&HidNpadButton_Up||keys&HidNpadButton_Down)row=(row+1)%2;
+        systemMenuIndex=row*3+column;
         if(keys&HidNpadButton_A) {
             const int action=systemMenuIndex;
             systemMenu=false;
-            if(action==0) {
-                // Retail System Settings are a scene inside qlaunch, not a
-                // launchable title. Requesting qlaunch here would relaunch HOME.
-                appSettingsMenu=true;
-                appSettingsIndex=0;
-            } else if(action==1) {
-                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
-                HidLaControllerSupportResultInfo result{};
-                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
-                    setStatus("CONTROLLER MENU UNAVAILABLE",3000);
-            } else if(action==2) {
-                if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
-            } else if(action==3) {
-                openUserProfile();
-            } else if(action==4) {
-                powerMenu=true;powerIndex=0;
-            } else if(action==5) {
+            if(action==0)openList();
+            else if(action==1){recentIndex=0;recentOpen=true;}
+            else if(action==2){powerMenu=true;powerIndex=0;}
+            else if(action==3) {
                 editing=!editing;
                 if(!editing&&dragging){dragging=false;saveNow();}
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-            } else if(action==6) {
-                recentIndex=0;recentOpen=true;
-            }
+            } else if(action==4)activateAppSettings(4);
+            else if(action==5)restartCatalogueScan();
         }
         return;
     }
@@ -3279,42 +3283,18 @@ void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN && systemMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=1058&&x<=1140&&y>=136&&y<=170){systemMenu=false;return;}
-        bool cardHit=false;
         if(y>=218&&y<354) {
-            if(x>=154&&x<364){systemMenuIndex=0;cardHit=true;}
-            else if(x>=398&&x<608){systemMenuIndex=1;cardHit=true;}
-            else if(x>=642&&x<852){systemMenuIndex=2;cardHit=true;}
-            else if(x>=886&&x<1096){systemMenuIndex=3;cardHit=true;}
+            if(x>=156&&x<444)systemMenuIndex=0;
+            else if(x>=496&&x<784)systemMenuIndex=1;
+            else if(x>=836&&x<1124)systemMenuIndex=2;
+            else return;
         } else if(y>=382&&y<518) {
-            if(x>=154&&x<364){systemMenuIndex=4;cardHit=true;}
-            else if(x>=398&&x<608){systemMenuIndex=5;cardHit=true;}
-            else if(x>=642&&x<852){systemMenuIndex=6;cardHit=true;}
-        }
-        if(cardHit) {
-            systemMenu=false;
-            if(systemMenuIndex==0) {
-                // System Settings are a qlaunch scene on retail consoles.
-                // Open the real DeskNX settings panel instead of relaunching HOME.
-                appSettingsMenu=true;
-                appSettingsIndex=0;
-            } else if(systemMenuIndex==1) {
-                HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
-                HidLaControllerSupportResultInfo result{};
-                if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))setStatus("CONTROLLER MENU UNAVAILABLE",3000);
-            } else if(systemMenuIndex==2) {
-                if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
-            } else if(systemMenuIndex==3) {
-                openUserProfile();
-            } else if(systemMenuIndex==4) {
-                powerMenu=true;powerIndex=0;
-            } else if(systemMenuIndex==5) {
-                editing=!editing;
-                if(!editing&&dragging){dragging=false;saveNow();}
-                setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-            } else if(systemMenuIndex==6) {
-                recentIndex=0;recentOpen=true;
-            }
-        }
+            if(x>=156&&x<444)systemMenuIndex=3;
+            else if(x>=496&&x<784)systemMenuIndex=4;
+            else if(x>=836&&x<1124)systemMenuIndex=5;
+            else return;
+        } else return;
+        keyInput(HidNpadButton_A,false);
         return;
     }
     if(e.type==SDL_FINGERDOWN && workspacePicker) {
@@ -3436,27 +3416,29 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(deletePrompt)return;
-        // Labelled system-toolbar hit targets use the same geometry as drawScreen().
+        // Four permanent shortcuts: Gallery, Settings, Pads and Tools.
         if(y>=16&&y<=82) {
+            if(x>=470&&x<=862) {
+                openUserProfile();
+                return;
+            }
             const int index=(x-ToolbarStartX)/ToolbarButtonStep;
             if(x>=ToolbarStartX&&index>=0&&index<ToolbarButtonCount&&
                x<toolbarButtonX(index)+ToolbarButtonWidth) {
                 switch(index) {
-                    case 0: openList(); break;
+                    case 0:
+                        if(R_FAILED(albumLaShowAllAlbumFiles()))
+                            setStatus("GALLERY UNAVAILABLE",3000);
+                        break;
                     case 1: appSettingsMenu=true;appSettingsIndex=0; break;
                     case 2: {
                         HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
                         HidLaControllerSupportResultInfo result{};
                         if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
-                            setStatus("CONTROLLER MENU UNAVAILABLE",3000);
+                            setStatus("PADS MENU UNAVAILABLE",3000);
                         break;
                     }
-                    case 3:
-                        if(R_FAILED(albumLaShowAllAlbumFiles()))setStatus("ALBUM UNAVAILABLE",3000);
-                        break;
-                    case 4: powerMenu=true;powerIndex=0; break;
-                    case 5: recentIndex=0;recentOpen=true; break;
-                    case 6: systemMenu=true;systemMenuIndex=0; break;
+                    case 3: systemMenu=true;systemMenuIndex=0; break;
                     default: break;
                 }
             }
@@ -3636,7 +3618,7 @@ int main(int,char**) {
     desknx::diag::Write("startup", "sdl_init_ok", "sdl_version=%u.%u.%u",
         SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"1");
-    window=SDL_CreateWindow("DeskNX",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
+    window=SDL_CreateWindow("Transwitch Launcher",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
     if(!window){
         desknx::diag::Write("startup", "window_create_failed", "error=%s", SDL_GetError());
         SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 2;
@@ -3806,7 +3788,7 @@ int main(int,char**) {
             // in-memory desks intact and do not rebuild them every frame.
             layoutLoaded=true;
             defaultLayoutPending=false;
-            if(saved)setStatus("DESKNX READY - Y ADD  X EDIT",4000);
+            if(saved)setStatus("LAUNCHER READY - Y ADD  X EDIT",4000);
         }
         if(complete&&truncated&&!catalogueWarningShown){catalogueWarningShown=true;setStatus("CATALOGUE LIMIT REACHED - SOME ITEMS HIDDEN",5000);}
 #ifdef DESKNX_SYSTEM_APPLET
