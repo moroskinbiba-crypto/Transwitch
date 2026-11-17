@@ -263,7 +263,8 @@ int main() {
         Workspace custom{"Custom",{}};
         custom.backgroundPath="sdmc:/switch/DeskNX/media/backgrounds/night.jpg";
         custom.backgroundFit=1; custom.artworkMode=2;
-        custom.labelOpacity=128; custom.accentColor=5;
+        custom.labelOpacity=128; custom.accentColor=11;
+        custom.tiles.push_back(Tile{Kind::Game,"Palette edge","0100000000001000",0,0,1,1,11});
         const std::string saved=desknx::layout::serialize({custom},0);
         assert(saved.find("DESKNX4\n")==0);
         desknx::layout::LoadResult loaded{};
@@ -271,12 +272,20 @@ int main() {
         const Workspace& restored=loaded.workspaces[0];
         assert(restored.backgroundPath==custom.backgroundPath);
         assert(restored.backgroundFit==1 && restored.artworkMode==2);
-        assert(restored.labelOpacity==128 && restored.accentColor==5);
+        assert(restored.labelOpacity==128 && restored.accentColor==11);
+        assert(restored.tiles.size()==1 && restored.tiles[0].color==11);
         assert(!loaded.needsMigration);
         desknx::layout::LoadResult legacy{};
         assert(desknx::layout::parse("DESKNX3\nA\t0\nD\tLegacy\n",legacy));
         assert(legacy.needsMigration && legacy.workspaces[0].backgroundPath.empty());
         assert(legacy.workspaces[0].artworkMode==0 && legacy.workspaces[0].labelOpacity==196);
+        const std::string paletteFile=
+            "DESKNX4\nA\t0\nD\tPalette\t\t0\t0\t196\t11\n"
+            "I\t0\tG\tPalette edge\t0100000000001000\t0\t0\t1\t1\t11\n";
+        desknx::layout::LoadResult parsedPalette{};
+        assert(desknx::layout::parse(paletteFile,parsedPalette));
+        assert(parsedPalette.workspaces[0].accentColor==11);
+        assert(parsedPalette.workspaces[0].tiles[0].color==11);
         custom.backgroundPath="sdmc:/switch/elsewhere/background.jpg";
         assert(desknx::layout::serialize({custom},0).empty());
         custom.backgroundPath.clear(); custom.artworkMode=99;
