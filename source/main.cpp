@@ -134,6 +134,7 @@ Uint32 activeWorkspaceMarkerDue=0;
 struct ConsoleUserProfile { AccountUid uid{}; std::string nickname; };
 std::vector<ConsoleUserProfile> consoleUsers;
 bool consoleUsersLoaded=false, userPickerOpen=false, uiHasSelectedUser=false;
+bool accountServiceReady=false;
 int userPickerIndex=0;
 AccountUid uiSelectedUser{};
 std::string selectedUserLabel="SELECT PLAYER";
@@ -2623,6 +2624,18 @@ bool sameAccountUid(const AccountUid& a,const AccountUid& b) {
 
 void loadConsoleUsers() {
     consoleUsers.clear();
+    if(!accountServiceReady) {
+        const Result rc=accountInitialize(AccountServiceType_Application);
+        accountServiceReady=R_SUCCEEDED(rc);
+        desknx::diag::Write("account","service_init",
+                            "rc=0x%08X ready=%d",
+                            static_cast<unsigned int>(rc),accountServiceReady?1:0);
+    }
+    if(!accountServiceReady) {
+        consoleUsersLoaded=false;
+        selectedUserLabel="SELECT PLAYER";
+        return;
+    }
     consoleUsersLoaded=true;
     AccountUid users[8]{};
     s32 actual=0;
@@ -3722,6 +3735,11 @@ int main(int,char**) {
         setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
     }
 
+    const Result accountRc=accountInitialize(AccountServiceType_Application);
+    accountServiceReady=R_SUCCEEDED(accountRc);
+    desknx::diag::Write("startup","account_service",
+                        "rc=0x%08X ready=%d",
+                        static_cast<unsigned int>(accountRc),accountServiceReady?1:0);
     loadLauncherSettings();
     applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
@@ -3873,6 +3891,10 @@ int main(int,char**) {
     }
     if(catalogueThread){SDL_WaitThread(catalogueThread,nullptr);catalogueThread=nullptr;}
     desknx::catalog::ShutdownServices();
+    if(accountServiceReady) {
+        accountExit();
+        accountServiceReady=false;
+    }
     if (setsysReady) setsysExit();
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
