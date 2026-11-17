@@ -25,3 +25,10 @@ The target-aware Homebrew loader under `projects/hbloader/` is derived from the 
 ## uLaunch visual reference
 
 uLaunch (https://github.com/XorTroll/uLaunch) is used as a design and behavior reference for grid navigation, themeable desktops, overlays and icon presentation. No uLaunch source files or theme assets are copied into Transwitch; the corresponding UI behavior is implemented independently. This avoids mixing GPL-2.0-only uLaunch code with GPL-3.0-or-later sLaunch-derived components already present in this repository.
+
+
+## HomeNX metadata cache
+
+- The persistent per-title metadata cache in `projects/common/include/switchu/control_cache.hpp` is adapted from HomeNX by ad3333m and contributors: https://github.com/ad3333m/homenx.
+- It handles NACP metadata including the compressed TitleDataFormat=1 language block used by modern Horizon versions, validates UTF-8, and stores per-title metadata/icon files under `sdmc:/config/SwitchU/control_cache/`.
+- License: GPL-3.0-only. The upstream license text is included as `projects/common/COPYING.HomeNX`. No HomeNX menu or runtime code is copied.
