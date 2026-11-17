@@ -979,6 +979,12 @@ void consumeInitialState() {
         g_backendUser=state.selected_user; g_backendHasUser=true;
         uiSelectedUser=state.selected_user;
         uiHasSelectedUser=true;
+        for(const auto& user:consoleUsers) {
+            if(sameAccountUid(user.uid,uiSelectedUser)) {
+                selectedUserLabel=user.nickname;
+                break;
+            }
+        }
     }
     if(state.app_state>=2&&state.app_title_id!=0) g_backendAppTitle=state.app_title_id;
     else g_backendAppTitle=0;
@@ -2668,6 +2674,7 @@ void loadConsoleUsers() {
     s32 actual=0;
     const Result listRc=accountListAllUsers(users,8,&actual);
     if(R_FAILED(listRc)||actual<=0) {
+        consoleUsersLoaded=false; // Retry only when the user opens the profile picker.
         selectedUserLabel="SELECT PLAYER";
         desknx::diag::Write("account","list_users_failed",
                             "rc=0x%08X count=%d",
@@ -2757,6 +2764,11 @@ void openUserProfile() {
     if(!consoleUsersLoaded) loadConsoleUsers();
     if(consoleUsers.empty()) {
         setStatus("NO NINTENDO ACCOUNT PROFILES FOUND",3500);
+        return;
+    }
+    if(!consoleUsersLoaded||!accountServiceReady) loadConsoleUsers();
+    if(consoleUsers.empty()) {
+        setStatus("ACCOUNT PROFILES UNAVAILABLE",3500);
         return;
     }
     userPickerIndex=0;
@@ -3778,7 +3790,6 @@ int main(int,char**) {
         setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
     }
 
-    (void)initializeAccountService();
     loadLauncherSettings();
     applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
@@ -3853,7 +3864,6 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
         if(SDL_AtomicGet(&heartbeatError)){SDL_AtomicSet(&heartbeatError,0);setStatus("SYSTEM BACKEND IPC UNAVAILABLE",2500);}
         consumeInitialState(); // IPC-06: queued at backend launch, read once
-        if(!consoleUsersLoaded) loadConsoleUsers();
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
         padUpdate(&pad);
