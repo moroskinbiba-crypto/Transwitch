@@ -700,11 +700,16 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
 
         const auto cachedName = nameCache.find(id);
         const bool iconCached = HasCachedGameIcon(id);
+        const bool cachedNameUsable = cachedName != nameCache.end() &&
+            !desknx::model::isTitleId(cachedName->second) &&
+            !(cachedName->second.compare(0, 5, "Game ") == 0 &&
+              desknx::model::isTitleId(cachedName->second.substr(5)));
         std::string title;
-        if (!forceRefresh && cachedName != nameCache.end()) {
-            // The title cache is independent of the icon cache. An app may
-            // legitimately have no icon; do not turn that into a repeated
-            // synchronous NS request for already-resolved metadata.
+        // Name metadata and artwork are independent cache entries. A valid
+        // name must never suppress the one-time NACP read needed to repair a
+        // missing icon, and a stale title-id placeholder must not be treated
+        // as a resolved game name.
+        if (!forceRefresh && cachedNameUsable && iconCached) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
@@ -713,8 +718,10 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                 controlRc = desknx::slaunch::ReadControlData(id, control, actual);
             if (nsReady && R_SUCCEEDED(controlRc)) {
                 ++controlDataOk;
-                title = desknx::slaunch::ResolveTitleName(control.nacp);
-                if (title.empty() && cachedName != nameCache.end())
+                const std::string resolved = desknx::slaunch::ResolveTitleName(control.nacp);
+                if (!resolved.empty() && !desknx::model::isTitleId(resolved))
+                    title = resolved;
+                else if (cachedNameUsable)
                     title = cachedName->second;
                 if (forceRefresh || !iconCached) CacheGameIcon(id, control, actual);
                 fetchedControlData = true;
@@ -722,9 +729,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                 ++controlDataFailed;
                 if (firstControlDataError == 0)
                     firstControlDataError = static_cast<std::uint32_t>(controlRc);
-                if (cachedName != nameCache.end()) {
+                if (cachedNameUsable)
                     title = cachedName->second;
-                }
             }
         }
 
@@ -732,9 +738,12 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
             title = std::string("Game ") + hex;
         }
-        freshNameCache.emplace(id, title);
+        const bool placeholderTitle = desknx::model::isTitleId(title) ||
+            (title.compare(0, 5, "Game ") == 0 &&
+             desknx::model::isTitleId(title.substr(5)));
+        if (!placeholderTitle) freshNameCache.emplace(id, title);
         Candidate game{Kind::Game, title, hex, 1, 1,
-                       static_cast<int>(colorIndex++ % 8), games[i].viewFlags};
+                       static_cast<int>(colorIndex++ % 12), games[i].viewFlags};
         result.items.push_back(std::move(game));
         if ((i + 1) % 12 == 0) report(false);
     }
@@ -754,7 +763,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     for (const auto& nro : nros) {
         if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
         Candidate item{Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
-                       static_cast<int>(result.items.size() % 8)};
+                       static_cast<int>(result.items.size() % 12)};
         CacheNroIconAndMetadata(nro, item, forceRefresh);
         result.items.push_back(std::move(item));
         if (result.items.size() % 12 == 0) report(false);
