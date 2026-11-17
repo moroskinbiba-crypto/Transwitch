@@ -13,6 +13,10 @@ export const PALETTE = [
   { name: 'Onyx Dark', hex: '#27272a', border: '#52525b', text: '#ffffff' },
   { name: 'Cyan Glow', hex: '#06b6d4', border: '#22d3ee', text: '#000000' },
   { name: 'Rose Pink', hex: '#ec4899', border: '#f472b6', text: '#ffffff' },
+  { name: 'Electric Violet', hex: '#a855f7', border: '#c084fc', text: '#ffffff' },
+  { name: 'Lime', hex: '#84cc16', border: '#a3e635', text: '#10140a' },
+  { name: 'Arctic', hex: '#38bdf8', border: '#7dd3fc', text: '#07131d' },
+  { name: 'Coral', hex: '#fb7185', border: '#fda4af', text: '#24090e' },
 ];
 
 /**
@@ -161,7 +165,7 @@ export function serializeLayout(workspaces: Workspace[], activeIndex: number): s
     // Keep the file parseable by the native reader: no NaN, no out-of-range
     // palette index, no undefined label opacity.
     const labelOpacity = clampInt(desk.labelOpacity, 0, 255, 196);
-    const accentColor = clampInt(desk.accentColor, -1, 7, -1);
+    const accentColor = clampInt(desk.accentColor, -1, 11, -1);
     lines.push(
       `D\t${safeName}\t${safeBg}\t${clampInt(desk.backgroundFit, 0, 2, 0)}\t${clampInt(desk.artworkMode, 0, 2, 0)}\t${labelOpacity}\t${accentColor}`
     );
@@ -176,7 +180,7 @@ export function serializeLayout(workspaces: Workspace[], activeIndex: number): s
       // Serializing an unsupported shape would be rewritten on the next parse.
       const shape = nearestSupportedTileSize(t.w, t.h);
       lines.push(
-        `I\t${d}\t${code}\t${safeTitle}\t${safeData}\t${clampInt(t.x, 0, COLUMNS - 1, 0)}\t${clampInt(t.y, 0, ROWS - 1, 0)}\t${shape.w}\t${shape.h}\t${clampInt(t.color, 0, 7, 0)}`
+        `I\t${d}\t${code}\t${safeTitle}\t${safeData}\t${clampInt(t.x, 0, COLUMNS - 1, 0)}\t${clampInt(t.y, 0, ROWS - 1, 0)}\t${shape.w}\t${shape.h}\t${clampInt(t.color, 0, 11, 0)}`
       );
     }
   }
