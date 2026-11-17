@@ -2222,7 +2222,7 @@ void drawScreen() {
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
         text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("MEDIA: /switch/DeskNX/media  •  ICONS: iconpacks/<folder>/<TITLEID>.jpg/png",
+        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
              346,592,1,MUTED,930);
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
     }
@@ -3725,12 +3725,12 @@ int main(int,char**) {
     loadLauncherSettings();
     applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
-    setStatus("STARTING DESKNX...",5000);
+    setStatus("STARTING TRANSWITCH...",5000);
     drawScreen(); // first frame precedes application enumeration, SD recursion and font service init
 #ifdef DESKNX_SYSTEM_APPLET
     const Result readyRc=sendIpc([]{return desknx::ipc::SendMenuReady();});
     if(R_FAILED(readyRc))setStatus("SYSTEM BACKEND NOT CONNECTED",5000);
-    else setStatus("DESKNX READY - CATALOGUE LOADING",4000);
+    else setStatus("TRANSWITCH READY - CATALOGUE LOADING",4000);
     startHeartbeatThread();
 #else
     setStatus("CATALOGUE LOADING - Y ADD  X EDIT",5000);
