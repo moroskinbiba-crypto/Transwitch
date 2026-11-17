@@ -762,7 +762,17 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         if (hasHomeNXMeta && cachedMeta.name[0] != '\0') {
             title = cachedMeta.name;
             ++metadataCacheHits;
-        } else if (!forceRefresh && cachedName != nameCache.end()) {
+            // HomeNX keeps its JPEGs in a shared metadata-cache directory;
+            // hydrate Transwitch's own lazy icon cache without another NS call.
+            if (!iconCached) {
+                const auto cachedIcon=switchu::control_cache::readIcon(id);
+                if (!cachedIcon.empty()) {
+                    const std::string localIconPath=
+                        desknx::model::iconCachePath(Kind::Game,hex);
+                    (void)CacheJpegIcon(localIconPath,cachedIcon.data(),cachedIcon.size(),true);
+                }
+            }
+        } else if (!forceRefresh && cachedName != nameCache.end() && iconCached) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
