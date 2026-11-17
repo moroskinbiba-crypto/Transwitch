@@ -132,6 +132,8 @@ bool persistedLayoutShapeKnown = false;
 bool layoutPrimaryNeedsRewrite = true;
 bool activeWorkspaceMarkerPending=false;
 Uint32 activeWorkspaceMarkerDue=0;
+bool activeWorkspaceMarkerKnown=false;
+std::string persistedActiveWorkspaceMarker;
 struct ConsoleUserProfile { AccountUid uid{}; std::string nickname; };
 std::vector<ConsoleUserProfile> consoleUsers;
 bool consoleUsersLoaded=false, userPickerOpen=false, uiHasSelectedUser=false;
@@ -1187,6 +1189,16 @@ bool saveActiveWorkspaceState() {
     const std::string state=
         desknx::layout::serializeActiveWorkspaceState(desks,deskIndex);
     if(state.empty()) return false;
+    if(activeWorkspaceMarkerKnown&&persistedActiveWorkspaceMarker==state) {
+        struct stat markerStat{};
+        if(stat(ACTIVE_WORKSPACE_FILE,&markerStat)==0&&
+           S_ISREG(markerStat.st_mode)&&
+           markerStat.st_size==static_cast<off_t>(state.size())) {
+            activeWorkspaceMarkerPending=false;
+            activeWorkspaceMarkerDue=0;
+            return true;
+        }
+    }
     std::ofstream out(ACTIVE_WORKSPACE_TMP,std::ios::binary|std::ios::trunc);
     if(!out) return false;
     out.write(state.data(),static_cast<std::streamsize>(state.size()));
@@ -1208,6 +1220,8 @@ bool saveActiveWorkspaceState() {
         return false;
     const bool committed=commitSdCard("active-workspace-publish");
     if(committed) {
+        persistedActiveWorkspaceMarker=state;
+        activeWorkspaceMarkerKnown=true;
         activeWorkspaceMarkerPending=false;
         activeWorkspaceMarkerDue=0;
     }
@@ -1249,6 +1263,13 @@ bool loadActiveWorkspaceState() {
         if(!desknx::layout::parseActiveWorkspaceState(contents.str(),desks,restored))
             continue;
         deskIndex=restored;
+        if(candidateIndex==0) {
+            persistedActiveWorkspaceMarker=contents.str();
+            activeWorkspaceMarkerKnown=true;
+        } else {
+            persistedActiveWorkspaceMarker.clear();
+            activeWorkspaceMarkerKnown=false;
+        }
         activeWorkspaceMarkerPending=false;
         activeWorkspaceMarkerDue=0;
         selectedX=selectedY=0;
