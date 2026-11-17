@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Workspace, Tile } from '../types/desknx';
 import { PALETTE, COLUMNS, ROWS, findFirstFree, isSupportedTileSize } from '../utils/desknxLayout';
 import { sound } from '../data/mockCatalog';
+import { notify } from '../ui/toast';
 import { 
   X, 
   Palette, 
@@ -48,6 +49,7 @@ export const UnifiedDeskCustomizer: React.FC<UnifiedDeskCustomizerProps> = ({
   const [cardStyle, setCardStyle] = useState<'glass' | 'matte' | 'border' | 'cyber'>(workspace.cardStyle ?? 'glass');
   const [labelOpacity, setLabelOpacity] = useState(workspace.labelOpacity ?? 196);
   const [backgroundFit, setBackgroundFit] = useState(workspace.backgroundFit ?? 0);
+  const backgroundInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -65,6 +67,55 @@ export const UnifiedDeskCustomizer: React.FC<UnifiedDeskCustomizerProps> = ({
       backgroundFit,
     });
     onClose();
+  };
+
+  const handleBackgroundFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      notify('Выберите файл изображения.');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      notify('Файл слишком большой. Максимальный размер — 20 МБ.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onerror = () => notify('Не удалось прочитать файл изображения.');
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => notify('Файл изображения повреждён или не поддерживается.');
+      image.onload = () => {
+        const maxWidth = 1600;
+        const maxHeight = 900;
+        const scale = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) {
+          notify('Не удалось подготовить изображение для обоев.');
+          return;
+        }
+        context.fillStyle = '#080d16';
+        context.fillRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.76);
+        // Keep each workspace asset comfortably below common WebKit localStorage quotas.
+        if (compressed.length > 1_600_000) {
+          notify('Изображение всё ещё слишком тяжёлое после сжатия. Выберите другое.');
+          return;
+        }
+        setBgPath(compressed);
+        notify('Изображение добавлено в галерею обоев. Нажмите «Применить настройки».');
+      };
+      image.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleCompactTiles = () => {
@@ -305,16 +356,49 @@ export const UnifiedDeskCustomizer: React.FC<UnifiedDeskCustomizerProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-zinc-300 mb-1.5">
-                  Или ссылка на собственную картинку (JPG/PNG):
+              <div className="rounded-2xl border border-white/10 bg-black/25 p-3.5 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold text-white">Галерея обоев</div>
+                    <div className="text-[11px] text-zinc-400 mt-0.5">Выберите изображение с устройства. Оно будет уменьшено и сохранено вместе с рабочим столом.</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => backgroundInputRef.current?.click()}
+                    className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 px-3.5 py-2.5 text-xs font-extrabold text-slate-950 shadow-lg shadow-cyan-950/30 transition-all active:scale-95"
+                  >
+                    <ImageIcon className="w-4 h-4" /> Выбрать файл
+                  </button>
+                  <input
+                    ref={backgroundInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={handleBackgroundFile}
+                  />
+                </div>
+                {bgPath && (
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="h-16 w-28 shrink-0 rounded-xl border border-white/15 bg-zinc-900 bg-cover bg-center"
+                      style={{ backgroundImage: `url("${bgPath}")` }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-emerald-300">Фон выбран</div>
+                      <div className="text-[10px] text-zinc-500 truncate">{bgPath.startsWith('data:') ? 'Локальное изображение · сохранится после перезапуска' : bgPath}</div>
+                    </div>
+                    <button type="button" onClick={() => setBgPath('')} className="rounded-lg px-2.5 py-2 text-xs font-bold text-zinc-300 hover:bg-white/10">Сбросить</button>
+                  </div>
+                )}
+                <label className="block text-[11px] font-bold text-zinc-400">
+                  Или вставьте ссылку на картинку (JPG/PNG):
                 </label>
                 <input
                   type="text"
-                  value={bgPath}
+                  value={bgPath.startsWith('data:') ? '' : bgPath}
                   onChange={(e) => setBgPath(e.target.value)}
-                  placeholder="https://... или оставьте пустым"
-                  className="w-full bg-zinc-900/90 border border-white/15 rounded-2xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-400"
+                  placeholder="https://…"
+                  className="w-full bg-zinc-900/90 border border-white/15 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-400"
                 />
               </div>
 
