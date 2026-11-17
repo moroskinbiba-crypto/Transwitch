@@ -116,6 +116,36 @@ export const THEME_CONFIGS = {
     textMuted: 'text-sky-300',
     accent: '#0284c7',
   },
+  emerald: {
+    name: 'Emerald Matrix',
+    description: 'Deep green glass with vivid mint highlights',
+    bgGradient: 'from-[#061b17] via-[#0b2922] to-[#07120f]',
+    cardBg: 'bg-emerald-950/60 hover:bg-emerald-900/70 border-emerald-400/20',
+    tileSelected: 'ring-3 ring-emerald-300 shadow-[0_0_25px_rgba(52,211,153,0.45)]',
+    textMain: 'text-emerald-50',
+    textMuted: 'text-emerald-200/70',
+    accent: '#34d399',
+  },
+  rose: {
+    name: 'Rose Quartz',
+    description: 'Warm graphite with rose and coral accents',
+    bgGradient: 'from-[#210d18] via-[#24111f] to-[#100b16]',
+    cardBg: 'bg-rose-950/45 hover:bg-rose-900/60 border-rose-300/20',
+    tileSelected: 'ring-3 ring-rose-300 shadow-[0_0_25px_rgba(251,113,133,0.5)]',
+    textMain: 'text-rose-50',
+    textMuted: 'text-rose-200/70',
+    accent: '#fb7185',
+  },
+  arctic: {
+    name: 'Arctic Light',
+    description: 'Cool midnight blue with clear ice-blue highlights',
+    bgGradient: 'from-[#071827] via-[#10283c] to-[#07111c]',
+    cardBg: 'bg-sky-950/55 hover:bg-sky-900/65 border-sky-300/25',
+    tileSelected: 'ring-3 ring-sky-300 shadow-[0_0_25px_rgba(125,211,252,0.5)]',
+    textMain: 'text-sky-50',
+    textMuted: 'text-sky-200/75',
+    accent: '#7dd3fc',
+  },
 };
 
 export function serializeSettingsIni(settings: DeskNXSettings): string {
@@ -163,7 +193,7 @@ export function parseSettingsIni(iniContent: string): DeskNXSettings {
     const val = line.substring(eqIdx + 1).trim();
 
     if (key === 'theme') {
-      if (['ulauncher_dark', 'frosted_glass', 'graphite', 'violet', 'sunset', 'ocean'].includes(val)) {
+      if (['ulauncher_dark', 'frosted_glass', 'graphite', 'violet', 'sunset', 'ocean', 'emerald', 'rose', 'arctic'].includes(val)) {
         settings.theme = val as any;
       }
     } else if (key === 'font_family') {
