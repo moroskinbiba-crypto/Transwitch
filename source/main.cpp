@@ -64,6 +64,7 @@ constexpr const char* SETTINGS_FILE = "sdmc:/switch/DeskNX/settings.ini";
 constexpr const char* SETTINGS_TMP = "sdmc:/switch/DeskNX/settings.tmp";
 constexpr const char* SETTINGS_BAK = "sdmc:/switch/DeskNX/settings.bak";
 constexpr const char* MEDIA_ROOT = "sdmc:/switch/DeskNX/media";
+constexpr const char* ALBUM_ROOT = "sdmc:/Nintendo/Album";
 
 struct Color { Uint8 r, g, b, a; };
 Color BG{10,14,22,255};
@@ -330,8 +331,12 @@ bool hasExtension(const std::string& path,const char* const* extensions,size_t c
 }
 
 bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
-    const std::string prefix=std::string(MEDIA_ROOT)+"/";
-    if(path.compare(0,prefix.size(),prefix)!=0||path.size()>240||
+    const std::string mediaPrefix=std::string(MEDIA_ROOT)+"/";
+    const std::string albumPrefix=std::string(ALBUM_ROOT)+"/";
+    const bool mediaPath=path.compare(0,mediaPrefix.size(),mediaPrefix)==0;
+    const bool albumPath=type==MediaPickerType::WorkspaceBackground &&
+        path.compare(0,albumPrefix.size(),albumPrefix)==0;
+    if((!mediaPath&&!albumPath)||path.size()>240||
        path.find("..")!=std::string::npos||path.find('\0')!=std::string::npos)
         return false;
     static const char* imageExts[]={".jpg",".jpeg",".png"};
@@ -574,6 +579,12 @@ void openMediaPicker(MediaPickerType type) {
 void mediaPickerBack() {
     if(mediaPickerDirectory==MEDIA_ROOT) {
         mediaPickerOpen=false;
+        return;
+    }
+    if(mediaPickerDirectory==ALBUM_ROOT) {
+        mediaPickerDirectory=MEDIA_ROOT;
+        mediaPickerIndex=mediaPickerOffset=0;
+        refreshMediaPicker();
         return;
     }
     const size_t slash=mediaPickerDirectory.find_last_of('/');
@@ -2235,6 +2246,12 @@ void drawScreen() {
              mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
              264,88,3,WHITE,1000);
         text(mediaPickerDirectory,266,128,1,MUTED,1000);
+        if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
+            const bool browsingAlbum=mediaPickerDirectory.compare(
+                0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0;
+            roundRect(782,86,132,34,10,Color{38,76,119,255});
+            text(browsingAlbum?"MEDIA":"NINTENDO ALBUM",794,98,1,WHITE,908);
+        }
         roundRect(930,86,92,34,10,Color{54,57,66,255});
         text("B  BACK",944,98,1,WHITE,1012);
         if(mediaPickerEntries.empty()) {
@@ -2257,7 +2274,10 @@ void drawScreen() {
         }
         text(std::to_string(mediaPickerIndex+1)+" / "+std::to_string(mediaPickerEntries.size())+
              "    A OPEN / APPLY",266,590,1,MUTED,650);
-        text("UP / DOWN SELECT     B BACK",730,590,1,BLUE,1018);
+        text(mediaPickerType==MediaPickerType::WorkspaceBackground
+             ?"UP/DOWN SELECT   A OPEN/APPLY   X ALBUM   B BACK"
+             :"UP / DOWN SELECT     B BACK",
+             682,590,1,BLUE,1018);
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
@@ -2962,6 +2982,15 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(mediaPickerOpen) {
         if(keys&HidNpadButton_B){mediaPickerBack();return;}
+        if((keys&HidNpadButton_X)&&
+           mediaPickerType==MediaPickerType::WorkspaceBackground) {
+            mediaPickerDirectory=mediaPickerDirectory.compare(
+                0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0
+                ?std::string(MEDIA_ROOT):std::string(ALBUM_ROOT);
+            mediaPickerIndex=mediaPickerOffset=0;
+            refreshMediaPicker();
+            return;
+        }
         if(!mediaPickerEntries.empty()) {
             if(keys&HidNpadButton_Up) {
                 mediaPickerIndex=(mediaPickerIndex-1+static_cast<int>(mediaPickerEntries.size()))%
@@ -3277,6 +3306,13 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=930&&x<=1022&&y>=86&&y<=120) {
             mediaPickerBack();
+        } else if(mediaPickerType==MediaPickerType::WorkspaceBackground &&
+                  x>=782&&x<=914&&y>=86&&y<=120) {
+            mediaPickerDirectory=mediaPickerDirectory.compare(
+                0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0
+                ?std::string(MEDIA_ROOT):std::string(ALBUM_ROOT);
+            mediaPickerIndex=mediaPickerOffset=0;
+            refreshMediaPicker();
         } else if(x>=260&&x<=1020&&y>=166&&y<574) {
             const int row=(y-166)/34;
             applyMediaPickerSelection(mediaPickerOffset+row);
