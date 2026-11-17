@@ -704,7 +704,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
 
     // Publish all installed Title IDs before per-title metadata or cover work.
     // A title remains discoverable even if a later control-data request stalls.
-    for (const auto& record : games) {
+    for (size_t gameIndex = 0; gameIndex < games.size() && gameIndex < gameLimit; ++gameIndex) {
+        const auto& record = games[gameIndex];
         char hex[32]{};
         std::snprintf(hex, sizeof(hex), "%016llX",
                       static_cast<unsigned long long>(record.id));
@@ -715,12 +716,13 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         result.items.push_back({Kind::Game, initialTitle, hex, 1, 1,
                                 static_cast<int>(colorIndex++ % 8), record.viewFlags});
     }
+    if (games.size() > gameLimit) result.truncated = true;
     report(false);
-    LogDiagnostic("catalogue_publish phase=installed_ids games=%zu", games.size());
+    LogDiagnostic("catalogue_publish phase=installed_ids games=%zu visible=%zu",
+                  games.size(), result.items.size());
 
     colorIndex = 0;
-    for (size_t i = 0; i < games.size(); ++i) {
-        if (result.items.size() >= gameLimit) { result.truncated = true; break; }
+    for (size_t i = 0; i < games.size() && i < gameLimit; ++i) {
         const u64 id = games[i].id;
         char hex[32]{};
         std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
