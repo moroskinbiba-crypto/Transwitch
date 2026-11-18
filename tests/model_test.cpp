@@ -5,6 +5,7 @@
 #include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
 #include <desknx/Artwork.hpp>
+#include <desknx/WidgetLayout.hpp>
 #include "../source/catalog_view.hpp"
 
 #include <cassert>
@@ -536,6 +537,35 @@ int main() {
         assert(!IsValidApplicationPageCount(secondPage.capacity, 129));
         assert(!IsValidApplicationPageCount(secondPage.capacity, -1));
     }
+
+
+    // Every supported widget footprint receives a usable layout. Its text
+    // region and list rows must remain within the actual tile bounds, including
+    // the 2x3 portrait footprint.
+    {
+        using desknx::widget_layout::measure;
+        const int sizes[][2]={{1,1},{2,1},{3,1},{2,2},{3,2},{2,3}};
+        for(const auto& size:sizes) {
+            const int width=size[0]*154+(size[0]-1)*14;
+            const int height=size[1]*112+(size[1]-1)*14;
+            const auto m=measure(141,150,width,height,size[0],size[1]);
+            assert(m.left>m.x);
+            assert(m.right<m.x+m.width);
+            assert(m.bodyTop>=m.y+28);
+            assert(m.bodyBottom<m.y+m.height);
+            assert(m.maxRows>=1&&m.maxRows<=6);
+            for(int row=0;row<m.maxRows;++row) {
+                const int y=m.rowY(row);
+                assert(y>=m.bodyTop);
+                assert(y<=m.bodyBottom);
+            }
+        }
+        assert(measure(0,0,154,112,1,1).compact());
+        assert(measure(0,0,322,112,2,1).banner());
+        assert(measure(0,0,322,364,2,3).portrait());
+    }
+    assert(typeCode(Kind::Nextendo)=="P");
+    assert(parseKind("P")==Kind::Nextendo);
 
     return 0;
 }

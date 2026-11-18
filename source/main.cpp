@@ -17,6 +17,7 @@
 #include "../include/desknx/Diagnostics.hpp"
 #include "../include/desknx/Localization.hpp"
 #include "../include/desknx/NextendoPlayers.hpp"
+#include "../include/desknx/WidgetLayout.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
@@ -232,6 +233,8 @@ int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
 int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
+bool nextendoOpen=false;
+int nextendoSelected=0;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -857,6 +860,7 @@ std::string typeName(Kind k) {
     switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
         case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT";
         case Kind::Storage:return "WIDGET / STORAGE"; case Kind::Calendar:return "WIDGET / CALENDAR";
+        case Kind::Nextendo:return "WIDGET / NEXTENDO ONLINE";
         case Kind::Unsupported:return "UNSUPPORTED"; }
     return "ITEM";
 }
@@ -1015,6 +1019,18 @@ unsigned nextendoPlayersForTitle(const std::string& titleId) {
     const unsigned count = nextendoFeed.playersFor(static_cast<std::uint64_t>(id), SDL_GetTicks64());
     SDL_UnlockMutex(nextendoMutex);
     return count;
+}
+
+
+desknx::nextendo::PopularGames nextendoPopularSnapshot() {
+    desknx::nextendo::PopularGames result{};
+    if (!nextendoMutex) return result;
+    SDL_LockMutex(nextendoMutex);
+    desknx::nextendo::PlayerSnapshot snapshot{};
+    if (nextendoFeed.copyFreshSnapshot(snapshot, SDL_GetTicks64()))
+        result = desknx::nextendo::rankPopularGames(snapshot);
+    SDL_UnlockMutex(nextendoMutex);
+    return result;
 }
 
 std::string nextendoTotalLabel() {
@@ -1872,6 +1888,7 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Recent,"Recent launches","",0,1,3,1,6});
     desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
     desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
+    desks[2].tiles.push_back(Tile{Kind::Nextendo,"Nextendo online","",3,1,3,1,9});
 }
 void refreshBattery() {
     Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
@@ -2228,20 +2245,26 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             outline(r.x,r.y,r.w,r.h,focusAccent());
             outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
         }
-        const int accentWidth=std::min(42,r.w-28);
+        const auto metrics=desknx::widget_layout::measure(
+            r.x,r.y,r.w,r.h,t.w,t.h);
+        const int accentWidth=std::max(8,std::min(42,r.w-28));
         roundRect(r.x+(r.w-accentWidth)/2,r.y+10,accentWidth,3,2,accent);
-        const bool compact=t.w==1&&t.h==1;
-        const bool wide=t.h==1&&t.w>=2;
-        const int left=r.x+18, right=r.x+r.w-14;
-        const int innerWidth=std::max(1,r.w-36);
+        const int left=metrics.left,right=metrics.right;
+        const int center=metrics.center;
+        const bool compact=metrics.compact();
+        const bool banner=metrics.banner();
+        const bool portrait=metrics.portrait();
+        const int bodyTop=metrics.bodyTop;
+        const int bottom=metrics.bodyBottom;
         auto label=[&](const std::string& value,int y) {
-            textCentered(value,r.x+r.w/2,y,1,MUTED,left,right);
+            textCentered(value,center,metrics.clampY(y,8),1,MUTED,left,right);
         };
         auto progress=[&](int y,int percent) {
-            const int barWidth=std::max(16,innerWidth);
+            const int barWidth=std::max(12,right-left);
             const int bounded=std::max(0,std::min(100,percent));
-            roundRect(left,y,barWidth,8,4,Color{48,62,79,255});
-            roundRect(left,y,std::max(2,barWidth*bounded/100),8,4,
+            const int barY=metrics.clampY(y,8);
+            roundRect(left,barY,barWidth,8,4,Color{48,62,79,255});
+            roundRect(left,barY,std::max(2,barWidth*bounded/100),8,4,
                       bounded>=80?RED:GREEN);
         };
         auto freeSpaceText=[&]() {
@@ -2253,58 +2276,63 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         auto recentLine=[&](size_t index,int y,int iconSize) {
             if(index>=recentLaunches.size())return;
             const auto& entry=recentLaunches[index];
+            const int safeY=metrics.clampY(y,iconSize);
             Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
-            drawTileIcon(iconTile,left,y,iconSize);
-            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
+            drawTileIcon(iconTile,left,safeY,iconSize);
+            text(entry.title,left+iconSize+8,safeY+std::max(3,iconSize/5),1,WHITE,right);
+        };
+        auto drawDate=[&](int y,int scale) {
+            const std::string date=clockText(true);
+            const std::string value=date.size()>6?date.substr(6):date;
+            textCentered(value,center,metrics.clampY(y,7*scale),scale,MUTED,left,right);
         };
 
         if(t.kind==Kind::Clock) {
             const std::string time=clockText();
-            const std::string date=clockText(true).substr(6);
             if(compact) {
-                textCentered(time,r.x+r.w/2,r.y+20,3,WHITE,left,right);
-                label(date,r.y+66);
-                textCentered("CLOCK",r.x+r.w/2,r.y+r.h-18,1,BLUE,left,right);
-            } else if(wide) {
-                textCentered(time,r.x+r.w/2,r.y+23,5,WHITE,left,right);
-                label(date,r.y+78);
-                if(t.w>=3) {
-                    drawSystemIcon(6,r.x+r.w-68,r.y+28,38,accent);
-                    textCentered("LOCAL TIME",r.x+r.w/2,r.y+78,1,BLUE,left,right);
-                }
+                textCentered(time,center,r.y+31,3,WHITE,left,right);
+                drawDate(r.y+70,1);
+                label("CLOCK",r.y+r.h-18);
+            } else if(banner) {
+                textCentered(time,center,r.y+23,5,WHITE,left,right);
+                drawDate(r.y+77,1);
             } else {
-                textCentered(time,r.x+r.w/2,r.y+24,6,WHITE,left,right);
-                textCentered(date,r.x+r.w/2,r.y+105,2,MUTED,left,right);
+                const int scale=portrait?6:5;
+                const int timeY=portrait?r.y+r.h/4:r.y+std::max(42,r.h/5);
+                textCentered(time,center,metrics.clampY(timeY,7*scale),scale,WHITE,left,right);
+                drawDate(bodyTop+metrics.rowStep,2);
                 textCentered(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",
-                             r.x+r.w/2,r.y+160,1,BLUE,left,right);
-                drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
+                             center,metrics.clampY(bottom-22,8),1,BLUE,left,right);
+                if(!portrait)drawSystemIcon(6,right-42,metrics.clampY(bodyTop+8,36),34,accent);
             }
         } else if(t.kind==Kind::Battery) {
             if(compact) {
+                label("BATTERY",r.y+14);
+                textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
+                             center,r.y+38,3,WHITE,left,right);
+                progress(r.y+r.h-24,battery);
+            } else if(banner) {
                 label("BATTERY",r.y+13);
                 textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
-                             r.x+r.w/2,r.y+34,3,WHITE,left,right);
-                progress(r.y+82,battery);
-            } else if(wide) {
-                label("BATTERY",r.y+13);
-                textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
-                             left+(right-70-left)/2,r.y+33,t.w>=3?4:3,
-                             WHITE,left,right-70);
-                progress(r.y+82,battery);
-                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
-                if(t.w>=3)text(languageRussian?"ЗАРЯД":"CHARGE",
-                    r.x+r.w-112,r.y+75,1,MUTED,right);
+                             center,r.y+38,3,WHITE,left,right);
+                progress(r.y+r.h-20,battery);
+                if(r.w>250)drawSystemIcon(3,right-38,r.y+29,30,battery>=20?GREEN:RED);
             } else {
-                label("BATTERY STATUS",r.y+14);
-                drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
+                label("BATTERY STATUS",r.y+18);
+                const int scale=portrait?5:6;
                 textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
-                             left+(right-70-left)/2,r.y+50,6,WHITE,left,right-70);
-                progress(r.y+145,battery);
+                             center,metrics.clampY(r.y+r.h/3,7*scale),
+                             scale,WHITE,left,right);
+                drawSystemIcon(3,right-52,metrics.clampY(r.y+r.h/3-4,42),42,
+                               battery>=20?GREEN:RED);
+                const int percent=bottom-r.y>100
+                    ?(battery>=0?battery:-1):-1;
+                progress(bottom-44,percent);
                 textCentered(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
-                     battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
-                     battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
-                                 (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
-                     r.x+r.w/2,r.y+172,2,battery>=20?GREEN:RED,left,right);
+                    battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
+                    battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
+                                (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
+                    center,bottom-25,1,battery>=20?GREEN:RED,left,right);
             }
         } else if(t.kind==Kind::System) {
             const u32 firmware=hosversionGet();
@@ -2312,53 +2340,39 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             std::snprintf(firmwareText,sizeof(firmwareText),"%u.%u.%u",
                 HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
             if(compact) {
-                drawSystemIcon(0,left,r.y+24,40,accent);
-                label("SYSTEM",r.y+13);
-                text("HOS "+std::string(firmwareText),left,r.y+70,1,WHITE,right);
-            } else if(wide) {
-                drawSystemIcon(0,left,r.y+31,48,accent);
+                label("SYSTEM",r.y+14);
+                drawSystemIcon(0,left+2,r.y+34,32,accent);
+                text("HOS "+std::string(firmwareText),left+43,r.y+48,1,WHITE,right);
+            } else if(banner) {
                 label("SYSTEM INFO",r.y+13);
-                text("HOS "+std::string(firmwareText),left+62,r.y+34,2,WHITE,right);
-                text(languageRussian?"DESKNX • NATIVE":"DESKNX • NATIVE",
-                     left+62,r.y+67,1,BLUE,right);
+                drawSystemIcon(0,left+2,r.y+37,38,accent);
+                text("HOS "+std::string(firmwareText),left+49,r.y+43,2,WHITE,right);
+                text("DESKNX  /  NATIVE",left+49,r.y+70,1,BLUE,right);
             } else {
-                roundRect(left,r.y+34,66,66,18,Color{37,61,91,255});
-                drawSystemIcon(0,left+12,r.y+46,42,WHITE);
-                label("SYSTEM INFORMATION",r.y+20);
-                text("HOS "+std::string(firmwareText),left+82,r.y+54,2,WHITE,right);
-                text(languageRussian?"НАТИВНЫЙ ЛАУНЧЕР":"NATIVE LAUNCHER",
-                     left+82,r.y+86,1,BLUE,right);
+                const int iconSize=portrait?54:62;
+                drawSystemIcon(0,left,r.y+bodyTop-r.y+8,iconSize,accent);
+                text("HOS "+std::string(firmwareText),left+iconSize+14,
+                     metrics.clampY(r.y+bodyTop+13,14),2,WHITE,right);
+                text("DESKNX  /  NATIVE",left+iconSize+14,
+                     metrics.clampY(r.y+bodyTop+43,8),1,BLUE,right);
                 text(languageRussian?"12 РАБОЧИХ СТОЛОВ":"12 WORKSPACES",
-                     left,r.y+132,2,MUTED,right);
-                text("SDL2 / LIBNX",left,r.y+168,1,MUTED,right);
+                     left,metrics.clampY(bottom-36,14),2,MUTED,right);
+                text("SDL2  /  LIBNX",left,metrics.clampY(bottom-16,8),1,MUTED,right);
             }
         } else if(t.kind==Kind::Recent) {
-            if(compact) {
-                label("RECENT",r.y+13);
-                if(recentLaunches.empty())
-                    textCentered(languageRussian?"ПУСТО":"EMPTY",r.x+r.w/2,
-                             r.y+50,1,WHITE,left,right);
-                else recentLine(0,r.y+42,26);
-            } else if(wide) {
-                label("RECENTLY OPENED",r.y+12);
-                if(recentLaunches.empty())
-                    textCentered(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                                 r.x+r.w/2,r.y+48,2,WHITE,left,right);
-                else {
-                    recentLine(0,r.y+34,26);
-                    if(t.w>=3)recentLine(1,r.y+67,26);
-                }
+            const int rows=compact?1:(banner?std::min(2,t.w>=3?2:1):metrics.maxRows);
+            if(compact)label("RECENT",r.y+14);
+            else label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",
+                       metrics.headerY);
+            if(recentLaunches.empty()) {
+                textCentered(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
+                    center,metrics.clampY(bodyTop+12,14),1,WHITE,left,right);
             } else {
-                label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
-                if(recentLaunches.empty()) {
-                    textCentered(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                                 r.x+r.w/2,r.y+86,2,WHITE,left,right);
-                } else {
-                    const size_t count=std::min<size_t>(4,recentLaunches.size());
-                    for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
+                const int iconSize=compact?22:(banner?24:30);
+                for(int i=0;i<rows&&static_cast<size_t>(i)<recentLaunches.size();++i) {
+                    const int y=compact?r.y+43:(banner?r.y+35+i*30:metrics.rowY(i));
+                    recentLine(static_cast<size_t>(i),y,iconSize);
                 }
-                text(languageRussian?"ИСТОРИЯ ЭТОЙ КОНСОЛИ":"HISTORY ON THIS CONSOLE",
-                     left,r.y+r.h-24,1,BLUE,right);
             }
         } else if(t.kind==Kind::Storage) {
             const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
@@ -2366,34 +2380,33 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
                 :-1;
             if(compact) {
-                label("SD STORAGE",r.y+13);
+                label("SD STORAGE",r.y+14);
                 textCentered(storageStatsAvailable?freeSpaceText():"N/A",
-                             r.x+r.w/2,r.y+39,2,WHITE,left,right);
-                progress(r.y+82,percent);
-            } else if(wide) {
-                label("SD CARD STORAGE",r.y+12);
+                             center,r.y+41,2,WHITE,left,right);
+                progress(r.y+r.h-24,percent);
+            } else if(banner) {
+                label("SD CARD STORAGE",r.y+13);
                 textCentered(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
-                             left+(right-78-left)/2,r.y+34,t.w>=3?4:3,
-                             WHITE,left,right-78);
-                if(percent>=0)textCentered(std::to_string(percent)+"% USED",
-                    r.x+r.w/2,r.y+49,1,MUTED,left,right);
-                progress(r.y+83,percent);
+                             center,r.y+37,3,WHITE,left,right);
+                textCentered(percent>=0?std::to_string(percent)+"% USED":"--",
+                             center,r.y+62,1,MUTED,left,right);
+                progress(r.y+r.h-20,percent);
             } else {
-                label("SD CARD STORAGE",r.y+18);
-                if(storageStatsAvailable) {
-                    textCentered(freeSpaceText()+" GB FREE",r.x+r.w/2,
-                                 r.y+50,5,WHITE,left,right);
-                    if(sdTotalBytes>0) {
-                        char total[64]{};
-                        std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
-                            static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
-                        textCentered(total,r.x+r.w/2,r.y+112,2,MUTED,left,right);
-                    }
-                    progress(r.y+157,percent);
-                    textCentered(std::to_string(percent)+"% USED",r.x+r.w/2,
-                                 r.y+184,1,BLUE,left,right);
-                } else textCentered(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
-                                    r.x+r.w/2,r.y+90,2,RED,left,right);
+                label("SD CARD STORAGE",metrics.headerY);
+                const int scale=portrait?4:5;
+                textCentered(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
+                             center,metrics.clampY(r.y+r.h/4,7*scale),
+                             scale,WHITE,left,right);
+                if(sdTotalBytes>0) {
+                    char total[64]{};
+                    std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
+                        static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+                    textCentered(total,center,metrics.clampY(r.y+r.h/2+8,14),
+                                 2,MUTED,left,right);
+                }
+                progress(bottom-42,percent);
+                textCentered(percent>=0?std::to_string(percent)+"% USED":"--",
+                             center,bottom-22,1,BLUE,left,right);
             }
         } else if(t.kind==Kind::Calendar) {
             std::time_t now=std::time(nullptr);
@@ -2409,51 +2422,79 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const int month=std::max(0,std::min(11,current.tm_mon));
             const char* monthName=languageRussian?ruMonths[month]:enMonths[month];
             if(compact) {
-                textCentered(std::to_string(current.tm_mday),r.x+r.w/2,
-                             r.y+17,5,WHITE,left,right);
-                textCentered(monthName,r.x+r.w/2,r.y+78,1,BLUE,left,right);
-            } else if(wide) {
+                textCentered(std::to_string(current.tm_mday),center,r.y+18,5,WHITE,left,right);
+                textCentered(monthName,center,r.y+78,1,BLUE,left,right);
+            } else if(banner) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
-                textCentered(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
-                             r.x+r.w/2,r.y+42,3,WHITE,left,right);
-                textCentered(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
-                             r.x+r.w/2,r.y+83,1,BLUE,left,right);
-                drawSystemIcon(6,right-34,r.y+38,26,accent);
+                char date[48]{};
+                std::snprintf(date,sizeof(date),"%d %s %d",current.tm_mday,
+                    monthName,current.tm_year+1900);
+                textCentered(date,center,r.y+42,2,WHITE,left,right);
+                textCentered(languageRussian?ruWeek[(current.tm_wday+6)%7]:
+                    enWeek[(current.tm_wday+6)%7],center,r.y+82,1,BLUE,left,right);
             } else {
                 std::tm first=current;
-                first.tm_mday=1; first.tm_hour=12; first.tm_min=0; first.tm_sec=0;
+                first.tm_mday=1;first.tm_hour=12;first.tm_min=0;first.tm_sec=0;
                 (void)std::mktime(&first);
                 std::tm lastDay=first;
-                lastDay.tm_mon+=1;
-                lastDay.tm_mday=0;
+                lastDay.tm_mon+=1;lastDay.tm_mday=0;
                 (void)std::mktime(&lastDay);
                 const int daysInMonth=lastDay.tm_mday;
                 const int startColumn=(first.tm_wday+6)%7;
-                label(monthName,r.y+15);
-                text(std::to_string(current.tm_year+1900),right-45,r.y+15,1,MUTED,right);
-                const int gridX=left,gridY=r.y+52;
-                const int cellW=std::max(24,innerWidth/7),cellH=25;
+                label(monthName,metrics.headerY);
+                text(std::to_string(current.tm_year+1900),right-42,
+                     metrics.headerY,1,MUTED,right);
+                const int cellW=std::max(1,(right-left)/7);
+                const int gridY=metrics.bodyTop;
+                const int cellH=std::max(19,std::min(28,(r.h-(gridY-r.y)-40)/6));
                 for(int col=0;col<7;++col)
                     text(languageRussian?ruWeek[col]:enWeek[col],
-                         gridX+col*cellW+2,gridY,1,BLUE,right);
+                         left+col*cellW+2,gridY,1,BLUE,right);
                 for(int day=1;day<=daysInMonth;++day) {
                     const int index=startColumn+day-1;
                     const int col=index%7,row=index/7;
-                    const int dx=gridX+col*cellW,dy=gridY+24+row*cellH;
+                    const int dx=left+col*cellW,dy=gridY+22+row*cellH;
+                    const int safeY=metrics.clampY(dy,8);
                     if(day==current.tm_mday)
-                        roundRect(dx,dy-2,std::max(20,cellW-3),22,6,
+                        roundRect(dx,safeY-2,std::max(14,cellW-3),18,5,
                                   Color{42,91,145,255});
-                    text(std::to_string(day),dx+4,dy+3,1,
+                    text(std::to_string(day),dx+3,safeY+2,1,
                          day==current.tm_mday?WHITE:MUTED,right);
                 }
                 text(languageRussian?"ТЕКУЩАЯ ДАТА":"CURRENT DATE",
-                     left,r.y+r.h-22,1,accent,right);
+                     left,metrics.clampY(bottom-12,8),1,accent,right);
             }
+        } else if(t.kind==Kind::Nextendo) {
+            const auto popular=nextendoPopularSnapshot();
+            label("NEXTENDO  /  ONLINE",metrics.headerY);
+            if(!popular.available) {
+                textCentered(languageRussian?"ПОЛУЧЕНИЕ ДАННЫХ...":"LOADING LIVE DATA...",
+                             center,metrics.clampY(bodyTop+8,8),1,MUTED,left,right);
+            } else if(popular.count==0) {
+                textCentered(languageRussian?"СЕЙЧАС НЕТ ИГР":"NO SUPPORTED GAMES ONLINE",
+                             center,metrics.clampY(bodyTop+8,8),1,MUTED,left,right);
+            } else {
+                const int rows=compact?1:(banner?std::min(2,metrics.maxRows):metrics.maxRows);
+                const int nameRight=right-43;
+                for(std::size_t i=0;i<popular.count&&i<static_cast<std::size_t>(rows);++i) {
+                    const auto& game=popular.games[i];
+                    const int y=metrics.rowY(static_cast<int>(i));
+                    text(std::to_string(i+1)+".",left,y,1,BLUE,nameRight-4);
+                    text(game.title?game.title:"Unknown game",left+20,y,1,WHITE,nameRight);
+                    text(std::to_string(game.players),right-38,y,1,GREEN,right);
+                }
+            }
+            if(!compact&&!banner)
+                text(languageRussian?"ИГРЫ С МАКСИМАЛЬНЫМ ОНЛАЙНОМ":
+                    "MOST PLAYED RIGHT NOW",left,metrics.clampY(bottom-11,8),1,MUTED,right);
         } else if(t.kind==Kind::Unsupported) {
-            roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
-            textCentered("UNSUPPORTED ITEM",r.x+r.w/2,r.y+18,2,WHITE,left,right);
+            roundRect(r.x+3,r.y+3,std::max(1,r.w-6),std::max(1,r.h-6),14,
+                      Color{39,46,58,255});
+            textCentered("UNSUPPORTED ITEM",center,metrics.clampY(r.y+18,14),
+                         2,WHITE,left,right);
             textCentered(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
-                         r.x+r.w/2,r.y+52,2,MUTED,left,right);
+                         center,metrics.clampY(r.y+52,14),2,MUTED,left,right);
+        }
         }
     }
 }
@@ -2885,6 +2926,41 @@ void drawScreen() {
             }
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
+    }
+    if(nextendoOpen) {
+        const auto popular=nextendoPopularSnapshot();
+        rect(0,0,SW,SH,Color{3,7,14,196});
+        softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,30});
+        text(languageRussian?"NEXTENDO  /  ПОПУЛЯРНЫЕ ИГРЫ":
+            "NEXTENDO  /  POPULAR GAMES",266,104,3,WHITE,850);
+        text(popular.available?std::to_string(popular.totalPlayers)+" PLAYERS ONLINE":
+            (languageRussian?"НЕТ СВЕЖИХ ДАННЫХ":"NO LIVE DATA"),
+            268,149,1,popular.available?GREEN:MUTED,850);
+        roundRect(926,108,86,32,9,Color{49,52,61,255});
+        text("B BACK",940,119,1,WHITE,1003);
+        if(!popular.available) {
+            text(languageRussian?"ПОДКЛЮЧЕНИЕ К NEXTENDO...":
+                "CONNECTING TO NEXTENDO...",290,238,2,MUTED,980);
+        } else if(popular.count==0) {
+            text(languageRussian?"НЕТ ИГР С АКТИВНЫМ ОНЛАЙНОМ":
+                "NO SUPPORTED GAMES ARE ONLINE",290,238,2,MUTED,980);
+        } else {
+            for(std::size_t i=0;i<popular.count;++i) {
+                const int yy=194+static_cast<int>(i)*42;
+                const bool selected=static_cast<int>(i)==nextendoSelected;
+                if(selected)roundRect(270,yy-5,740,36,9,Color{39,61,88,255});
+                roundRect(284,yy+2,26,24,8,Color{32,66,91,255});
+                text(std::to_string(i+1),292,yy+9,1,BLUE,305);
+                text(popular.games[i].title?popular.games[i].title:"Unknown game",
+                     326,yy+8,2,selected?WHITE:MUTED,900);
+                text(std::to_string(popular.games[i].players)+" ONLINE",
+                     908,yy+10,1,GREEN,996);
+            }
+        }
+        text(languageRussian?"ДАННЫЕ NEXTENDO ОБНОВЛЯЮТСЯ АВТОМАТИЧЕСКИ":
+            "NEXTENDO LIVE DATA REFRESHES AUTOMATICALLY",
+            270,584,1,MUTED,990);
+        text("A / B  CLOSE     UP / DOWN  SELECT",270,600,1,BLUE,990);
     }
     if(systemMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
@@ -3598,11 +3674,61 @@ void activateAppSettings(int action) {
         default: break;
     }
 }
+void activateWidget(const Tile& t) {
+    desknx::diag::Write("widgets","activate_begin",
+        "kind=%s title=%s width=%d height=%d",
+        typeName(t.kind).c_str(),t.title.c_str(),t.w,t.h);
+    switch(t.kind) {
+        case Kind::Nextendo:
+            nextendoSelected=0;
+            nextendoOpen=true;
+            setStatus(languageRussian?"ПОПУЛЯРНЫЕ ИГРЫ NEXTENDO":
+                "NEXTENDO POPULAR GAMES");
+            break;
+        case Kind::Battery:
+            setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":
+                "BATTERY STATUS UNAVAILABLE");
+            break;
+        case Kind::Storage:
+            setStatus("SD STORAGE WIDGET");
+            break;
+        case Kind::Calendar:
+            setStatus("CALENDAR WIDGET");
+            break;
+        case Kind::System: {
+            const u32 firmware=hosversionGet();
+            char detail[64]{};
+            std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
+                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            setStatus(detail,3500);
+            break;
+        }
+        case Kind::Clock:
+            setStatus("CLOCK WIDGET");
+            break;
+        case Kind::Recent:
+            if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
+            else {recentIndex=0;recentOpen=true;}
+            break;
+        default:
+            setStatus("WIDGET ACTION UNAVAILABLE");
+            break;
+    }
+    desknx::diag::Write("widgets","activate_end","kind=%s modal=%d",
+        typeName(t.kind).c_str(),nextendoOpen?1:0);
+}
+
 void launch(const Tile& t) {
     desknx::diag::Write("launch", "requested", "kind=%s",
         t.kind == Kind::Game ? "game" : t.kind == Kind::Nro ? "homebrew" : "widget");
     if (t.kind == Kind::Unsupported) {
         setStatus("UNSUPPORTED TILE TYPE: " + t.unknownTypeCode, 3500);
+        return;
+    }
+    if(t.kind!=Kind::Game && t.kind!=Kind::Nro) {
+        // Widgets are UI components, never application launch targets. Keep
+        // them out of the HOME/NS/chain-load path that owns game and NRO launches.
+        activateWidget(t);
         return;
     }
     if(t.kind==Kind::Game) {
@@ -3714,27 +3840,26 @@ void launch(const Tile& t) {
 #endif
         return;
     }
-    if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
-    else if(t.kind==Kind::Storage)setStatus("SD STORAGE WIDGET");
-    else if(t.kind==Kind::Calendar)setStatus("CALENDAR WIDGET");
-    else if(t.kind==Kind::System) {
-        const u32 firmware=hosversionGet();
-        char detail[64]{};
-        std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
-            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
-        setStatus(detail,3500);
-    }
-    else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
-    else if(t.kind==Kind::Recent) {
-        if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
-        else {recentIndex=0;recentOpen=true;}
-    } else setStatus(lastLaunched);
+
 }
 void keyInput(u64 keys, bool fromRepeat) {
     // A live touch gesture owns focus until its initiating finger is released.
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(nextendoOpen) {
+        if(keys&HidNpadButton_B || keys&HidNpadButton_A) {
+            nextendoOpen=false;
+            return;
+        }
+        const auto popular=nextendoPopularSnapshot();
+        const int count=static_cast<int>(popular.count);
+        if(count>0&&keys&HidNpadButton_Up)
+            nextendoSelected=(nextendoSelected-1+count)%count;
+        if(count>0&&keys&HidNpadButton_Down)
+            nextendoSelected=(nextendoSelected+1)%count;
+        return;
+    }
     if(userPickerOpen) {
         if(keys&HidNpadButton_B){userPickerOpen=false;return;}
         if(!consoleUsers.empty()) {
@@ -4069,6 +4194,21 @@ void openControllerSupport() {
 }
 
 void touchInput(const SDL_Event&e) {
+    if(nextendoOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=920&&x<=1020&&y>=100&&y<=152) {
+                nextendoOpen=false;
+            } else if(y>=185&&y<565) {
+                const int row=(y-189)/42;
+                const auto popular=nextendoPopularSnapshot();
+                if(row>=0&&static_cast<std::size_t>(row)<popular.count)
+                    nextendoSelected=row;
+            }
+        }
+        return;
+    }
     if(userPickerOpen) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
@@ -4186,7 +4326,7 @@ void touchInput(const SDL_Event&e) {
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
+    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !nextendoOpen && !powerMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=566&&y<=614&&itemAt(
                desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {

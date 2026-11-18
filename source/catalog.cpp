@@ -31,7 +31,7 @@ using desknx::model::Candidate;
 using desknx::model::Kind;
 constexpr size_t MaxItems = static_cast<size_t>(desknx::model::MaxItems);
 constexpr size_t GameReserve = 32;
-constexpr size_t WidgetReserve = 6;
+constexpr size_t WidgetReserve = 7;
 constexpr const char* CacheDir = "sdmc:/switch/DeskNX/cache";
 constexpr const char* IconsDir = "sdmc:/switch/DeskNX/cache/icons";
 constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
@@ -234,6 +234,7 @@ bool EnsureBuiltinWidgets(std::vector<Candidate>& items) {
         {Kind::Recent, "Recent launch widget", 3, 1, 6},
         {Kind::Storage, "SD storage widget", 3, 1, 3},
         {Kind::Calendar, "Calendar widget", 3, 1, 4},
+        {Kind::Nextendo, "Nextendo popular games", 3, 2, 9},
     };
     bool changed = false;
     for (const auto& spec : widgets) {
@@ -784,7 +785,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             [](const Candidate& item) {
                 return item.kind == Kind::Clock || item.kind == Kind::Battery ||
                     item.kind == Kind::System || item.kind == Kind::Recent ||
-                    item.kind == Kind::Storage || item.kind == Kind::Calendar;
+                    item.kind == Kind::Storage || item.kind == Kind::Calendar ||
+                    item.kind == Kind::Nextendo;
             })),
         result.nroCount);
     report(false);

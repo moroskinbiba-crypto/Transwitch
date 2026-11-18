@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 
 using namespace desknx::nextendo;
 
@@ -128,6 +129,53 @@ void testClockWrapDoesNotCrash() {
     assert(feed.refreshDue(T0 - 1));
 }
 
+
+void testPopularGamesAreSortedAndRegionalRowsAreMerged() {
+    PlayerSnapshot snapshot;
+    snapshot.perTitle[0x0100152000022000ull] = 14; // Mario Kart 8 Deluxe
+    snapshot.perTitle[0x0100F8F0000A2000ull] = 5;  // Splatoon 2 region A
+    snapshot.perTitle[0x01003BC0000A0000ull] = 7;  // Splatoon 2 region B
+    snapshot.perTitle[0x01006A800016E000ull] = 20; // Smash Ultimate
+    snapshot.perTitle[0x0100E65002BB8000ull] = 0;  // not currently online
+    snapshot.perTitle[0xDEADBEEFDEADBEEFull] = 99; // unknown IDs are not guessed
+    snapshot.total = 145;
+
+    const PopularGames popular = rankPopularGames(snapshot);
+    assert(popular.available);
+    assert(popular.totalPlayers == 145);
+    assert(popular.count == 3);
+    assert(std::strcmp(popular.games[0].title, "Super Smash Bros. Ultimate") == 0);
+    assert(popular.games[0].players == 20);
+    assert(std::strcmp(popular.games[1].title, "Splatoon 2") == 0);
+    assert(popular.games[1].players == 12);
+    assert(std::strcmp(popular.games[2].title, "Mario Kart 8 Deluxe") == 0);
+    assert(popular.games[2].players == 14);
+}
+
+void testPopularGamesRespectLimitAndEmptySnapshot() {
+    PlayerSnapshot snapshot;
+    snapshot.total = 0;
+    const PopularGames empty = rankPopularGames(snapshot);
+    assert(empty.available);
+    assert(empty.count == 0);
+    const PopularGames limited = rankPopularGames(makeSnapshot(2, 4, 6), 1);
+    assert(limited.available);
+    assert(limited.count == 0); // synthetic IDs deliberately have no public name mapping
+}
+
+void testFreshSnapshotCopyIsSafe() {
+    PresenceFeed feed;
+    feed.setEnabled(true);
+    PlayerSnapshot source = makeSnapshot(2, 0, 2);
+    PlayerSnapshot copy;
+    assert(!feed.copyFreshSnapshot(copy, T0));
+    assert(feed.apply(source, T0));
+    assert(feed.copyFreshSnapshot(copy, T0));
+    assert(copy.total == 2);
+    assert(copy.perTitle.size() == 2);
+    assert(!feed.copyFreshSnapshot(copy, T0 + SnapshotTtlMs));
+}
+
 } // namespace
 
 int main() {
@@ -139,6 +187,9 @@ int main() {
     testInvalidSnapshotIsRejected();
     testInvalidateResetsToUnknown();
     testClockWrapDoesNotCrash();
+    testPopularGamesAreSortedAndRegionalRowsAreMerged();
+    testPopularGamesRespectLimitAndEmptySnapshot();
+    testFreshSnapshotCopyIsSafe();
     std::puts("nextendo_players_test: ok");
     return 0;
 }

@@ -70,7 +70,8 @@ std::string searchKey(const std::string& value) {
 bool isWidget(model::Kind kind) {
     return kind==model::Kind::Clock || kind==model::Kind::Battery ||
            kind==model::Kind::System || kind==model::Kind::Recent ||
-           kind==model::Kind::Storage || kind==model::Kind::Calendar;
+           kind==model::Kind::Storage || kind==model::Kind::Calendar ||
+           kind==model::Kind::Nextendo;
 }
 bool matchesFilter(model::Kind kind, FilterMode filter) {
     switch(filter) {
