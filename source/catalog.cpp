@@ -499,7 +499,7 @@ bool HasCachedGameIcon(u64 id) {
     if (IsUsableCachedImage(path)) return true;
     if (IsRegularFile(path)) {
         std::remove(path.c_str());
-        LogDiagnostic("icon_cache invalid_jpeg title_id=%s removed=1", hex);
+        LogDiagnostic("icon_cache invalid_image title_id=%s removed=1", hex);
     }
     return false;
 }
@@ -855,6 +855,11 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             !(cachedName->second.compare(0, 5, "Game ") == 0 &&
               desknx::model::isTitleId(cachedName->second.substr(5)));
         std::string title;
+        Result metadataRc=0;
+        bool metadataRead=false;
+        bool iconAvailable=iconCached;
+        const char* nameSource=(cachedNameUsable&&iconCached&&!forceRefresh)
+            ?"cache":"nacp";
         // Name metadata and artwork are independent cache entries. A valid
         // name must never suppress the one-time NACP read needed to repair a
         // missing icon, and a stale title-id placeholder must not be treated
@@ -863,27 +868,36 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
-            Result controlRc = 0;
             if (nsReady)
-                controlRc = desknx::slaunch::ReadControlData(id, control, actual);
-            if (nsReady && R_SUCCEEDED(controlRc)) {
+                metadataRc = desknx::slaunch::ReadControlData(id, control, actual);
+            metadataRead=true;
+            if (nsReady && R_SUCCEEDED(metadataRc)) {
                 ++controlDataOk;
                 const std::string resolved = desknx::slaunch::ResolveTitleName(control.nacp);
                 if (!resolved.empty() && !desknx::model::isTitleId(resolved))
                     title = resolved;
-                else if (cachedNameUsable)
+                else if (cachedNameUsable) {
                     title = cachedName->second;
+                    nameSource="cache_fallback";
+                }
                 if (forceRefresh || !iconCached) {
-                    if (CacheGameIcon(id, control, actual)) ++cachedGameIcons;
-                    else ++failedGameIcons;
+                    if (CacheGameIcon(id, control, actual)) {
+                        ++cachedGameIcons;
+                        iconAvailable=true;
+                    } else {
+                        ++failedGameIcons;
+                        iconAvailable=false;
+                    }
                 }
                 fetchedControlData = true;
             } else {
                 ++controlDataFailed;
                 if (firstControlDataError == 0)
-                    firstControlDataError = static_cast<std::uint32_t>(controlRc);
-                if (cachedNameUsable)
+                    firstControlDataError = static_cast<std::uint32_t>(metadataRc);
+                if (cachedNameUsable) {
                     title = cachedName->second;
+                    nameSource="cache_fallback";
+                }
             }
         }
 
@@ -894,6 +908,10 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         const bool placeholderTitle = desknx::model::isTitleId(title) ||
             (title.compare(0, 5, "Game ") == 0 &&
              desknx::model::isTitleId(title.substr(5)));
+        LogDiagnostic("game_metadata title_id=%s name_source=%s resolved=%d icon_available=%d cached_name=%d cached_icon=%d metadata_read=%d rc=0x%08X title=%s",
+            hex,nameSource,placeholderTitle?0:1,iconAvailable?1:0,
+            cachedNameUsable?1:0,iconCached?1:0,metadataRead?1:0,
+            static_cast<unsigned int>(metadataRc),title.c_str());
         if (!placeholderTitle) {
             freshNameCache.emplace(id, title);
             ++resolvedGameNames;
