@@ -17,11 +17,11 @@ fetch() {
 # Variable Noto/Open Sans are supported by the bundled FreeType/SDL_ttf build.
 fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf" "$FONT_DIR/NotoSans.ttf"
 fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf" "$FONT_DIR/OpenSans.ttf"
-fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Regular.ttf" "$FONT_DIR/PTSans.ttf"
+fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansmono/NotoSansMono%5Bwdth%2Cwght%5D.ttf" "$FONT_DIR/NotoSansMono.ttf"
 
 fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/OFL.txt" "$FONT_DIR/NotoSans-OFL.txt"
 fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/opensans/OFL.txt" "$FONT_DIR/OpenSans-OFL.txt"
-fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/OFL.txt" "$FONT_DIR/PTSans-OFL.txt"
+fetch "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansmono/OFL.txt" "$FONT_DIR/NotoSansMono-OFL.txt"
 
 cat > "$FONT_DIR/README.txt" <<'EOF'
 DeskNX built-in fonts
@@ -29,7 +29,7 @@ DeskNX built-in fonts
 
 Noto Sans — Noto Project Authors — SIL Open Font License 1.1.
 Open Sans — The Open Sans Project Authors — SIL Open Font License 1.1.
-PT Sans — Alexandra Korolkova, Olga Umpeleva and Vladimir Yefimov — SIL Open Font License 1.1.
+Noto Sans Mono — The Noto Project Authors — SIL Open Font License 1.1.
 
 All three families include Cyrillic glyphs. Select a font in DeskNX:
 Settings > Choose custom font > media/fonts.
