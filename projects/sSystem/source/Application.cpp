@@ -214,7 +214,9 @@ namespace desknx::system::app {
         Result rc = appletCreateApplication(&g_AppHolder, app_id);
         if (rc != 0) return rc;
 
-        rc = wants_user ? PushUserParam(user) : 0;
+        // Match HomeNX/qlaunch: an invalid or unavailable user is not a
+        // preselection. Leave the title free to show its own account picker.
+        rc = (wants_user && accountUidIsValid(&user)) ? PushUserParam(user) : 0;
         if (rc == 0) {
             // Release foreground so the app can acquire it. Do not start
             // the title if AM refused the handoff.
