@@ -200,6 +200,7 @@ private:
     }
 
     int workerLoop() {
+        SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
         for (;;) {
             Request request;
             SDL_LockMutex(mutex_);
