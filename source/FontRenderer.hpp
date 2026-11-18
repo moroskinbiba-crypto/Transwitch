@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+#include <cstdint>
 
 class FontRenderer {
 public:
@@ -30,59 +32,97 @@ public:
 
     bool setCustomFont(const std::string& path) {
         if (path == customFontPath_) return true;
-        clearCache();
-        fittedTextCache_.clear();
-        for (auto*& font : fonts_) {
-            if (font) TTF_CloseFont(font);
-            font = nullptr;
+        if (!ttfReady_) return false;
+
+        // Keep one bounded in-memory copy so other point sizes can be opened
+        // gradually. The previous active face remains intact unless the
+        // replacement has been read completely and its first size opens.
+        if (path.empty()) {
+            closeCustomFonts();
+            customFontData_.clear();
+            customFontPath_.clear();
+            customWarmupIndex_ = 8;
+            warmupFrameCounter_ = 0;
+            ++fontGeneration_;
+            if (fontGeneration_ == 0) fontGeneration_ = 1;
+            fittedTextCache_.clear();
+            return true;
         }
+
+        constexpr Sint64 MaxCustomFontBytes = 16 * 1024 * 1024;
+        if (path.size() > 512) return false;
+        SDL_RWops* file = SDL_RWFromFile(path.c_str(), "rb");
+        if (!file) return false;
+        const Sint64 fileSize = SDL_RWsize(file);
+        if (fileSize <= 0 || fileSize > MaxCustomFontBytes) {
+            SDL_RWclose(file);
+            return false;
+        }
+
+        std::vector<Uint8> candidateData(static_cast<size_t>(fileSize));
+        const size_t bytesRead = SDL_RWread(
+            file, candidateData.data(), 1, candidateData.size());
+        SDL_RWclose(file);
+        if (bytesRead != candidateData.size()) return false;
+
+        SDL_RWops* stream = SDL_RWFromConstMem(
+            candidateData.data(), static_cast<int>(candidateData.size()));
+        if (!stream) return false;
+        TTF_Font* candidate = TTF_OpenFontRW(stream, 1, fontPixelSize(0));
+        if (!candidate) return false;
+
+        closeCustomFonts();
+        customFontData_ = std::move(candidateData);
+        customFonts_[0] = candidate;
         customFontPath_ = path;
-        if (path.empty() || !ttfReady_) return true;
-        fonts_[0] = TTF_OpenFont(path.c_str(), fontPixelSize(0));
-        if (fonts_[0]) return true;
-        customFontPath_.clear();
-        return false;
+        customWarmupIndex_ = 1;
+        warmupFrameCounter_ = 0;
+        ++fontGeneration_;
+        if (fontGeneration_ == 0) fontGeneration_ = 1;
+        fittedTextCache_.clear();
+        // Keep old textures in the bounded LRU. Font generation/pointer are
+        // part of the key, so stale glyphs cannot be shown after replacement.
+        return true;
     }
 
     const std::string& customFontPath() const { return customFontPath_; }
 
-    bool draw(const std::string& value, int x, int y, int scale, SDL_Color color, int right) {
-        if (!ttfReady_ || !renderer_ || value.empty()) return false;
-        const int maxWidth = std::max(0, right - x);
-        if (maxWidth == 0) return true;
+    void beginFrame() { newTexturesRemaining_ = NewTextureBudget; }
 
-        TTF_Font* font = fontForScale(scale);
-        if (!font) return false;
-        const std::string& fitted = fitToWidth(value, font, scale, maxWidth);
-        if (fitted.empty()) return true;
+    // Open one additional point size from RAM every three frames. Until that
+    // size is ready, rendering falls back to the shared system font rather
+    // than doing disk I/O or parsing a large font synchronously in draw().
+    bool pumpWarmup() {
+        if (customFontPath_.empty() || customFontData_.empty() ||
+            customWarmupIndex_ >= 8)
+            return false;
+        if (++warmupFrameCounter_ < 3) return true;
+        warmupFrameCounter_ = 0;
+        const int index = customWarmupIndex_++;
+        SDL_RWops* stream = SDL_RWFromConstMem(
+            customFontData_.data(), static_cast<int>(customFontData_.size()));
+        if (stream)
+            customFonts_[index] = TTF_OpenFontRW(stream, 1, fontPixelSize(index));
+        return customWarmupIndex_ < 8;
+    }
 
-        const std::string key = makeKey(fitted, scale, color);
-        CacheEntry* entry = find(key);
-        if (!entry) {
-            SDL_Surface* surface = TTF_RenderUTF8_Blended(font, fitted.c_str(), color);
-            if (!surface) return false;
-            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
-            const int width = surface->w, height = surface->h;
-            SDL_FreeSurface(surface);
-            if (!texture) return false;
-            SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
-            entry = insert(key, texture, width, height);
-        }
-        entry->lastUse = ++clock_;
-        const int drawWidth = std::min(entry->width, maxWidth);
-        SDL_Rect source{0, 0, drawWidth, entry->height};
-        SDL_Rect destination{x, y, drawWidth, entry->height};
-        SDL_RenderCopy(renderer_, entry->texture, &source, &destination);
-        return true;
+    bool draw(const std::string& value, int x, int y, int scale,
+              SDL_Color color, int right) {
+        return drawImpl(value, x, y, scale, color, x, right, false, 0);
+    }
+
+    bool drawCentered(const std::string& value, int centerX, int y, int scale,
+                      SDL_Color color, int left, int right) {
+        return drawImpl(value, centerX, y, scale, color,
+                        left, right, true, centerX);
     }
 
     void shutdown() {
         clearCache();
         fittedTextCache_.clear();
-        for (auto*& font : fonts_) {
-            if (font) TTF_CloseFont(font);
-            font = nullptr;
-        }
+        closeFonts();
+        customFontData_.clear();
+        customFontPath_.clear();
         if (ttfReady_) TTF_Quit();
         ttfReady_ = false;
         if (plReady_) plExit();
@@ -100,6 +140,7 @@ private:
 
     static constexpr size_t CacheLimit = 384;
     static constexpr size_t FitCacheLimit = 512;
+    static constexpr int NewTextureBudget = 12;
     static int fontPixelSize(int index) {
         // Small labels are noticeably clearer at 10 px; larger scale steps
         // retain a consistent, predictable hierarchy for cards and headings.
@@ -109,26 +150,97 @@ private:
     SDL_Renderer* renderer_{nullptr};
     PlFontData sharedFont_{};
     TTF_Font* fonts_[8]{};
+    TTF_Font* customFonts_[8]{};
     std::string customFontPath_;
+    std::vector<Uint8> customFontData_;
     std::unordered_map<std::string, CacheEntry> cache_;
     std::unordered_map<std::string, std::string> fittedTextCache_;
     unsigned long long clock_{0};
+    uint64_t fontGeneration_{1};
+    int customWarmupIndex_{8};
+    int warmupFrameCounter_{0};
+    int newTexturesRemaining_{NewTextureBudget};
     bool ttfReady_{false};
     bool plReady_{false};
 
+    void closeCustomFonts() {
+        for (auto*& font : customFonts_) {
+            if (font) TTF_CloseFont(font);
+            font = nullptr;
+        }
+    }
+
+    void closeFonts() {
+        for (auto*& font : fonts_) {
+            if (font) TTF_CloseFont(font);
+            font = nullptr;
+        }
+        closeCustomFonts();
+    }
+
+    bool isCustomFace(const TTF_Font* font) const {
+        for (const auto* candidate : customFonts_)
+            if (candidate == font) return true;
+        return false;
+    }
+
     TTF_Font* fontForScale(int scale) {
         const int index = std::max(0, std::min(7, scale - 1));
+        if (customFonts_[index]) return customFonts_[index];
         if (fonts_[index]) return fonts_[index];
-        const int pixelSize = fontPixelSize(index);
-        if (!customFontPath_.empty()) {
-            fonts_[index] = TTF_OpenFont(customFontPath_.c_str(), pixelSize);
-            if (fonts_[index]) return fonts_[index];
-        }
         if (!sharedFont_.address || sharedFont_.size > static_cast<u32>(INT_MAX)) return nullptr;
-        SDL_RWops* rw = SDL_RWFromConstMem(sharedFont_.address, static_cast<int>(sharedFont_.size));
+        SDL_RWops* rw = SDL_RWFromConstMem(
+            sharedFont_.address, static_cast<int>(sharedFont_.size));
         if (!rw) return nullptr;
-        fonts_[index] = TTF_OpenFontRW(rw, 1, pixelSize);
+        fonts_[index] = TTF_OpenFontRW(rw, 1, fontPixelSize(index));
         return fonts_[index];
+    }
+
+    bool drawImpl(const std::string& value, int x, int y, int scale,
+                  SDL_Color color, int left, int right,
+                  bool centered, int centerX) {
+        if (!ttfReady_ || !renderer_ || value.empty()) return false;
+        const int maxWidth = std::max(0, right - left);
+        if (maxWidth == 0) return true;
+        const int fontIndex = std::max(0, std::min(7, scale - 1));
+        TTF_Font* font = fontForScale(scale);
+        if (!font) return false;
+        const std::string* fitted = &fitToWidth(value, font, scale, maxWidth);
+        if (fitted->empty()) return true;
+
+        std::string key = makeKey(*fitted, scale, color, font);
+        CacheEntry* entry = find(key);
+        if (!entry && newTexturesRemaining_ <= 0 &&
+            isCustomFace(font) && fonts_[fontIndex]) {
+            // During the post-change warm-up, reuse the already cached system
+            // face for strings whose new-font texture has not been rebuilt.
+            // This avoids falling through to bitmap placeholders.
+            font = fonts_[fontIndex];
+            fitted = &fitToWidth(value, font, scale, maxWidth);
+            key = makeKey(*fitted, scale, color, font);
+            entry = find(key);
+        }
+        if (!entry) {
+            if (newTexturesRemaining_ <= 0) return false;
+            SDL_Surface* surface = TTF_RenderUTF8_Blended(font, fitted->c_str(), color);
+            if (!surface) return false;
+            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
+            const int width = surface->w, height = surface->h;
+            SDL_FreeSurface(surface);
+            if (!texture) return false;
+            SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+            entry = insert(key, texture, width, height);
+            --newTexturesRemaining_;
+        }
+        entry->lastUse = ++clock_;
+        const int drawWidth = std::min(entry->width, maxWidth);
+        const int destinationX = centered
+            ? std::max(left, std::min(right - drawWidth, centerX - drawWidth / 2))
+            : x;
+        SDL_Rect source{0, 0, drawWidth, entry->height};
+        SDL_Rect destination{destinationX, y, drawWidth, entry->height};
+        SDL_RenderCopy(renderer_, entry->texture, &source, &destination);
+        return true;
     }
 
     static size_t previousCodePointStart(const std::string& value, size_t end) {
@@ -141,8 +253,9 @@ private:
 
     const std::string& fitToWidth(const std::string& value, TTF_Font* font,
                                   int scale, int maxWidth) {
-        const std::string fitKey = std::to_string(scale) + ":" +
-                                   std::to_string(maxWidth) + ":" + value;
+        const std::string fitKey = std::to_string(fontGeneration_) + ":" +
+            std::to_string(reinterpret_cast<std::uintptr_t>(font)) + ":" +
+            std::to_string(scale) + ":" + std::to_string(maxWidth) + ":" + value;
         auto cached = fittedTextCache_.find(fitKey);
         if (cached != fittedTextCache_.end()) return cached->second;
 
@@ -176,8 +289,15 @@ private:
         return fittedTextCache_.emplace(fitKey, std::move(fitted)).first->second;
     }
 
-    static std::string makeKey(const std::string& text, int scale, SDL_Color c) {
-        return std::to_string(scale) + ":" + std::to_string(c.r) + ":" +
+    std::string makeKey(const std::string& text, int scale, SDL_Color c,
+                        const TTF_Font* font) const {
+        // Shared/system faces remain alive across custom-font changes. Their
+        // existing cached textures can be used while new custom glyphs warm.
+        const std::string identity = isCustomFace(font)
+            ? std::to_string(fontGeneration_) : std::string("system");
+        return identity + ":" +
+               std::to_string(reinterpret_cast<std::uintptr_t>(font)) + ":" +
+               std::to_string(scale) + ":" + std::to_string(c.r) + ":" +
                std::to_string(c.g) + ":" + std::to_string(c.b) + ":" +
                std::to_string(c.a) + ":" + text;
     }

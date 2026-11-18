@@ -27,7 +27,7 @@ DeskNX — нативный домашний экран и лаунчер для
 - Сенсорное управление и управление Joy-Con/Pro Controller.
 - Атомарное сохранение раскладки и резервные копии настроек.
 
-Подробнее: [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md), [docs/FEATURES.md](docs/FEATURES.md), [docs/HOMENX_PORT_STATUS.md](docs/HOMENX_PORT_STATUS.md).
+Подробнее: [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md), [docs/FEATURES.md](docs/FEATURES.md), [docs/UX_UI_GUIDELINES.md](docs/UX_UI_GUIDELINES.md), [docs/HOMENX_PORT_STATUS.md](docs/HOMENX_PORT_STATUS.md).
 
 ## Сборка самостоятельного NRO
 

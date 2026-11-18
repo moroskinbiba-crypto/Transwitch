@@ -52,17 +52,19 @@ void testMoveIntoEmptyCell() {
     assert(provider.activeWorkspace()->tiles[0].w == 1);
 }
 
-void testMoveOntoOccupiedCellIsRefusedAndChangesNothing() {
+void testMoveOntoOccupiedCellAdvancesToNextFreePosition() {
     WorkspaceProvider provider = makeProvider();
-    const Workspace before = *provider.activeWorkspace();
 
-    // The 2x1 game occupies (1,0)-(2,0); dropping the clock there must fail.
-    assert(!provider.moveTile(0, 1, 0));
+    // The 2x1 game occupies (1,0)-(2,0). Requesting (1,0) for the clock
+    // advances to the next free cell at (3,0), without losing either tile.
+    assert(provider.moveTile(0, 1, 0));
 
     const Workspace& after = *provider.activeWorkspace();
-    assert(after.tiles.size() == before.tiles.size());
-    assert(after.tiles[0].x == before.tiles[0].x);
-    assert(after.tiles[0].y == before.tiles[0].y);
+    assert(after.tiles.size() == 2);
+    assert(after.tiles[0].x == 3);
+    assert(after.tiles[0].y == 0);
+    assert(after.tiles[1].x == 1);
+    assert(after.tiles[1].y == 0);
 }
 
 void testMoveOffGridIsRefused() {
@@ -100,12 +102,16 @@ void testResizeToUnsupportedShapeIsRefused() {
     WorkspaceProvider provider = makeProvider();
     const Workspace before = *provider.activeWorkspace();
 
-    // 4x1 and 2x3 are not part of the native shape set (1x1, 2x1, 3x1, 2x2, 3x2).
+    // 4x1 remains unsupported, while 2x3 is the newly supported portrait shape.
     assert(!provider.resizeTile(0, 0, 0, 4, 1));
-    assert(!provider.resizeTile(0, 0, 0, 2, 3));
-
     assert(provider.activeWorkspace()->tiles[0].w == before.tiles[0].w);
     assert(provider.activeWorkspace()->tiles[0].h == before.tiles[0].h);
+
+    // The provider can relocate the enlarged tile to a valid footprint when
+    // its original origin is blocked by the neighbouring game tile.
+    assert(provider.resizeTile(0, 0, 0, 2, 3));
+    assert(provider.activeWorkspace()->tiles[0].w == 2);
+    assert(provider.activeWorkspace()->tiles[0].h == 3);
 }
 
 void testResizeWithoutRoomIsRefused() {
@@ -207,7 +213,7 @@ void testEditsSurviveSerializeAndReload() {
 
 int main() {
     testMoveIntoEmptyCell();
-    testMoveOntoOccupiedCellIsRefusedAndChangesNothing();
+    testMoveOntoOccupiedCellAdvancesToNextFreePosition();
     testMoveOffGridIsRefused();
     testMoveToSameCellIsNotAnEdit();
     testMoveOfUnknownTileIsRefused();

@@ -41,12 +41,17 @@ int main() {
     assert(itemAt(desk, 1, 0) == 0);
     assert(itemAt(desk, 5, 2) == -1);
     assert(placeable(desk, wide, 1, 1));
+    assert(isSupportedTileSize(2, 3));
+    assert(placeable(desk, Tile{Kind::Game, "portrait", "", 0, 0, 2, 3, 0}, 3, 0));
     assert(!placeable(desk, Tile{Kind::Game, "bad", "", 0, 0, 4, 1, 0}, 0, 0));
     assert(!placeable(desk, small, std::numeric_limits<int>::max(), 0));
     assert(!placeable(desk, small, 0, std::numeric_limits<int>::max()));
     int x = -1, y = -1;
     assert(firstFree(desk, small, x, y));
     assert(x >= 0 && y >= 0 && placeable(desk, small, x, y));
+    int nextX = -1, nextY = -1;
+    assert(firstFreeFrom(desk, small, 0, 0, nextX, nextY));
+    assert(nextX == 2 && nextY == 0);
 
     // Workspace names must fit the exact persisted UTF-8 limits so a
     // successful save is guaranteed to be readable on the next launch.
@@ -101,6 +106,19 @@ int main() {
         assert(!moveSelectedTile(moveDesk,sx,sy,10,0));
     }
 
+    // An occupied requested cell advances a dragged tile to the next
+    // available position rather than rejecting the move.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace collision{"collision",{}};
+        collision.tiles.push_back(Tile{Kind::Game,"Move","0100000000000011",0,0,1,1,0});
+        collision.tiles.push_back(Tile{Kind::Nro,"Occupied","sdmc:/switch/occupied.nro",1,0,1,1,1});
+        int sx=0,sy=0;
+        assert(moveSelectedTile(collision,sx,sy,1,0));
+        assert(collision.tiles[0].x==2 && collision.tiles[0].y==0);
+        assert(sx==2 && sy==0);
+    }
+
     // A diagonal drag should use the final cell atomically. An occupied
     // horizontal intermediate cell must not block a free diagonal target.
     {
@@ -112,6 +130,18 @@ int main() {
         assert(moveSelectedTile(diagonal,sx,sy,1,1));
         assert(diagonal.tiles[0].x==1 && diagonal.tiles[0].y==1);
         assert(sx==1 && sy==1);
+    }
+
+    // 3x2 is followed by a portrait 2x3 size; shrinking returns to 3x2.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace portrait{"portrait",{}};
+        portrait.tiles.push_back(Tile{Kind::Game,"Large","0100000000000012",0,0,3,2,0});
+        int sx=0,sy=0;
+        assert(resizeSelectedTile(portrait,sx,sy,true));
+        assert(portrait.tiles[0].w==2 && portrait.tiles[0].h==3);
+        assert(resizeSelectedTile(portrait,sx,sy,false));
+        assert(portrait.tiles[0].w==3 && portrait.tiles[0].h==2);
     }
 
     // Shrinking a large tile must move keyboard focus back to its top-left.

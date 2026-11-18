@@ -58,7 +58,7 @@ public:
         clearTextures();
     }
 
-    SDL_Texture* get(const desknx::model::Tile& tile) {
+    SDL_Texture* get(const desknx::model::Tile& tile, bool highPriority = false) {
         if (!renderer_) return nullptr;
 
         // Hot path: resident textures are found by stable tile identity before
@@ -84,7 +84,7 @@ public:
 
         // Queueing is non-blocking. Missing artwork is represented by the
         // caller's placeholder until the worker finishes decoding it.
-        enqueue(tile, key);
+        enqueue(tile, key, highPriority ? 2 : 0);
         return nullptr;
     }
 
@@ -128,6 +128,7 @@ private:
         std::string key;
         std::string customDirectory;
         std::uint64_t generation{0};
+        int priority{0};
     };
 
     struct Decoded {
@@ -230,7 +231,7 @@ private:
         return 0;
     }
 
-    void enqueue(const desknx::model::Tile& tile, const std::string& key) {
+    void enqueue(const desknx::model::Tile& tile, const std::string& key, int priority) {
         if (!ensureWorker() || pendingKeys_.find(key) != pendingKeys_.end())
             return;
 
@@ -240,14 +241,28 @@ private:
         request.data = tile.data;
         request.key = key;
         request.customDirectory = customIconPackDir_;
+        request.priority = priority;
 
         SDL_LockMutex(mutex_);
-        if (stopWorker_ || requests_.size() >= MaxQueuedRequests) {
+        if (stopWorker_ || pendingKeys_.find(key) != pendingKeys_.end()) {
             SDL_UnlockMutex(mutex_);
             return;
         }
+        if (requests_.size() >= MaxQueuedRequests) {
+            // Preserve the bounded queue, but allow the currently focused
+            // tile to displace an unstarted background request. The worker
+            // always consumes the highest-priority request first.
+            if (requests_.empty() || priority <= requests_.back().priority) {
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            pendingKeys_.erase(requests_.back().key);
+            requests_.pop_back();
+        }
         request.generation = generation_;
-        requests_.push_back(std::move(request));
+        auto position = std::find_if(requests_.begin(), requests_.end(),
+            [&](const Request& queued) { return queued.priority < priority; });
+        requests_.insert(position, std::move(request));
         pendingKeys_.insert(key);
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);

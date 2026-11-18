@@ -66,6 +66,16 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test three-column library navigation and viewport projection
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/library_grid_test.cpp -o /tmp/desknx-library-grid-test
+          /tmp/desknx-library-grid-test
+
+      - name: Test production SD homebrew scanner and partial-tree recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nro_scanner_test.cpp -o /tmp/desknx-nro-scanner-test
+          /tmp/desknx-nro-scanner-test
+
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test
@@ -80,6 +90,11 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
           /tmp/desknx-protocol-rules-test
+
+      - name: Install host zlib headers for NACP normalization test
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends zlib1g-dev
 
       - name: Test compressed NACP title normalization
         run: |
