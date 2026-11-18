@@ -100,12 +100,16 @@ void testResizeToUnsupportedShapeIsRefused() {
     WorkspaceProvider provider = makeProvider();
     const Workspace before = *provider.activeWorkspace();
 
-    // 4x1 and 2x3 are not part of the native shape set (1x1, 2x1, 3x1, 2x2, 3x2).
+    // 4x1 remains unsupported, while 2x3 is the newly supported portrait shape.
     assert(!provider.resizeTile(0, 0, 0, 4, 1));
-    assert(!provider.resizeTile(0, 0, 0, 2, 3));
-
     assert(provider.activeWorkspace()->tiles[0].w == before.tiles[0].w);
     assert(provider.activeWorkspace()->tiles[0].h == before.tiles[0].h);
+
+    // The provider can relocate the enlarged tile to a valid footprint when
+    // its original origin is blocked by the neighbouring game tile.
+    assert(provider.resizeTile(0, 0, 0, 2, 3));
+    assert(provider.activeWorkspace()->tiles[0].w == 2);
+    assert(provider.activeWorkspace()->tiles[0].h == 3);
 }
 
 void testResizeWithoutRoomIsRefused() {
