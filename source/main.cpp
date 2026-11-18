@@ -2202,8 +2202,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const auto& entry=recentLaunches[index];
             Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
             drawTileIcon(iconTile,left,y,iconSize);
-            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),
-                 iconSize>28?1:1,WHITE,right);
+            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
         };
 
         if(t.kind==Kind::Clock) {
@@ -2227,7 +2226,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
             }
         } else if(t.kind==Kind::Battery) {
-            const int pct=std::max(0,std::min(100,battery));
             if(compact) {
                 label("BATTERY",r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
@@ -2363,9 +2361,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else {
                 std::tm first=current;
                 first.tm_mday=1; first.tm_hour=12; first.tm_min=0; first.tm_sec=0;
-                const std::time_t firstStamp=std::mktime(&first);
-                std::tm next=first; next.tm_mon+=1;
-                const std::time_t nextStamp=std::mktime(&next);
+                (void)std::mktime(&first);
                 std::tm lastDay=first;
                 lastDay.tm_mon+=1;
                 lastDay.tm_mday=0;
