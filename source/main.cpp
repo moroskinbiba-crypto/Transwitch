@@ -2992,10 +2992,14 @@ void renameDesk() {
         setStatus("DROP THE MOVING TILE BEFORE RENAMING");
         return;
     }
+    const Uint64 keyboardStarted=SDL_GetTicks64();
     SwkbdConfig kbd{};
-    if(R_FAILED(swkbdCreate(&kbd,0))){setStatus("KEYBOARD UNAVAILABLE");return;}
+    const Result keyboardCreateRc=swkbdCreate(&kbd,0);
+    desknx::diag::Write("keyboard","rename_create","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(keyboardCreateRc),static_cast<unsigned long long>(SDL_GetTicks64()-keyboardStarted));
+    if(R_FAILED(keyboardCreateRc)){setStatus("KEYBOARD UNAVAILABLE");return;}
     swkbdConfigMakePresetDefault(&kbd);
-    swkbdConfigSetHeaderText(&kbd,"Rename workspace");
+    swkbdConfigSetHeaderText(&kbd,languageRussian?"Переименовать рабочий стол":"Rename workspace");
     swkbdConfigSetInitialText(&kbd,desks[static_cast<size_t>(deskIndex)].name.c_str());
     // DESKNX3 stores up to 31 UTF-8 codepoints (124 bytes). The larger
     // input buffer permits 31 four-byte characters without truncation.
@@ -3260,12 +3264,20 @@ void activateAppSettings(int action) {
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
         case 8:
-            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;
+            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;iconStyle=0;
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
             gIconCache.setCustomIconPackDir("");
             applyThemePalette();
             if(saveLauncherSettings())setStatus("APPEARANCE RESET");
+            break;
+        case 9:
+            languageRussian=!languageRussian;
+            if(saveLauncherSettings())setStatus(languageRussian?"ЯЗЫК: РУССКИЙ":"LANGUAGE: ENGLISH");
+            break;
+        case 10:
+            iconStyle=(iconStyle+1)%3;
+            if(saveLauncherSettings())setStatus("ICON STYLE");
             break;
         default: break;
     }
@@ -3446,8 +3458,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+8)%9;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%9;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
