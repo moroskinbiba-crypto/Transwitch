@@ -186,7 +186,7 @@ namespace desknx::system::app {
         return ctl->nacp.startup_user_account != 0;
     }
 
-    Result Launch(u64 app_id, AccountUid user, u64 flags) {
+    Result Launch(u64 app_id, AccountUid user, u64 flags, bool take_foreground) {
         if (g_AppRunning) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
         g_ExitAppId = 0;
 
@@ -238,6 +238,17 @@ namespace desknx::system::app {
         g_AppRunning  = true;
         g_AppHasFocus = false;
         g_LaunchTick  = armGetSystemTick();
+
+        // HomeNX starts the application while its HOME menu applet is still
+        // closing. AM creates and starts the title here, but the menu keeps the
+        // display until its holder has been joined. The backend then calls
+        // FocusApplication() from HandleMenuClosed(). Starting and foreground
+        // acquisition are deliberately separate operations.
+        if (!take_foreground) {
+            DaemonLog("app: started behind HOME title=0x%016lx; foreground handoff deferred",
+                      app_id);
+            return 0;
+        }
 
         rc = appletApplicationRequestForApplicationToGetForeground(&g_AppHolder);
         if (R_FAILED(rc)) {
