@@ -40,3 +40,11 @@ This is an implementation ledger, not a claim that every HomeNX feature should b
 - Never show a fabricated online count or treat failed network responses as zero.
 - Preserve GPL-3.0 notices for any source copied or adapted from HomeNX. Current IconCache worker is an SDL2 adaptation of the documented IconStreamer pipeline; the implementation was written for Transwitch rather than copying the HomeNX nxui class.
 - CI compilation does not prove Switch runtime stability. Keep experimental qlaunch installation disabled until hardware recovery tests pass.
+
+
+## CI update — 18 November 2026
+
+The asynchronous IconCache port now passes the repository's cross-build checks on branch `port/homenx-async-icon-streamer`, commit `b303741d257d9ed8f62ce529f6acb453807c09eb`:
+- `Build DeskNX` run `44252212096`: success, including the production HOME library applet and native standalone-path compile-check.
+- `Build Nintendo Switch NRO` run `44252212151`: success, but this is the separate WebKit-wrapper build and does not exercise the SDL icon worker.
+- Physical Switch testing remains pending. In particular, do not infer worker stability or Atmosphère compatibility from these builds.
