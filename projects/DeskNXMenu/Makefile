@@ -91,7 +91,7 @@ standalone-check:
 	@mkdir -p build-standalone-check
 	@$(MAKE) --no-print-directory -C build-standalone-check -f $(CURDIR)/Makefile STANDALONE_CHECK=1 BUILD=build-standalone-check standalone-compile-check
 clean:
-	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
+	@rm -rf $(BUILD) build-standalone-check $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
 	@rm -rf $(CURDIR)/../../SdOut/switch/DeskNX/bin/Menu
 else
 DEPENDS := $(OFILES:.o=.d)
