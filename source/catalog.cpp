@@ -38,7 +38,7 @@ constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
 constexpr const char* CacheTemp = "sdmc:/switch/DeskNX/cache/catalogue.tmp";
 constexpr size_t MaxNroAssetBytes = 2 * 1024 * 1024;
 
-struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; };
+struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; bool updateStatusAvailable; };
 using NroFile = desknx::nro_scan::File;
 struct Signatures {
     size_t gameCount{0};
@@ -174,7 +174,7 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
             flags = views[i].flags;
         }
         records.push_back({installed[i].application_id,
-                           installed[i].last_updated, flags});
+                           installed[i].last_updated, flags, i < views.size()});
     }
 
     // Play statistics are loaded lazily for the selected library entry.
@@ -189,6 +189,8 @@ Signatures MakeSignatures(const std::vector<GameRecord>& games, const std::vecto
         // View flags are cached metadata too (update/game-card badges), and
         // can change independently of the installed record timestamp.
         sig.gameHash = hashBytes(sig.gameHash, &game.viewFlags, sizeof(game.viewFlags));
+        sig.gameHash = hashBytes(sig.gameHash, &game.updateStatusAvailable,
+                                 sizeof(game.updateStatusAvailable));
     }
     for (const auto& nro : nros) {
         sig.sdHash = hashText(sig.sdHash, nro.path);
@@ -277,7 +279,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     std::string line;
     if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
-    if (header.size() != 4 || header[0] != "DESKNXCAT3") return false;
+    if (header.size() != 4 || header[0] != "DESKNXCAT4") return false;
     if (!allowStale) {
         char gameHash[32]{}, sdHash[32]{};
         std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
@@ -290,9 +292,10 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     while (std::getline(input, line)) {
         if (line.size() > MaxCacheLineBytes || items.size() >= MaxItems) return false;
         const auto fields = desknx::model::splitTabs(line);
-        if (fields.size() != 9 || fields[0] != "C" ||
+        if (fields.size() != 10 || fields[0] != "C" ||
             fields[1].size() > 16 || fields[2].size() > 512 ||
-            fields[3].size() > 512 || fields[8].size() > 15)
+            fields[3].size() > 512 || fields[8].size() > 15 ||
+            (fields[9] != "0" && fields[9] != "1"))
             return false;
 
         Candidate item{};
@@ -301,6 +304,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
         item.title = fields[2];
         item.data = fields[3];
         item.displayVersion = fields[8];
+        item.updateStatusAvailable = fields[9] == "1";
         char* flagsEnd = nullptr;
         errno = 0;
         const unsigned long parsedFlags = std::strtoul(fields[7].c_str(), &flagsEnd, 10);
@@ -581,14 +585,15 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     char gameHash[32]{}, sdHash[32]{};
     std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
-    output << "DESKNXCAT3\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
+    output << "DESKNXCAT4\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
     for (const auto& item : result.items) {
         output << "C\t" << desknx::model::typeCode(item.kind) << '\t'
                << desknx::model::safeField(item.title) << '\t'
                << desknx::model::safeField(item.data) << '\t'
                << item.w << '\t' << item.h << '\t' << item.color << '\t'
                << item.viewFlags << '\t'
-               << desknx::model::safeField(item.displayVersion) << '\n';
+               << desknx::model::safeField(item.displayVersion) << '\t'
+               << (item.updateStatusAvailable ? 1 : 0) << '\n';
     }
     output.flush();
     const bool good = output.good();
@@ -779,10 +784,13 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                 return item.kind == Kind::Game && item.data == id;
             });
         if (existing == result.items.end()) {
-            result.items.push_back({Kind::Game, title, id, 1, 1,
-                static_cast<int>(earlyGameCount % 12), game.viewFlags});
+            Candidate seed{Kind::Game, title, id, 1, 1,
+                static_cast<int>(earlyGameCount % 12), game.viewFlags};
+            seed.updateStatusAvailable=game.updateStatusAvailable;
+            result.items.push_back(std::move(seed));
         } else {
             existing->viewFlags = game.viewFlags;
+            existing->updateStatusAvailable = game.updateStatusAvailable;
             if (!usableCachedName(existing->title) && usableCachedName(title))
                 existing->title = title;
         }
@@ -849,8 +857,10 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         const std::string title = cached != nameCache.end() &&
             usableCachedName(cached->second)
             ? cached->second : std::string("Game ") + id;
-        result.items.push_back({Kind::Game, title, id, 1, 1,
-            static_cast<int>(i % 12), games[i].viewFlags});
+        Candidate seed{Kind::Game, title, id, 1, 1,
+            static_cast<int>(i % 12), games[i].viewFlags};
+        seed.updateStatusAvailable=games[i].updateStatusAvailable;
+        result.items.push_back(std::move(seed));
     }
     (void)EnsureBuiltinWidgets(result.items);
     report(false);
@@ -944,12 +954,14 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             result.items[i].title = title;
             result.items[i].displayVersion = displayVersion;
             result.items[i].viewFlags = games[i].viewFlags;
+            result.items[i].updateStatusAvailable=games[i].updateStatusAvailable;
             result.items[i].color = static_cast<int>(colorIndex++ % 12);
         } else {
             // Defensive fallback for a malformed staging snapshot.
             Candidate fallback{Kind::Game, title, hex, 1, 1,
                 static_cast<int>(colorIndex++ % 12), games[i].viewFlags};
             fallback.displayVersion=displayVersion;
+            fallback.updateStatusAvailable=games[i].updateStatusAvailable;
             result.items.insert(result.items.begin() + static_cast<std::ptrdiff_t>(
                 std::min(i, result.items.size())), std::move(fallback));
         }

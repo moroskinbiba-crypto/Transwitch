@@ -2548,16 +2548,18 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 textCentered(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
                              center,metrics.clampY(r.y+r.h/4,7*scale),
                              scale,WHITE,left,right);
+                const int detailsTop=std::max(bodyTop+8,
+                    r.y+r.h/4+7*scale+6);
                 text("INSTALLED GAMES  "+std::to_string(installedGameCount),
-                     left,metrics.clampY(bodyTop+19,12),1,WHITE,right);
+                     left,metrics.clampY(detailsTop,12),1,WHITE,right);
                 text("HOMEBREW APPS  "+std::to_string(installedHomebrewCount),
-                     left,metrics.clampY(bodyTop+47,12),1,WHITE,right);
-                text(ramLine,left,metrics.clampY(bodyTop+75,12),1,BLUE,right);
+                     left,metrics.clampY(detailsTop+24,12),1,WHITE,right);
+                text(ramLine,left,metrics.clampY(detailsTop+48,12),1,BLUE,right);
                 if(sdTotalBytes>0) {
                     char total[64]{};
                     std::snprintf(total,sizeof(total),"SD TOTAL  %.1f GB",
                         static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
-                    text(total,left,metrics.clampY(bodyTop+103,12),1,MUTED,right);
+                    text(total,left,metrics.clampY(detailsTop+72,12),1,MUTED,right);
                 }
                 progress(bottom-14,percent);
             }
@@ -2876,8 +2878,9 @@ void drawScreen() {
                         appBadge=candidate.displayVersion.empty()
                             ?(languageRussian?"ВЕРСИЯ Н/Д":"VERSION N/A")
                             :"v"+candidate.displayVersion;
-                        badgeColor=(candidate.viewFlags&NsViewFlagNeedsUpdate)
-                            ?Color{255,196,87,255}:GREEN;
+                        badgeColor=!candidate.updateStatusAvailable?MUTED:
+                            (candidate.viewFlags&NsViewFlagNeedsUpdate)
+                                ?Color{255,196,87,255}:GREEN;
                     }
                     textCentered(appBadge,x+cardW/2,y+101,1,badgeColor,x+8,x+cardW-8);
                 }
@@ -2896,8 +2899,9 @@ void drawScreen() {
                 detailType=selected.displayVersion.empty()
                     ?(languageRussian?"ВЕРСИЯ Н/Д":"VERSION N/A")
                     :"VERSION "+selected.displayVersion;
-                detailColor=(selected.viewFlags&NsViewFlagNeedsUpdate)
-                    ?Color{255,196,87,255}:GREEN;
+                detailColor=!selected.updateStatusAvailable?MUTED:
+                    (selected.viewFlags&NsViewFlagNeedsUpdate)
+                        ?Color{255,196,87,255}:GREEN;
             }
             text(detailType,mx+800,my+252,1,detailColor,mx+mw-30);
             if(selected.kind==Kind::Game) {

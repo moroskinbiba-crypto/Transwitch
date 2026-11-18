@@ -46,6 +46,7 @@ struct Candidate {
     bool playStatsQueried{false};
     bool playStatsAvailable{false};
     std::string displayVersion{}; // Installed control.nacp DisplayVersion, if available.
+    bool updateStatusAvailable{false}; // True only when NS returned an application view.
 };
 
 inline bool isTitleId(const std::string& value) {
