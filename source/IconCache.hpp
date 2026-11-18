@@ -216,16 +216,10 @@ private:
             requests_.pop_front();
             SDL_UnlockMutex(mutex_);
 
-            Decoded decoded;
-            try {
-                decoded = decode(request);
-            } catch (...) {
-                decoded.kind = request.kind;
-                decoded.data = request.data;
-                decoded.key = request.key;
-                decoded.generation = request.generation;
-                decoded.success = false;
-            }
+            // The Switch target is built with -fno-exceptions. Input file
+            // size and decoded dimensions are bounded before allocating RGBA
+            // storage, so decoder failures are reported through Decoded::success.
+            Decoded decoded = decode(request);
 
             SDL_LockMutex(mutex_);
             if (!stopWorker_ && request.generation == generation_) {
