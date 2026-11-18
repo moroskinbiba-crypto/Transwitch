@@ -53,12 +53,13 @@ constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
 constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
 constexpr int ToolbarStartX=64, ToolbarButtonWidth=100, ToolbarButtonStep=108, ToolbarButtonCount=3;
 constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarButtonStep; }
-constexpr int AppSettingsActions[11]={0,1,2,3,10,8,4,6,7,5,9};
+constexpr int AppSettingsActions[13]={0,1,2,3,4,5,6,7,8,9,10,11,12};
 constexpr int appSettingsRowY(int index) {
  switch(index) {
- case 0:return 210; case 1:return 236; case 2:return 262; case 3:return 288;
- case 4:return 314; case 5:return 340; case 6:return 396; case 7:return 422;
- case 8:return 448; case 9:return 504; default:return 556;
+ case 0:return 206; case 1:return 230; case 2:return 254; case 3:return 278;
+ case 4:return 302; case 5:return 326; case 6:return 374; case 7:return 398;
+ case 8:return 422; case 9:return 470; case 10:return 494; case 11:return 518;
+ default:return 542;
  }
 }
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
@@ -82,6 +83,9 @@ constexpr const char* SETTINGS_FILE = "sdmc:/switch/DeskNX/settings.ini";
 constexpr const char* SETTINGS_TMP = "sdmc:/switch/DeskNX/settings.tmp";
 constexpr const char* SETTINGS_BAK = "sdmc:/switch/DeskNX/settings.bak";
 constexpr const char* MEDIA_ROOT = "sdmc:/switch/DeskNX/media";
+constexpr const char* GAME_ICON_OVERRIDES_DIR = "sdmc:/switch/DeskNX/media/game-icons";
+constexpr const char* GAME_NAME_OVERRIDES_FILE = "sdmc:/switch/DeskNX/cache/game-overrides.tsv";
+constexpr const char* GAME_NAME_OVERRIDES_TMP = "sdmc:/switch/DeskNX/cache/game-overrides.tmp";
 constexpr const char* ALBUM_ROOT = "sdmc:/Nintendo/Album";
 
 struct Color { Uint8 r, g, b, a; };
@@ -96,15 +100,18 @@ std::array<Color,12> COLORS{{
     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}
 }};
 int themeIndex=1;
+int accentColorIndex=-1; // -1 = follow selected theme, 0..11 = explicit palette colour.
 bool languageRussian=true;
 int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
-std::string wallpaperPath, fontPath, iconPackPath;
+std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
+std::unordered_map<std::string,std::string> gameNameOverrides;
+std::string pendingGameIconTitleId;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
 SDL_Texture* roundedCornerMaskTexture=nullptr;
 int roundedCornerMaskRadius=0;
 
-enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground };
+enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground, GameIcon };
 struct MediaEntry { std::string name, path; bool directory{false}; };
 bool mediaPickerOpen=false;
 MediaPickerType mediaPickerType=MediaPickerType::Wallpaper;
@@ -391,6 +398,8 @@ void applyThemePalette() {
                      {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}}};
             break;
     }
+    if(accentColorIndex>=0 && accentColorIndex<static_cast<int>(COLORS.size()))
+        BLUE=COLORS[static_cast<size_t>(accentColorIndex)];
 }
 
 // A low-amplitude pulse gives current focus a living highlight without
@@ -398,7 +407,7 @@ void applyThemePalette() {
 Color focusAccent() {
     const double phase=static_cast<double>(SDL_GetTicks())/360.0;
     const double pulse=(std::sin(phase)+1.0)*0.5;
-    return Color{139,190,255,static_cast<Uint8>(185.0+70.0*pulse)};
+    return Color{BLUE.r,BLUE.g,BLUE.b,static_cast<Uint8>(185.0+70.0*pulse)};
 }
 
 bool hasExtension(const std::string& path,const char* const* extensions,size_t count) {
@@ -433,7 +442,7 @@ void loadLauncherSettings() {
     const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
     for(const char* candidate:candidates) {
         struct stat st{};
-        if(stat(candidate,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>4096)
+        if(stat(candidate,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>8192)
             continue;
         std::ifstream in(candidate,std::ios::binary);
         std::string header;
@@ -465,6 +474,15 @@ void loadLauncherSettings() {
             const long valueLong=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&valueLong>=0&&valueLong<=7)
                 themeIndex=static_cast<int>(valueLong);
+        } else if(key=="accent") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\\0'&&parsed>=-1&&parsed<static_cast<long>(COLORS.size()))
+                accentColorIndex=static_cast<int>(parsed);
+        } else if(key=="steamgriddb_key") {
+            bool valid=value.size()<=64;
+            for(unsigned char ch:value)if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
+            if(valid)steamGridDbApiKey=value;
         } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
@@ -493,6 +511,8 @@ bool saveLauncherSettings() {
     if(!out){setStatus("SETTINGS SAVE FAILED",3000);return false;}
     out<<"DESKNXSET1\n"
        <<"theme="<<themeIndex<<"\n"
+       <<"accent="<<accentColorIndex<<"\n"
+       <<"steamgriddb_key="<<steamGridDbApiKey<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"

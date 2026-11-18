@@ -37,10 +37,19 @@ public:
     void setCustomIconPackDir(const std::string& path) {
         if (path == customIconPackDir_) return;
         customIconPackDir_ = path;
+        invalidate();
+    }
 
-        // Any result already being decoded belongs to the old icon pack. Bump
-        // the generation and discard queued/completed work without joining the
-        // worker or blocking the HOME thread.
+    void setGameIconOverridesDir(const std::string& path) {
+        if (path == gameIconOverridesDir_) return;
+        gameIconOverridesDir_ = path;
+        invalidate();
+    }
+
+    // Call after a user replaces a single game's cover without changing the
+    // selected global pack. The worker never touches SDL textures; generation
+    // tags discard stale decodes and the render thread clears its own cache.
+    void invalidate() {
         if (mutex_) {
             SDL_LockMutex(mutex_);
             ++generation_;
@@ -53,7 +62,6 @@ public:
             ++generation_;
             pendingKeys_.clear();
         }
-
         failedUntil_.clear();
         clearTextures();
     }
@@ -127,6 +135,7 @@ private:
         std::string data;
         std::string key;
         std::string customDirectory;
+        std::string gameOverrideDirectory;
         std::uint64_t generation{0};
         int priority{0};
     };
@@ -241,6 +250,7 @@ private:
         request.data = tile.data;
         request.key = key;
         request.customDirectory = customIconPackDir_;
+        request.gameOverrideDirectory = gameIconOverridesDir_;
         request.priority = priority;
 
         SDL_LockMutex(mutex_);
@@ -279,8 +289,9 @@ private:
             desknx::model::iconCachePath(request.kind, request.data);
         if (defaultPath.empty()) return result;
 
-        const std::string customPath =
-            customPathFor(request.kind, request.data, request.customDirectory);
+        const std::string customPath = customPathFor(
+            request.kind,request.data,request.customDirectory,
+            request.gameOverrideDirectory);
         result.isCustom = !customPath.empty();
         result.path = result.isCustom ? customPath : defaultPath;
 
@@ -439,8 +450,9 @@ private:
 
     static std::string customPathFor(desknx::model::Kind kind,
                                      const std::string& data,
-                                     const std::string& customDirectory) {
-        if (customDirectory.empty()) return {};
+                                     const std::string& customDirectory,
+                                     const std::string& gameOverrideDirectory) {
+        if (customDirectory.empty() && gameOverrideDirectory.empty()) return {};
 
         std::string stem;
         if (kind == desknx::model::Kind::Game) {
@@ -472,10 +484,11 @@ private:
         }
 
         static const char* const extensions[] = {".jpg", ".png", ".jpeg"};
-        auto findFile = [&](const std::string& base) -> std::string {
+        auto findInDirectory = [&](const std::string& directory,
+                                   const std::string& base) -> std::string {
+            if(directory.empty())return {};
             for (const char* extension : extensions) {
-                const std::string candidate =
-                    customDirectory + "/" + base + extension;
+                const std::string candidate = directory + "/" + base + extension;
                 struct stat st{};
                 if (stat(candidate.c_str(), &st) == 0 &&
                     S_ISREG(st.st_mode) && st.st_size > 0)
@@ -483,8 +496,14 @@ private:
             }
             return {};
         };
+        auto findFile = [&](const std::string& base) -> std::string {
+            return findInDirectory(customDirectory,base);
+        };
 
         if (kind == desknx::model::Kind::Game) {
+            // One-off icon assignments always override a selected shared pack.
+            const std::string perGame = findInDirectory(gameOverrideDirectory,stem);
+            if(!perGame.empty())return perGame;
             // Prefer real landscape box art over the square NACP system icon.
             const std::string coverBases[] = {
                 "cover-" + stem, stem + "-cover",
@@ -610,6 +629,7 @@ private:
     std::uint64_t generation_{1};
 
     std::string customIconPackDir_;
+    std::string gameIconOverridesDir_;
     std::unordered_map<std::string, Uint32> failedUntil_;
     std::unordered_set<std::string> pendingKeys_;
     std::deque<Request> requests_;

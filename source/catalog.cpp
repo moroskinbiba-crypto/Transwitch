@@ -4,6 +4,7 @@
 #include "../include/desknx/StrictParse.hpp"
 #include "../include/desknx/CatalogPagination.hpp"
 #include "../include/desknx/NroScanner.hpp"
+#include "../include/desknx/ApplicationSize.hpp"
 #include <desknx/SafeReplace.hpp>
 
 #include <switch.h>
@@ -279,7 +280,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     std::string line;
     if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
-    if (header.size() != 4 || header[0] != "DESKNXCAT4") return false;
+    if (header.size() != 4 || header[0] != "DESKNXCAT5") return false;
     if (!allowStale) {
         char gameHash[32]{}, sdHash[32]{};
         std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
@@ -292,10 +293,11 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     while (std::getline(input, line)) {
         if (line.size() > MaxCacheLineBytes || items.size() >= MaxItems) return false;
         const auto fields = desknx::model::splitTabs(line);
-        if (fields.size() != 10 || fields[0] != "C" ||
+        if (fields.size() != 12 || fields[0] != "C" ||
             fields[1].size() > 16 || fields[2].size() > 512 ||
             fields[3].size() > 512 || fields[8].size() > 15 ||
-            (fields[9] != "0" && fields[9] != "1"))
+            (fields[9] != "0" && fields[9] != "1") ||
+            (fields[11] != "0" && fields[11] != "1"))
             return false;
 
         Candidate item{};
@@ -305,6 +307,13 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
         item.data = fields[3];
         item.displayVersion = fields[8];
         item.updateStatusAvailable = fields[9] == "1";
+        char* sizeEnd = nullptr;
+        errno = 0;
+        const unsigned long long occupiedBytes = std::strtoull(fields[10].c_str(), &sizeEnd, 10);
+        if (errno != 0 || sizeEnd == fields[10].c_str() || !sizeEnd || *sizeEnd != '\0')
+            return false;
+        item.occupiedSizeBytes = static_cast<uint64_t>(occupiedBytes);
+        item.occupiedSizeAvailable = fields[11] == "1" && occupiedBytes > 0;
         char* flagsEnd = nullptr;
         errno = 0;
         const unsigned long parsedFlags = std::strtoul(fields[7].c_str(), &flagsEnd, 10);
@@ -585,7 +594,7 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     char gameHash[32]{}, sdHash[32]{};
     std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
-    output << "DESKNXCAT4\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
+    output << "DESKNXCAT5\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
     for (const auto& item : result.items) {
         output << "C\t" << desknx::model::typeCode(item.kind) << '\t'
                << desknx::model::safeField(item.title) << '\t'
@@ -593,7 +602,9 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
                << item.w << '\t' << item.h << '\t' << item.color << '\t'
                << item.viewFlags << '\t'
                << desknx::model::safeField(item.displayVersion) << '\t'
-               << (item.updateStatusAvailable ? 1 : 0) << '\n';
+               << (item.updateStatusAvailable ? 1 : 0) << '\t'
+               << item.occupiedSizeBytes << '\t'
+               << (item.occupiedSizeAvailable ? 1 : 0) << '\n';
     }
     output.flush();
     const bool good = output.good();
@@ -869,6 +880,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     freshNameCache.reserve(games.size());
     bool fetchedControlData = false;
     size_t controlDataOk = 0, controlDataFailed = 0;
+    size_t occupiedSizeOk = 0, occupiedSizeFailed = 0;
     size_t resolvedGameNames = 0, unresolvedGameNames = 0;
     size_t cachedGameIcons = 0, failedGameIcons = 0;
     char firstUnresolvedTitleId[17]{};
@@ -888,6 +900,17 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
               desknx::model::isTitleId(cachedName->second.substr(5)));
         std::string title;
         std::string displayVersion;
+        uint64_t occupiedSizeBytes=0;
+        bool occupiedSizeAvailable=false;
+        NsApplicationOccupiedSize occupiedSize{};
+        const Result occupiedRc=nsCalculateApplicationOccupiedSize(id,&occupiedSize);
+        if(R_SUCCEEDED(occupiedRc)) {
+            const auto decoded=desknx::application_size::decode(
+                reinterpret_cast<const uint8_t*>(&occupiedSize),sizeof(occupiedSize));
+            occupiedSizeBytes=decoded.bytes;
+            occupiedSizeAvailable=decoded.available;
+        }
+        if(occupiedSizeAvailable)++occupiedSizeOk;else ++occupiedSizeFailed;
         Result metadataRc=0;
         bool metadataRead=false;
         bool iconAvailable=iconCached;
@@ -953,6 +976,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             result.items[i].kind == Kind::Game && result.items[i].data == hex) {
             result.items[i].title = title;
             result.items[i].displayVersion = displayVersion;
+            result.items[i].occupiedSizeBytes = occupiedSizeBytes;
+            result.items[i].occupiedSizeAvailable = occupiedSizeAvailable;
             result.items[i].viewFlags = games[i].viewFlags;
             result.items[i].updateStatusAvailable=games[i].updateStatusAvailable;
             result.items[i].color = static_cast<int>(colorIndex++ % 12);
@@ -961,6 +986,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             Candidate fallback{Kind::Game, title, hex, 1, 1,
                 static_cast<int>(colorIndex++ % 12), games[i].viewFlags};
             fallback.displayVersion=displayVersion;
+            fallback.occupiedSizeBytes=occupiedSizeBytes;
+            fallback.occupiedSizeAvailable=occupiedSizeAvailable;
             fallback.updateStatusAvailable=games[i].updateStatusAvailable;
             result.items.insert(result.items.begin() + static_cast<std::ptrdiff_t>(
                 std::min(i, result.items.size())), std::move(fallback));
@@ -972,6 +999,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     LogDiagnostic("control_data successful=%zu failed=%zu first_error=0x%08X cached_names=%zu",
                   controlDataOk, controlDataFailed,
                   static_cast<unsigned int>(firstControlDataError), nameCache.size());
+    LogDiagnostic("occupied_size successful=%zu unavailable=%zu",
+                  occupiedSizeOk,occupiedSizeFailed);
     LogDiagnostic("game_artwork resolved_names=%zu unresolved_names=%zu icons_written=%zu icon_failures=%zu first_unresolved=%s",
                   resolvedGameNames, unresolvedGameNames, cachedGameIcons,
                   failedGameIcons, firstUnresolvedTitleId[0] ? firstUnresolvedTitleId : "none");
