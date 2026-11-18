@@ -23,11 +23,14 @@ INCLUDES    := include projects/common/include
 APP_TITLE   := DeskNX
 APP_AUTHOR  := Transwitch Team
 APP_VERSION := 0.3.0
-APP_ICON    := $(CURDIR)/icon.png
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
+# The recursive make re-reads this file from BUILD; it must re-apply the
+# include paths exported by the outer make invocation.
+CFLAGS      += $(INCLUDE)
+CXXFLAGS    += $(INCLUDE)
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
 
@@ -48,13 +51,13 @@ endif
 LIBS    := $(SDL2_IMAGE_LIBS) $(SDL2_TTF_LIBS) $(SDL2_LIBS) $(CURL_LIBS) -lnx
 LIBDIRS := $(PORTLIBS) $(LIBNX)
 
-# NACP metadata is embedded. There is intentionally no RomFS section.
-export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
-
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT  := $(CURDIR)/$(TARGET)
 export TOPDIR  := $(CURDIR)
-export APP_ICON APP_TITLE APP_AUTHOR APP_VERSION
+export APP_ICON := $(TOPDIR)/icon.png
+export APP_TITLE APP_AUTHOR APP_VERSION
+# NACP metadata is embedded. There is intentionally no RomFS section.
+export NROFLAGS += --nacp=$(OUTPUT).nacp
 export VPATH   := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
