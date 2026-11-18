@@ -12,6 +12,7 @@
 #include "catalog.hpp"
 #include "slaunch_applications.hpp"
 #include "../include/desknx/Diagnostics.hpp"
+#include "../include/desknx/Localization.hpp"
 #include "../include/desknx/NextendoPlayers.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
@@ -81,6 +82,8 @@ std::array<Color,12> COLORS{{
     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}
 }};
 int themeIndex=1;
+bool languageRussian=true;
+int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
 std::string wallpaperPath, fontPath, iconPackPath;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
@@ -238,6 +241,7 @@ desknx::ipc::InitialState g_initialState{};
 
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
+    desknx::diag::Write("ui","status","message=%s",s.c_str());
 }
 
 bool commitSdCard(const char* operation) {
@@ -386,6 +390,8 @@ bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
 
 void loadLauncherSettings() {
     if(!sdMounted){applyThemePalette();return;}
+    languageRussian=true;
+    iconStyle=0;
     std::string selectedPath;
     const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
     for(const char* candidate:candidates) {
@@ -426,6 +432,12 @@ void loadLauncherSettings() {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
             fontPath=value;
+        } else if(key=="language") {
+            languageRussian=(value=="ru" || value=="russian");
+        } else if(key=="iconstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -446,7 +458,9 @@ bool saveLauncherSettings() {
        <<"theme="<<themeIndex<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
        <<"font="<<safeField(fontPath)<<"\n"
-       <<"iconpack="<<safeField(iconPackPath)<<"\n";
+       <<"iconpack="<<safeField(iconPackPath)<<"\n"
+       <<"language="<<(languageRussian?"ru":"en")<<"\n"
+       <<"iconstyle="<<iconStyle<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -772,8 +786,9 @@ std::string fallbackAscii(const std::string& input) {
 // pass ASCII through and draw U+FFFD-style replacement boxes for anything
 // else (default glyph in glyph()) instead of silently dropping characters.
 void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
-    if(gFontRenderer.draw(value,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
-    const std::string s=fallbackAscii(value); color(c); int px=x;
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
+    const std::string s=fallbackAscii(localized); color(c); int px=x;
     for(char ch:s) {
         if(px+5*scale>right) break;
         const auto rows=glyph(ch);
@@ -835,15 +850,21 @@ const std::vector<Candidate>& visibleCatalogueSnapshot() {
 }
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize);
 void searchCatalogue() {
+    const Uint64 keyboardStarted=SDL_GetTicks64();
     SwkbdConfig config{};
-    if(R_FAILED(swkbdCreate(&config,0))){setStatus("SEARCH KEYBOARD UNAVAILABLE",2500);return;}
+    const Result createRc=swkbdCreate(&config,0);
+    desknx::diag::Write("keyboard","search_create","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(createRc),static_cast<unsigned long long>(SDL_GetTicks64()-keyboardStarted));
+    if(R_FAILED(createRc)){setStatus("SEARCH KEYBOARD UNAVAILABLE",2500);return;}
     swkbdConfigMakePresetDefault(&config);
-    swkbdConfigSetHeaderText(&config,"Search games and Homebrew");
+    swkbdConfigSetHeaderText(&config,languageRussian?"Поиск игр и Homebrew":"Search games and Homebrew");
     swkbdConfigSetInitialText(&config,catalogueQuery.c_str());
     char value[128]{};
     std::snprintf(value,sizeof(value),"%s",catalogueQuery.c_str());
     const Result rc=showKeyboard(&config,value,sizeof(value));
     swkbdClose(&config);
+    desknx::diag::Write("keyboard","search_complete","rc=0x%08X total_ms=%llu result_bytes=%zu",
+        static_cast<unsigned int>(rc),static_cast<unsigned long long>(SDL_GetTicks64()-keyboardStarted),std::strlen(value));
     if(R_SUCCEEDED(rc)) {
         catalogueQuery=value;
         ++catalogueViewRevision;
@@ -1030,10 +1051,12 @@ Result sendIpc(Sender sender) {
     return rc;
 }
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
-    const Result busyRc=sendIpc([]{return desknx::ipc::SendBusy(30);});
+    // The independent heartbeat thread remains active while swkbdShow owns the
+    // foreground. A synchronous BUSY IPC round-trip delayed keyboard startup.
+    const Uint64 started=SDL_GetTicks64();
     const Result dialogRc=swkbdShow(config,output,outputSize);
-    if(R_SUCCEEDED(busyRc))
-        (void)sendIpc([]{return desknx::ipc::SendBusyEnd();});
+    desknx::diag::Write("keyboard","dialog_return","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(dialogRc),static_cast<unsigned long long>(SDL_GetTicks64()-started));
     return dialogRc;
 }
 int heartbeatThreadMain(void*) {
@@ -1142,7 +1165,11 @@ void stopHeartbeatThread() {
 }
 #else
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
-    return swkbdShow(config,output,outputSize);
+    const Uint64 started=SDL_GetTicks64();
+    const Result rc=swkbdShow(config,output,outputSize);
+    desknx::diag::Write("keyboard","dialog_return","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(rc),static_cast<unsigned long long>(SDL_GetTicks64()-started));
+    return rc;
 }
 #endif
 bool isSafeNroPath(const std::string& path) {
