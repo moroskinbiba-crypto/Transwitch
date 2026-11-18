@@ -73,6 +73,18 @@
 6. P2 — закрепить toolchain refs вместо плавающего devkitpro/devkita64:latest только после сравнения версий и совместимости.
 7. Hardware smoke test: cold boot, HOME open, launch title, HOME from game, launch NRO, HOME from NRO, repeated loops, sleep/wake, recovery. Записать HOS/Atmosphère/libnx/build ID и результат.
 
+## DeskNX UX, NACP titles and diagnostics — 18 November 2026
+
+- Рабочая ветка: `fix/deskux-polish-russian`. Изменения выполняются отдельными коммитами; в `main` пока не вносились.
+- Устранена причина ID-only названий на HOS 21+: HomeNX нормализует raw-DEFLATE NACP title block формата TitlesDataFormat=1 (32 language slots) перед вызовом libnx; Transwitch получил совместимый нормализатор и host test.
+- NACP/NRO artwork cache теперь принимает JPEG и PNG. Добавлены агрегированные и покарточные диагностические события по успешности metadata/name/icon resolution.
+- Поиск больше не делает синхронный BUSY IPC round-trip перед `swkbdShow`: heartbeat остаётся отдельным потоком. Добавлены измерения `swkbdCreate` и полного времени показа клавиатуры.
+- Виджеты получили разные компоновки для 1×1, 2×1/3×1 и 2×2/3×2. Исправлен расчёт количества дней в месяце для календаря.
+- Добавлены русский интерфейс (по умолчанию), сохранение языка и стиля значков, три встроенных векторных обработки системных значков (Classic, Tabler-inspired outline, Material-style filled).
+- SD-пакет теперь загружает Noto Sans, Open Sans и Noto Sans Mono с лицензиями SIL OFL. Шрифты содержат кириллицу.
+- Расширено логирование раскладки, активного рабочего стола, истории, состояния кэша и времени сканирования медиапроводника. Вызов системного Nintendo Album applet измеряется отдельно; сам applet остаётся внешним компонентом Horizon.
+- Аппаратная Switch-проверка обязательна. CI/host tests не подтверждают runtime на консоли, время запуска системной галереи, качество шрифтов на экране или фактическое отображение иконок.
+
 ## Формат следующих записей
 
 Для каждого завершённого этапа записывать дату, commit SHA, список файлов, причину, тесты/CI со ссылками, открытые риски и hardware checks (passed / not run). Предыдущие записи не удалять.
