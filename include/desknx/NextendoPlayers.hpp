@@ -176,7 +176,7 @@ inline const char* displayNameForTitle(TitleId id) {
         case 0x0100152000022000ull: return "Mario Kart 8 Deluxe";
         case 0x0100F8F0000A2000ull:
         case 0x01003BC0000A0000ull:
-        case 0x01003C700009C800ull: return "Splatoon 2";
+        case 0x01003C700009C000ull: return "Splatoon 2";
         case 0x01006A800016E000ull: return "Super Smash Bros. Ultimate";
         case 0x01006F8002326000ull: return "Animal Crossing: New Horizons";
         case 0x01006FE013472000ull: return "Mario Party Superstars";

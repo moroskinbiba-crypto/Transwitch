@@ -146,10 +146,10 @@ void testPopularGamesAreSortedAndRegionalRowsAreMerged() {
     assert(popular.count == 3);
     assert(std::strcmp(popular.games[0].title, "Super Smash Bros. Ultimate") == 0);
     assert(popular.games[0].players == 20);
-    assert(std::strcmp(popular.games[1].title, "Splatoon 2") == 0);
-    assert(popular.games[1].players == 12);
-    assert(std::strcmp(popular.games[2].title, "Mario Kart 8 Deluxe") == 0);
-    assert(popular.games[2].players == 14);
+    assert(std::strcmp(popular.games[1].title, "Mario Kart 8 Deluxe") == 0);
+    assert(popular.games[1].players == 14);
+    assert(std::strcmp(popular.games[2].title, "Splatoon 2") == 0);
+    assert(popular.games[2].players == 12);
 }
 
 void testPopularGamesRespectLimitAndEmptySnapshot() {

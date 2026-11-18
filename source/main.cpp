@@ -132,6 +132,7 @@ SDL_Thread* nextendoThread = nullptr;
 SDL_mutex* nextendoMutex = nullptr;
 SDL_atomic_t nextendoStop{};
 desknx::nextendo::PresenceFeed nextendoFeed;
+desknx::nextendo::PopularGames nextendoPopularCache{};
 struct CatalogueScanRequest { bool forceRefresh; bool reinitializeNs; };
 const CatalogueScanRequest catalogueRefreshRequest{true, true};
 #ifdef DESKNX_SYSTEM_APPLET
@@ -995,6 +996,8 @@ int nextendoThreadMain(void*) {
             if (ok && nextendoMutex) {
                 SDL_LockMutex(nextendoMutex);
                 const bool applied = nextendoFeed.apply(snapshot, SDL_GetTicks64());
+                if (applied)
+                    nextendoPopularCache=desknx::nextendo::rankPopularGames(snapshot);
                 SDL_UnlockMutex(nextendoMutex);
                 desknx::diag::Write("nextendo", applied ? "snapshot_updated" : "snapshot_rejected",
                     "titles=%zu total=%u", snapshot.perTitle.size(), snapshot.total);
@@ -1026,9 +1029,8 @@ desknx::nextendo::PopularGames nextendoPopularSnapshot() {
     desknx::nextendo::PopularGames result{};
     if (!nextendoMutex) return result;
     SDL_LockMutex(nextendoMutex);
-    desknx::nextendo::PlayerSnapshot snapshot{};
-    if (nextendoFeed.copyFreshSnapshot(snapshot, SDL_GetTicks64()))
-        result = desknx::nextendo::rankPopularGames(snapshot);
+    if (nextendoFeed.hasTotal(SDL_GetTicks64()))
+        result=nextendoPopularCache;
     SDL_UnlockMutex(nextendoMutex);
     return result;
 }
@@ -2494,7 +2496,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                          2,WHITE,left,right);
             textCentered(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
                          center,metrics.clampY(r.y+52,14),2,MUTED,left,right);
-        }
         }
     }
 }
