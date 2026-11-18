@@ -1,5 +1,9 @@
 #include <desknx/NextendoPlayers.hpp>
 
+// Nextendo endpoint selection and the per-title merge strategy are adapted
+// from HomeNX (GPL-3.0), projects/cards/src/Library.cpp. The polling cadence
+// and card presentation follow projects/cards/src/CardsActivity.cpp.
+
 #include <switch.h>
 #include <curl/curl.h>
 
