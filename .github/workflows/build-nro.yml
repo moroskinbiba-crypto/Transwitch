@@ -33,6 +33,21 @@ jobs:
       - name: Verify native NRO (NACP present, no RomFS/WebKit wrapper)
         run: python3 scripts/check-nro-assets.py DeskNX.nro
 
+      - name: Prepare standalone SD-card package with Cyrillic fonts
+        run: |
+          mkdir -p dist/switch/DeskNX
+          cp DeskNX.nro dist/switch/DeskNX/DeskNX.nro
+          bash scripts/package-runtime-assets.sh dist/switch/DeskNX
+          cp README.md dist/README-DeskNX.md
+
+      - name: Upload standalone SD-card package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeskNX-sdcard
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload native NRO artifact
         uses: actions/upload-artifact@v4
         with:
