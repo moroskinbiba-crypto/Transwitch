@@ -2115,6 +2115,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
+
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,workspace,r,fill);
         if(selected) {
@@ -2123,79 +2124,222 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         }
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
-        if(t.kind==Kind::Clock) {
-        text(clockText(),r.x+18,r.y+18,5,WHITE,r.x+r.w-12);
-        text(clockText(true).substr(6),r.x+20,r.y+74,2,MUTED,r.x+r.w-12);
-        text("CLOCK",r.x+20,r.y+r.h-23,1,BLUE,r.x+r.w-12);
-        } else if(t.kind==Kind::Battery) {
-        text("BATTERY",r.x+20,r.y+14,1,MUTED,r.x+r.w-12);
-        text(battery>=0?std::to_string(battery)+"%":"N/A",r.x+20,r.y+38,4,WHITE,r.x+r.w-12);
-        int maxW=std::max(1,r.w-48),value=battery>=0?maxW*battery/100:4;
-        roundRect(r.x+20,r.y+r.h-25,maxW,7,4,Color{54,66,84,255});
-        roundRect(r.x+20,r.y+r.h-25,std::max(4,value),7,4,battery>=20?GREEN:RED);
-    } else if(t.kind==Kind::System) {
-        roundRect(r.x+18,r.y+18,70,70,20,Color{37,61,91,255});
-        drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
-        const u32 firmware=hosversionGet();
-        char firmwareText[48]{};
-        std::snprintf(firmwareText,sizeof(firmwareText),"FIRMWARE %u.%u.%u",
-            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
-        text("SYSTEM INFO",r.x+104,r.y+27,2,WHITE,r.x+r.w-12);
-        text(firmwareText,r.x+104,r.y+54,1,MUTED,r.x+r.w-12);
-        text("TRANSWITCH LAUNCHER",r.x+104,r.y+73,1,BLUE,r.x+r.w-12);
-    } else if(t.kind==Kind::Unsupported) {
-        roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
-        text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,r.x+r.w-12);
-        text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,r.x+14,r.y+52,2,MUTED,r.x+r.w-12);
-    } else if(t.kind==Kind::Recent) {
-        text("RECENTLY OPENED",r.x+18,r.y+12,1,MUTED,r.x+r.w-12);
-        if(recentLaunches.empty())text("NOTHING HERE YET",r.x+18,r.y+44,2,WHITE,r.x+r.w-12);
-        else {
-            const size_t visible=std::min<size_t>(2,recentLaunches.size());
-            for(size_t i=0;i<visible;++i) {
-                const auto& e=recentLaunches[i];Tile iconTile{e.kind,e.title,e.data,0,0,1,1,static_cast<int>(i)};
-                const int iy=r.y+37+static_cast<int>(i)*28;drawTileIcon(iconTile,r.x+18,iy,22);
-                text(e.title,r.x+48,iy+5,1,WHITE,r.x+r.w-12);
-            }
-        }
-        text("HISTORY ON THIS CONSOLE",r.x+18,r.y+r.h-18,1,BLUE,r.x+r.w-12);
-    } else if(t.kind==Kind::Storage) {
-        text("SD CARD STORAGE",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
-        if(storageStatsAvailable) {
-            const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
-            const int percent=static_cast<int>(std::min<uint64_t>(
-                100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)));
-            char sizeText[64]{};
-            std::snprintf(sizeText,sizeof(sizeText),"%.1f GB FREE",
+        const bool compact=t.w==1&&t.h==1;
+        const bool wide=t.h==1&&t.w>=2;
+        const int left=r.x+18, right=r.x+r.w-14;
+        const int innerWidth=std::max(1,r.w-36);
+        auto label=[&](const std::string& value,int y) {
+            text(value,left,y,1,MUTED,right);
+        };
+        auto progress=[&](int y,int percent) {
+            const int barWidth=std::max(16,innerWidth);
+            const int bounded=std::max(0,std::min(100,percent));
+            roundRect(left,y,barWidth,8,4,Color{48,62,79,255});
+            roundRect(left,y,std::max(2,barWidth*bounded/100),8,4,
+                      bounded>=80?RED:GREEN);
+        };
+        auto freeSpaceText=[&]() {
+            char value[64]{};
+            std::snprintf(value,sizeof(value),"%.1f GB",
                 static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
-            text(sizeText,r.x+18,r.y+37,3,WHITE,r.x+r.w-14);
-            roundRect(r.x+18,r.y+r.h-29,r.w-36,9,5,Color{48,62,79,255});
-            roundRect(r.x+18,r.y+r.h-29,std::max(3,(r.w-36)*percent/100),9,5,GREEN);
-            text(std::to_string(percent)+"% USED",r.x+18,r.y+r.h-16,1,MUTED,r.x+r.w-14);
-        } else {
-            text("SD STATUS UNAVAILABLE",r.x+18,r.y+45,1,RED,r.x+r.w-14);
-        }
+            return std::string(value);
+        };
+        auto recentLine=[&](size_t index,int y,int iconSize) {
+            if(index>=recentLaunches.size())return;
+            const auto& entry=recentLaunches[index];
+            Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
+            drawTileIcon(iconTile,left,y,iconSize);
+            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),
+                 iconSize>28?1:1,WHITE,right);
+        };
+
+        if(t.kind==Kind::Clock) {
+            const std::string time=clockText();
+            const std::string date=clockText(true).substr(6);
+            if(compact) {
+                text(time,r.x+10,r.y+20,3,WHITE,right);
+                label(date,r.y+66);
+                text("CLOCK",left,r.y+r.h-18,1,BLUE,right);
+            } else if(wide) {
+                text(time,left,r.y+23,5,WHITE,right);
+                label(date,r.y+78);
+                if(t.w>=3) {
+                    drawSystemIcon(6,r.x+r.w-68,r.y+28,38,accent);
+                    text("LOCAL TIME",r.x+r.w-118,r.y+78,1,BLUE,right);
+                }
+            } else {
+                text(time,left,r.y+24,6,WHITE,right);
+                text(date,left,r.y+105,2,MUTED,right);
+                text(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",left,r.y+160,1,BLUE,right);
+                drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
+            }
+        } else if(t.kind==Kind::Battery) {
+            const int pct=std::max(0,std::min(100,battery));
+            if(compact) {
+                label("BATTERY",r.y+13);
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+34,3,WHITE,right);
+                progress(r.y+82,battery);
+            } else if(wide) {
+                label("BATTERY",r.y+13);
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+33,t.w>=3?4:3,WHITE,right-70);
+                progress(r.y+82,battery);
+                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
+                if(t.w>=3)text(languageRussian?"ЗАРЯД":"CHARGE",
+                    r.x+r.w-112,r.y+75,1,MUTED,right);
+            } else {
+                label("BATTERY STATUS",r.y+14);
+                drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+50,6,WHITE,right-70);
+                progress(r.y+145,battery);
+                text(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
+                     battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
+                     battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
+                                 (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
+                     left,r.y+172,2,battery>=20?GREEN:RED,right);
+            }
+        } else if(t.kind==Kind::System) {
+            const u32 firmware=hosversionGet();
+            char firmwareText[48]{};
+            std::snprintf(firmwareText,sizeof(firmwareText),"%u.%u.%u",
+                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            if(compact) {
+                drawSystemIcon(0,left,r.y+24,40,accent);
+                label("SYSTEM");
+                text("HOS "+std::string(firmwareText),left,r.y+70,1,WHITE,right);
+            } else if(wide) {
+                drawSystemIcon(0,left,r.y+31,48,accent);
+                label("SYSTEM INFO");
+                text("HOS "+std::string(firmwareText),left+62,r.y+34,2,WHITE,right);
+                text(languageRussian?"DESKNX • NATIVE":"DESKNX • NATIVE",
+                     left+62,r.y+67,1,BLUE,right);
+            } else {
+                roundRect(left,r.y+34,66,66,18,Color{37,61,91,255});
+                drawSystemIcon(0,left+12,r.y+46,42,WHITE);
+                label("SYSTEM INFORMATION",r.y+20);
+                text("HOS "+std::string(firmwareText),left+82,r.y+54,2,WHITE,right);
+                text(languageRussian?"НАТИВНЫЙ ЛАУНЧЕР":"NATIVE LAUNCHER",
+                     left+82,r.y+86,1,BLUE,right);
+                text(languageRussian?"12 РАБОЧИХ СТОЛОВ":"12 WORKSPACES",
+                     left,r.y+132,2,MUTED,right);
+                text("SDL2 / LIBNX",left,r.y+168,1,MUTED,right);
+            }
+        } else if(t.kind==Kind::Recent) {
+            if(compact) {
+                label("RECENT",r.y+13);
+                if(recentLaunches.empty())
+                    text(languageRussian?"ПУСТО":"EMPTY",left,r.y+50,1,WHITE,right);
+                else recentLine(0,r.y+42,26);
+            } else if(wide) {
+                label("RECENTLY OPENED",r.y+12);
+                if(recentLaunches.empty())
+                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
+                         left,r.y+48,2,WHITE,right);
+                else {
+                    recentLine(0,r.y+34,26);
+                    if(t.w>=3)recentLine(1,r.y+67,26);
+                }
+            } else {
+                label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
+                if(recentLaunches.empty()) {
+                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
+                         left,r.y+86,2,WHITE,right);
+                } else {
+                    const size_t count=std::min<size_t>(4,recentLaunches.size());
+                    for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
+                }
+                text(languageRussian?"ИСТОРИЯ ЭТОЙ КОНСОЛИ":"HISTORY ON THIS CONSOLE",
+                     left,r.y+r.h-24,1,BLUE,right);
+            }
+        } else if(t.kind==Kind::Storage) {
+            const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
+            const int percent=storageStatsAvailable
+                ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
+                :-1;
+            if(compact) {
+                label("SD STORAGE",r.y+13);
+                text(storageStatsAvailable?freeSpaceText():"N/A",left,r.y+39,2,WHITE,right);
+                progress(r.y+82,percent);
+            } else if(wide) {
+                label("SD CARD STORAGE",r.y+12);
+                text(storageStatsAvailable?freeSpaceText()+" GB FREE":"N/A",
+                     left,r.y+34,t.w>=3?4:3,WHITE,right-78);
+                if(percent>=0)text(std::to_string(percent)+"% USED",
+                    right-70,r.y+49,1,MUTED,right);
+                progress(r.y+83,percent);
+            } else {
+                label("SD CARD STORAGE",r.y+18);
+                if(storageStatsAvailable) {
+                    text(freeSpaceText()+" GB FREE",left,r.y+50,5,WHITE,right);
+                    if(sdTotalBytes>0) {
+                        char total[64]{};
+                        std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
+                            static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+                        text(total,left,r.y+112,2,MUTED,right);
+                    }
+                    progress(r.y+157,percent);
+                    text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
+                } else text(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
+                            left,r.y+90,2,RED,right);
+            }
         } else if(t.kind==Kind::Calendar) {
-        std::time_t now=std::time(nullptr);
-        std::tm* tmv=std::localtime(&now);
-        char date[48]="--";
-        char day[48]="CALENDAR";
-        if(tmv) {
-            std::strftime(date,sizeof(date),"%d %b %Y",tmv);
-            std::strftime(day,sizeof(day),"%A",tmv);
-        }
-        text("TODAY",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
-        text(date,r.x+18,r.y+35,3,WHITE,r.x+r.w-14);
-        text(day,r.x+18,r.y+r.h-24,1,BLUE,r.x+r.w-14);
-        } else if(t.w==1&&t.h==1) {
-        drawTileIcon(t,r.x+(r.w-60)/2,r.y+9,60);
-        text(t.title,r.x+9,r.y+r.h-21,1,WHITE,r.x+r.w-8);
-        if(t.kind==Kind::Nro)roundRect(r.x+8,r.y+8,6,6,3,GREEN);
-    } else {
-        const int is=t.h>1?86:66;
-        drawTileIcon(t,r.x+17,r.y+(r.h-is)/2,is);
-        text(t.title,r.x+is+31,r.y+r.h/2-13,2,WHITE,r.x+r.w-12);
-        text(t.kind==Kind::Nro?"HOMEBREW":"GAME",r.x+is+31,r.y+r.h/2+13,1,MUTED,r.x+r.w-12);
+            std::time_t now=std::time(nullptr);
+            std::tm current{};
+            std::tm* nowTm=std::localtime(&now);
+            if(nowTm)current=*nowTm;
+            static const char* enMonths[]={"January","February","March","April","May","June",
+                "July","August","September","October","November","December"};
+            static const char* ruMonths[]={"ЯНВАРЬ","ФЕВРАЛЬ","МАРТ","АПРЕЛЬ","МАЙ","ИЮНЬ",
+                "ИЮЛЬ","АВГУСТ","СЕНТЯБРЬ","ОКТЯБРЬ","НОЯБРЬ","ДЕКАБРЬ"};
+            static const char* enWeek[]={"Mo","Tu","We","Th","Fr","Sa","Su"};
+            static const char* ruWeek[]={"Пн","Вт","Ср","Чт","Пт","Сб","Вс"};
+            const int month=std::max(0,std::min(11,current.tm_mon));
+            const char* monthName=languageRussian?ruMonths[month]:enMonths[month];
+            if(compact) {
+                text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
+                text(monthName,left,r.y+78,1,BLUE,right);
+            } else if(wide) {
+                label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
+                text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
+                     left,r.y+42,3,WHITE,right);
+                text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
+                     left,r.y+83,1,BLUE,right);
+                drawSystemIcon(6,right-34,r.y+38,26,accent);
+            } else {
+                std::tm first=current;
+                first.tm_mday=1; first.tm_hour=12; first.tm_min=0; first.tm_sec=0;
+                const std::time_t firstStamp=std::mktime(&first);
+                std::tm next=first; next.tm_mon+=1;
+                const std::time_t nextStamp=std::mktime(&next);
+                const int daysInMonth=static_cast<int>((nextStamp-firstStamp)/86400);
+                const int startColumn=(first.tm_wday+6)%7;
+                label(monthName,r.y+15);
+                text(std::to_string(current.tm_year+1900),right-45,r.y+15,1,MUTED,right);
+                const int gridX=left,gridY=r.y+52;
+                const int cellW=std::max(24,innerWidth/7),cellH=25;
+                for(int col=0;col<7;++col)
+                    text(languageRussian?ruWeek[col]:enWeek[col],
+                         gridX+col*cellW+2,gridY,1,BLUE,right);
+                for(int day=1;day<=daysInMonth;++day) {
+                    const int index=startColumn+day-1;
+                    const int col=index%7,row=index/7;
+                    const int dx=gridX+col*cellW,dy=gridY+24+row*cellH;
+                    if(day==current.tm_mday)
+                        roundRect(dx,dy-2,std::max(20,cellW-3),22,6,
+                                  Color{42,91,145,255});
+                    text(std::to_string(day),dx+4,dy+3,1,
+                         day==current.tm_mday?WHITE:MUTED,right);
+                }
+                text(languageRussian?"ТЕКУЩАЯ ДАТА":"CURRENT DATE",
+                     left,r.y+r.h-22,1,accent,right);
+            }
+        } else if(t.kind==Kind::Unsupported) {
+            roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
+            text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
+            text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
+                 r.x+14,r.y+52,2,MUTED,right);
         }
     }
     if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
