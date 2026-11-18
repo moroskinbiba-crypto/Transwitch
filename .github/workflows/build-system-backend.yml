@@ -51,8 +51,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Switch networking dependency
-        run: dkp-pacman -S --noconfirm switch-curl
+      - name: Verify Switch curl dependency
+        run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
 
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
