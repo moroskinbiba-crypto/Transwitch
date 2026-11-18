@@ -442,3 +442,6 @@ The native standalone build has now completed both CI workflows:
 - No persistence format changes were made.
 - Verification required: native NRO/HOME builds, host grid test, existing interaction/persistence tests and physical Switch checks for touch targets/readability/responsiveness.
 - MP4/video wallpaper, animated covers, weather and temperature widgets remain unexposed pending decoder/platform/network validation.
+
+
+- UI review correction: removed redundant wallpaper/font/icon summary lines that overlapped the new settings category heading; removed an unused library viewport constant; library status and item counts now use the shared Russian localization.

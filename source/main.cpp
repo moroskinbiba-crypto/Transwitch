@@ -2609,10 +2609,10 @@ void drawScreen() {
             roundRect(chip.x,my+52,chip.w,25,9,Color{31,43,61,255});
             text(chip.label,chip.x+7,my+61,1,WHITE,chip.x+chip.w-5);
         }
-        std::string viewLabel=std::string("FILTER  ")+
-            desknx::catalog_view::FilterName(catalogueFilter)+"     SORT  "+
+        std::string viewLabel=std::string("FILTER: ")+
+            desknx::catalog_view::FilterName(catalogueFilter)+"     SORT: "+
             desknx::catalog_view::SortName(catalogueSort);
-        if(!catalogueQuery.empty())viewLabel+="     SEARCH  "+catalogueQuery;
+        if(!catalogueQuery.empty())viewLabel+="     SEARCH: "+catalogueQuery;
         if(!catalogCompleteNow)viewLabel+="     /  UPDATING";
         if(catalogueNsErrorNow!=0) {
             char nsError[40]{};
@@ -2622,7 +2622,6 @@ void drawScreen() {
         }
         text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-22);
         text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
-        constexpr int vis=desknx::library_grid::VisibleItems;
         if(available.empty()) { listIndex=0; listOffset=0; }
         else {
             listIndex=std::max(0,std::min(listIndex,static_cast<int>(available.size())-1));
@@ -2751,9 +2750,13 @@ void drawScreen() {
             roundRect(mx+792,my+462,228,42,12,Color{49,119,199,255});
             text("A  ADD TO WORKSPACE",mx+823,my+477,1,WHITE,mx+mw-30);
         }
-        const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
-            std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
-            std::to_string(available.size())+" SHOWN";
+        const std::string counts=languageRussian
+            ?std::to_string(catalogueGameCountNow)+" ИГР  /  "+
+             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
+             std::to_string(available.size())+" ПОКАЗАНО"
+            :std::to_string(catalogueGameCountNow)+" GAMES  /  "+
+             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
+             std::to_string(available.size())+" SHOWN";
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
     if(workspaceMenu) {
@@ -2910,14 +2913,6 @@ void drawScreen() {
         text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
         roundRect(842,132,92,32,10,Color{54,57,66,255});
         text("B  BACK",856,143,1,WHITE,926);
-        text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
-        const size_t fontSlash=fontPath.find_last_of('/');
-        const std::string fontLabel=fontPath.empty()?std::string("SYSTEM"):
-            (fontSlash==std::string::npos?fontPath:fontPath.substr(fontSlash+1));
-        text("FONT  "+fontLabel,646,190,1,fontPath.empty()?MUTED:BLUE,930);
-        text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
