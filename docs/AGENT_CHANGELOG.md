@@ -458,6 +458,8 @@ The native standalone build has now completed both CI workflows:
 - Expanded verified title-name coverage for the current Nextendo games list. Unknown title IDs are not assigned guessed names; expired/missing snapshots remain unavailable rather than being displayed as zero.
 - Cached the ranked fixed-size list when a new network snapshot arrives. Rendering no longer copies and sorts the full per-title hash map every frame.
 - Added host coverage for widget geometry, widget type serialization, HomeNX workspace projection, Nextendo ranking, region merging and top-N limiting.
-- Relevant commits on `agent/homenx-plan-20261118`: `d70e143` (initial widget path and Nextendo widget), `3d737c0` (build repair, cached ranking and ordering fix), `7acbc0a` (broader title coverage and projection tests).
-- The NRO and DeskNX CI workflows passed for `3d737c0`; CI for the expanded title map in `7acbc0a` is running. Physical Switch testing is still required to confirm touch ergonomics and verify that the reported crash no longer occurs on-device.
+- Relevant commits on `agent/homenx-plan-20261118`: `d70e143` (initial widget path and Nextendo widget), `3d737c0` (build repair, cached ranking and ordering fix), `7acbc0a` (broader title coverage and projection tests), `99cacb3` (top-ten test fixture correction), `bd02c59` (modal row spacing).
+- CI caught a test-fixture error on `7acbc0a`: the top-N test was ranking an intentionally empty snapshot. The fixture now covers 11 recognized titles and asserts that the highest 10 are retained.
+- Native NRO packaging and the complete DeskNX host/HOME build workflows passed on `bd02c59`; the `DeskNX-sdcard` package artifact was produced. The experimental system-backend workflow is separate and was still running at this checkpoint.
+- Physical Switch testing is still required to confirm touch ergonomics and verify that the reported crash no longer occurs on-device.
 
