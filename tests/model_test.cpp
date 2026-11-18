@@ -5,6 +5,8 @@
 #include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
 #include <desknx/Artwork.hpp>
+#include <desknx/WidgetSensors.hpp>
+#include <desknx/WidgetLayout.hpp>
 #include "../source/catalog_view.hpp"
 
 #include <cassert>
@@ -41,12 +43,17 @@ int main() {
     assert(itemAt(desk, 1, 0) == 0);
     assert(itemAt(desk, 5, 2) == -1);
     assert(placeable(desk, wide, 1, 1));
+    assert(isSupportedTileSize(2, 3));
+    assert(placeable(desk, Tile{Kind::Game, "portrait", "", 0, 0, 2, 3, 0}, 3, 0));
     assert(!placeable(desk, Tile{Kind::Game, "bad", "", 0, 0, 4, 1, 0}, 0, 0));
     assert(!placeable(desk, small, std::numeric_limits<int>::max(), 0));
     assert(!placeable(desk, small, 0, std::numeric_limits<int>::max()));
     int x = -1, y = -1;
     assert(firstFree(desk, small, x, y));
     assert(x >= 0 && y >= 0 && placeable(desk, small, x, y));
+    int nextX = -1, nextY = -1;
+    assert(firstFreeFrom(desk, small, 0, 0, nextX, nextY));
+    assert(nextX == 2 && nextY == 0);
 
     // Workspace names must fit the exact persisted UTF-8 limits so a
     // successful save is guaranteed to be readable on the next launch.
@@ -101,6 +108,19 @@ int main() {
         assert(!moveSelectedTile(moveDesk,sx,sy,10,0));
     }
 
+    // An occupied requested cell advances a dragged tile to the next
+    // available position rather than rejecting the move.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace collision{"collision",{}};
+        collision.tiles.push_back(Tile{Kind::Game,"Move","0100000000000011",0,0,1,1,0});
+        collision.tiles.push_back(Tile{Kind::Nro,"Occupied","sdmc:/switch/occupied.nro",1,0,1,1,1});
+        int sx=0,sy=0;
+        assert(moveSelectedTile(collision,sx,sy,1,0));
+        assert(collision.tiles[0].x==2 && collision.tiles[0].y==0);
+        assert(sx==2 && sy==0);
+    }
+
     // A diagonal drag should use the final cell atomically. An occupied
     // horizontal intermediate cell must not block a free diagonal target.
     {
@@ -112,6 +132,18 @@ int main() {
         assert(moveSelectedTile(diagonal,sx,sy,1,1));
         assert(diagonal.tiles[0].x==1 && diagonal.tiles[0].y==1);
         assert(sx==1 && sy==1);
+    }
+
+    // 3x2 is followed by a portrait 2x3 size; shrinking returns to 3x2.
+    {
+        using namespace desknx::workspace_ops;
+        Workspace portrait{"portrait",{}};
+        portrait.tiles.push_back(Tile{Kind::Game,"Large","0100000000000012",0,0,3,2,0});
+        int sx=0,sy=0;
+        assert(resizeSelectedTile(portrait,sx,sy,true));
+        assert(portrait.tiles[0].w==2 && portrait.tiles[0].h==3);
+        assert(resizeSelectedTile(portrait,sx,sy,false));
+        assert(portrait.tiles[0].w==3 && portrait.tiles[0].h==2);
     }
 
     // Shrinking a large tile must move keyboard focus back to its top-left.
@@ -506,6 +538,45 @@ int main() {
         assert(!IsValidApplicationPageCount(secondPage.capacity, 129));
         assert(!IsValidApplicationPageCount(secondPage.capacity, -1));
     }
+
+
+    // Every supported widget footprint receives a usable layout. Its text
+    // region and list rows must remain within the actual tile bounds, including
+    // the 2x3 portrait footprint.
+    {
+        using desknx::widget_layout::measure;
+        const int sizes[][2]={{1,1},{2,1},{3,1},{2,2},{3,2},{2,3}};
+        for(const auto& size:sizes) {
+            const int width=size[0]*154+(size[0]-1)*14;
+            const int height=size[1]*112+(size[1]-1)*14;
+            const auto m=measure(141,150,width,height,size[0],size[1]);
+            assert(m.left>m.x);
+            assert(m.right<m.x+m.width);
+            assert(m.bodyTop>=m.y+28);
+            assert(m.bodyBottom<m.y+m.height);
+            assert(m.maxRows>=1&&m.maxRows<=6);
+            for(int row=0;row<m.maxRows;++row) {
+                const int y=m.rowY(row);
+                assert(y>=m.bodyTop);
+                assert(y<=m.bodyBottom);
+            }
+        }
+        assert(measure(0,0,154,112,1,1).compact());
+        assert(measure(0,0,322,112,2,1).banner());
+        assert(measure(0,0,322,364,2,3).portrait());
+    }
+    assert(typeCode(Kind::Nextendo)=="P");
+    assert(parseKind("P")==Kind::Nextendo);
+
+    const auto atmosphere=desknx::widget_sensors::decodeAtmosphereConfig(
+        static_cast<std::uint64_t>(0x010C02ull)<<40);
+    assert(atmosphere.available);
+    assert(atmosphere.major==1&&atmosphere.minor==12&&atmosphere.patch==2);
+    assert(!desknx::widget_sensors::decodeAtmosphereConfig(0).available);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(0)==0);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(2)==50);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(4)==100);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(5)==100);
 
     return 0;
 }

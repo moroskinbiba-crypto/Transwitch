@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 
 using namespace desknx::nextendo;
 
@@ -34,8 +35,10 @@ void testOnlineAndOffline() {
     assert(feed.total(T0) == 12);
     assert(feed.presenceOf(0x0100000000001000ull, T0) == Presence::Online);
     assert(feed.presenceOf(0x010000000000100Bull, T0) == Presence::Offline);
-    // unknown title: offline because the snapshot covers all titles
-    assert(feed.presenceOf(0xFFFFFFFFFFFFFF01ull, T0) == Presence::Offline);
+    assert(feed.hasTitleSnapshot(0x0100000000001000ull,T0));
+    assert(feed.hasTitleSnapshot(0x010000000000100Bull,T0));
+    // An untracked title is not a zero-player claim.
+    assert(!feed.hasTitleSnapshot(0xFFFFFFFFFFFFFF01ull,T0));
 }
 
 void testSnapshotExpires() {
@@ -66,6 +69,7 @@ void testDisabledHidesEverything() {
     feed.setEnabled(false);
     // the snapshot is wiped on disable
     assert(!feed.hasTotal(T0));
+    assert(!feed.hasTitleSnapshot(0x0100000000001000ull,T0));
     assert(feed.presenceOf(0x0100000000001000ull, T0) == Presence::Unknown);
     // cannot apply while disabled
     assert(!feed.apply(makeSnapshot(1, 0, 1), T0));
@@ -128,6 +132,91 @@ void testClockWrapDoesNotCrash() {
     assert(feed.refreshDue(T0 - 1));
 }
 
+
+void testPopularGamesAreSortedAndRegionalRowsAreMerged() {
+    PlayerSnapshot snapshot;
+    snapshot.perTitle[0x0100152000022000ull] = 26; // Mario Kart 8 Deluxe
+    snapshot.perTitle[0x0100F8F0000A2000ull] = 5;  // Splatoon 2 region A
+    snapshot.perTitle[0x01003BC0000A0000ull] = 7;  // Splatoon 2 region B
+    snapshot.perTitle[0x0100C2500FC20000ull] = 28; // Splatoon 3
+    snapshot.perTitle[0x01009B90006DC000ull] = 6;  // Mario Maker 2
+    snapshot.perTitle[0x0100B04011742000ull] = 4;  // Monster Hunter Rise
+    snapshot.perTitle[0x0100F43008C44000ull] = 3;  // Pokemon Legends: Z-A
+    snapshot.perTitle[0x0100A250097F0000ull] = 1;  // Dragon Ball FighterZ
+    snapshot.perTitle[0x01006A800016E000ull] = 32; // Smash Ultimate
+    snapshot.perTitle[0x0100E65002BB8000ull] = 0;  // not currently online
+    snapshot.perTitle[0xDEADBEEFDEADBEEFull] = 99; // unknown IDs are not guessed
+    snapshot.total = 211;
+
+    const PopularGames popular = rankPopularGames(snapshot);
+    assert(popular.available);
+    assert(popular.totalPlayers == 211);
+    assert(popular.count == 8);
+    assert(std::strcmp(popular.games[0].title, "Super Smash Bros. Ultimate") == 0);
+    assert(popular.games[0].players == 32);
+    assert(std::strcmp(popular.games[1].title, "Splatoon 3") == 0);
+    assert(popular.games[1].players == 28);
+    assert(std::strcmp(popular.games[2].title, "Mario Kart 8 Deluxe") == 0);
+    assert(popular.games[2].players == 26);
+    assert(std::strcmp(popular.games[3].title, "Splatoon 2") == 0);
+    assert(popular.games[3].players == 12);
+    assert(std::strcmp(popular.games[4].title, "Super Mario Maker 2") == 0);
+    assert(popular.games[4].players == 6);
+    assert(std::strcmp(popular.games[5].title, "Monster Hunter Rise") == 0);
+    assert(popular.games[5].players == 4);
+    assert(std::strcmp(popular.games[6].title, "Pokemon Legends: Z-A") == 0);
+    assert(popular.games[6].players == 3);
+    assert(std::strcmp(popular.games[7].title, "Dragon Ball FighterZ") == 0);
+    assert(popular.games[7].players == 1);
+}
+
+void testPopularGamesRespectLimitAndEmptySnapshot() {
+    PlayerSnapshot snapshot;
+    snapshot.total = 0;
+    const PopularGames empty = rankPopularGames(snapshot);
+    assert(empty.available);
+    assert(empty.count == 0);
+    PlayerSnapshot ranked;
+    ranked.perTitle[0x01006A800016E000ull] = 32; // Super Smash Bros. Ultimate
+    ranked.perTitle[0x0100C2500FC20000ull] = 28; // Splatoon 3
+    ranked.perTitle[0x0100152000022000ull] = 26; // Mario Kart 8 Deluxe
+    ranked.perTitle[0x01003BC0000A0000ull] = 12; // Splatoon 2
+    ranked.perTitle[0x01009B500007C000ull] = 11; // ARMS
+    ranked.perTitle[0x010047700D540000ull] = 9;  // Clubhouse Games
+    ranked.perTitle[0x0100BDE00862A000ull] = 8;  // Mario Tennis Aces
+    ranked.perTitle[0x01009B90006DC000ull] = 6;  // Super Mario Maker 2
+    ranked.perTitle[0x0100B04011742000ull] = 4;  // Monster Hunter Rise
+    ranked.perTitle[0x0100F43008C44000ull] = 3;  // Pokemon Legends: Z-A
+    ranked.perTitle[0x0100A250097F0000ull] = 1;  // Dragon Ball FighterZ
+    ranked.total = 140;
+
+    const PopularGames all = rankPopularGames(ranked);
+    assert(all.available);
+    assert(all.count == MaxPopularGames);
+    assert(all.games[0].players == 32);
+    assert(all.games[9].players == 3); // top ten retained despite >10 known titles
+
+    const PopularGames limited = rankPopularGames(ranked, 3);
+    assert(limited.available);
+    assert(limited.count == 3);
+    assert(limited.games[0].players == 32);
+    assert(limited.games[1].players == 28);
+    assert(limited.games[2].players == 26);
+}
+
+void testFreshSnapshotCopyIsSafe() {
+    PresenceFeed feed;
+    feed.setEnabled(true);
+    PlayerSnapshot source = makeSnapshot(2, 0, 2);
+    PlayerSnapshot copy;
+    assert(!feed.copyFreshSnapshot(copy, T0));
+    assert(feed.apply(source, T0));
+    assert(feed.copyFreshSnapshot(copy, T0));
+    assert(copy.total == 2);
+    assert(copy.perTitle.size() == 2);
+    assert(!feed.copyFreshSnapshot(copy, T0 + SnapshotTtlMs));
+}
+
 } // namespace
 
 int main() {
@@ -139,6 +228,9 @@ int main() {
     testInvalidSnapshotIsRejected();
     testInvalidateResetsToUnknown();
     testClockWrapDoesNotCrash();
+    testPopularGamesAreSortedAndRegionalRowsAreMerged();
+    testPopularGamesRespectLimitAndEmptySnapshot();
+    testFreshSnapshotCopyIsSafe();
     std::puts("nextendo_players_test: ok");
     return 0;
 }

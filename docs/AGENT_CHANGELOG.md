@@ -362,3 +362,129 @@ The native standalone build has now completed both CI workflows:
 - Изменения рабочих столов и active-workspace marker теперь записываются через отдельный SDL worker; повторные правки объединяются в последний актуальный snapshot. Синхронный checked save сохранён перед запуском/завершением приложения.
 - SD commits сериализованы отдельным mutex, а завершение фоновой записи отражается в диагностике async_save_finished.
 - CI проверит native NRO и host tests. Физический тест на Switch всё ещё обязателен: особенно проверить старый catalogue cache, фильтр Widgets, появление 90 игр до завершения metadata scan, drag/resize/add/remove, переключение рабочих столов и перезапуск во время активного сохранения.
+
+
+## 2026-11-18 — HomeNX plan, implementation tranche 1
+
+- Hardened custom font replacement in `source/FontRenderer.hpp`: rejects unreadable, empty, oversized, and overlong font files; opens a candidate before releasing the active font; preserves the previous font on failure; and treats an empty path as an explicit return to the system shared font.
+- Connected the production D-pad focus path in `source/main.cpp` to the existing HomeNX spatial grid adapter. Navigation now moves between tile origins, skips continuation/empty cells, chooses directional neighbours using tile geometry, and remains stationary at an edge. Malformed layouts retain a bounded fallback path.
+- Existing workspace persistence format and manual drag/sort behaviour were intentionally left unchanged.
+- Validation status: changes are committed to an isolated branch; CI/build and real-console font/controls checks remain required before merge.
+
+- Added focused-tile priority to `IconCache`: the selected game's/homebrew cover is decoded before background tiles, and may evict the lowest-priority not-yet-started request when the bounded request queue is full. Queue and decoded-image memory bounds remain unchanged.
+
+- Applied SDL's low-priority scheduling class to catalogue scanning, artwork-adjacent metadata queries (play statistics), Nextendo polling, and asynchronous layout writes. Heartbeat remains at its existing priority so backend liveness is not deprioritized. This uses the SDL portability layer rather than assuming a Switch-only native thread handle; CPU-core affinity remains deferred until verified against the exact devkitPro SDL/libnx runtime.
+
+- Fixed the experimental system-backend CI workflow: its compressed-NACP host test linked `-lz` but did not install the host zlib development headers. Added the same explicit `zlib1g-dev` setup already used by the regular build workflow.
+
+
+## 2026-11-18 — Persistence shutdown safety
+
+- Fixed a lifecycle hole in the production NRO: asynchronous layout-save jobs are now drained unconditionally before renderer/SDL shutdown and SD unmount, not only when `layoutLoaded` is already true.
+- The final synchronous snapshot is also written when the user changed a first-run workspace while the catalogue scan is still running. An untouched first-run placeholder layout remains deliberately unpersisted so the post-scan Games/Homebrew defaults are still generated.
+- Added `ShutdownPersistence.hpp` and a host test covering loaded layouts, first-run untouched/modified layouts, save-blocked recovery, missing SD, and empty workspace sets.
+- Added the new test to the regular CI workflow.
+
+- Follow-up review corrected the shutdown-policy call-site argument order so the helper receives the actual `layoutSaveBlocked` flag (rather than its inverse). This keeps writes enabled during normal shutdown and disabled when recovery protection is active.
+
+
+## 2026-11-18 — UX follow-up: portrait tiles, collision-safe moves and font smoothness
+
+- Added portrait 2×3 as the next enlargement after 3×2; shrinking from 2×3 returns to 3×2. The production layout validator accepts the new footprint.
+- Workspace movement now searches forward from the requested cell when the destination is occupied, wrapping through the grid and ignoring the moving tile's previous footprint. Cross-workspace placement uses the same ordered search. The HomeNX workspace provider and its edit regression tests now use the same collision-advance rule. The existing move action and drag hotkeys are now described more clearly in the workspace UI.
+- Widget focus no longer fills the entire widget with a blue surface: its neutral background stays unchanged and focus is represented by a double contour. Game-cover labels and key widget headings/metrics are horizontally centered.
+- Custom font data is read once into a bounded 16 MiB buffer. Remaining point sizes are opened gradually from memory; draw() no longer reopens the font from SD on first use. New text textures are budgeted per frame. Existing shared-font faces and their cached glyphs remain alive as a temporary fallback while new custom-font textures warm, avoiding a burst of bitmap placeholders; custom-font cache keys include font generation/identity to prevent stale glyph reuse.
+- Added timing diagnostics around Nintendo's controller-support applet. That applet remains synchronous and Horizon-controlled; the log will show whether the observed delay is in the applet call itself.
+- Cache audit: workspaces and the active workspace persist in `layout.tsv` / `active-workspace.dat`. The discovered game/homebrew catalogue is persisted in `cache/catalogue.tsv`, resolved game names in `cache/game-names.tsv`, and artwork in `cache/icons`. Startup warm-loads the saved catalogue while live NS/NRO scanning refreshes it; a stale warm cache remains available when required services are unavailable. The filtered/sorted visible catalogue view itself is RAM-side.
+- Validation: host tests and CI must run after commit. Real Switch checks remain necessary for 2×3 resizing, moving across occupied cells/desktops, font-switch frame pacing, and controller-applet timing.
+
+- CI follow-up: updated the HomeNX grid-edit regression test so 2×3 is treated as a supported portrait footprint; 4×1 remains rejected. The earlier failure was an obsolete assertion, not a product-code defect.
+
+
+## 2026-11-18 — SD mount recovery and homebrew catalogue performance
+
+### Root cause: SD card was already mounted by libnx
+
+- The native launcher called `fsdevMountSdmc()` again from `main()`. libnx's runtime mounts SDMC before entering `main()`; a second mount under the same device name is rejected. The launcher treated that expected duplicate-mount result as a missing SD card, left `sdMounted=false`, and then refused all workspace/settings/history writes guarded by that flag.
+- Startup now checks `fsdevGetDeviceFileSystem("sdmc")` first and verifies the mounted root with `statvfs("sdmc:/")`. It mounts only when no device exists; if a pre-registered handle cannot access the root, it detaches the stale handle and retries once.
+- Removed the launcher's manual SD unmounts from normal/error returns. libnx owns filesystem teardown and performs `fsdevUnmountAll()` during its exit path. The diagnostics record whether SD was already mounted and the probe errno.
+
+### Homebrew discovery and scan safety
+
+- Replaced the depth-3, error-swallowing NRO walk with a tested scanner that searches up to eight nested directories, handles uppercase `.NRO`, reports inaccessible subtrees and root failures, and caps the total catalogue at 512 files.
+- Where the directory API provides entry types, ordinary files no longer trigger an individual `stat()` IPC; only unknown entries and NRO files need metadata queries.
+- A failed/partial SD walk is no longer treated as an empty valid inventory and cannot overwrite `cache/catalogue.tsv`. Still-valid cached NRO shortcuts remain visible while successfully discovered new NROs are merged in. Homebrew scanning also proceeds when NS is unavailable.
+- Added `tests/nro_scanner_test.cpp` and enabled it in the regular build and experimental HOME backend workflows.
+
+### UI/catalogue CPU work
+
+- Cached transliterated UTF-8 search keys for titles, paths and the current query. Progress updates from the background scanner no longer redo the same Cyrillic normalization for every previously seen catalogue row.
+- The scan log now records completeness, directories/entries visited, inaccessible subtrees, depth skips, item limit and first filesystem error.
+
+### Validation
+
+- Host regression test covers root-level and nested NROs, case-insensitive extension handling, exclusion of DeskNX's internal folder/hidden folders, depth-limit reporting, and root-open failure.
+- CI must confirm both native and HOME applet compilation. Hardware validation is still required to confirm SD save/restore and real SD-card scan time on Switch.
+
+- Performance refinement: the NRO directory walk now starts after the launcher has published the initial installed-game IDs and system widgets. This keeps the catalogue usable during SD enumeration instead of blocking the first visible library update behind a slow card.
+- Cache recovery refinement: cached NRO shortcuts are discarded only when the path is confirmed missing/invalid. Transient I/O or access errors keep the previous shortcut in the warm catalogue until a complete directory scan can verify it.
+
+
+## UI/UX overhaul — 18 November 2026
+
+- New branch: `agent/transwitch-ux-polish-20261118`, based on the SD persistence and Homebrew scanner fixes in `c3e53eb`; isolated from `main`.
+- Simplified the persistent header to Gallery, Settings and Pads. Duplicate Tools navigation was removed from the header; quick tools remain reachable through L3/controller navigation and Minus power shortcut.
+- Repositioned profile and status indicators to use the freed header space without overlapping the primary destinations.
+- Converted the application library from a ten-row text list into an artwork-first 3 × 3 card browser. The detail panel remains, including playtime, launch history and NRO path metadata.
+- Added deterministic grid navigation, row-based touch scrolling, viewport projection and host boundary tests.
+- Reorganized launcher settings into visible Appearance, Workspace, Library and System groups. Existing action handlers and settings IDs remain intact through an explicit view-to-action mapping.
+- Kept the desktop grid, empty-cell semantics, drag/drop, tile resize ladder, 10 px game-cover corners and image-fit modes unchanged.
+- No persistence format changes were made.
+- Verification required: native NRO/HOME builds, host grid test, existing interaction/persistence tests and physical Switch checks for touch targets/readability/responsiveness.
+- MP4/video wallpaper, animated covers, weather and temperature widgets remain unexposed pending decoder/platform/network validation.
+
+
+- UI review correction: removed redundant wallpaper/font/icon summary lines that overlapped the new settings category heading; removed an unused library viewport constant; library status and item counts now use the shared Russian localization.
+
+- Interaction polish: added a subtle time-based focus pulse to selected desktop tiles, empty cells and library cards without changing their size or adding extra texture work.
+- Touch accessibility: retained the three primary header tabs and added a compact overflow button beside Pads so touchscreen users can still open Quick Tools after Tools was removed as a top-level destination.
+
+
+## 2026-11-18 — Widget activation, adaptive layouts and Nextendo popular games
+
+- Separated widget activation from application launching. Only installed games and NROs can enter the title/NRO launch path; widget clicks stay inside the UI and are recorded with `widgets/activate_begin` and `widgets/activate_end` diagnostics.
+- Added an adaptive widget layout helper for 1×1, 2×1, 3×1, 2×2, 3×2 and 2×3 footprints. Clock, battery, system, recent launches, storage, calendar and Nextendo use size-aware typography, spacing and row limits.
+- Added a standalone Nextendo popular-games widget to the widget catalogue and the default Widgets desktop. It sorts current counts, merges regional Splatoon 2 title IDs, and opens a larger controller/touch-accessible ranked list.
+- Expanded verified title-name coverage for the current Nextendo games list. Unknown title IDs are not assigned guessed names; expired/missing snapshots remain unavailable rather than being displayed as zero.
+- Cached the ranked fixed-size list when a new network snapshot arrives. Rendering no longer copies and sorts the full per-title hash map every frame.
+- Added host coverage for widget geometry, widget type serialization, HomeNX workspace projection, Nextendo ranking, region merging and top-N limiting.
+- Relevant commits on `agent/homenx-plan-20261118`: `d70e143` (initial widget path and Nextendo widget), `3d737c0` (build repair, cached ranking and ordering fix), `7acbc0a` (broader title coverage and projection tests), `99cacb3` (top-ten test fixture correction), `bd02c59` (modal row spacing).
+- CI caught a test-fixture error on `7acbc0a`: the top-N test was ranking an intentionally empty snapshot. The fixture now covers 11 recognized titles and asserts that the highest 10 are retained.
+- Native NRO packaging and the complete DeskNX host/HOME build workflows passed on `bd02c59`; the `DeskNX-sdcard` package artifact was produced. The experimental system-backend workflow is separate and was still running at this checkpoint.
+- Physical Switch testing is still required to confirm touch ergonomics and verify that the reported crash no longer occurs on-device.
+
+
+## 2026-11-18 — Storage, controller and system widgets; installed version badges
+
+- Expanded the SD/storage widget. Compact tiles retain free-space and short game/homebrew counters; expanded tiles show installed game count, discovered Homebrew NRO count, SD capacity and the current process memory usage/limit from svcGetInfo.
+- Reworked the battery widget to keep the Switch battery percentage and add separate left/right Joy-Con battery levels and charging indicators. The HID API reports coarse 0–4 battery steps, so the UI deliberately shows 0/4…4/4 instead of implying an exact percentage.
+- Added the running Atmosphère version to the system widget. It is queried once from Exosphere config item 65000 through splGetConfig; if the service or config is unavailable the widget shows AMS N/A.
+- Replaced the catalogue's UPDATE AVAILABLE text badge with the installed control.nacp DisplayVersion. The version is stored in the catalogue cache (schema DESKNXCAT4). The badge is green when NS update metadata is available and says no update is pending, yellow when NsApplicationView.flags contains NsViewFlagNeedsUpdate, and muted when NS did not return a usable update-status view.
+- Clarified the source of the update hint: it comes from Nintendo's NS application-view metadata, not from comparing two version strings or scraping the eShop. The installed version text itself comes from the local NACP.
+- Added host tests for Atmosphère version decoding and the coarse Joy-Con battery-level conversion. Added an explicit update-status-known bit to cached game records so missing NS metadata is never mislabeled as green/latest.
+- Improved the expanded storage layout so the free-space headline no longer overlaps the game, Homebrew, RAM and SD-total rows.
+- Validation: native NRO packaging and the regular DeskNX host/HOME build workflows passed on 4353555. The SD-card package artifact was generated. The separate experimental system-backend workflow was still running at the last check; physical Switch testing remains necessary for Joy-Con readings, Atmosphère query availability, and visual spacing on all tile sizes.
+- Commits: d056253 (widget data sources and installed-version cache), dcaf35b (source integration correction), 4353555 (update-status confidence and expanded layout).
+
+
+## 2026-11-18 — Game library metadata, per-game rename/icons and settings carousels
+
+- Added installed application occupied size from nsCalculateApplicationOccupiedSize. The raw four-entry NS structure is decoded platform-neutrally; app + patch + add-on sizes are totalled across storage entities. A host test covers valid entries, undersized buffers, empty values and integer overflow.
+- Expanded the full library game's detail panel with installed size, the installed control.nacp DisplayVersion, and fresh per-title Nextendo online-player count. A stale feed or title absent from the snapshot is displayed as UNKNOWN, not zero. PDM playtime, launch count and last-played date remain visible.
+- Added persistent game display-name overrides in cache/game-overrides.tsv. Rename updates existing desktop shortcuts and the library view without modifying installed-game NACP metadata.
+- Added Choose icon for games. It copies a selected SD JPG/JPEG/PNG image (limited to 2 MiB) into media/game-icons/<TITLEID>.<ext>. Per-game overrides take precedence over the selected shared icon pack and survive restart.
+- Settings now has a SteamGridDB artwork API key editor. The key is saved in settings.ini as plaintext; remote search and download are not wired yet. This intentionally targets SteamGridDB, not SteamDB: SteamDB has no public API and disallows scraping.
+- Added left/right theme and accent-colour carousels. The Settings modal stays open during theme, accent, language, icon-style and API-key changes. Added explicit arrow hit targets for touch.
+- Normal add-to-workspace library now defaults to the Games filter. The dedicated widget picker retains its Widgets filter.
+- Updated icon-pack documentation, per-game file naming, UI guidelines and feature descriptions.
+- Validation is pending CI for this commit; physical Switch testing is required for NS occupied-size values, Nextendo count freshness, icon assignment/priority, rename persistence, and touch/gamepad settings controls.

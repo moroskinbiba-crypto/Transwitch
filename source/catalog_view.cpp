@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <sys/stat.h>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -12,6 +13,13 @@ namespace desknx::catalog_view {
 namespace {
 
 std::string searchKey(const std::string& value) {
+    // Catalogue progress publishes a few updated rows at a time. Keep the
+    // transliterated key for titles and paths so opening/searching the library
+    // does not repeatedly decode every UTF-8 title on each progress update.
+    static std::unordered_map<std::string, std::string> cache;
+    const auto cached = cache.find(value);
+    if (cached != cache.end()) return cached->second;
+
     std::string key;
     key.reserve(value.size());
     for (size_t i=0; i<value.size();) {
@@ -54,13 +62,16 @@ std::string searchKey(const std::string& value) {
             key.push_back(static_cast<char>(0x80|(cp&0x3F)));
         }
     }
+    if (cache.size() >= 1024) cache.clear();
+    cache.emplace(value, key);
     return key;
 }
 
 bool isWidget(model::Kind kind) {
     return kind==model::Kind::Clock || kind==model::Kind::Battery ||
            kind==model::Kind::System || kind==model::Kind::Recent ||
-           kind==model::Kind::Storage || kind==model::Kind::Calendar;
+           kind==model::Kind::Storage || kind==model::Kind::Calendar ||
+           kind==model::Kind::Nextendo;
 }
 bool matchesFilter(model::Kind kind, FilterMode filter) {
     switch(filter) {

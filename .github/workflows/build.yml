@@ -39,6 +39,26 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test installed application occupied-size decoding
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/application_size_test.cpp -o /tmp/desknx-application-size-test
+          /tmp/desknx-application-size-test
+
+      - name: Test three-column library navigation and viewport projection
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/library_grid_test.cpp -o /tmp/desknx-library-grid-test
+          /tmp/desknx-library-grid-test
+
+      - name: Test production SD homebrew scanner and partial-tree recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nro_scanner_test.cpp -o /tmp/desknx-nro-scanner-test
+          /tmp/desknx-nro-scanner-test
+
+      - name: Test production shutdown persistence decision
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/shutdown_persistence_test.cpp -o /tmp/desknx-shutdown-persistence-test
+          /tmp/desknx-shutdown-persistence-test
+
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update

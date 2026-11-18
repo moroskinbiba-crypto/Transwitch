@@ -3,6 +3,8 @@
 #include "slaunch_applications.hpp"
 #include "../include/desknx/StrictParse.hpp"
 #include "../include/desknx/CatalogPagination.hpp"
+#include "../include/desknx/NroScanner.hpp"
+#include "../include/desknx/ApplicationSize.hpp"
 #include <desknx/SafeReplace.hpp>
 
 #include <switch.h>
@@ -30,15 +32,15 @@ using desknx::model::Candidate;
 using desknx::model::Kind;
 constexpr size_t MaxItems = static_cast<size_t>(desknx::model::MaxItems);
 constexpr size_t GameReserve = 32;
-constexpr size_t WidgetReserve = 6;
+constexpr size_t WidgetReserve = 7;
 constexpr const char* CacheDir = "sdmc:/switch/DeskNX/cache";
 constexpr const char* IconsDir = "sdmc:/switch/DeskNX/cache/icons";
 constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
 constexpr const char* CacheTemp = "sdmc:/switch/DeskNX/cache/catalogue.tmp";
 constexpr size_t MaxNroAssetBytes = 2 * 1024 * 1024;
 
-struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; };
-struct NroFile { std::string path; u64 size; u64 mtime; };
+struct GameRecord { u64 id; u64 last_updated; u32 viewFlags; bool updateStatusAvailable; };
+using NroFile = desknx::nro_scan::File;
 struct Signatures {
     size_t gameCount{0};
     uint64_t gameHash{14695981039346656037ULL};
@@ -113,32 +115,20 @@ std::string GetApplicationName(const NacpStruct& nacp) {
     return desknx::slaunch::ResolveTitleName(nacp);
 }
 
-void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) {
-    if (depth > 3 || out.size() >= MaxItems) return;
-    DIR* dir = opendir(root.c_str());
-    if (!dir) return;
-    dirent* entry = nullptr;
-    while ((entry = readdir(dir)) && out.size() < MaxItems) {
-        std::string name = entry->d_name;
-        if (name == "." || name == ".." || (!name.empty() && name[0] == '.')) continue;
-        const std::string path = root + "/" + name;
-        struct stat st{};
-        if (stat(path.c_str(), &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) {
-            // This directory belongs to DeskNX itself. It contains the persistent
-            // catalogue, hundreds of cached icons and diagnostics, not user NROs.
-            // Walking it on every launch adds avoidable SD-card I/O.
-            if (depth == 0 && name == "DeskNX") continue;
-            CollectNros(path, depth + 1, out);
-        } else if (S_ISREG(st.st_mode) && name.size() > 4) {
-            std::string ext = name.substr(name.size() - 4);
-            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (ext == ".nro" && name != "DeskNX.nro")
-                out.push_back({path, static_cast<u64>(st.st_size), static_cast<u64>(st.st_mtime)});
-        }
-    }
-    closedir(dir);
+std::string GetApplicationDisplayVersion(const NacpStruct& nacp) {
+    const char* begin=nacp.display_version;
+    const char* end=std::find(begin,begin+sizeof(nacp.display_version),
+                              static_cast<char>(0));
+    std::string version(begin,end);
+    if(version.size()>15)return {};
+    for(char& ch:version)
+        if(ch=='\t'||ch=='\n'||ch=='\r')ch=' ';
+    return version;
 }
+
+// NRO traversal is shared with the host regression suite in NroScanner.hpp.
+// It uses directory-entry types when available and stats only NROs or entries
+// whose type is unknown.
 std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) {
     std::vector<GameRecord> records;
     if (!nsReady) {
@@ -185,7 +175,7 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
             flags = views[i].flags;
         }
         records.push_back({installed[i].application_id,
-                           installed[i].last_updated, flags});
+                           installed[i].last_updated, flags, i < views.size()});
     }
 
     // Play statistics are loaded lazily for the selected library entry.
@@ -200,6 +190,8 @@ Signatures MakeSignatures(const std::vector<GameRecord>& games, const std::vecto
         // View flags are cached metadata too (update/game-card badges), and
         // can change independently of the installed record timestamp.
         sig.gameHash = hashBytes(sig.gameHash, &game.viewFlags, sizeof(game.viewFlags));
+        sig.gameHash = hashBytes(sig.gameHash, &game.updateStatusAvailable,
+                                 sizeof(game.updateStatusAvailable));
     }
     for (const auto& nro : nros) {
         sig.sdHash = hashText(sig.sdHash, nro.path);
@@ -217,7 +209,7 @@ bool isHexTitleId(const std::string& value) {
     return true;
 }
 
-bool isCachedNroPath(const std::string& path) {
+bool isCachedNroPath(const std::string& path, bool retainUnverifiable = false) {
     constexpr char prefix[] = "sdmc:/switch/";
     if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
         path.find("..") != std::string::npos || path.size() <= sizeof(prefix) + 3)
@@ -225,7 +217,16 @@ bool isCachedNroPath(const std::string& path) {
     std::string extension = path.substr(path.size() - 4);
     for (char& c : extension)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return extension == ".nro" && IsRegularFile(path);
+    if (extension != ".nro") return false;
+
+    struct stat st{};
+    errno = 0;
+    if (stat(path.c_str(), &st) == 0) return S_ISREG(st.st_mode);
+    // ENOENT/ENOTDIR means the shortcut is genuinely stale. For EACCES,
+    // EIO, or a transient filesystem fault, keep the old shortcut while the
+    // full scanner marks the inventory incomplete; do not confuse "unknown"
+    // with "deleted" and erase the user's homebrew entry from the warm cache.
+    return retainUnverifiable && errno != ENOENT && errno != ENOTDIR;
 }
 
 bool IsUsableCachedImage(const std::string& path);
@@ -247,6 +248,7 @@ bool EnsureBuiltinWidgets(std::vector<Candidate>& items) {
         {Kind::Recent, "Recent launch widget", 3, 1, 6},
         {Kind::Storage, "SD storage widget", 3, 1, 3},
         {Kind::Calendar, "Calendar widget", 3, 1, 4},
+        {Kind::Nextendo, "Nextendo popular games", 3, 2, 9},
     };
     bool changed = false;
     for (const auto& spec : widgets) {
@@ -278,7 +280,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     std::string line;
     if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
-    if (header.size() != 4 || header[0] != "DESKNXCAT2") return false;
+    if (header.size() != 4 || header[0] != "DESKNXCAT5") return false;
     if (!allowStale) {
         char gameHash[32]{}, sdHash[32]{};
         std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
@@ -291,8 +293,11 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     while (std::getline(input, line)) {
         if (line.size() > MaxCacheLineBytes || items.size() >= MaxItems) return false;
         const auto fields = desknx::model::splitTabs(line);
-        if (fields.size() != 8 || fields[0] != "C" ||
-            fields[1].size() > 16 || fields[2].size() > 512 || fields[3].size() > 512)
+        if (fields.size() != 12 || fields[0] != "C" ||
+            fields[1].size() > 16 || fields[2].size() > 512 ||
+            fields[3].size() > 512 || fields[8].size() > 15 ||
+            (fields[9] != "0" && fields[9] != "1") ||
+            (fields[11] != "0" && fields[11] != "1"))
             return false;
 
         Candidate item{};
@@ -300,6 +305,15 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
         if (item.kind == Kind::Unsupported) return false;
         item.title = fields[2];
         item.data = fields[3];
+        item.displayVersion = fields[8];
+        item.updateStatusAvailable = fields[9] == "1";
+        char* sizeEnd = nullptr;
+        errno = 0;
+        const unsigned long long occupiedBytes = std::strtoull(fields[10].c_str(), &sizeEnd, 10);
+        if (errno != 0 || sizeEnd == fields[10].c_str() || !sizeEnd || *sizeEnd != '\0')
+            return false;
+        item.occupiedSizeBytes = static_cast<uint64_t>(occupiedBytes);
+        item.occupiedSizeAvailable = fields[11] == "1" && occupiedBytes > 0;
         char* flagsEnd = nullptr;
         errno = 0;
         const unsigned long parsedFlags = std::strtoul(fields[7].c_str(), &flagsEnd, 10);
@@ -322,8 +336,8 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
                 if (!IsMissingOrUsableCachedImage(iconPath)) return false;
             }
         } else if (item.kind == Kind::Nro) {
-            if (!isCachedNroPath(item.data)) {
-                if (allowStale) continue; // stale homebrew entry was removed from SD
+            if (!isCachedNroPath(item.data, allowStale)) {
+                if (allowStale) continue; // confirmed missing/invalid shortcut
                 return false;
             }
             if (!allowStale) {
@@ -580,13 +594,17 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     char gameHash[32]{}, sdHash[32]{};
     std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
-    output << "DESKNXCAT2\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
+    output << "DESKNXCAT5\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
     for (const auto& item : result.items) {
         output << "C\t" << desknx::model::typeCode(item.kind) << '\t'
                << desknx::model::safeField(item.title) << '\t'
                << desknx::model::safeField(item.data) << '\t'
                << item.w << '\t' << item.h << '\t' << item.color << '\t'
-               << item.viewFlags << '\n';
+               << item.viewFlags << '\t'
+               << desknx::model::safeField(item.displayVersion) << '\t'
+               << (item.updateStatusAvailable ? 1 : 0) << '\t'
+               << item.occupiedSizeBytes << '\t'
+               << (item.occupiedSizeAvailable ? 1 : 0) << '\n';
     }
     output.flush();
     const bool good = output.good();
@@ -666,8 +684,11 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     // background. Stale NRO paths are filtered by ReadCache's allowStale mode.
     ScanResult warmCache;
     const bool warmCacheAvailable = ReadCache(Signatures{}, warmCache, true);
+    std::vector<Candidate> warmNroItems;
     if (warmCacheAvailable) {
         result.items = std::move(warmCache.items);
+        for (const auto& item : result.items)
+            if (item.kind == Kind::Nro) warmNroItems.push_back(item);
         result.fromCache = true;
         result.gameCount = static_cast<size_t>(std::count_if(
             result.items.begin(), result.items.end(),
@@ -688,20 +709,45 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                   static_cast<unsigned int>(result.nsErrorCode));
     result.gameCount = games.size();
 
-    // If NS is unavailable, the already-published last-known-good catalogue is
-    // sufficient for this session. Do not make the user wait for another SD
-    // traversal just to rediscover the same cached NRO paths.
+    // The NRO scanner runs after the installed-game seed is published so a
+    // slow SD card walk never delays the first usable library snapshot.
+    std::vector<NroFile> nros;
+    desknx::nro_scan::Report nroScan{};
+
+    // Keep the last-known-good game list when NS is offline, but merge newly
+    // discovered NROs so homebrew discovery does not depend on NS availability.
     if ((!nsReady || result.nsErrorCode != 0) && warmCacheAvailable) {
+        nroScan = desknx::nro_scan::Collect("sdmc:/switch", nros);
+        std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
+            return a.path < b.path;
+        });
+        LogDiagnostic("nro_scan root=switch complete=%d count=%zu dirs=%zu entries=%zu inaccessible=%zu depth_skips=%zu limit=%d first_error=%d",
+            nroScan.complete ? 1 : 0, nros.size(), nroScan.directoriesVisited,
+            nroScan.entriesVisited, nroScan.inaccessibleDirectories,
+            nroScan.directoriesBeyondDepth, nroScan.limitReached ? 1 : 0,
+            nroScan.firstError);
+        std::unordered_map<std::string, bool> knownNros;
+        for (const auto& item : result.items)
+            if (item.kind == Kind::Nro) knownNros.emplace(item.data, true);
+        for (const auto& nro : nros) {
+            if (knownNros.find(nro.path) != knownNros.end()) continue;
+            Candidate item{Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
+                           static_cast<int>(result.items.size() % 12)};
+            CacheNroIconAndMetadata(nro, item, forceRefresh);
+            result.items.push_back(std::move(item));
+            knownNros.emplace(nro.path, true);
+        }
         result.gameCount = static_cast<size_t>(std::count_if(
             result.items.begin(), result.items.end(),
             [](const Candidate& item) { return item.kind == Kind::Game; }));
         result.nroCount = static_cast<size_t>(std::count_if(
             result.items.begin(), result.items.end(),
             [](const Candidate& item) { return item.kind == Kind::Nro; }));
-        result.complete = true;
-        LogDiagnostic("scan_offline_warm_cache games=%zu nros=%zu ns_error=0x%08X",
-                      result.gameCount, result.nroCount,
+        result.truncated = nroScan.limitReached || !nroScan.complete;
+        LogDiagnostic("scan_offline_warm_cache games=%zu nros=%zu scan_complete=%d ns_error=0x%08X",
+                      result.gameCount, result.nroCount, nroScan.complete ? 1 : 0,
                       static_cast<unsigned int>(result.nsErrorCode));
+        result.complete = true;
         report(true);
         return result;
     }
@@ -749,10 +795,13 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                 return item.kind == Kind::Game && item.data == id;
             });
         if (existing == result.items.end()) {
-            result.items.push_back({Kind::Game, title, id, 1, 1,
-                static_cast<int>(earlyGameCount % 12), game.viewFlags});
+            Candidate seed{Kind::Game, title, id, 1, 1,
+                static_cast<int>(earlyGameCount % 12), game.viewFlags};
+            seed.updateStatusAvailable=game.updateStatusAvailable;
+            result.items.push_back(std::move(seed));
         } else {
             existing->viewFlags = game.viewFlags;
+            existing->updateStatusAvailable = game.updateStatusAvailable;
             if (!usableCachedName(existing->title) && usableCachedName(title))
                 existing->title = title;
         }
@@ -769,45 +818,63 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             [](const Candidate& item) {
                 return item.kind == Kind::Clock || item.kind == Kind::Battery ||
                     item.kind == Kind::System || item.kind == Kind::Recent ||
-                    item.kind == Kind::Storage || item.kind == Kind::Calendar;
+                    item.kind == Kind::Storage || item.kind == Kind::Calendar ||
+                    item.kind == Kind::Nextendo;
             })),
         result.nroCount);
     report(false);
 
-    const std::time_t nroScanStarted = std::time(nullptr);
-    std::vector<NroFile> nros;
-    CollectNros("sdmc:/switch", 0, nros);
-    LogDiagnostic("nro_scan_elapsed seconds=%lld",
-        static_cast<long long>(std::time(nullptr) - nroScanStarted));
-    result.nroCount = nros.size();
-    LogDiagnostic("nro_scan root=switch depth_limit=3 count=%zu", nros.size());
+    // The initial IDs and widgets are now visible to the UI. Perform the
+    // directory walk only after that seed has been published, then use the
+    // complete inventory for cache validation and metadata resolution.
+    nroScan = desknx::nro_scan::Collect("sdmc:/switch", nros);
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
         return a.path < b.path;
     });
-    const Signatures sig = MakeSignatures(games, nros);
-    // If NS is unavailable, keep the last known-good game list visible rather
-    // than replacing it with an empty catalogue. The UI reports the NS error,
-    // and stale entries remain launch-attemptable until the service recovers.
-    if ((!nsReady || result.nsErrorCode != 0) && ReadCache(sig, result, true)) {
-        result.gameCount = static_cast<size_t>(std::count_if(result.items.begin(), result.items.end(),
-            [](const Candidate& item) { return item.kind == Kind::Game; }));
-        result.nroCount = static_cast<size_t>(std::count_if(result.items.begin(), result.items.end(),
-            [](const Candidate& item) { return item.kind == Kind::Nro; }));
-        result.nsAvailable = false;
-        result.complete = true;
-        LogDiagnostic("scan_stale_cache games=%zu nros=%zu items=%zu ns_error=0x%08X",
-                      result.gameCount, result.nroCount, result.items.size(),
-                      static_cast<unsigned int>(result.nsErrorCode));
-        report(true);
-        return result;
-    }
+    LogDiagnostic("nro_scan root=switch complete=%d count=%zu dirs=%zu entries=%zu inaccessible=%zu depth_skips=%zu limit=%d first_error=%d",
+        nroScan.complete ? 1 : 0, nros.size(), nroScan.directoriesVisited,
+        nroScan.entriesVisited, nroScan.inaccessibleDirectories,
+        nroScan.directoriesBeyondDepth, nroScan.limitReached ? 1 : 0,
+        nroScan.firstError);
 
-    // Never reuse a cache with mismatched live signatures during a normal scan.
-    if (!forceRefresh && nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
+    result.nroCount = nros.size();
+    const Signatures sig = MakeSignatures(games, nros);
+
+    // A partial directory walk is not an authoritative inventory. In that
+    // case skip both cache hits and cache publication, and merge valid NROs
+    // from the previous snapshot below.
+    if (nroScan.complete && !forceRefresh && nsReady &&
+        result.nsErrorCode == 0 && ReadCache(sig, result)) {
+        // The catalogue metadata and artwork are stable, but installed content
+        // sizes can change when patches or DLC are installed without changing
+        // the base title ID. Refresh only the small NS size records on cache
+        // hits; keep the previous value when the service returns no data.
+        size_t refreshedSizes=0, retainedSizes=0;
+        for(auto& item:result.items) {
+            if(item.kind!=Kind::Game||!desknx::model::isTitleId(item.data))continue;
+            char* end=nullptr;
+            const unsigned long long id=std::strtoull(item.data.c_str(),&end,16);
+            if(end!=item.data.c_str()+item.data.size()||id==0)continue;
+            NsApplicationOccupiedSize occupied{};
+            const Result occupiedRc=nsCalculateApplicationOccupiedSize(
+                static_cast<u64>(id),&occupied);
+            if(R_FAILED(occupiedRc)) { if(item.occupiedSizeAvailable)++retainedSizes; continue; }
+            const auto decoded=desknx::application_size::decode(
+                reinterpret_cast<const uint8_t*>(&occupied),sizeof(occupied));
+            if(decoded.available) {
+                item.occupiedSizeBytes=decoded.bytes;
+                item.occupiedSizeAvailable=true;
+                ++refreshedSizes;
+            } else if(item.occupiedSizeAvailable) {
+                ++retainedSizes;
+            }
+        }
+        if(refreshedSizes>0) (void)WriteCache(sig,result);
         // Volatile play statistics are fetched only for the selected game.
         result.complete = true;
-        LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu elapsed=%llds",
+        LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu sizes_refreshed=%zu sizes_retained=%zu elapsed=%llds",
                       result.gameCount, result.nroCount, result.items.size(),
+                      refreshedSizes,retainedSizes,
                       static_cast<long long>(std::time(nullptr) - scanStarted));
         report(true);
         return result;
@@ -827,8 +894,10 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         const std::string title = cached != nameCache.end() &&
             usableCachedName(cached->second)
             ? cached->second : std::string("Game ") + id;
-        result.items.push_back({Kind::Game, title, id, 1, 1,
-            static_cast<int>(i % 12), games[i].viewFlags});
+        Candidate seed{Kind::Game, title, id, 1, 1,
+            static_cast<int>(i % 12), games[i].viewFlags};
+        seed.updateStatusAvailable=games[i].updateStatusAvailable;
+        result.items.push_back(std::move(seed));
     }
     (void)EnsureBuiltinWidgets(result.items);
     report(false);
@@ -837,6 +906,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     freshNameCache.reserve(games.size());
     bool fetchedControlData = false;
     size_t controlDataOk = 0, controlDataFailed = 0;
+    size_t occupiedSizeOk = 0, occupiedSizeFailed = 0;
     size_t resolvedGameNames = 0, unresolvedGameNames = 0;
     size_t cachedGameIcons = 0, failedGameIcons = 0;
     char firstUnresolvedTitleId[17]{};
@@ -855,49 +925,56 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             !(cachedName->second.compare(0, 5, "Game ") == 0 &&
               desknx::model::isTitleId(cachedName->second.substr(5)));
         std::string title;
+        std::string displayVersion;
+        uint64_t occupiedSizeBytes=0;
+        bool occupiedSizeAvailable=false;
+        NsApplicationOccupiedSize occupiedSize{};
+        const Result occupiedRc=nsCalculateApplicationOccupiedSize(id,&occupiedSize);
+        if(R_SUCCEEDED(occupiedRc)) {
+            const auto decoded=desknx::application_size::decode(
+                reinterpret_cast<const uint8_t*>(&occupiedSize),sizeof(occupiedSize));
+            occupiedSizeBytes=decoded.bytes;
+            occupiedSizeAvailable=decoded.available;
+        }
+        if(occupiedSizeAvailable)++occupiedSizeOk;else ++occupiedSizeFailed;
         Result metadataRc=0;
         bool metadataRead=false;
         bool iconAvailable=iconCached;
         const char* nameSource=(cachedNameUsable&&iconCached&&!forceRefresh)
             ?"cache":"nacp";
-        // Name metadata and artwork are independent cache entries. A valid
-        // name must never suppress the one-time NACP read needed to repair a
-        // missing icon, and a stale title-id placeholder must not be treated
-        // as a resolved game name.
-        if (!forceRefresh && cachedNameUsable && iconCached) {
-            title = cachedName->second;
+        // A stable catalogue returns from ReadCache above. On a cache miss,
+        // refresh installed control.nacp so the visible version is current.
+        u64 actual = 0;
+        if (nsReady)
+            metadataRc = desknx::slaunch::ReadControlData(id, control, actual);
+        metadataRead=true;
+        if (nsReady && R_SUCCEEDED(metadataRc)) {
+            ++controlDataOk;
+            const std::string resolved = desknx::slaunch::ResolveTitleName(control.nacp);
+            if (!resolved.empty() && !desknx::model::isTitleId(resolved))
+                title = resolved;
+            else if (cachedNameUsable) {
+                title = cachedName->second;
+                nameSource="cache_fallback";
+            }
+            displayVersion=GetApplicationDisplayVersion(control.nacp);
+            if (forceRefresh || !iconCached) {
+                if (CacheGameIcon(id, control, actual)) {
+                    ++cachedGameIcons;
+                    iconAvailable=true;
+                } else {
+                    ++failedGameIcons;
+                    iconAvailable=false;
+                }
+            }
+            fetchedControlData = true;
         } else {
-            u64 actual = 0;
-            if (nsReady)
-                metadataRc = desknx::slaunch::ReadControlData(id, control, actual);
-            metadataRead=true;
-            if (nsReady && R_SUCCEEDED(metadataRc)) {
-                ++controlDataOk;
-                const std::string resolved = desknx::slaunch::ResolveTitleName(control.nacp);
-                if (!resolved.empty() && !desknx::model::isTitleId(resolved))
-                    title = resolved;
-                else if (cachedNameUsable) {
-                    title = cachedName->second;
-                    nameSource="cache_fallback";
-                }
-                if (forceRefresh || !iconCached) {
-                    if (CacheGameIcon(id, control, actual)) {
-                        ++cachedGameIcons;
-                        iconAvailable=true;
-                    } else {
-                        ++failedGameIcons;
-                        iconAvailable=false;
-                    }
-                }
-                fetchedControlData = true;
-            } else {
-                ++controlDataFailed;
-                if (firstControlDataError == 0)
-                    firstControlDataError = static_cast<std::uint32_t>(metadataRc);
-                if (cachedNameUsable) {
-                    title = cachedName->second;
-                    nameSource="cache_fallback";
-                }
+            ++controlDataFailed;
+            if (firstControlDataError == 0)
+                firstControlDataError = static_cast<std::uint32_t>(metadataRc);
+            if (cachedNameUsable) {
+                title = cachedName->second;
+                nameSource="cache_fallback";
             }
         }
 
@@ -924,14 +1001,22 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         if (i < result.items.size() &&
             result.items[i].kind == Kind::Game && result.items[i].data == hex) {
             result.items[i].title = title;
+            result.items[i].displayVersion = displayVersion;
+            result.items[i].occupiedSizeBytes = occupiedSizeBytes;
+            result.items[i].occupiedSizeAvailable = occupiedSizeAvailable;
             result.items[i].viewFlags = games[i].viewFlags;
+            result.items[i].updateStatusAvailable=games[i].updateStatusAvailable;
             result.items[i].color = static_cast<int>(colorIndex++ % 12);
         } else {
             // Defensive fallback for a malformed staging snapshot.
+            Candidate fallback{Kind::Game, title, hex, 1, 1,
+                static_cast<int>(colorIndex++ % 12), games[i].viewFlags};
+            fallback.displayVersion=displayVersion;
+            fallback.occupiedSizeBytes=occupiedSizeBytes;
+            fallback.occupiedSizeAvailable=occupiedSizeAvailable;
+            fallback.updateStatusAvailable=games[i].updateStatusAvailable;
             result.items.insert(result.items.begin() + static_cast<std::ptrdiff_t>(
-                std::min(i, result.items.size())),
-                Candidate{Kind::Game, title, hex, 1, 1,
-                          static_cast<int>(colorIndex++ % 12), games[i].viewFlags});
+                std::min(i, result.items.size())), std::move(fallback));
         }
         if ((i + 1) % 3 == 0 || i + 1 == games.size()) report(false);
     }
@@ -940,6 +1025,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     LogDiagnostic("control_data successful=%zu failed=%zu first_error=0x%08X cached_names=%zu",
                   controlDataOk, controlDataFailed,
                   static_cast<unsigned int>(firstControlDataError), nameCache.size());
+    LogDiagnostic("occupied_size successful=%zu unavailable=%zu",
+                  occupiedSizeOk,occupiedSizeFailed);
     LogDiagnostic("game_artwork resolved_names=%zu unresolved_names=%zu icons_written=%zu icon_failures=%zu first_unresolved=%s",
                   resolvedGameNames, unresolvedGameNames, cachedGameIcons,
                   failedGameIcons, firstUnresolvedTitleId[0] ? firstUnresolvedTitleId : "none");
@@ -952,17 +1039,40 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     report(false); // expose the installed-game part before scanning NRO assets
 
     for (const auto& nro : nros) {
-        if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
+        if (result.items.size() >= MaxItems - WidgetReserve) {
+            result.truncated = true;
+            break;
+        }
         Candidate item{Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
                        static_cast<int>(result.items.size() % 12)};
         CacheNroIconAndMetadata(nro, item, forceRefresh);
         result.items.push_back(std::move(item));
         if (result.items.size() % 12 == 0) report(false);
     }
-    if (games.size() > gameLimit || nros.size() >= MaxItems) result.truncated = true;
+
+    // Keep still-valid cached homebrew entries when one folder could not be
+    // enumerated. ReadCache has already discarded paths that no longer exist.
+    if (!nroScan.complete) {
+        for (const auto& cached : warmNroItems) {
+            const bool alreadyPresent = std::any_of(result.items.begin(), result.items.end(),
+                [&](const Candidate& item) {
+                    return item.kind == Kind::Nro && item.data == cached.data;
+                });
+            if (!alreadyPresent && result.items.size() < MaxItems - WidgetReserve)
+                result.items.push_back(cached);
+        }
+    }
+
+    result.nroCount = static_cast<size_t>(std::count_if(
+        result.items.begin(), result.items.end(),
+        [](const Candidate& item) { return item.kind == Kind::Nro; }));
+    if (games.size() > gameLimit || nroScan.limitReached || !nroScan.complete)
+        result.truncated = true;
     (void)EnsureBuiltinWidgets(result.items);
-    // Preserve the last known-good catalogue if NS enumeration failed.
-    if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
+
+    // Never publish a partial SD walk as the new last-known-good catalogue.
+    if (nsReady && result.nsErrorCode == 0 && nroScan.complete)
+        WriteCache(sig, result);
     LogDiagnostic("scan_done games=%zu nros=%zu items=%zu truncated=%d ns_error=0x%08X elapsed=%llds",
                   result.gameCount, result.nroCount, result.items.size(),
                   result.truncated ? 1 : 0,

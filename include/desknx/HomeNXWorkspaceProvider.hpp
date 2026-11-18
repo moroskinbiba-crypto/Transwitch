@@ -178,11 +178,25 @@ public:
         const model::Tile& tile = workspace->tiles[tileIndex];
         if (tile.x == x && tile.y == y)
             return false;
-        if (!model::placeable(*workspace, tile, x, y, static_cast<int>(tileIndex)))
+        // Keep an explicit out-of-grid drop rejected. For a collision within
+        // the grid, advance in reading order to the next footprint that fits.
+        if (x < 0 || y < 0 || x > model::Columns - tile.w ||
+            y > model::Rows - tile.h)
+            return false;
+        int targetX = x;
+        int targetY = y;
+        if (!model::placeable(*workspace, tile, targetX, targetY,
+                              static_cast<int>(tileIndex))) {
+            if (!model::firstFreeFrom(*workspace, tile, x, y,
+                                      targetX, targetY,
+                                      static_cast<int>(tileIndex)))
+                return false;
+        }
+        if (targetX == tile.x && targetY == tile.y)
             return false;
 
-        workspace->tiles[tileIndex].x = x;
-        workspace->tiles[tileIndex].y = y;
+        workspace->tiles[tileIndex].x = targetX;
+        workspace->tiles[tileIndex].y = targetY;
         return true;
     }
 
