@@ -372,3 +372,5 @@ The native standalone build has now completed both CI workflows:
 - Validation status: changes are committed to an isolated branch; CI/build and real-console font/controls checks remain required before merge.
 
 - Added focused-tile priority to `IconCache`: the selected game's/homebrew cover is decoded before background tiles, and may evict the lowest-priority not-yet-started request when the bounded request queue is full. Queue and decoded-image memory bounds remain unchanged.
+
+- Applied SDL's low-priority scheduling class to catalogue scanning, artwork-adjacent metadata queries (play statistics), Nextendo polling, and asynchronous layout writes. Heartbeat remains at its existing priority so backend liveness is not deprioritized. This uses the SDL portability layer rather than assuming a Switch-only native thread handle; CPU-core affinity remains deferred until verified against the exact devkitPro SDL/libnx runtime.
