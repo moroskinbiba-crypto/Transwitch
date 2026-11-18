@@ -51,6 +51,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Switch networking dependency
+        run: dkp-pacman -S --noconfirm switch-curl
+
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
 
@@ -61,6 +64,11 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
+
+      - name: Test Nextendo presence snapshot and expiry rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test
+          /tmp/desknx-nextendo-test
 
       - name: Test production menu liveness controller
         run: |
