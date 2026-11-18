@@ -97,6 +97,12 @@ inline bool moveSelectedTile(model::Workspace& desk, int& selectedX,
     auto& tile = desk.tiles[static_cast<size_t>(index)];
     const int requestedX = tile.x + dx;
     const int requestedY = tile.y + dy;
+    // A collision inside the grid should advance to another free cell, but a
+    // request beyond the grid edge remains a rejected directional move.
+    if (requestedX < 0 || requestedY < 0 ||
+        requestedX > model::Columns - tile.w ||
+        requestedY > model::Rows - tile.h)
+        return false;
     int nextX = requestedX;
     int nextY = requestedY;
     if (!model::placeable(desk, tile, nextX, nextY, index)) {
