@@ -13,6 +13,7 @@ export PATH := $(PORTLIBS)/bin:$(PATH)
 SDL2_LIBS       := $(shell pkg-config --static --libs SDL2 2>/dev/null)
 SDL2_IMAGE_LIBS := $(shell pkg-config --static --libs SDL2_image 2>/dev/null)
 SDL2_TTF_LIBS   := $(shell pkg-config --static --libs SDL2_ttf 2>/dev/null)
+CURL_LIBS      := $(shell pkg-config --static --libs libcurl 2>/dev/null)
 ifeq ($(strip $(SDL2_LIBS)),)
 SDL2_LIBS := -lSDL2
 endif
