@@ -52,17 +52,19 @@ void testMoveIntoEmptyCell() {
     assert(provider.activeWorkspace()->tiles[0].w == 1);
 }
 
-void testMoveOntoOccupiedCellIsRefusedAndChangesNothing() {
+void testMoveOntoOccupiedCellAdvancesToNextFreePosition() {
     WorkspaceProvider provider = makeProvider();
-    const Workspace before = *provider.activeWorkspace();
 
-    // The 2x1 game occupies (1,0)-(2,0); dropping the clock there must fail.
-    assert(!provider.moveTile(0, 1, 0));
+    // The 2x1 game occupies (1,0)-(2,0). Requesting (1,0) for the clock
+    // advances to the next free cell at (3,0), without losing either tile.
+    assert(provider.moveTile(0, 1, 0));
 
     const Workspace& after = *provider.activeWorkspace();
-    assert(after.tiles.size() == before.tiles.size());
-    assert(after.tiles[0].x == before.tiles[0].x);
-    assert(after.tiles[0].y == before.tiles[0].y);
+    assert(after.tiles.size() == 2);
+    assert(after.tiles[0].x == 3);
+    assert(after.tiles[0].y == 0);
+    assert(after.tiles[1].x == 1);
+    assert(after.tiles[1].y == 0);
 }
 
 void testMoveOffGridIsRefused() {
@@ -211,7 +213,7 @@ void testEditsSurviveSerializeAndReload() {
 
 int main() {
     testMoveIntoEmptyCell();
-    testMoveOntoOccupiedCellIsRefusedAndChangesNothing();
+    testMoveOntoOccupiedCellAdvancesToNextFreePosition();
     testMoveOffGridIsRefused();
     testMoveToSameCellIsNotAnEdit();
     testMoveOfUnknownTileIsRefused();
