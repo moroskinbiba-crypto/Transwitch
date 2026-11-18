@@ -330,3 +330,13 @@ The native standalone build has now completed both CI workflows:
 - The standalone build does not launch a browser/WebKit applet, website, local web server, qlaunch backend or another NRO. It is one native process; bounded SDL worker threads execute catalogue, icon decoding, Nextendo polling and on-demand play-stat work inside that process.
 - The optional projects/sSystem qlaunch integration remains separate and experimental. It is neither linked into nor started by the standalone NRO.
 - CI proves compilation, linking, static native-NRO checks and host tests. It does not prove that the latest NRO starts successfully on a physical Switch or that the previous Atmosphère crash is resolved. Required hardware checks: cold start, SDL renderer, game catalogue, icon decode, navigation, game launch/return and Atmosphère crash report inspection if it fails.
+
+## Сведение PR и native-only merge — 18 ноября 2026
+
+- PR #40 объединён в main (squash commit `32bc5ad848693bfbb4633e56dfe793c26db37641`).
+- В main теперь самостоятельный DeskNX.nro на C++/SDL2 из `source/*.cpp`; WebKit wrapper, React/Vite UI и website RomFS удалены.
+- CI runs `44257150856` (native NRO) и `44257150890` (полный build + host tests + HOME library applet) завершились успешно.
+- README, FEATURES, DIAGNOSTICS, HOMENX_FRONTEND_PLAN и CLEANUP приведены к фактической native архитектуре.
+- Закрыты устаревшие PR #5, #6, #7, #8, #10, #11, #34 и дублирующий native-cutover PR #38. У каждого оставлен комментарий с причиной. PR #40 — единственный интеграционный PR, теперь уже merged.
+- Ветки закрытых PR не удалялись; полезные дополнительные изменения из #38 и NPDM audit #7 можно выборочно восстановить и отдельно проверить.
+- Атмосферный/runtime crash на физической Switch не считается исправленным до аппаратного smoke test. CI подтверждает build/link/test, не выполнение на консоли.
