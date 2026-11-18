@@ -25,3 +25,10 @@ The target-aware Homebrew loader under `projects/hbloader/` is derived from the 
 ## uLaunch visual reference
 
 uLaunch (https://github.com/XorTroll/uLaunch) is used as a design and behavior reference for grid navigation, themeable desktops, overlays and icon presentation. No uLaunch source files or theme assets are copied into Transwitch; the corresponding UI behavior is implemented independently. This avoids mixing GPL-2.0-only uLaunch code with GPL-3.0-or-later sLaunch-derived components already present in this repository.
+
+
+## HomeNX / Nextendo online presence
+
+The Nextendo online-player feed in `source/NextendoPlayers.cpp` adapts the endpoint selection, per-title count merge order and refresh behavior used by **HomeNX** (repository: https://github.com/ad3333m/homenx, files `projects/cards/src/Library.cpp` and `projects/cards/src/CardsActivity.cpp`). HomeNX is distributed under GNU GPL version 3. The corresponding license text is preserved in `projects/Nextendo/COPYING.HomeNX`.
+
+The transport, bounded response handling, title-ID validation, snapshot expiry and DeskNX card rendering are implemented for Transwitch.
