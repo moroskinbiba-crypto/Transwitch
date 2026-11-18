@@ -4452,9 +4452,11 @@ int main(int,char**) {
             layoutSaveBlocked = true;
         defaultLayout();
         defaultLayoutPending=true;
+        desknx::diag::Write("layout","defaults_created","reason=primary_invalid backup_unavailable");
     } else if (!layoutLoaded) {
         defaultLayout();
         defaultLayoutPending=true;
+        desknx::diag::Write("layout","defaults_created","reason=no_persisted_layout");
     }
     if(layoutLoaded && loadActiveWorkspaceState()) {
         setStatus("RESTORED: "+desks[static_cast<size_t>(deskIndex)].name,2500);
