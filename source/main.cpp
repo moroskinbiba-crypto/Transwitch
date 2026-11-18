@@ -810,6 +810,27 @@ void text(const std::string& value,int x,int y,int scale,Color c,int right=1260)
         px+=6*scale;
     }
 }
+void textCentered(const std::string& value,int centerX,int y,int scale,
+                  Color c,int left,int right) {
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    const SDL_Color tint{c.r,c.g,c.b,c.a};
+    if(gFontRenderer.drawCentered(localized,centerX,y,scale,tint,left,right))return;
+    const std::string fallback=fallbackAscii(localized);
+    const int width=fallback.empty()?0:
+        static_cast<int>(fallback.size())*6*scale-scale;
+    int px=std::max(left,std::min(right-width,centerX-width/2));
+    color(c);
+    for(char ch:fallback) {
+        if(px+5*scale>right)break;
+        const auto rows=glyph(ch);
+        for(int ry=0;ry<7;++ry)for(int rx=0;rx<5;++rx)
+            if(rows[ry]&(1u<<(4-rx))) {
+                SDL_Rect p{px+rx*scale,y+ry*scale,scale,scale};
+                SDL_RenderFillRect(renderer,&p);
+            }
+        px+=6*scale;
+    }
+}
 std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
@@ -2139,14 +2160,15 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
     if(overlay>0)
         rect(viewport.x,viewport.y+viewport.h-stripHeight,viewport.w,stripHeight,
              Color{5,9,16,static_cast<Uint8>(overlay)});
+    const int titleCenter=bounds.x+bounds.w/2;
     if(titleLines.size()==1) {
-        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+8,
-             2,WHITE,bounds.x+bounds.w-10);
+        textCentered(titleLines[0],titleCenter,bounds.y+bounds.h-stripHeight+8,
+                      2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
     } else {
-        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+3,
-             2,WHITE,bounds.x+bounds.w-10);
-        text(titleLines[1],bounds.x+10,bounds.y+bounds.h-stripHeight+22,
-             2,WHITE,bounds.x+bounds.w-10);
+        textCentered(titleLines[0],titleCenter,bounds.y+bounds.h-stripHeight+3,
+                     2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
+        textCentered(titleLines[1],titleCenter,bounds.y+bounds.h-stripHeight+22,
+                     2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
     }
     // Texture rendering uses a rectangular clip; paint only the four corner
     // wedges afterwards so the actual game artwork follows the tile's 10px
@@ -2170,24 +2192,32 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     const Color accent=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
-    const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
+    const bool artworkTile=t.kind==Kind::Game||t.kind==Kind::Nro;
+    const Color fill=artworkTile&&selected
+        ?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
 
-    if(t.kind==Kind::Game||t.kind==Kind::Nro) {
+    if(artworkTile) {
         drawTileCover(t,workspace,r,fill,selected);
         if(selected) {
             outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
             outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
         }
     } else {
-        roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
+        // Widget selection is outline-only: the surface does not turn blue.
+        if(selected) {
+            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
+            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
+        }
+        const int accentWidth=std::min(42,r.w-28);
+        roundRect(r.x+(r.w-accentWidth)/2,r.y+10,accentWidth,3,2,accent);
         const bool compact=t.w==1&&t.h==1;
         const bool wide=t.h==1&&t.w>=2;
         const int left=r.x+18, right=r.x+r.w-14;
         const int innerWidth=std::max(1,r.w-36);
         auto label=[&](const std::string& value,int y) {
-            text(value,left,y,1,MUTED,right);
+            textCentered(value,r.x+r.w/2,y,1,MUTED,left,right);
         };
         auto progress=[&](int y,int percent) {
             const int barWidth=std::max(16,innerWidth);
@@ -2214,32 +2244,34 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const std::string time=clockText();
             const std::string date=clockText(true).substr(6);
             if(compact) {
-                text(time,r.x+10,r.y+20,3,WHITE,right);
+                textCentered(time,r.x+r.w/2,r.y+20,3,WHITE,left,right);
                 label(date,r.y+66);
-                text("CLOCK",left,r.y+r.h-18,1,BLUE,right);
+                textCentered("CLOCK",r.x+r.w/2,r.y+r.h-18,1,BLUE,left,right);
             } else if(wide) {
-                text(time,left,r.y+23,5,WHITE,right);
+                textCentered(time,r.x+r.w/2,r.y+23,5,WHITE,left,right);
                 label(date,r.y+78);
                 if(t.w>=3) {
                     drawSystemIcon(6,r.x+r.w-68,r.y+28,38,accent);
-                    text("LOCAL TIME",r.x+r.w-118,r.y+78,1,BLUE,right);
+                    textCentered("LOCAL TIME",r.x+r.w/2,r.y+78,1,BLUE,left,right);
                 }
             } else {
-                text(time,left,r.y+24,6,WHITE,right);
-                text(date,left,r.y+105,2,MUTED,right);
-                text(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",left,r.y+160,1,BLUE,right);
+                textCentered(time,r.x+r.w/2,r.y+24,6,WHITE,left,right);
+                textCentered(date,r.x+r.w/2,r.y+105,2,MUTED,left,right);
+                textCentered(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",
+                             r.x+r.w/2,r.y+160,1,BLUE,left,right);
                 drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
             }
         } else if(t.kind==Kind::Battery) {
             if(compact) {
                 label("BATTERY",r.y+13);
-                text(battery>=0?std::to_string(battery)+"%":"N/A",
-                     left,r.y+34,3,WHITE,right);
+                textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
+                             r.x+r.w/2,r.y+34,3,WHITE,left,right);
                 progress(r.y+82,battery);
             } else if(wide) {
                 label("BATTERY",r.y+13);
-                text(battery>=0?std::to_string(battery)+"%":"N/A",
-                     left,r.y+33,t.w>=3?4:3,WHITE,right-70);
+                textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
+                             left+(right-70-left)/2,r.y+33,t.w>=3?4:3,
+                             WHITE,left,right-70);
                 progress(r.y+82,battery);
                 drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
                 if(t.w>=3)text(languageRussian?"ЗАРЯД":"CHARGE",
@@ -2247,14 +2279,14 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else {
                 label("BATTERY STATUS",r.y+14);
                 drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
-                text(battery>=0?std::to_string(battery)+"%":"N/A",
-                     left,r.y+50,6,WHITE,right-70);
+                textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
+                             left+(right-70-left)/2,r.y+50,6,WHITE,left,right-70);
                 progress(r.y+145,battery);
-                text(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
+                textCentered(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
                      battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
                      battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
                                  (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
-                     left,r.y+172,2,battery>=20?GREEN:RED,right);
+                     r.x+r.w/2,r.y+172,2,battery>=20?GREEN:RED,left,right);
             }
         } else if(t.kind==Kind::System) {
             const u32 firmware=hosversionGet();
@@ -2286,13 +2318,14 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             if(compact) {
                 label("RECENT",r.y+13);
                 if(recentLaunches.empty())
-                    text(languageRussian?"ПУСТО":"EMPTY",left,r.y+50,1,WHITE,right);
+                    textCentered(languageRussian?"ПУСТО":"EMPTY",r.x+r.w/2,
+                             r.y+50,1,WHITE,left,right);
                 else recentLine(0,r.y+42,26);
             } else if(wide) {
                 label("RECENTLY OPENED",r.y+12);
                 if(recentLaunches.empty())
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+48,2,WHITE,right);
+                    textCentered(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
+                                 r.x+r.w/2,r.y+48,2,WHITE,left,right);
                 else {
                     recentLine(0,r.y+34,26);
                     if(t.w>=3)recentLine(1,r.y+67,26);
@@ -2300,8 +2333,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else {
                 label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
                 if(recentLaunches.empty()) {
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+86,2,WHITE,right);
+                    textCentered(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
+                                 r.x+r.w/2,r.y+86,2,WHITE,left,right);
                 } else {
                     const size_t count=std::min<size_t>(4,recentLaunches.size());
                     for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
@@ -2316,29 +2349,33 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 :-1;
             if(compact) {
                 label("SD STORAGE",r.y+13);
-                text(storageStatsAvailable?freeSpaceText():"N/A",left,r.y+39,2,WHITE,right);
+                textCentered(storageStatsAvailable?freeSpaceText():"N/A",
+                             r.x+r.w/2,r.y+39,2,WHITE,left,right);
                 progress(r.y+82,percent);
             } else if(wide) {
                 label("SD CARD STORAGE",r.y+12);
-                text(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
-                     left,r.y+34,t.w>=3?4:3,WHITE,right-78);
-                if(percent>=0)text(std::to_string(percent)+"% USED",
-                    right-70,r.y+49,1,MUTED,right);
+                textCentered(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
+                             left+(right-78-left)/2,r.y+34,t.w>=3?4:3,
+                             WHITE,left,right-78);
+                if(percent>=0)textCentered(std::to_string(percent)+"% USED",
+                    r.x+r.w/2,r.y+49,1,MUTED,left,right);
                 progress(r.y+83,percent);
             } else {
                 label("SD CARD STORAGE",r.y+18);
                 if(storageStatsAvailable) {
-                    text(freeSpaceText()+" GB FREE",left,r.y+50,5,WHITE,right);
+                    textCentered(freeSpaceText()+" GB FREE",r.x+r.w/2,
+                                 r.y+50,5,WHITE,left,right);
                     if(sdTotalBytes>0) {
                         char total[64]{};
                         std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
                             static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
-                        text(total,left,r.y+112,2,MUTED,right);
+                        textCentered(total,r.x+r.w/2,r.y+112,2,MUTED,left,right);
                     }
                     progress(r.y+157,percent);
-                    text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
-                } else text(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
-                            left,r.y+90,2,RED,right);
+                    textCentered(std::to_string(percent)+"% USED",r.x+r.w/2,
+                                 r.y+184,1,BLUE,left,right);
+                } else textCentered(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
+                                    r.x+r.w/2,r.y+90,2,RED,left,right);
             }
         } else if(t.kind==Kind::Calendar) {
             std::time_t now=std::time(nullptr);
@@ -2354,14 +2391,15 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const int month=std::max(0,std::min(11,current.tm_mon));
             const char* monthName=languageRussian?ruMonths[month]:enMonths[month];
             if(compact) {
-                text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
-                text(monthName,left,r.y+78,1,BLUE,right);
+                textCentered(std::to_string(current.tm_mday),r.x+r.w/2,
+                             r.y+17,5,WHITE,left,right);
+                textCentered(monthName,r.x+r.w/2,r.y+78,1,BLUE,left,right);
             } else if(wide) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
-                text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
-                     left,r.y+42,3,WHITE,right);
-                text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
-                     left,r.y+83,1,BLUE,right);
+                textCentered(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
+                             r.x+r.w/2,r.y+42,3,WHITE,left,right);
+                textCentered(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
+                             r.x+r.w/2,r.y+83,1,BLUE,left,right);
                 drawSystemIcon(6,right-34,r.y+38,26,accent);
             } else {
                 std::tm first=current;
@@ -2395,12 +2433,11 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             }
         } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
-            text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
-            text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
-                 r.x+14,r.y+52,2,MUTED,right);
+            textCentered("UNSUPPORTED ITEM",r.x+r.w/2,r.y+18,2,WHITE,left,right);
+            textCentered(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
+                         r.x+r.w/2,r.y+52,2,MUTED,left,right);
         }
     }
-    if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
 }
 void drawDotted(int x,int y,int w,int h) {
     for(int xx=x;xx<x+w;xx+=12){rect(xx,y,6,2,Color{67,79,98,180});rect(xx,y+h-2,6,2,Color{67,79,98,180});}
@@ -2412,6 +2449,7 @@ int visibleStart() {
 }
 void drawScreen() {
     gIconCache.beginFrame();
+    gFontRenderer.beginFrame();
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     bool catalogueNsAvailableNow=false;
@@ -2707,7 +2745,7 @@ void drawScreen() {
         text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
-        const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE","CUSTOMIZE DESKTOP",
+        const char* actions[]={"OPEN WORKSPACE","MOVE ICON TO ANOTHER DESKTOP","CUSTOMIZE DESKTOP",
                                "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
         for(int i=0;i<6;++i) {
             const int yy=238+i*44;
@@ -2716,7 +2754,9 @@ void drawScreen() {
                                    (i==workspaceMenuIndex?WHITE:MUTED);
             text(actions[i],412,yy+12,1,labelColor,875);
         }
-        text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
+        text("EDIT MODE: SELECT A TILE BEFORE MOVING IT",390,512,1,MUTED,900);
+        text("D-PAD + L/R WHILE DRAGGING ALSO MOVES BETWEEN DESKTOPS",
+             390,528,1,BLUE,920);
     }
     if(workspaceSettingsMenu) {
         rect(0,0,SW,SH,Color{3,7,14,198});
@@ -2767,7 +2807,8 @@ void drawScreen() {
         }
         roundRect(744,590,176,38,10,Color{54,57,66,255});
         text("CANCEL",795,603,1,WHITE,875);
-        text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
+        text(workspacePickerMoveTile?"A MOVE HERE     B CANCEL":"A OPEN     B BACK",
+             360,608,1,MUTED,730);
     }
     if(deletePrompt) {
         rect(0,0,SW,SH,Color{3,7,14,194});
@@ -3929,7 +3970,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_A) {
         Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
         if(editing){if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");}
-            else if(i>=0){const Tile&t=d.tiles[static_cast<size_t>(i)];selectedX=t.x;selectedY=t.y;dragging=true;setStatus("MOVE WITH D-PAD; L/R CHANGES WORKSPACE");}
+            else if(i>=0){const Tile&t=d.tiles[static_cast<size_t>(i)];selectedX=t.x;selectedY=t.y;dragging=true;setStatus("D-PAD MOVE; L/R CHANGE DESKTOP; A/B DROP");}
             else openList();}
         else if(i>=0)launch(d.tiles[static_cast<size_t>(i)]);else setStatus("EMPTY CELL - PRESS Y TO ADD");
     }
@@ -3976,6 +4017,21 @@ int tabStart(){
     return std::max(0,std::min(deskIndex-2,
         static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+void openControllerSupport() {
+    const Uint64 started=SDL_GetTicks64();
+    HidLaControllerSupportArg arg{};
+    hidLaCreateControllerSupportArg(&arg);
+    HidLaControllerSupportResultInfo result{};
+    desknx::diag::Write("controller","support_applet_begin",
+                        "applet_type=%d",static_cast<int>(appletGetAppletType()));
+    const Result rc=hidLaShowControllerSupport(&result,&arg);
+    desknx::diag::Write("controller","support_applet_end",
+        "rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(rc),
+        static_cast<unsigned long long>(SDL_GetTicks64()-started));
+    if(R_FAILED(rc))setStatus("PADS MENU UNAVAILABLE",3000);
+}
+
 void touchInput(const SDL_Event&e) {
     if(userPickerOpen) {
         if(e.type==SDL_FINGERDOWN) {
@@ -4197,13 +4253,7 @@ void touchInput(const SDL_Event&e) {
                         break;
                     }
                     case 1: appSettingsMenu=true;appSettingsIndex=0; break;
-                    case 2: {
-                        HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
-                        HidLaControllerSupportResultInfo result{};
-                        if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
-                            setStatus("PADS MENU UNAVAILABLE",3000);
-                        break;
-                    }
+                    case 2: openControllerSupport(); break;
                     case 3: systemMenu=true;systemMenuIndex=0; break;
                     default: break;
                 }
@@ -4654,6 +4704,7 @@ int main(int,char**) {
         }
         pumpAsyncLayoutSaver();
         pumpPlayStatsQuery();
+        (void)gFontRenderer.pumpWarmup();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&

@@ -386,3 +386,14 @@ The native standalone build has now completed both CI workflows:
 - Added the new test to the regular CI workflow.
 
 - Follow-up review corrected the shutdown-policy call-site argument order so the helper receives the actual `layoutSaveBlocked` flag (rather than its inverse). This keeps writes enabled during normal shutdown and disabled when recovery protection is active.
+
+
+## 2026-11-18 — UX follow-up: portrait tiles, collision-safe moves and font smoothness
+
+- Added portrait 2×3 as the next enlargement after 3×2; shrinking from 2×3 returns to 3×2. The production layout validator accepts the new footprint.
+- Workspace movement now searches forward from the requested cell when the destination is occupied, wrapping through the grid and ignoring the moving tile's previous footprint. Cross-workspace placement uses the same ordered search. The existing move action and drag hotkeys are now described more clearly in the workspace UI.
+- Widget focus no longer fills the entire widget with a blue surface: its neutral background stays unchanged and focus is represented by a double contour. Game-cover labels and key widget headings/metrics are horizontally centered.
+- Custom font data is read once into a bounded 16 MiB buffer. Remaining point sizes are opened gradually from memory; draw() no longer reopens the font from SD on first use. New text textures are budgeted per frame and cache keys include font generation/identity, preventing stale glyph reuse after changes.
+- Added timing diagnostics around Nintendo's controller-support applet. That applet remains synchronous and Horizon-controlled; the log will show whether the observed delay is in the applet call itself.
+- Cache audit: workspaces and the active workspace are persisted on SD; the found game/homebrew catalogue and visible-filter snapshot are rebuilt in RAM after launch/rescan; icon artwork has a separate SD cache under `sdmc:/switch/DeskNX/cache/icons`.
+- Validation: host tests and CI must run after commit. Real Switch checks remain necessary for 2×3 resizing, moving across occupied cells/desktops, font-switch frame pacing, and controller-applet timing.

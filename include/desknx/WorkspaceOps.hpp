@@ -95,9 +95,16 @@ inline bool moveSelectedTile(model::Workspace& desk, int& selectedX,
     const int index = model::itemAt(desk, selectedX, selectedY);
     if (index < 0 || (dx == 0 && dy == 0)) return false;
     auto& tile = desk.tiles[static_cast<size_t>(index)];
-    const int nextX = tile.x + dx;
-    const int nextY = tile.y + dy;
-    if (!model::placeable(desk, tile, nextX, nextY, index)) return false;
+    const int requestedX = tile.x + dx;
+    const int requestedY = tile.y + dy;
+    int nextX = requestedX;
+    int nextY = requestedY;
+    if (!model::placeable(desk, tile, nextX, nextY, index)) {
+        if (!model::firstFreeFrom(desk, tile, requestedX, requestedY,
+                                  nextX, nextY, index))
+            return false;
+    }
+    if (nextX == tile.x && nextY == tile.y) return false;
     tile.x = nextX;
     tile.y = nextY;
     selectedX = nextX;
@@ -126,7 +133,10 @@ inline bool resizeSelectedTile(model::Workspace& desk, int& selectedX,
         if (bigger) { nextW = 3; nextH = 2; }
         else { nextW = 2; nextH = 1; }
     } else if (tile.w == 3 && tile.h == 2) {
-        if (!bigger) { nextW = 2; nextH = 2; }
+        if (bigger) { nextW = 2; nextH = 3; }
+        else { nextW = 2; nextH = 2; }
+    } else if (tile.w == 2 && tile.h == 3) {
+        if (!bigger) { nextW = 3; nextH = 2; }
         else return false;
     } else if (tile.w == 3 && tile.h == 1) {
         if (bigger) { nextW = 3; nextH = 2; }
@@ -184,7 +194,8 @@ inline bool moveSelectedTileToWorkspace(std::vector<model::Workspace>& workspace
     int nextX = tile.x;
     int nextY = tile.y;
     if (!model::placeable(destination, tile, nextX, nextY) &&
-        !model::firstFree(destination, tile, nextX, nextY))
+        !model::firstFreeFrom(destination, tile, tile.x, tile.y,
+                              nextX, nextY))
         return false;
     source.tiles.erase(source.tiles.begin() + index);
     tile.x = nextX;
