@@ -16,6 +16,8 @@
 #include "../include/desknx/NextendoPlayers.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
+#include "../include/desknx/CardsLayout.hpp"
+#include "CardsHomeRenderer.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
 
@@ -60,7 +62,20 @@ constexpr const char* ACTIVE_WORKSPACE_FILE = "sdmc:/switch/DeskNX/active-worksp
 constexpr const char* ACTIVE_WORKSPACE_TMP = "sdmc:/switch/DeskNX/active-workspace.tmp";
 constexpr const char* ACTIVE_WORKSPACE_BAK = "sdmc:/switch/DeskNX/active-workspace.bak";
 constexpr int UiCornerRadius = 10;
+constexpr int AppSettingsRows = 12;
 size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
+// CardsNX-style showcase: large cover art on a rail, with the editable 6x3
+// grid one button away. Both views read the same workspaces, so nothing is
+// duplicated and no layout is rewritten when the view changes.
+desknx::cards::HomeRenderer cardsRenderer;
+bool cardsView = true;
+int cardsSelected = 0;
+float cardsAnchor = 0.f;
+bool cardsViewBeforeEditing = false;
+Uint32 cardsAnimationTick = 0;
+int cardsTouchFingerStartX = 0, cardsTouchFingerStartY = 0;
+bool cardsTouchActive = false;
+SDL_FingerID cardsTouchFingerId = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
@@ -392,6 +407,7 @@ void loadLauncherSettings() {
     if(!sdMounted){applyThemePalette();return;}
     languageRussian=true;
     iconStyle=0;
+    cardsView=true;
     std::string selectedPath;
     const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
     for(const char* candidate:candidates) {
@@ -438,6 +454,8 @@ void loadLauncherSettings() {
             char* end=nullptr;
             const long parsed=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
+        } else if(key=="view") {
+            cardsView=(value=="cards");
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -460,7 +478,8 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n"
+       <<"view="<<(cardsView?"cards":"grid")<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -2405,6 +2424,264 @@ int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+
+// --- CardsNX-style showcase ------------------------------------------------
+// Actions shared with the grid view; all of them are defined further down in
+// this translation unit and keep a single implementation.
+void launch(const Tile& t);
+void openList();
+void newDesk();
+void renameDesk();
+void openWorkspacePicker(bool moveTile);
+void openUserProfile();
+
+// The grid model stays authoritative: the deck is a per-frame projection of
+// the active workspace, so editing, drag/drop and persistence are unchanged.
+desknx::cards::Deck cardsDeck() {
+    if(desks.empty())return desknx::cards::Deck{};
+    return desknx::cards::makeDeck(desks[static_cast<size_t>(
+        std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))]);
+}
+
+void clampCardsSelection(const desknx::cards::Deck& deck) {
+    cardsSelected=deck.size>0?std::max(0,std::min(cardsSelected,deck.size-1)):0;
+}
+
+// Entering the showcase keeps whatever the grid cursor had selected, so the
+// two views never disagree about which shortcut is current.
+void syncCardsFromGrid() {
+    const auto deck=cardsDeck();
+    if(deck.size==0){cardsSelected=0;cardsAnchor=0.f;return;}
+    const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    cardsSelected=deck.positionOf(itemAt(desk,selectedX,selectedY));
+    clampCardsSelection(deck);
+    cardsAnchor=static_cast<float>(cardsSelected);
+}
+
+// Leaving the showcase moves the grid cursor onto the focused card.
+void syncGridFromCards() {
+    const auto deck=cardsDeck();
+    if(deck.size==0)return;
+    clampCardsSelection(deck);
+    const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int tileIndex=deck.indices[static_cast<size_t>(cardsSelected)];
+    if(tileIndex<0||static_cast<size_t>(tileIndex)>=desk.tiles.size())return;
+    selectedX=desk.tiles[static_cast<size_t>(tileIndex)].x;
+    selectedY=desk.tiles[static_cast<size_t>(tileIndex)].y;
+}
+
+void setCardsView(bool enabled) {
+    if(cardsView==enabled)return;
+    if(enabled)syncCardsFromGrid();
+    else syncGridFromCards();
+    cardsView=enabled;
+    cardsTouchActive=false;
+    cardsAnimationTick=SDL_GetTicks();
+    if(saveLauncherSettings())
+        desknx::diag::Write("ui","view_changed","cards=%d",enabled?1:0);
+}
+
+// Leaving arrange mode returns to the showcase when that is where the user
+// opened it from, so the view never silently changes under them.
+void leaveEditing() {
+    editing=false;
+    if(cardsViewBeforeEditing&&!cardsView)setCardsView(true);
+    cardsViewBeforeEditing=false;
+}
+
+const Tile* cardsSelectedTile() {
+    const auto deck=cardsDeck();
+    if(deck.size==0)return nullptr;
+    clampCardsSelection(deck);
+    const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int tileIndex=deck.indices[static_cast<size_t>(cardsSelected)];
+    if(tileIndex<0||static_cast<size_t>(tileIndex)>=desk.tiles.size())return nullptr;
+    return &desk.tiles[static_cast<size_t>(tileIndex)];
+}
+
+// Frame-rate independent glide towards the focused card; it always settles.
+void animateCards() {
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 elapsed=cardsAnimationTick==0?16:std::min<Uint32>(64,now-cardsAnimationTick);
+    cardsAnimationTick=now;
+    const float target=static_cast<float>(cardsSelected);
+    const float distance=target-cardsAnchor;
+    if(std::fabs(distance)<0.004f){cardsAnchor=target;return;}
+    cardsAnchor+=distance*std::min(1.f,static_cast<float>(elapsed)/92.f);
+}
+
+std::string cardsStorageLabel() {
+    if(!storageStatsAvailable)return "SD --";
+    char value[32]{};
+    std::snprintf(value,sizeof(value),"%.1f GB",
+        static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
+    return value;
+}
+
+void drawCardsHome() {
+    const auto deck=cardsDeck();
+    clampCardsSelection(deck);
+    cardsRenderer.backdrop(renderer,desknx::cards::Theme{
+        SDL_Color{THEME_TOP.r,THEME_TOP.g,THEME_TOP.b,255},
+        SDL_Color{THEME_BOTTOM.r,THEME_BOTTOM.g,THEME_BOTTOM.b,255},
+        SDL_Color{BLUE.r,BLUE.g,BLUE.b,255}});
+    if(!desks.empty())drawWorkspaceBackground(desks[static_cast<size_t>(deskIndex)]);
+
+    static const desknx::cards::DrawHooks hooks{
+        [](const Tile& tile)->SDL_Texture*{ return gIconCache.get(tile); },
+        [](const Tile& tile)->SDL_Color{
+            const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+            const Color c=desk.accentColor>=0
+                ?COLORS[static_cast<size_t>(desk.accentColor)%COLORS.size()]
+                :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
+            return SDL_Color{c.r,c.g,c.b,255};
+        },
+        [](const std::string& titleId)->unsigned{ return nextendoPlayersForTitle(titleId); },
+        [](const std::string& value,int x,int y,int scale,SDL_Color c,int right,bool localize){
+            const std::string shown=localize?desknx::i18n::translate(value,languageRussian):value;
+            if(gFontRenderer.draw(shown,x,y,scale,c,right))return;
+            text(shown,x,y,std::max(1,scale),Color{c.r,c.g,c.b,c.a},right);
+        }};
+
+    const bool showStatus=statusUntil==0||SDL_GetTicks()<statusUntil;
+    const desknx::cards::HomeState view{
+        desks,deck,deskIndex,visibleStart(),cardsSelected,cardsAnchor,
+        selectedUserLabel,clockText(),
+        battery>=0?std::to_string(battery)+"%":"BAT --",
+        cardsStorageLabel(),nextendoTotalLabel(),
+        showStatus?statusText:std::string{},
+        SDL_Color{BLUE.r,BLUE.g,BLUE.b,255}};
+    cardsRenderer.draw(renderer,view,hooks);
+}
+
+// Touch handling for the showcase. Returns true when the event was consumed.
+bool cardsTouchInput(const SDL_Event& e) {
+    const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+    const auto deck=cardsDeck();
+    if(e.type==SDL_FINGERDOWN) {
+        if(desknx::cards::Arrange.contains(x,y)) {
+            cardsViewBeforeEditing=true;
+            setCardsView(false);editing=true;
+            setStatus("EDIT MODE ENABLED");return true;
+        }
+        if(desknx::cards::Primary.contains(x,y)) {
+            if(const Tile* tile=cardsSelectedTile())launch(*tile);
+            else {cardsViewBeforeEditing=true;setCardsView(false);editing=true;openList();}
+            return true;
+        }
+        if(desknx::cards::Actions.contains(x,y)){systemMenu=true;systemMenuIndex=0;return true;}
+        if(desknx::cards::Profile.contains(x,y)){openUserProfile();return true;}
+        if(desknx::cards::AddDesk.contains(x,y)){newDesk();return true;}
+        if(desknx::cards::Workspaces.contains(x,y)){workspaceMenu=true;workspaceMenuIndex=0;return true;}
+        if(desknx::cards::WorkspaceCount.contains(x,y)){openWorkspacePicker(false);return true;}
+        for(int i=0;i<static_cast<int>(desknx::cards::Tool::Count);++i) {
+            if(!desknx::cards::tool(static_cast<desknx::cards::Tool>(i)).contains(x,y))continue;
+            switch(static_cast<desknx::cards::Tool>(i)) {
+                case desknx::cards::Tool::Library:
+                    cardsViewBeforeEditing=true;setCardsView(false);
+                    editing=true;openList();break;
+                case desknx::cards::Tool::Gallery: {
+                    const Result rc=albumLaShowAllAlbumFiles();
+                    desknx::diag::Write("gallery","return","rc=0x%08X",static_cast<unsigned int>(rc));
+                    if(R_FAILED(rc))setStatus("GALLERY UNAVAILABLE",3000);
+                    break;
+                }
+                case desknx::cards::Tool::Controllers: {
+                    HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
+                    HidLaControllerSupportResultInfo result{};
+                    if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
+                        setStatus("PADS MENU UNAVAILABLE",3000);
+                    break;
+                }
+                case desknx::cards::Tool::Tools: systemMenu=true;systemMenuIndex=0;break;
+                case desknx::cards::Tool::Power: powerMenu=true;powerIndex=0;break;
+                case desknx::cards::Tool::Settings: appSettingsMenu=true;appSettingsIndex=0;break;
+                default: break;
+            }
+            return true;
+        }
+        for(int slot=0;slot<desknx::cards::VisibleTabs;++slot) {
+            if(!desknx::cards::tab(slot).contains(x,y))continue;
+            const int target=visibleStart()+slot;
+            if(target<0||target>=static_cast<int>(desks.size()))return true;
+            if(target!=deskIndex) {
+                deskIndex=target;
+                scheduleActiveWorkspaceSave();
+                syncCardsFromGrid();
+                setStatus(desks[static_cast<size_t>(deskIndex)].name);
+            } else renameDesk();
+            return true;
+        }
+        const int hit=desknx::cards::hitCard(deck.size,cardsAnchor,x,y);
+        if(hit>=0) {
+            // Tapping the focused card launches it; tapping a neighbour only
+            // brings it into focus, so a swipe never starts a game by mistake.
+            if(hit==cardsSelected) {
+                cardsTouchActive=true;
+                cardsTouchFingerId=e.tfinger.fingerId;
+                cardsTouchFingerStartX=x;cardsTouchFingerStartY=y;
+            } else cardsSelected=hit;
+            return true;
+        }
+        if(y>=desknx::cards::RailTop&&y<desknx::cards::RailBottom) {
+            cardsTouchActive=true;
+            cardsTouchFingerId=e.tfinger.fingerId;
+            cardsTouchFingerStartX=x;cardsTouchFingerStartY=y;
+            return true;
+        }
+        return true;
+    }
+    if(!cardsTouchActive||e.tfinger.fingerId!=cardsTouchFingerId)return true;
+    if(e.type==SDL_FINGERUP) {
+        cardsTouchActive=false;
+        const int dx=x-cardsTouchFingerStartX,dy=y-cardsTouchFingerStartY;
+        const int step=desknx::cards::swipeStep(dx,dy);
+        if(step!=0) {
+            const int next=deck.step(cardsSelected,step);
+            if(next>=0)cardsSelected=next;
+            return true;
+        }
+        if(std::abs(dx)+std::abs(dy)<24) {
+            if(const Tile* tile=cardsSelectedTile())launch(*tile);
+            else {cardsViewBeforeEditing=true;setCardsView(false);editing=true;openList();}
+        }
+    }
+    return true;
+}
+
+// Controller handling for the showcase. Returns true when the key was consumed.
+bool cardsKeyInput(u64 keys) {
+    const auto deck=cardsDeck();
+    clampCardsSelection(deck);
+    if(keys&HidNpadButton_ZL){setCardsView(false);setStatus("DESKTOP GRID");return true;}
+    if(keys&HidNpadButton_X) {
+        cardsViewBeforeEditing=true;
+        setCardsView(false);editing=true;setStatus("EDIT MODE ENABLED");return true;
+    }
+    if(keys&HidNpadButton_Y) {
+        cardsViewBeforeEditing=true;
+        setCardsView(false);editing=true;openList();return true;
+    }
+    if(keys&HidNpadButton_Left){const int next=deck.step(cardsSelected,-1);if(next>=0)cardsSelected=next;return true;}
+    if(keys&HidNpadButton_Right){const int next=deck.step(cardsSelected,1);if(next>=0)cardsSelected=next;return true;}
+    if(keys&(HidNpadButton_Up|HidNpadButton_Down))return true; // the rail is horizontal
+    if(keys&HidNpadButton_A) {
+        if(const Tile* tile=cardsSelectedTile())launch(*tile);
+        else {cardsViewBeforeEditing=true;setCardsView(false);editing=true;openList();}
+        return true;
+    }
+    if(keys&(HidNpadButton_L|HidNpadButton_R)) {
+        if(desks.empty())return true;
+        const int step=(keys&HidNpadButton_L)?-1:1;
+        deskIndex=(deskIndex+step+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
+        scheduleActiveWorkspaceSave();
+        cardsSelected=0;cardsAnchor=0.f;
+        setStatus(desks[static_cast<size_t>(deskIndex)].name);
+        return true;
+    }
+    return false; // +, B, L3, R3, - keep their global meaning
+}
+
 void drawScreen() {
     gIconCache.beginFrame();
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -2417,6 +2694,13 @@ void drawScreen() {
         &catalogueGameCountNow,&catalogueNroCountNow);
     refreshBattery();
     refreshStorageStats();
+    // The showcase replaces the home surface only; every modal below (library,
+    // tools, settings, power, pickers) still draws on top of whichever view
+    // is active, so no dialog is reachable in one view and lost in the other.
+    if(cardsView&&!desks.empty()) {
+        animateCards();
+        drawCardsHome();
+    } else {
     rect(0,0,SW,SH,BG);
     for(int band=0;band<24;++band) {
         const double t=static_cast<double>(band)/23.0;
@@ -2540,6 +2824,7 @@ void drawScreen() {
         editing?Color{53,100,156,255}:Color{34,46,64,255});
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
+    } // end of the classic grid surface
     if(listOpen) {
         rect(0,0,SW,SH,Color{3,7,14,194});
         const int mx=110,my=70,mw=1060,mh=570;
@@ -2858,14 +3143,16 @@ void drawScreen() {
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE",
+            "HOME SCREEN STYLE"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
+        for(int i=0;i<AppSettingsRows;++i) {
             const int yy=214+i*31;
             if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
             text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
             if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
             if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
+            if(i==11)text(cardsView?"CARD VIEW":"DESKTOP GRID",755,yy+8,1,BLUE,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -3470,8 +3757,8 @@ void activateAppSettings(int action) {
             workspaceMenuIndex=0;
             break;
         case 7:
-            editing=!editing;
-            if(!editing&&dragging){dragging=false;saveNow();}
+            if(editing){if(dragging){dragging=false;saveNow();}leaveEditing();}
+            else editing=true;
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
         case 8:
@@ -3489,6 +3776,11 @@ void activateAppSettings(int action) {
         case 10:
             iconStyle=(iconStyle+1)%3;
             if(saveLauncherSettings())setStatus("ICON STYLE");
+            break;
+        case 11:
+            // setCardsView persists the choice itself.
+            setCardsView(!cardsView);
+            setStatus(cardsView?"CARD VIEW":"DESKTOP GRID");
             break;
         default: break;
     }
@@ -3669,8 +3961,9 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        if(keys&HidNpadButton_Up)
+            appSettingsIndex=(appSettingsIndex+AppSettingsRows-1)%AppSettingsRows;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%AppSettingsRows;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -3697,8 +3990,8 @@ void keyInput(u64 keys, bool fromRepeat) {
             else if(action==1){recentIndex=0;recentOpen=true;}
             else if(action==2){powerMenu=true;powerIndex=0;}
             else if(action==3) {
-                editing=!editing;
-                if(!editing&&dragging){dragging=false;saveNow();}
+                if(editing){if(dragging){dragging=false;saveNow();}leaveEditing();}
+                else editing=true;
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             } else if(action==4)activateAppSettings(4);
             else if(action==5)restartCatalogueScan();
@@ -3834,7 +4127,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_Minus)removeTile();
         if(keys&HidNpadButton_X) {
             const bool saved=finishTileDrag(nullptr);
-            editing=false;
+            leaveEditing();
             if(saved)setStatus("EDIT MODE CLOSED");
         }
         return;
@@ -3852,6 +4145,9 @@ void keyInput(u64 keys, bool fromRepeat) {
         appletRequestExitToSelf();running=false;return;
 #endif
     }
+    // The showcase owns plain navigation and launching; global shortcuts
+    // (+, -, B, L3, R3) keep working exactly as they do on the grid.
+    if(cardsView&&!desks.empty()&&cardsKeyInput(keys))return;
     if(keys&HidNpadButton_Plus)newDesk();
     if(keys&HidNpadButton_StickL) { systemMenu=true;systemMenuIndex=0;return; }
     if(keys&HidNpadButton_StickR) {
@@ -3860,7 +4156,11 @@ void keyInput(u64 keys, bool fromRepeat) {
         workspaceMenu=true;
         workspaceMenuIndex=0;
     }
-    if(keys&HidNpadButton_X){editing=!editing;if(!editing&&dragging){dragging=false;saveNow();}setStatus(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"EDIT MODE CLOSED");}
+    if(keys&HidNpadButton_X) {
+        if(editing){if(dragging){dragging=false;saveNow();}leaveEditing();}
+        else editing=true;
+        setStatus(editing?"EDIT MODE - EMPTY CELLS STAY EMPTY":"EDIT MODE CLOSED");
+    }
     if(keys&HidNpadButton_Y){editing=true;openList();}
     if(keys&HidNpadButton_L) {
         if(dragging) moveAcrossDesk(-1);
@@ -3881,6 +4181,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
     if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
     if(keys&HidNpadButton_Down){if(dragging)moveTile(0,1);else updateCursor(0,1);}
+    if(!editing&&(keys&HidNpadButton_ZL)){setCardsView(true);setStatus("CARD VIEW");return;}
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
     if(editing&&(keys&HidNpadButton_ZR))resizeTile(true);
     if(editing&&(keys&HidNpadButton_Minus))removeTile();
@@ -3989,9 +4290,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
+        } else if(x>=340&&x<=940&&y>=214&&y<214+AppSettingsRows*31) {
             const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+            if(row>=0&&row<AppSettingsRows)activateAppSettings(row);
         }
         return;
     }
@@ -4050,6 +4351,13 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
+        return;
+    }
+    // The showcase has its own hit targets; it is reached only once every
+    // modal above has declined the event, so dialogs always win.
+    if(cardsView&&!desks.empty()&&!listOpen&&!recentOpen&&!powerMenu&&
+       (e.type==SDL_FINGERDOWN||e.type==SDL_FINGERUP||e.type==SDL_FINGERMOTION)) {
+        if(e.type!=SDL_FINGERMOTION)(void)cardsTouchInput(e);
         return;
     }
     if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
@@ -4211,8 +4519,8 @@ void touchInput(const SDL_Event&e) {
                 return;
             }
             if(x>=1096&&x<1224) {
-                editing=!editing;
-                if(!editing&&dragging){dragging=false;saveNow();}
+                if(editing){if(dragging){dragging=false;saveNow();}leaveEditing();}
+                else editing=true;
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
                 return;
             }
@@ -4639,6 +4947,7 @@ int main(int,char**) {
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
         (void)saveLayout();
+    cardsRenderer.release();
     for(auto& entry:workspaceBackgroundTextures)
         if(entry.texture)SDL_DestroyTexture(entry.texture);
     workspaceBackgroundTextures.clear();

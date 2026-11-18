@@ -44,6 +44,16 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends zlib1g-dev
 
+      - name: Test Cards home view layout and selection
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/cards_layout_test.cpp -o /tmp/desknx-cards-layout-test
+          /tmp/desknx-cards-layout-test
+
+      - name: Test UI localization table and prefix rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/localization_test.cpp -o /tmp/desknx-localization-test
+          /tmp/desknx-localization-test
+
       - name: Test compressed NACP title normalization
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/nacp_title_block_test.cpp -lz -o /tmp/desknx-nacp-test

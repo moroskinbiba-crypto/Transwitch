@@ -232,6 +232,15 @@ inline std::string translate(const std::string& value, bool russian) {
         {"BACKGROUND SCAN UNAVAILABLE", "ФОНОВОЕ СКАНИРОВАНИЕ НЕДОСТУПНО"},
         {"SELECT A TILE IN EDIT MODE FIRST", "СНАЧАЛА ВЫБЕРИТЕ ПЛИТКУ В РЕЖИМЕ РЕДАКТИРОВАНИЯ"},
         {"PLAYER:", "ИГРОК:"},
+        // Card view
+        {"HOME LAUNCHER", "ДОМАШНИЙ ЭКРАН"},
+        {"PLAY", "ИГРАТЬ"}, {"OPEN", "ОТКРЫТЬ"},
+        {"ADD APPS", "ДОБАВИТЬ"},
+        {"EDIT", "ИЗМЕНИТЬ"}, {"DONE", "ГОТОВО"},
+        {"WIDGETS", "ВИДЖЕТЫ"},
+        {"CARD VIEW", "ВИТРИНА"}, {"DESKTOP GRID", "СЕТКА РАБОЧЕГО СТОЛА"},
+        {"L/R  SPACES     X  EDIT     ZL  VIEW",
+         "L/R  СТОЛЫ     X  ИЗМЕНИТЬ     ZL  ВИД"},
         {"ЯЗЫК: РУССКИЙ", "ЯЗЫК: РУССКИЙ"},
         {"ПОИСК ОЧИЩЕН", "ПОИСК ОЧИЩЕН"}
     };
@@ -244,9 +253,11 @@ inline std::string translate(const std::string& value, bool russian) {
         return "ФИЛЬТР: " + translate(value.substr(8), true);
     if (value.compare(0, 6, "SORT: ") == 0)
         return "СОРТИРОВКА: " + translate(value.substr(6), true);
-    if (value.compare(0, 7, "PLAYER: ") == 0)
+    // These prefixes are 8 characters long; comparing only 7 matched the
+    // wrong strings and dropped a character from the remainder.
+    if (value.compare(0, 8, "PLAYER: ") == 0)
         return "ИГРОК: " + value.substr(8);
-    if (value.compare(0, 7, "SEARCH: ") == 0)
+    if (value.compare(0, 8, "SEARCH: ") == 0)
         return "ПОИСК: " + value.substr(8);
     if (value.compare(0, 6, "THEME ") == 0)
         return "ТЕМА " + value.substr(6);
