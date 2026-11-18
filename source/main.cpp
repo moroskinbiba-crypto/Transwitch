@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -4416,8 +4417,43 @@ void touchInput(const SDL_Event&e) {
 } // namespace
 
 int main(int,char**) {
-    const Result sdMountRc = fsdevMountSdmc();
-    if(R_SUCCEEDED(sdMountRc))sdMounted=true;
+    // libnx normally mounts sdmc during __libnx_init(), before main(). Calling
+    // fsdevMountSdmc() again fails because a device with the same name already
+    // exists; the old code treated that expected condition as "no SD card".
+    // Reuse and probe the pre-mounted device first, and only mount when absent.
+    Result sdMountRc = 0;
+    const bool sdWasAlreadyMounted =
+        fsdevGetDeviceFileSystem("sdmc") != nullptr;
+    int sdProbeErrno = 0;
+    auto probeSdRoot = [&]() {
+        struct statvfs probe{};
+        errno = 0;
+        const int rc = statvfs("sdmc:/", &probe);
+        sdProbeErrno = rc == 0 ? 0 : errno;
+        return rc == 0;
+    };
+
+    if (sdWasAlreadyMounted) {
+        sdMounted = probeSdRoot();
+        if (!sdMounted) {
+            // The registered device may refer to a card removed between
+            // libnx startup and main(). Detach that stale handle and retry
+            // the normal mount once; never mount over an existing device.
+            const int unmountRc = fsdevUnmountDevice("sdmc");
+            if (unmountRc == 0) {
+                sdMountRc = fsdevMountSdmc();
+                if (R_SUCCEEDED(sdMountRc)) sdMounted = probeSdRoot();
+            }
+        }
+    } else {
+        sdMountRc = fsdevMountSdmc();
+        if (R_SUCCEEDED(sdMountRc)) sdMounted = probeSdRoot();
+        // A concurrent/automatic mount between the existence check and mount
+        // is harmless: accept it after verifying the actual SD root.
+        if (!sdMounted && fsdevGetDeviceFileSystem("sdmc") != nullptr)
+            sdMounted = probeSdRoot();
+    }
+
     desknx::diag::Initialize(sdMounted);
 #ifdef DESKNX_SYSTEM_APPLET
     constexpr const char* buildMode = "system-applet";
@@ -4426,13 +4462,14 @@ int main(int,char**) {
 #endif
     const AppletType appletType = appletGetAppletType();
     desknx::diag::Write("session", "start",
-        "mode=%s applet_type=%u application_mode=%d sd_mounted=%d sd_mount_rc=0x%08X",
+        "mode=%s applet_type=%u application_mode=%d sd_mounted=%d sd_pre_mounted=%d sd_probe_errno=%d sd_mount_rc=0x%08X",
         buildMode, static_cast<unsigned int>(appletType),
         appletType == AppletType_Application ? 1 : 0,
-        sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
+        sdMounted ? 1 : 0, sdWasAlreadyMounted ? 1 : 0,
+        sdProbeErrno, static_cast<unsigned int>(sdMountRc));
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){
         desknx::diag::Write("startup", "sdl_init_failed", "error=%s", SDL_GetError());
-        if(sdMounted) fsdevUnmountDevice("sdmc");
+        
         return 1;
     }
     desknx::diag::Write("startup", "sdl_init_ok", "sdl_version=%u.%u.%u",
@@ -4441,14 +4478,14 @@ int main(int,char**) {
     window=SDL_CreateWindow("Transwitch Launcher",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
     if(!window){
         desknx::diag::Write("startup", "window_create_failed", "error=%s", SDL_GetError());
-        SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 2;
+        SDL_Quit();return 2;
     }
     desknx::diag::Write("startup", "window_created", "logical_width=%d logical_height=%d", SW, SH);
     renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
     if(!renderer)renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
     if(!renderer){
         desknx::diag::Write("startup", "renderer_create_failed", "error=%s", SDL_GetError());
-        SDL_DestroyWindow(window);SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 3;
+        SDL_DestroyWindow(window);SDL_Quit();return 3;
     }
     SDL_RendererInfo rendererInfo{};
     const int rendererInfoRc = SDL_GetRendererInfo(renderer, &rendererInfo);
@@ -4778,6 +4815,6 @@ int main(int,char**) {
     if (window) SDL_DestroyWindow(window);
     SDL_Quit();
     desknx::diag::Write("session", "end", "normal_exit=1");
-    if(sdMounted)fsdevUnmountDevice("sdmc");
+    
     return 0;
 }

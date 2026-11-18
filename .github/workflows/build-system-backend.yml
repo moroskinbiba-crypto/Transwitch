@@ -66,6 +66,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test production SD homebrew scanner and partial-tree recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nro_scanner_test.cpp -o /tmp/desknx-nro-scanner-test
+          /tmp/desknx-nro-scanner-test
+
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test

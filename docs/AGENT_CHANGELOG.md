@@ -399,3 +399,29 @@ The native standalone build has now completed both CI workflows:
 - Validation: host tests and CI must run after commit. Real Switch checks remain necessary for 2×3 resizing, moving across occupied cells/desktops, font-switch frame pacing, and controller-applet timing.
 
 - CI follow-up: updated the HomeNX grid-edit regression test so 2×3 is treated as a supported portrait footprint; 4×1 remains rejected. The earlier failure was an obsolete assertion, not a product-code defect.
+
+
+## 2026-11-18 — SD mount recovery and homebrew catalogue performance
+
+### Root cause: SD card was already mounted by libnx
+
+- The native launcher called `fsdevMountSdmc()` again from `main()`. libnx's runtime mounts SDMC before entering `main()`; a second mount under the same device name is rejected. The launcher treated that expected duplicate-mount result as a missing SD card, left `sdMounted=false`, and then refused all workspace/settings/history writes guarded by that flag.
+- Startup now checks `fsdevGetDeviceFileSystem("sdmc")` first and verifies the mounted root with `statvfs("sdmc:/")`. It mounts only when no device exists; if a pre-registered handle cannot access the root, it detaches the stale handle and retries once.
+- Removed the launcher's manual SD unmounts from normal/error returns. libnx owns filesystem teardown and performs `fsdevUnmountAll()` during its exit path. The diagnostics record whether SD was already mounted and the probe errno.
+
+### Homebrew discovery and scan safety
+
+- Replaced the depth-3, error-swallowing NRO walk with a tested scanner that searches up to eight nested directories, handles uppercase `.NRO`, reports inaccessible subtrees and root failures, and caps the total catalogue at 512 files.
+- Where the directory API provides entry types, ordinary files no longer trigger an individual `stat()` IPC; only unknown entries and NRO files need metadata queries.
+- A failed/partial SD walk is no longer treated as an empty valid inventory and cannot overwrite `cache/catalogue.tsv`. Still-valid cached NRO shortcuts remain visible while successfully discovered new NROs are merged in. Homebrew scanning also proceeds when NS is unavailable.
+- Added `tests/nro_scanner_test.cpp` and enabled it in the regular build and experimental HOME backend workflows.
+
+### UI/catalogue CPU work
+
+- Cached transliterated UTF-8 search keys for titles, paths and the current query. Progress updates from the background scanner no longer redo the same Cyrillic normalization for every previously seen catalogue row.
+- The scan log now records completeness, directories/entries visited, inaccessible subtrees, depth skips, item limit and first filesystem error.
+
+### Validation
+
+- Host regression test covers root-level and nested NROs, case-insensitive extension handling, exclusion of DeskNX's internal folder/hidden folders, depth-limit reporting, and root-open failure.
+- CI must confirm both native and HOME applet compilation. Hardware validation is still required to confirm SD save/restore and real SD-card scan time on Switch.
