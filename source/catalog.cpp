@@ -845,10 +845,36 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     // from the previous snapshot below.
     if (nroScan.complete && !forceRefresh && nsReady &&
         result.nsErrorCode == 0 && ReadCache(sig, result)) {
+        // The catalogue metadata and artwork are stable, but installed content
+        // sizes can change when patches or DLC are installed without changing
+        // the base title ID. Refresh only the small NS size records on cache
+        // hits; keep the previous value when the service returns no data.
+        size_t refreshedSizes=0, retainedSizes=0;
+        for(auto& item:result.items) {
+            if(item.kind!=Kind::Game||!desknx::model::isTitleId(item.data))continue;
+            char* end=nullptr;
+            const unsigned long long id=std::strtoull(item.data.c_str(),&end,16);
+            if(end!=item.data.c_str()+item.data.size()||id==0)continue;
+            NsApplicationOccupiedSize occupied{};
+            const Result occupiedRc=nsCalculateApplicationOccupiedSize(
+                static_cast<u64>(id),&occupied);
+            if(R_FAILED(occupiedRc)) { if(item.occupiedSizeAvailable)++retainedSizes; continue; }
+            const auto decoded=desknx::application_size::decode(
+                reinterpret_cast<const uint8_t*>(&occupied),sizeof(occupied));
+            if(decoded.available) {
+                item.occupiedSizeBytes=decoded.bytes;
+                item.occupiedSizeAvailable=true;
+                ++refreshedSizes;
+            } else if(item.occupiedSizeAvailable) {
+                ++retainedSizes;
+            }
+        }
+        if(refreshedSizes>0) (void)WriteCache(sig,result);
         // Volatile play statistics are fetched only for the selected game.
         result.complete = true;
-        LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu elapsed=%llds",
+        LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu sizes_refreshed=%zu sizes_retained=%zu elapsed=%llds",
                       result.gameCount, result.nroCount, result.items.size(),
+                      refreshedSizes,retainedSizes,
                       static_cast<long long>(std::time(nullptr) - scanStarted));
         report(true);
         return result;

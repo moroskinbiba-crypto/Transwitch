@@ -30,10 +30,12 @@ inline Result decode(const std::uint8_t* data,std::size_t size) {
     std::uint64_t total=0;
     for(std::size_t i=0;i<EntityCount;++i) {
         const std::uint8_t* entity=data+i*EntitySize;
-        const std::uint64_t components=
-            readLe64(entity+0x08)+readLe64(entity+0x10)+readLe64(entity+0x18);
-        if(components>std::numeric_limits<std::uint64_t>::max()-total)return {};
-        total+=components;
+        const std::uint64_t values[]={readLe64(entity+0x08),
+            readLe64(entity+0x10),readLe64(entity+0x18)};
+        for(const std::uint64_t value:values) {
+            if(value>std::numeric_limits<std::uint64_t>::max()-total)return {};
+            total+=value;
+        }
     }
     return {total>0,total};
 }

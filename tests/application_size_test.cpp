@@ -22,6 +22,10 @@ int main() {
     assert(!desknx::application_size::decode(raw.data(),0x7F).available);
     std::array<std::uint8_t,0x80> empty{};
     assert(!desknx::application_size::decode(empty.data(),empty.size()).available);
+    std::array<std::uint8_t,0x80> overflow{};
+    writeLe64(overflow.data()+0x08,UINT64_MAX);
+    writeLe64(overflow.data()+0x10,1);
+    assert(!desknx::application_size::decode(overflow.data(),overflow.size()).available);
     std::puts("application_size_test: ok");
     return 0;
 }

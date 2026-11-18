@@ -35,8 +35,10 @@ void testOnlineAndOffline() {
     assert(feed.total(T0) == 12);
     assert(feed.presenceOf(0x0100000000001000ull, T0) == Presence::Online);
     assert(feed.presenceOf(0x010000000000100Bull, T0) == Presence::Offline);
-    // unknown title: offline because the snapshot covers all titles
-    assert(feed.presenceOf(0xFFFFFFFFFFFFFF01ull, T0) == Presence::Offline);
+    assert(feed.hasTitleSnapshot(0x0100000000001000ull,T0));
+    assert(feed.hasTitleSnapshot(0x010000000000100Bull,T0));
+    // An untracked title is not a zero-player claim.
+    assert(!feed.hasTitleSnapshot(0xFFFFFFFFFFFFFF01ull,T0));
 }
 
 void testSnapshotExpires() {
@@ -67,6 +69,7 @@ void testDisabledHidesEverything() {
     feed.setEnabled(false);
     // the snapshot is wiped on disable
     assert(!feed.hasTotal(T0));
+    assert(!feed.hasTitleSnapshot(0x0100000000001000ull,T0));
     assert(feed.presenceOf(0x0100000000001000ull, T0) == Presence::Unknown);
     // cannot apply while disabled
     assert(!feed.apply(makeSnapshot(1, 0, 1), T0));

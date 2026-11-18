@@ -475,3 +475,16 @@ The native standalone build has now completed both CI workflows:
 - Improved the expanded storage layout so the free-space headline no longer overlaps the game, Homebrew, RAM and SD-total rows.
 - Validation: native NRO packaging and the regular DeskNX host/HOME build workflows passed on 4353555. The SD-card package artifact was generated. The separate experimental system-backend workflow was still running at the last check; physical Switch testing remains necessary for Joy-Con readings, Atmosphère query availability, and visual spacing on all tile sizes.
 - Commits: d056253 (widget data sources and installed-version cache), dcaf35b (source integration correction), 4353555 (update-status confidence and expanded layout).
+
+
+## 2026-11-18 — Game library metadata, per-game rename/icons and settings carousels
+
+- Added installed application occupied size from nsCalculateApplicationOccupiedSize. The raw four-entry NS structure is decoded platform-neutrally; app + patch + add-on sizes are totalled across storage entities. A host test covers valid entries, undersized buffers, empty values and integer overflow.
+- Expanded the full library game's detail panel with installed size, the installed control.nacp DisplayVersion, and fresh per-title Nextendo online-player count. A stale feed or title absent from the snapshot is displayed as UNKNOWN, not zero. PDM playtime, launch count and last-played date remain visible.
+- Added persistent game display-name overrides in cache/game-overrides.tsv. Rename updates existing desktop shortcuts and the library view without modifying installed-game NACP metadata.
+- Added Choose icon for games. It copies a selected SD JPG/JPEG/PNG image (limited to 2 MiB) into media/game-icons/<TITLEID>.<ext>. Per-game overrides take precedence over the selected shared icon pack and survive restart.
+- Settings now has a SteamGridDB artwork API key editor. The key is saved in settings.ini as plaintext; remote search and download are not wired yet. This intentionally targets SteamGridDB, not SteamDB: SteamDB has no public API and disallows scraping.
+- Added left/right theme and accent-colour carousels. The Settings modal stays open during theme, accent, language, icon-style and API-key changes. Added explicit arrow hit targets for touch.
+- Normal add-to-workspace library now defaults to the Games filter. The dedicated widget picker retains its Widgets filter.
+- Updated icon-pack documentation, per-game file naming, UI guidelines and feature descriptions.
+- Validation is pending CI for this commit; physical Switch testing is required for NS occupied-size values, Nextendo count freshness, icon assignment/priority, rename persistence, and touch/gamepad settings controls.
