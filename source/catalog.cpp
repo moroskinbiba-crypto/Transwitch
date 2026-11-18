@@ -669,23 +669,23 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                   static_cast<unsigned int>(result.nsErrorCode));
     result.gameCount = games.size();
 
-    // Scan homebrew independently of NS availability. A missing Horizon NS
-    // service must not hide newly installed NROs from the general library.
+    // The NRO scanner runs after the installed-game seed is published so a
+    // slow SD card walk never delays the first usable library snapshot.
     std::vector<NroFile> nros;
-    const desknx::nro_scan::Report nroScan =
-        desknx::nro_scan::Collect("sdmc:/switch", nros);
-    std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
-        return a.path < b.path;
-    });
-    LogDiagnostic("nro_scan root=switch complete=%d count=%zu dirs=%zu entries=%zu inaccessible=%zu depth_skips=%zu limit=%d first_error=%d",
-        nroScan.complete ? 1 : 0, nros.size(), nroScan.directoriesVisited,
-        nroScan.entriesVisited, nroScan.inaccessibleDirectories,
-        nroScan.directoriesBeyondDepth, nroScan.limitReached ? 1 : 0,
-        nroScan.firstError);
+    desknx::nro_scan::Report nroScan{};
 
     // Keep the last-known-good game list when NS is offline, but merge newly
     // discovered NROs so homebrew discovery does not depend on NS availability.
     if ((!nsReady || result.nsErrorCode != 0) && warmCacheAvailable) {
+        nroScan = desknx::nro_scan::Collect("sdmc:/switch", nros);
+        std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
+            return a.path < b.path;
+        });
+        LogDiagnostic("nro_scan root=switch complete=%d count=%zu dirs=%zu entries=%zu inaccessible=%zu depth_skips=%zu limit=%d first_error=%d",
+            nroScan.complete ? 1 : 0, nros.size(), nroScan.directoriesVisited,
+            nroScan.entriesVisited, nroScan.inaccessibleDirectories,
+            nroScan.directoriesBeyondDepth, nroScan.limitReached ? 1 : 0,
+            nroScan.firstError);
         std::unordered_map<std::string, bool> knownNros;
         for (const auto& item : result.items)
             if (item.kind == Kind::Nro) knownNros.emplace(item.data, true);
@@ -779,6 +779,19 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             })),
         result.nroCount);
     report(false);
+
+    // The initial IDs and widgets are now visible to the UI. Perform the
+    // directory walk only after that seed has been published, then use the
+    // complete inventory for cache validation and metadata resolution.
+    nroScan = desknx::nro_scan::Collect("sdmc:/switch", nros);
+    std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
+        return a.path < b.path;
+    });
+    LogDiagnostic("nro_scan root=switch complete=%d count=%zu dirs=%zu entries=%zu inaccessible=%zu depth_skips=%zu limit=%d first_error=%d",
+        nroScan.complete ? 1 : 0, nros.size(), nroScan.directoriesVisited,
+        nroScan.entriesVisited, nroScan.inaccessibleDirectories,
+        nroScan.directoriesBeyondDepth, nroScan.limitReached ? 1 : 0,
+        nroScan.firstError);
 
     result.nroCount = nros.size();
     const Signatures sig = MakeSignatures(games, nros);
