@@ -316,3 +316,17 @@ CI и физическая проверка для этого изменения
 ### Проверка
 - Ожидается новая CI сборка после этого cutover. Предыдущие green runs относились к WebKit standalone artifact плюс native HOME applet cross-build и не являются проверкой нового native NRO.
 - До получения green CI и Switch hardware smoke test не распространять сборку как проверенную. На железе обязательны cold start, каталог, иконки, управление, запуск игры, возврат и лог Atmosphère при возможном сбое.
+
+## Native NRO cutover — CI result, 18 November 2026
+
+The native standalone build has now completed both CI workflows:
+- Run 44256681598 — Build native Nintendo Switch NRO: success. make -j2 compiled and linked the SDL2/C++ launcher; NACP validation passed; RomFS and WebKit markers were absent; artifact DeskNX-native-nro uploaded (4,519,591 bytes).
+- Run 44256681489 — Build DeskNX: success. All host tests passed; native NRO build passed; native HOME library applet build passed; SD-card package and applet artifact uploads passed.
+- Available build artifacts from run 44256681489: DeskNX-native-nro, DeskNX-sdcard, DeskNX-menu-applet. The menu applet artifact is for the separate experimental HOME integration and is not the standalone install target.
+- Corrected PR #40 title/body to describe both the native build cutover and HomeNX icon streaming.
+
+### Current state and explicit limitations
+- DeskNX.nro is now built from production source/*.cpp, not src-switch/main.cpp.
+- The standalone build does not launch a browser/WebKit applet, website, local web server, qlaunch backend or another NRO. It is one native process; bounded SDL worker threads execute catalogue, icon decoding, Nextendo polling and on-demand play-stat work inside that process.
+- The optional projects/sSystem qlaunch integration remains separate and experimental. It is neither linked into nor started by the standalone NRO.
+- CI proves compilation, linking, static native-NRO checks and host tests. It does not prove that the latest NRO starts successfully on a physical Switch or that the previous Atmosphère crash is resolved. Required hardware checks: cold start, SDL renderer, game catalogue, icon decode, navigation, game launch/return and Atmosphère crash report inspection if it fails.
