@@ -104,6 +104,12 @@ public:
         return hasFreshSnapshot(nowMs) ? m_snapshot.total : 0u;
     }
 
+    unsigned playersFor(TitleId titleId, std::uint64_t nowMs) const {
+        if (!hasFreshSnapshot(nowMs)) return 0u;
+        const auto found = m_snapshot.perTitle.find(titleId);
+        return found == m_snapshot.perTitle.end() ? 0u : found->second;
+    }
+
     // The poll timer: true when the caller should fetch again.
     bool refreshDue(std::uint64_t nowMs) const {
         if (!m_enabled) return false;
