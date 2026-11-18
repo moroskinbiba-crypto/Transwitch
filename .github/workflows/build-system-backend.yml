@@ -27,6 +27,7 @@ on:
       - "README.md"
       - "source/**"
       - "Makefile"
+      - "Makefile.switch"
       - ".github/workflows/build-system-backend.yml"
 
 concurrency:
@@ -119,7 +120,7 @@ jobs:
           cp -a "$ATMOSPHERE_DIR/libraries/libvapours/include/." "$DEVKITPRO/AtmosphereLibs/include/"
           find "$ATMOSPHERE_DIR/libraries/libstratosphere" -type f -name "*.a" -exec cp -f {} "$DEVKITPRO/AtmosphereLibs/lib/" \;
 
-      - name: Build standalone NRO and library applet
+      - name: Build native standalone NRO and library applet
         run: |
           make -j2
           make -C projects/DeskNXMenu -j2 LIBNX="$SL_LIBNX"

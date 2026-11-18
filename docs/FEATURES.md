@@ -1,79 +1,53 @@
-# Launcher feature inventory
+# DeskNX native feature inventory
 
-Where each launcher capability lives today, what it needs to reach a console, and what
-disappears if nobody ports it. HomeNX paths refer to the pinned upstream
-(`ad3333m/homenx@8756d38`), Transwitch paths to this repository.
+This document describes the native implementation in `source/main.cpp` and supporting modules. The old React/WebKit prototype is not part of the project build and is no longer shipped.
 
-## 1. What actually works on a console today
+## 1. Standalone application
 
-`DeskNX.nro` is a web-shell: `src-switch/main.cpp` opens the React bundle inside the Horizon
-OS WebKit applet. So on hardware you get **the visuals and the input**, nothing more.
+`DeskNX.nro` is compiled from the production SDL2/C++ UI. The NRO owns its window, renderer, input loop, catalogue and launch requests. It does not open a WebKit applet and does not depend on HTML, JavaScript, React, mock catalogue data or RomFS assets.
 
-| Works | Does not work |
+The standalone target is one Homebrew application. Its catalogue, image decoder, Nextendo feed and on-demand PDM query use internal worker threads so file/network/service work does not stall the render loop.
+
+## 2. Native UI and desktop model
+
+| Feature | Native implementation |
 |---|---|
-| Drawing the home screen, switching desktops, drag/resize/remove tiles, editing names and wallpapers | Reading installed games (no `ns:` access) |
-| Touch and D-pad navigation | Launching a game or an NRO |
-| Persisting the layout to the webview's `localStorage` | Reading `pdm:qry` playtime, `psm` battery, temperatures |
-| | Album, controllers, profiles as *system* objects |
+| Multiple independent workspaces (up to 12) | `source/main.cpp`, `source/Layout.cpp`, `include/desknx/Model.hpp` |
+| 6 × 3 desktop with explicit empty cells | Native workspace/tile model |
+| Move, drag, resize and remove tiles | Native controller/touch input handlers |
+| Switch desktop and remember last active desktop | Layout plus active-workspace sidecar |
+| Library of installed games | NS enumeration, ApplicationView and NACP in `source/catalog.cpp` |
+| Homebrew NRO discovery | SD filesystem scan in `source/catalog.cpp` |
+| Native game names and identifiers | NACP/control data, cache and fallback metadata |
+| Themes, wallpaper, fonts, icon packs | Native settings and SDL resource loaders |
+| Clock, battery, system, recent, storage and calendar widgets | Native tile renderers |
+| Playtime / launch statistics | PDM query, loaded on demand for the selected game |
+| Nextendo online player counts | `source/NextendoPlayers.cpp`, card badges and total indicator |
+| Background artwork decode | `source/IconCache.hpp`, bounded SDL worker and render-thread texture uploads |
 
-Everything below marked "simulated" is real code with a mock data source.
+## 3. HomeNX-derived mechanisms
 
-## 2. Implemented in the web UI
+Already present or being ported:
+- Nextendo online presence endpoint selection and per-title merge strategy.
+- Delayed polling and expiry semantics; failed requests do not become fabricated zero counts.
+- Asynchronous icon file lookup/decode with bounded queues and LRU texture cache.
+- HomeNX workspace/provider and grid adapter abstractions with host tests.
+- Separate lifecycle/backend components for the optional qlaunch integration.
 
-| Feature | Where | State on hardware |
-|---|---|---|
-| Up to 12 independent workspaces, 6×3 grid, five tile shapes, empty cells as state | `src/App.tsx`, `src/utils/desknxLayout.ts`, `src/components/DeskNXGrid.tsx` | works (visual) |
-| Drag to move, resize handles, remove, move tile to another desktop | `DeskNXGrid.tsx`, `App.tsx` | works (visual) |
-| Per-desktop wallpaper, fit, artwork mode, label opacity, accent colour, blur/brightness | `UnifiedDeskCustomizer.tsx`, `desknxSettings.ts` | works (visual) |
-| Widgets: clock, battery, storage, recent activity, system tools | `src/components/Widgets.tsx` | renders; data is mock |
-| Themes, fonts, font scaling | `SettingsModal.tsx`, `desknxSettings.ts` | works (visual) |
-| Dock, app drawer, top/bottom bars, Joy-Con overlay | `BottomBar.tsx`, `UlauncherHub.tsx`, `JoyconOverlay.tsx` | works (visual) |
-| User profiles with separate desktops | `UserProfileModal.tsx` | works (visual, `localStorage`) |
-| Album viewer, controller test, diagnostics, settings import/export | `AlbumModal.tsx`, `ControllersModal.tsx`, `DiagnosticsModal.tsx` | simulated |
-| Catalogue of installed games and homebrew | `src/data/mockCatalog.ts` | simulated — 24 demo entries |
-| Launch flow with play statistics | `AppLaunchModal.tsx`, `utils/playStats.ts` | simulated (statistics no longer invented, see #12) |
-| UI sound effects | `SoundEngine` in `src/data/mockCatalog.ts` — WebAudio oscillators | beeps from the synthesizer, no audio files |
-| Hardware bridge | deleted in #14 (was `switchHardwareService.ts`) | never existed |
+Remaining candidates:
+- consolidate SteamGridDB covers and system icons behind one artwork scheduler;
+- prioritize selected/visible tiles and prefetch adjacent tiles;
+- make the tested workspace Provider/FileStore the single production persistence API;
+- compare grid focus behavior for differently sized tiles;
+- lock screen, MTP, safe updater, music and social modules as optional independent features.
 
-## 3. HomeNX subsystems available to port
+## 4. Separate experimental HOME integration
 
-| Feature | HomeNX source | What it needs | Cost |
-|---|---|---|---|
-| **Cover art: SteamGridDB** | `projects/menu/src/SteamGridDb{Manager,Backdrop,PickerScreen,Tab}.cpp`, `CardsActivity.cpp` (`steamGridDbKey`, `steamGridDbFind`) | API key from steamgriddb.com → Settings > Look; fallback GameTDB → eShop banner; cache keyed by title ID | medium — HTTP + cache + picker UI |
-| **Online players (Nextendo/Prelude)** | `CardsActivity.cpp` (`m_players`, per-minute refresh, green dots, total pill, Settings toggle), `openNextendo(mode)` | `nextendo.nro` on SD, network to `https://nextendo.network`, Prelude switches network and restarts the console | medium — background fetch + opt-out |
-| **Music player** | `projects/cards/src/Audio.{hpp,cpp}` (SDL_mixer): playlist from `sdmc:/switch/SwitchU/sounds/wiiu/music` (`.mp3`/`.ogg`), shuffle, repeat, skip, volume, fade before launching a game, pause on sleep/applet, position/duration, 48-band spectrum for a visualiser | SDL_mixer in the portlibs, one decode buffer in memory | high — audio device + thread + UI |
-| **Quick Settings** | `QuickSettingsOverlay.cpp` | overlay rendering, volume/brightness/sleep actions | low — pure UI over existing APIs |
-| **Notifications** | `NotificationBell/Panel/Log.cpp` | event sources (downloads, screenshots, friends) | medium |
-| **Lock screen** | `LockScreen.cpp` | background + input gate before the grid | low |
-| **Profile carousel** | `ProfileCarouselScreen.cpp` | account service | medium |
-| **Friends / Discord / Miis** | `SocialScreen.cpp` + `friends/FriendStore.hpp`, `social/DiscordService.hpp`, `social/MiiStore.hpp` | friends service, Discord RPC, Mii data | high |
-| **Theme shop** | `ThemeShopScreen.cpp`, `ThemeCatalogClient.cpp`, `ThemeHttp.cpp`, `ThemePackageInstaller.cpp` | HTTP, package install, theming pipeline | high |
-| **Folders, zoom** | `FolderStore.cpp`, `FolderZoom.cpp`, `FolderOptionsScreen.cpp` | folder model + animation | medium |
-| **Widgets (native)** | `WidgetStore.cpp`, `WidgetModel.cpp`, `BatteryWidget.cpp`, `DateTimeWidget.cpp`, `TitlePillWidget.cpp` | widget model already mirrored by Transwitch | low |
-| **Achievements** | `projects/achievements/` (packs per title, e.g. `packs/0100000000010000.txt`) | memory-watch per title, Tesla overlay | high, entirely separate app |
-| **Bluetooth audio sink (A2DP)** | `projects/a2dp-sink/` | BT stack, profile work | very high, experimental |
-| **Game cards / manager / updater** | `projects/cards`, `projects/manager`, `projects/updater` | their own frontends | high |
+The standalone NRO does not require `projects/sSystem`, `projects/hbloader` or the HOME library applet. These are only for a separate experimental qlaunch-replacement flow. Do not install the system override based solely on successful compilation; it needs hardware recovery and lifecycle tests for the exact HOS/Atmosphère combination.
 
-Note: HomeNX's music, covers and player counts all live in its **cards** app, not necessarily in
-the HOME menu — porting them means porting the data layer, then drawing it in our own UI.
+## 5. Not implemented / not claimed
 
-## 4. What disappears unless deliberately ported
-
-| At risk | Why |
-|---|---|
-| Web-only interaction polish — toasts, transitions, CSS effects | React/CSS do not exist in the `nxui` path; each becomes native drawing code or is lost |
-| The demo catalogue (`mockCatalog.ts`) | Only the WebKit path uses it. Useful for design work, dead weight in the native build |
-| Album / controller / profile screens as currently written | They are simulated views; the native versions must talk to real services |
-| The 6×3 desktop model itself | Safe — it is already mirrored natively (`Model.hpp`, workspace layer from #13) and guarded by the tile-contract check |
-| `sound` module (synthesised beeps) | Replaced by HomeNX's real sound set from the SD card, or lost if nobody wires audio |
-
-## 5. Recommended order
-
-1. **SteamGridDB covers** and **Nextendo players** — highest perceived value, both are pure
-   network + cache work and do not touch the system lifecycle. They need Phase 2's native data
-   path first (see `docs/HOMENX_FRONTEND_PLAN.md` §4a).
-2. **Quick Settings, lock screen, native widgets** — cheap UI wins on top of what already exists.
-3. **Music player** — big feature, but needs SDL_mixer and an audio device in the menu process;
-   do it after the menu builds reliably as a HOME applet.
-4. **Notifications, folders, theme shop** — medium, depend on event sources that do not exist yet.
-5. **Achievements, A2DP, social** — separate products; do not let them block the launcher.
+- Donor-title Homebrew Application Mode is intentionally disabled.
+- A successful CI build is not a hardware runtime validation.
+- Online presence is unavailable while offline or when the endpoint cannot be reached; no fake value is shown.
+- MP4/video wallpaper, achievements, MTP, Discord, Spotify/music and theme shop are not considered complete features.

@@ -239,3 +239,94 @@ CI и физическая проверка для этого изменения
 - Пользовательские логи относятся к запуску до фиксов debounce/сокращения SD commit и до текущего патча API; они фиксируют реальные задержки при множественных синхронных записях.
 - Патч не может подтвердить запуск игры на реальном устройстве. До нового прогона на Switch нельзя считать проблему runtime закрытой. Если новый лог заканчивается на \`applet_launch_request_begin\`, запрос не вернулся; если есть \`applet_launch_request_end\`, код результата укажет, отклонила ли его система.
 - Отдельная проверка standalone-ветки CI — это компиляция нативных источников, а не новый install-ready standalone NRO. Стандартный \`DeskNX.nro\` workflow по-прежнему собирает WebKit wrapper.
+
+
+## Запись работ — 18 ноября 2026: перенос архитектуры HomeNX IconStreamer
+
+Рабочая ветка: `port/homenx-async-icon-streamer`.
+База: `16594497ca8586115898b5a274826798ddb1e81c` (main).
+Референс HomeNX: `63205f0d2ad855822ed9f3c5c3201d4bd6245505` (master).
+
+### Изменения
+
+Файл: `source/IconCache.hpp`.
+
+- Синхронные `stat()`, проверка заголовка, `IMG_Load()` и декодирование изображения удалены из пути `get()`, вызываемого отрисовкой.
+- Добавлена одна фоновая SDL-служба с низким приоритетом для поиска файла, чтения, проверки размеров и декодирования.
+- Результат передаётся в ограниченную очередь RGBA-изображений; создание SDL_Texture и освобождение GPU-ресурсов остаются в render thread.
+- За один кадр загружается не более одной новой текстуры.
+- Очередь запросов ограничена 48 элементами, очередь готовых изображений — двумя результатами; это ограничивает накопление CPU-side RGBA-буферов.
+- GPU-кэш ограничен 64 текстурами и расчётным бюджетом 32 MiB, вытеснение выполняется по LRU.
+- Смена icon pack увеличивает generation, сбрасывает старые очереди и не блокирует UI ожиданием декодера.
+- Сохраняются проверки JPG/PNG, верхний лимит 1024×1024 и 2 MiB на сжатый файл; пользовательские файлы icon pack не удаляются при ошибке.
+- При отсутствии или медленной загрузке изображения плитка сразу остаётся интерактивной и показывает прежний placeholder.
+
+Архитектурный референс: HomeNX `projects/menu/src/launcher/IconStreamer.cpp` и `AppListLoader.cpp`. Реализация адаптирована под SDL2 и существующую модель текстур Transwitch; nxui/GPU-классы HomeNX напрямую не подключались.
+
+### Проверки и ограничения
+
+- Изменение внесено в отдельную ветку, main не изменён.
+- Ожидается PR CI: host tests, standalone NRO compile, production HOME applet compile и native standalone compile-check.
+- На момент записи cross-build и тесты на физической консоли ещё не подтверждены.
+- Следующий обязательный тест на Switch: быстрый проход по 40–60 плиткам, повторная навигация, смена icon pack, холодный запуск без сети, длительная работа и возврат из игры.
+- Бюджет 32 MiB — консервативный учёт размеров RGBA-текстур, а не точный замер выделений GPU-драйвера. Он требует измерения на железе.
+- Очередь ограничивает накопленные результаты, но декодер всё ещё может временно выделять память SDL_image при обработке одного файла.
+
+
+## Исправление CI — 18 ноября 2026: очистка устаревшего поля IconCache
+
+- После перехода на асинхронную очередь путей поле `resolvedPaths_` больше не существует, но его очистка осталась в `shutdown()`.
+- Cross-build HOME applet обнаружил это на этапе компиляции: `source/IconCache.hpp:120:9: error: 'resolvedPaths_' was not declared in this scope`.
+- Удалён единственный устаревший вызов. Поведение очередей, worker thread и жизненного цикла текстур не менялось.
+- До повторного успешного cross-build эту ветку нельзя считать собирающейся; запуск на Switch после этой правки ещё не подтверждён.
+
+
+## Проверка пользовательских логов и CI — 18 ноября 2026
+
+### Результат cross-build после фикса
+- Коммит фикса: `5ac6eacaae678ca5b770c2f89064a369cef02088`; запись в changelog: `b303741d257d9ed8f62ce529f6acb453807c09eb`.
+- PR workflow `Build DeskNX`, run `44252212096`: **success**. Успешно скомпилированы production HOME library applet и native standalone launch path; все host tests и упаковочные шаги прошли.
+- Workflow `Build Nintendo Switch NRO`, run `44252212151`: **success**. Это отдельная сборка WebKit wrapper; её успех не проверяет нативный SDL IconCache.
+- В первом прогоне HOME applet build падал на оставшемся `resolvedPaths_.clear()` в `IconCache::shutdown()`; ссылка удалена. Ошибка исправлена и повторная сборка прошла.
+- Switch runtime и Atmosphère crash stability не подтверждены — cross-build не заменяет тест на реальной консоли.
+
+### Разбор предоставленных логов
+- `applet_type=0 is_applet=0` означает, что NRO запущен как Application, не в Album applet mode.
+- `web_offline_create rc=0` и первый `web_show_end rc=0`, затем `libnx_exit orderly_exit=1` показывают успешное создание offline WebKit page и штатный возврат из `webConfigShow()` в этой сессии.
+- Во второй и третьей сессиях лог заканчивается на `web_show_begin`; без `web_show_end` неизвестно, вернулся ли вызов. Сам по себе этот фрагмент не содержит Atmosphère fatal code/report и не доказывает аварийное завершение.
+- Эти метки относятся к `src-switch/main.cpp` — standalone WebKit host. Они не относятся к `source/main.cpp`, SDL renderer или новому worker в `source/IconCache.hpp`.
+- Чтобы подтвердить конкретный Atmosphère crash, нужен fatal report / код ошибки из экрана Atmosphère и совпадающие по времени `diagnostics.log*`. Не маркировать runtime-проблему закрытой по одному этому фрагменту.
+
+
+## Исправление неверного standalone build target — 18 ноября 2026
+
+### Что было неверно
+- `make` собирал `src-switch/main.cpp`, который открывал HTML через `webOfflineCreate()` и `webConfigShow()`.
+- Полноценный native SDL2 launcher уже находился в `source/main.cpp`, но в standalone target он не попадал. Он использовался HOME library applet и compile-only проверкой.
+- Поэтому пользовательский журнал с `web_show_begin/end` был журналом WebKit wrapper, а не native launcher. Это расхождение возникло из-за неправильной точки входа сборки.
+
+### Исправлено в native-only cutover
+- Root `Makefile.switch` теперь компилирует production `source/*.cpp` и линкует SDL2, SDL2_image, SDL2_ttf, libcurl и libnx в самостоятельный `DeskNX.nro`.
+- Удалён WebKit entry point `src-switch/main.cpp`, React/TypeScript UI, Vite/npm toolchain, JS lockfiles и сгенерированный HTML/JS/CSS RomFS.
+- NRO больше не содержит website RomFS; проверка `scripts/check-nro-assets.py` подтверждает NACP и отклоняет RomFS/WebKit markers.
+- `build.yml` и `build-nro.yml` больше не устанавливают Node-пакеты и не собирают web client. Главный CI теперь линкует actual native standalone NRO, а не только объектный compile check.
+- HOME library applet и экспериментальный qlaunch backend оставлены как отдельный необязательный путь; самостоятельный NRO не запускает их и не нуждается в них.
+- Сохранены Nextendo, каталог, PDM и асинхронный IconCache. Их worker threads работают внутри одного DeskNX процесса; это не внешние процессы.
+
+### Проверка
+- Ожидается новая CI сборка после этого cutover. Предыдущие green runs относились к WebKit standalone artifact плюс native HOME applet cross-build и не являются проверкой нового native NRO.
+- До получения green CI и Switch hardware smoke test не распространять сборку как проверенную. На железе обязательны cold start, каталог, иконки, управление, запуск игры, возврат и лог Atmosphère при возможном сбое.
+
+## Native NRO cutover — CI result, 18 November 2026
+
+The native standalone build has now completed both CI workflows:
+- Run 44256681598 — Build native Nintendo Switch NRO: success. make -j2 compiled and linked the SDL2/C++ launcher; NACP validation passed; RomFS and WebKit markers were absent; artifact DeskNX-native-nro uploaded (4,519,591 bytes).
+- Run 44256681489 — Build DeskNX: success. All host tests passed; native NRO build passed; native HOME library applet build passed; SD-card package and applet artifact uploads passed.
+- Available build artifacts from run 44256681489: DeskNX-native-nro, DeskNX-sdcard, DeskNX-menu-applet. The menu applet artifact is for the separate experimental HOME integration and is not the standalone install target.
+- Corrected PR #40 title/body to describe both the native build cutover and HomeNX icon streaming.
+
+### Current state and explicit limitations
+- DeskNX.nro is now built from production source/*.cpp, not src-switch/main.cpp.
+- The standalone build does not launch a browser/WebKit applet, website, local web server, qlaunch backend or another NRO. It is one native process; bounded SDL worker threads execute catalogue, icon decoding, Nextendo polling and on-demand play-stat work inside that process.
+- The optional projects/sSystem qlaunch integration remains separate and experimental. It is neither linked into nor started by the standalone NRO.
+- CI proves compilation, linking, static native-NRO checks and host tests. It does not prove that the latest NRO starts successfully on a physical Switch or that the previous Atmosphère crash is resolved. Required hardware checks: cold start, SDL renderer, game catalogue, icon decode, navigation, game launch/return and Atmosphère crash report inspection if it fails.
