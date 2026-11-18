@@ -592,9 +592,15 @@ void drawWorkspaceBackground(const Workspace& desk) {
 }
 
 void refreshMediaPicker() {
+    const Uint64 started=SDL_GetTicks64();
     mediaPickerEntries.clear();
     DIR* dir=opendir(mediaPickerDirectory.c_str());
-    if(!dir){setStatus("CANNOT OPEN MEDIA FOLDER",2500);return;}
+    if(!dir) {
+        desknx::diag::Write("media","picker_scan_failed","path=%s errno=%d",
+            mediaPickerDirectory.c_str(),errno);
+        setStatus("CANNOT OPEN MEDIA FOLDER",2500);
+        return;
+    }
     while(dirent* entry=readdir(dir)) {
         const char* name=entry->d_name;
         if(!name||name[0]=='.')continue;
@@ -616,6 +622,10 @@ void refreshMediaPicker() {
         std::max(0,static_cast<int>(mediaPickerEntries.size())-1)));
     mediaPickerOffset=std::max(0,std::min(mediaPickerOffset,
         std::max(0,static_cast<int>(mediaPickerEntries.size())-12)));
+    desknx::diag::Write("media","picker_scan_complete",
+        "path=%s entries=%zu elapsed_ms=%llu",
+        mediaPickerDirectory.c_str(),mediaPickerEntries.size(),
+        static_cast<unsigned long long>(SDL_GetTicks64()-started));
 }
 
 void openMediaPicker(MediaPickerType type) {
@@ -1218,17 +1228,21 @@ void loadHistory() {
     std::vector<HistoryEntry> loaded;
     if(readHistoryFile(HISTORY_FILE,loaded)) {
         recentLaunches=std::move(loaded);
+        desknx::diag::Write("history","loaded","path=%s entries=%zu",HISTORY_FILE,recentLaunches.size());
     } else if(readHistoryFile(HISTORY_BAK_FILE,loaded)) {
         recentLaunches=std::move(loaded);
-        desknx::diag::Write("history","backup_restored","path=%s",HISTORY_BAK_FILE);
+        desknx::diag::Write("history","backup_restored","path=%s entries=%zu",HISTORY_BAK_FILE,recentLaunches.size());
         setStatus("RECENT HISTORY RESTORED FROM BACKUP",4000);
     } else {
+        desknx::diag::Write("history","load_empty","primary=%s backup=%s",
+            HISTORY_FILE,HISTORY_BAK_FILE);
         return;
     }
     if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
 }
 void saveHistory() {
     if(!sdMounted)return;
+    const Uint64 started=SDL_GetTicks64();
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     std::ofstream out(HISTORY_TMP,std::ios::binary|std::ios::trunc);
     if(!out){setStatus("RECENT HISTORY SAVE FAILED",3000);return;}
@@ -1251,8 +1265,13 @@ void saveHistory() {
             setStatus("RECENT HISTORY RENAME FAILED", 3000);
         return;
     }
-    if(!commitSdCard("history-publish"))
+    if(!commitSdCard("history-publish")) {
+        desknx::diag::Write("history","save_failed","phase=publish_commit entries=%zu",recentLaunches.size());
         setStatus("RECENT HISTORY COMMIT FAILED; BACKUP KEPT",4000);
+    } else {
+        desknx::diag::Write("history","saved","entries=%zu elapsed_ms=%llu",
+            recentLaunches.size(),static_cast<unsigned long long>(SDL_GetTicks64()-started));
+    }
 }
 void recordRecentLaunch(const Tile& tile) {
     if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;
@@ -1406,6 +1425,7 @@ bool loadActiveWorkspaceState() {
 }
 
 bool saveLayout() {
+    const Uint64 saveStarted=SDL_GetTicks64();
     drainAsyncLayoutSaver();
     if(!sdMounted) {
         setStatus("SAVE FAILED: SD CARD NOT MOUNTED",3500);
@@ -1432,6 +1452,11 @@ bool saveLayout() {
     // changed, do not rewrite every tile or rotate the full-layout backup.
     if(!mustRewritePrimary && saveActiveWorkspaceState()) {
         layoutLoaded=true;
+        size_t tileCount=0;for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
+        desknx::diag::Write("layout","saved",
+            "mode=active_marker workspaces=%zu tiles=%zu active=%d elapsed_ms=%llu",
+            desks.size(),tileCount,deskIndex,
+            static_cast<unsigned long long>(SDL_GetTicks64()-saveStarted));
         return true;
     }
 
@@ -1475,6 +1500,11 @@ bool saveLayout() {
         (void)std::remove(ACTIVE_WORKSPACE_FILE);
     }
     layoutLoaded=true;
+    size_t tileCount=0;for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
+    desknx::diag::Write("layout","saved",
+        "mode=full workspaces=%zu tiles=%zu active=%d bytes=%zu elapsed_ms=%llu",
+        desks.size(),tileCount,deskIndex,serialized.size(),
+        static_cast<unsigned long long>(SDL_GetTicks64()-saveStarted));
     setStatus("LAYOUT SAVED",1600);
     return true;
 }
@@ -1736,16 +1766,32 @@ void drainAsyncLayoutSaver() {
 }
 
 bool loadLayoutFrom(const char* path) {
+    const Uint64 started=SDL_GetTicks64();
     struct stat fileStat{};
-    if (stat(path, &fileStat) != 0 || !S_ISREG(fileStat.st_mode) ||
-        fileStat.st_size <= 0 || fileStat.st_size > 1024 * 1024) return false;
+    if (!path || stat(path, &fileStat) != 0 || !S_ISREG(fileStat.st_mode) ||
+        fileStat.st_size <= 0 || fileStat.st_size > 1024 * 1024) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_size",
+            path?path:"null");
+        return false;
+    }
     std::ifstream file(path, std::ios::binary);
-    if (!file) return false;
+    if (!file) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=open",path);
+        return false;
+    }
     std::ostringstream contents;
     contents << file.rdbuf();
-    if (file.bad()) return false;
+    if (file.bad()) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=read",path);
+        return false;
+    }
+    const std::string serialized=contents.str();
     desknx::layout::LoadResult loaded{};
-    if (!desknx::layout::parse(contents.str(), loaded)) return false;
+    if (!desknx::layout::parse(serialized, loaded)) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=parse bytes=%zu",
+            path,serialized.size());
+        return false;
+    }
     desks = std::move(loaded.workspaces);
     deskIndex = loaded.activeWorkspace;
     layoutNeedsMigration = loaded.needsMigration;
@@ -1759,6 +1805,13 @@ bool loadLayoutFrom(const char* path) {
     // even when the restored workspace contents themselves have not changed.
     layoutPrimaryNeedsRewrite=(std::string(path)!=CFG_FILE)||layoutNeedsMigration;
     selectedX = selectedY = 0;
+    size_t tileCount=0;
+    for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
+    desknx::diag::Write("layout","loaded",
+        "path=%s bytes=%zu workspaces=%zu tiles=%zu active=%d migration=%d recovered=%zu dropped=%zu elapsed_ms=%llu",
+        path,serialized.size(),desks.size(),tileCount,deskIndex,
+        layoutNeedsMigration?1:0,layoutRecoveredTiles,layoutDroppedTiles,
+        static_cast<unsigned long long>(SDL_GetTicks64()-started));
     return true;
 }
 bool loadLayout() { return loadLayoutFrom(CFG_FILE); }
@@ -2264,7 +2317,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 progress(r.y+82,percent);
             } else if(wide) {
                 label("SD CARD STORAGE",r.y+12);
-                text(storageStatsAvailable?freeSpaceText()+" GB FREE":"N/A",
+                text(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
                      left,r.y+34,t.w>=3?4:3,WHITE,right-78);
                 if(percent>=0)text(std::to_string(percent)+"% USED",
                     right-70,r.y+49,1,MUTED,right);
@@ -2313,7 +2366,11 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 const std::time_t firstStamp=std::mktime(&first);
                 std::tm next=first; next.tm_mon+=1;
                 const std::time_t nextStamp=std::mktime(&next);
-                const int daysInMonth=static_cast<int>((nextStamp-firstStamp)/86400);
+                std::tm lastDay=first;
+                lastDay.tm_mon+=1;
+                lastDay.tm_mday=0;
+                (void)std::mktime(&lastDay);
+                const int daysInMonth=lastDay.tm_mday;
                 const int startColumn=(first.tm_wday+6)%7;
                 label(monthName,r.y+15);
                 text(std::to_string(current.tm_year+1900),right-45,r.y+15,1,MUTED,right);
@@ -4359,11 +4416,28 @@ int main(int,char**) {
         }
     }
 
+    desknx::diag::Write("storage","persistent_paths",
+        "catalogue=sdmc:/switch/DeskNX/cache/catalogue.tsv names=sdmc:/switch/DeskNX/cache/game-names.tsv icons=sdmc:/switch/DeskNX/cache/icons layout=%s active=%s settings=%s history=%s",
+        CFG_FILE,ACTIVE_WORKSPACE_FILE,SETTINGS_FILE,HISTORY_FILE);
+    struct stat catalogueCacheStat{}, nameCacheStat{};
+    const bool catalogueCacheExists=stat("sdmc:/switch/DeskNX/cache/catalogue.tsv",&catalogueCacheStat)==0&&S_ISREG(catalogueCacheStat.st_mode);
+    const bool nameCacheExists=stat("sdmc:/switch/DeskNX/cache/game-names.tsv",&nameCacheStat)==0&&S_ISREG(nameCacheStat.st_mode);
+    desknx::diag::Write("catalogue","persistent_cache_state",
+        "catalogue_exists=%d catalogue_bytes=%lld names_exists=%d names_bytes=%lld",
+        catalogueCacheExists?1:0,
+        catalogueCacheExists?static_cast<long long>(catalogueCacheStat.st_size):0LL,
+        nameCacheExists?1:0,
+        nameCacheExists?static_cast<long long>(nameCacheStat.st_size):0LL);
     loadHistory();
     struct stat layoutStat{}, backupStat{};
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
     layoutLoaded = loadLayout();
+    desknx::diag::Write("layout","startup_primary_result",
+        "loaded=%d primary_exists=%d primary_bytes=%lld backup_exists=%d",
+        layoutLoaded?1:0,layoutExists?1:0,
+        layoutExists?static_cast<long long>(layoutStat.st_size):0LL,
+        backupExists?1:0);
     bool restoredFromBackup = false;
     if (!layoutLoaded && backupExists && loadLayoutFrom(CFG_BAK_FILE)) {
         // The primary may be missing as well as corrupt. Never discard the only
