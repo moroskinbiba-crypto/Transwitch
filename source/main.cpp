@@ -376,6 +376,14 @@ void applyThemePalette() {
     }
 }
 
+// A low-amplitude pulse gives current focus a living highlight without
+// scaling/reflowing the desktop or adding extra draw calls.
+Color focusAccent() {
+    const double phase=static_cast<double>(SDL_GetTicks())/360.0;
+    const double pulse=(std::sin(phase)+1.0)*0.5;
+    return Color{139,190,255,static_cast<Uint8>(185.0+70.0*pulse)};
+}
+
 bool hasExtension(const std::string& path,const char* const* extensions,size_t count) {
     const size_t dot=path.find_last_of('.');
     if(dot==std::string::npos)return false;
@@ -2211,13 +2219,13 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     if(artworkTile) {
         drawTileCover(t,workspace,r,fill,selected);
         if(selected) {
-            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
+            outline(r.x,r.y,r.w,r.h,focusAccent());
             outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
         }
     } else {
         // Widget selection is outline-only: the surface does not turn blue.
         if(selected) {
-            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
+            outline(r.x,r.y,r.w,r.h,focusAccent());
             outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
         }
         const int accentWidth=std::min(42,r.w-28);
@@ -2534,7 +2542,7 @@ void drawScreen() {
         int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
         if(x==selectedX&&y==selectedY) {
             roundRect(px+2,py+2,CW-4,CH-4,16,Color{34,63,99,100});
-            outline(px+2,py+2,CW-4,CH-4,BLUE);
+            outline(px+2,py+2,CW-4,CH-4,focusAccent());
             text("+",px+CW/2-4,py+CH/2-10,2,WHITE,px+CW-3);
         }
     }
@@ -2662,7 +2670,7 @@ void drawScreen() {
                         selectedCard?Color{106,175,255,190}:Color{255,255,255,20});
                     Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                     drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66);
-                    if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,Color{139,190,255,230});
+                    if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,focusAccent());
                     textCentered(candidate.title,x+cardW/2,y+79,2,
                         selectedCard?WHITE:Color{201,211,225,255},x+8,x+cardW-8);
                     std::string appBadge=typeName(candidate.kind);
