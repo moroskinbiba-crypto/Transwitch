@@ -111,6 +111,18 @@ inline std::string translate(const std::string& value, bool russian) {
         {"LAYOUT SAVE FAILED", "НЕ УДАЛОСЬ СОХРАНИТЬ РАСКЛАДКУ"},
         {"INVALID TITLE ID", "НЕКОРРЕКТНЫЙ TITLE ID"},
         {"GALLERY", "ГАЛЕРЕЯ"},
+        {"Games", "Игры"}, {"Homebrew", "Homebrew"}, {"Widgets", "Виджеты"},
+        {"Clock", "Часы"}, {"Battery", "Батарея"}, {"System info", "Система"},
+        {"Recent launches", "Недавние запуски"}, {"SD storage", "Память SD"},
+        {"Calendar", "Календарь"}, {"SYSTEM INFORMATION", "СИСТЕМНАЯ ИНФОРМАЦИЯ"},
+        {"BATTERY STATUS", "СОСТОЯНИЕ БАТАРЕИ"}, {"RECENT", "НЕДАВНИЕ"},
+        {"SD STORAGE", "ПАМЯТЬ SD"}, {"GB FREE", "ГБ СВОБОДНО"},
+        {"TOTAL", "ВСЕГО"}, {"USED", "ЗАНЯТО"},
+        {"LOW BATTERY", "НИЗКИЙ ЗАРЯД"}, {"CHARGED", "ЗАРЯЖЕНО"},
+        {"NORMAL", "НОРМА"}, {"UNAVAILABLE", "НЕДОСТУПНО"},
+        {"Classic", "Классический"}, {"Tabler outline", "Контурный Tabler"},
+        {"Material filled", "Заливка Material"},
+        {"WORKSPACE", "РАБОЧИЙ СТОЛ"},
         {"APP LIBRARY", "БИБЛИОТЕКА ПРИЛОЖЕНИЙ"},
         {"Installed games, homebrew and system widgets", "Установленные игры, homebrew и системные виджеты"},
         {"SELECT AN APP TO SEE DETAILS", "ВЫБЕРИТЕ ПРИЛОЖЕНИЕ ДЛЯ ПОДРОБНОСТЕЙ"},
@@ -238,6 +250,8 @@ inline std::string translate(const std::string& value, bool russian) {
         return "ПОИСК: " + value.substr(8);
     if (value.compare(0, 6, "THEME ") == 0)
         return "ТЕМА " + value.substr(6);
+    if (value.compare(0, 10, "Workspace ") == 0)
+        return "Рабочий стол " + value.substr(10);
     if (value.compare(0, 9, "FIRMWARE ") == 0)
         return "ПРОШИВКА " + value.substr(9);
     return value;
