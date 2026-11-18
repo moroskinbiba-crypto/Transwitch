@@ -55,8 +55,8 @@ constexpr int AppSettingsActions[11]={0,1,2,3,10,8,4,6,7,5,9};
 constexpr int appSettingsRowY(int index) {
  switch(index) {
  case 0:return 210; case 1:return 236; case 2:return 262; case 3:return 288;
- case 4:return 340; case 5:return 366; case 6:return 392; case 7:return 444;
- case 8:return 496; case 9:return 522; default:return 548;
+ case 4:return 314; case 5:return 340; case 6:return 396; case 7:return 422;
+ case 8:return 448; case 9:return 504; default:return 556;
  }
 }
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
@@ -2919,9 +2919,9 @@ void drawScreen() {
             languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
         text("APPEARANCE",346,190,1,BLUE,920);
-        text("WORKSPACE",346,320,1,BLUE,920);
-        text("LIBRARY",346,424,1,BLUE,920);
-        text("SYSTEM",346,476,1,BLUE,920);
+        text("WORKSPACE",346,376,1,BLUE,920);
+        text("LIBRARY",346,484,1,BLUE,920);
+        text("SYSTEM",346,536,1,BLUE,920);
         for(int i=0;i<11;++i) {
             const int yy=appSettingsRowY(i),action=AppSettingsActions[i];
             if(i==appSettingsIndex)roundRect(340,yy,600,24,8,Color{35,61,93,255});
