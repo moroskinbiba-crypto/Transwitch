@@ -32,6 +32,9 @@ jobs:
       - name: Verify production HOME applet entry point
         run: bash scripts/check-home-applet-entrypoint.sh
 
+      - name: Install Switch networking dependency
+        run: dkp-pacman -S --noconfirm switch-curl
+
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -82,6 +85,11 @@ jobs:
 
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
+
+      - name: Test Nextendo presence snapshot and expiry rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test
+          /tmp/desknx-nextendo-test
 
       # Android-style workspace layer (platform-neutral, host-testable).
       - name: Test hold-to-drag and page-swipe gestures
