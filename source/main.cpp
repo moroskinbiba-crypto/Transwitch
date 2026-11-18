@@ -3785,8 +3785,12 @@ int main(int,char**) {
 #else
     constexpr const char* buildMode = "standalone-nro";
 #endif
-    desknx::diag::Write("session", "start", "mode=%s sd_mounted=%d sd_mount_rc=0x%08X",
-        buildMode, sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
+    const AppletType appletType = appletGetAppletType();
+    desknx::diag::Write("session", "start",
+        "mode=%s applet_type=%u application_mode=%d sd_mounted=%d sd_mount_rc=0x%08X",
+        buildMode, static_cast<unsigned int>(appletType),
+        appletType == AppletType_Application ? 1 : 0,
+        sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){
         desknx::diag::Write("startup", "sdl_init_failed", "error=%s", SDL_GetError());
         if(sdMounted) fsdevUnmountDevice("sdmc");

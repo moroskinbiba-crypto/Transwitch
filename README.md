@@ -1,89 +1,71 @@
-# DeskNX
+# DeskNX / Transwitch
 
-DeskNX — кастомный рабочий стол для Nintendo Switch. В проекте разделяются **standalone Homebrew-приложение** и экспериментальная **интеграция системного HOME через Atmosphère**. Это разные сборки: первая запускается вручную из Homebrew Menu, вторая предназначена для замены qlaunch и требует отдельного системного окружения.
+DeskNX — нативный домашний экран и лаунчер для Nintendo Switch на C++/SDL2. Основное приложение компилируется непосредственно из `source/main.cpp` в самостоятельный NRO. Это не WebKit-обёртка и не браузер с React-интерфейсом.
 
-## Что сделано в UI-прототипе
+## Что запускается на консоли
 
-- Рабочие столы, включая создание, переименование и удаление.
-- Сетка 6 × 3 с сохраняемыми пустыми ячейками.
-- Каталог установленных игр и Homebrew NRO на SD-карте.
-- Перетаскивание с контроллера и сенсорного экрана, перенос между столами.
-- Размеры плиток 1×1, 2×1, 2×2 и 3×2, без пересечения элементов.
-- Виджеты: часы, батарея, системные инструменты, недавние запуски, свободное место SD и календарь.
-- Отдельное меню настроек DeskNX: пять цветовых тем, пользовательский фон JPG/PNG, шрифты TTF/OTF и наборы иконок.
-- Пользовательские обложки игр по Title ID и Homebrew по имени NRO или резервному хешу пути.
-- Сенсорное и контроллерное управление, отдельные настройки лаунчера, сохранение состояния раскладки.
-- Сохранение раскладки в `sdmc:/switch/DeskNX/layout.tsv`, настроек — в `settings.ini`.
-- Native C++/SDL2 production HOME library applet (IPC/heartbeat/input/catalogue/launching); standalone NRO — отдельный WebKit-хост React UI, упакованного в RomFS.
+**DeskNX.nro** — одно нативное Homebrew-приложение. Оно само создаёт SDL2-окно, рисует интерфейс, читает ввод, получает каталог установленных игр через libnx/NS, сканирует NRO на SD-карте и запускает выбранные приложения через Horizon API.
 
-## Персонализация и дополнительные возможности
+В runtime нет WebKit, HTML, JavaScript, React, RomFS с сайтом или отдельного browser applet. В NRO встроены нативный код и NACP-метаданные; UI и ресурсы загружаются из файловой системы SD.
 
-Руководство по пользовательским фонам, шрифтам, icon pack, виджетам и ограничениям текущей версии: [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md).
+Внутри одного процесса используются ограниченные фоновые потоки для задач, которые не должны блокировать отрисовку: каталог, декодирование иконок, Nextendo presence и PDM-статистика по запросу. Они не являются отдельными приложениями или системными процессами. Сетевой опрос Nextendo отложен после старта и не блокирует открытие рабочего стола.
 
-## Сборка standalone NRO
+## Нативные функции
 
-Требуются devkitPro, devkitA64, libnx и SDL2 for Switch.
+- До 12 независимых рабочих столов с пустыми ячейками и сохранением активного рабочего стола.
+- Сетка 6 × 3, размещение, перемещение и изменение размеров плиток.
+- Каталог установленных игр и Homebrew NRO.
+- Поиск, фильтрация и сортировка библиотеки.
+- Иконки и обложки из NACP/SD и пользовательского icon pack.
+- Асинхронная очередь декодирования изображений с ограничением памяти и GPU-кэша.
+- Виджеты: часы, батарея, системные инструменты, недавние запуски, SD storage и календарь.
+- Темы, шрифты, обои и индивидуальное оформление рабочих столов.
+- Nextendo: реальные онлайн-счётчики по играм; отсутствие данных не показывается как ноль.
+- PDM playtime/launch statistics по выбранной игре.
+- Сенсорное управление и управление Joy-Con/Pro Controller.
+- Атомарное сохранение раскладки и резервные копии настроек.
+
+Подробнее: [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md), [docs/FEATURES.md](docs/FEATURES.md), [docs/HOMENX_PORT_STATUS.md](docs/HOMENX_PORT_STATUS.md).
+
+## Сборка самостоятельного NRO
+
+Нужны devkitPro/devkitA64, libnx и Switch portlibs SDL2, SDL2_image, SDL2_ttf и libcurl.
 
     make -j2
 
-После успешной сборки откройте Actions → **Build DeskNX NRO and HOME applet**. Артефакт DeskNX-nro — обычное Homebrew-приложение; DeskNX-sdcard содержит его в структуре SD-карты.
+Результат: `DeskNX.nro` (также создаётся совместимая копия `desknx.nro`). В GitHub Actions артефакт называется **DeskNX-native-nro**; пакет SD-карты — **DeskNX-sdcard**.
 
-## Экспериментальная интеграция HOME
+Основной build workflow также собирает библиотечный HOME applet из того же нативного `source/main.cpp`. Этот артефакт предназначен для экспериментальной интеграции HOME и сам по себе не является готовым к установке пакетом.
 
-Структура projects/sSystem содержит отдельный qlaunch-backend на основе Atmosphère/libstratosphere, projects/DeskNXMenu собирает библиотечный applet, а projects/hbloader — отдельный target-aware загрузчик Homebrew. В system-mode запуск игры или NRO передаётся backend через версионированный IPC. Backend освобождает меню-слот, обслуживает NRO через ECS, запускает его через hbloader и возвращает DeskNX после завершения.
+## Необязательная системная интеграция HOME
 
-Standalone-сборка не нуждается в Atmosphère. Чтобы подготовить системные компоненты, нужны **совместимые** libnx, Atmosphère/libstratosphere и AtmosphereLibs:
+В репозитории остаётся отдельная экспериментальная система для замены qlaunch: `projects/sSystem`, библиотечный HOME applet `projects/DeskNXMenu` и target-aware loader `projects/hbloader`. Она нужна только для сценария замены штатного HOME и не требуется для запуска самостоятельного DeskNX.nro.
 
-    make menu-applet
-    make system-backend
-    make system-package
-    make package-system
+Системный backend остаётся экспериментальным. Установка qlaunch override на основную консоль не рекомендуется без проверенного способа отката и аппаратных тестов. Сборка компонентов не подтверждает совместимость с конкретной версией HOS/Atmosphère.
 
-Основной workflow компилирует standalone NRO и библиотечный applet. Отдельный workflow **Build experimental DeskNX HOME backend** пытается собрать qlaunch backend против выбранных refs libnx и Atmosphère (по умолчанию — Atmosphère 1.12.1 и зафиксированный commit libnx). Даже успешная сборка этих зависимостей **не доказывает** совместимость с прошивкой вашей консоли и не заменяет runtime-тесты на физическом Switch. Системный слой остаётся экспериментальным. В этой версии предусмотрен только applet-mode запуск Homebrew; запуск NRO как полноценного приложения с выделенной игрой-донором намеренно отключён. Не устанавливайте его как повседневную замену HOME на основной консоли.
+Схема, сборка, recovery и ограничения: [docs/HOME_INTEGRATION.md](docs/HOME_INTEGRATION.md), [docs/COMPAT.md](docs/COMPAT.md).
 
-### Установка системного backend
+## Диагностика
 
-После успешной сборки откройте Actions → Build experimental DeskNX HOME backend и скачайте DeskNX-system-experimental. **Распакуйте архив на ПК**, в отдельную папку: внутри должны лежать папки SdOut, scripts и docs. Не распаковывайте этот пакет прямо в корень SD-карты — он содержит подготовленные компоненты, а не автоматически включаемую установку.
+Журналы записываются в `sdmc:/switch/DeskNX/`:
 
-Только после проверки сборки и на восстанавливаемой консоли запустите из распакованной папки:
+- `diagnostics.log*` — native startup, SDL renderer, services, каталог, фоновые задачи и запуск игр/NRO.
+- `catalogue.log*` — NS/NACP/PDM и сканирование домашнего каталога.
+- `logs/daemon.log*` и `logs/ecs.log*` — только при использовании экспериментального system backend.
 
-    bash scripts/install-system.sh --sd-root /path/to/sd-card --acknowledge-risk
-
-Если на SD-карте уже есть override qlaunch, добавьте --backup-existing. Скрипт сохраняет старые файлы и пишет install manifest. Для восстановления на ПК:
-
-    bash scripts/uninstall-system.sh --sd-root /path/to/sd-card --acknowledge-risk
-
-Пакет хранит системные файлы внутри SdOut, включая hbloader в switch/DeskNX/bin/hbloader; сам qlaunch override копируется в atmosphere только после явного запуска установщика. Если DeskNX не может запустить ни один из проверяемых HOME applet-слотов и нет запущенной игры, backend также предусматривает аварийное восстановление: удерживать L+R+ZL+ZR+Plus+Minus+D-pad Down три секунды. Оно действует только при наличии точного маркера DeskNX и переименовывает активный override перед запросом перезагрузки. Это дополнительная страховка, а не гарантия восстановления при любой поломке. Не запускайте установщик без рабочего способа получить доступ к SD-карте и восстановить предыдущую конфигурацию Atmosphère. Подробности — в docs/HOME_INTEGRATION.md.
-
-## Технический аудит
-
-Актуальный полный аудит, исправления, блокирующие риски и порядок дальнейших проверок: [docs/AUDIT_2026-10-30.md](docs/AUDIT_2026-10-30.md). Предыдущий аудит: [docs/AUDIT_2026-10-29.md](docs/AUDIT_2026-10-29.md). Системный HOME backend остаётся экспериментальным до успешной сборки и проверки на физической консоли.
-
-### Диагностика и обратная связь
-
-Standalone NRO и native HOME applet записывают технические журналы на SD-карту в `sdmc:/switch/DeskNX/`:
-- `diagnostics.log` (+ две ротируемые копии) — для NRO: ранний libnx startup hook, режим запуска, RomFS и вызовы WebKit; для native HOME applet: также SDL/renderer, системные сервисы и запуск игр;
-- `catalogue.log` (+ одна ротируемая копия) — обнаружение игр, NS, NACP, PDM, NRO и кэш в native HOME applet.
-
-После воспроизведения ошибки скопируйте все файлы `diagnostics.log*` и `catalogue.log*` и приложите их к сообщению. Не нужно присылать папку кэша или сами игры. Подробная инструкция и перечень собираемых данных: [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).
+После сбоя пришлите все существующие `diagnostics.log*` и `catalogue.log*`. Для фатального завершения дополнительно нужен соответствующий report из `atmosphere/crash_reports/`. Инструкция: [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).
 
 ## Структура
 
-- src-switch/main.cpp — standalone NRO / WebKit host; src/App.tsx и romfs/ — React UI.
-- source/main.cpp — production native HOME UI: controller/touch input, workspaces, catalogue, IPC, heartbeat, game/NRO launch and diagnostics; compiled into the library applet.
-- projects/DeskNXMenu/source/main.cpp — older simplified prototype entry point, intentionally excluded from the release applet.
-- projects/DeskNXMenu/source/*.cpp (except main.cpp) and source/*.cpp are supporting modules linked into the HOME applet.
-- projects/common/include/desknx/Protocol.hpp — версионированный IPC между UI и системным процессом.
-- projects/DeskNXMenu/ — библиотечный applet и NPDM для запуска через backend.
-- projects/hbloader/ — target-aware загрузчик NRO, запускаемый backend через ECS.
-- projects/sSystem/ — экспериментальный Atmosphère qlaunch backend, lifecycle приложений и ECS.
-- scripts/install-system.sh и scripts/uninstall-system.sh — отдельные установочные скрипты с проверками и резервированием.
-- docs/HOME_INTEGRATION.md — схема интеграции, сборка, диагностика и recovery.
-- docs/COMPAT.md — матрица проверенных на железе версий прошивки/Atmosphère; всё остальное считается непроверенным.
-- THIRD_PARTY.md — заимствования и лицензии.
+- `source/main.cpp` — единственная production SDL2 UI entry point для NRO и HOME applet.
+- `source/catalog.cpp` — NS/NACP catalogue, NRO scanning and cache.
+- `source/IconCache.hpp` — bounded asynchronous icon decoder and render-thread texture cache.
+- `source/NextendoPlayers.cpp` — Nextendo online presence feed.
+- `projects/DeskNXMenu/` — HOME library applet target, собранный из общего native UI.
+- `projects/sSystem/` — необязательный экспериментальный qlaunch backend.
+- `projects/hbloader/` — загрузчик для экспериментальной системной интеграции.
+- `projects/common/` — IPC и backend state machine.
+- `tests/` — host tests для модели, раскладки, IPC и persistence.
+- `docs/AGENT_CHANGELOG.md` — журнал изменений и контрольная точка для продолжения разработки.
 
-## Качество и проверка
-
-Мы ориентируемся на инженерные практики sLaunch: разделение UI/backend, IPC с версией и проверкой размеров сообщения, логирование, повторные попытки запуска меню, отдельные Makefile и осознанный rollback. Это **не** означает, что DeskNX уже реализовал весь функционал или уровень тестирования sLaunch. Текущий system-backend — стартовая реализация, требующая компиляции с целевым Atmosphère, ревью lifecycle и проверок на реальном железе.
-
-Standalone исходный код распространяется по лицензии из LICENSE; заимствованные system components и их лицензии описаны в THIRD_PARTY.md.
+Лицензии и происхождение адаптированного кода указаны в [THIRD_PARTY.md](THIRD_PARTY.md).

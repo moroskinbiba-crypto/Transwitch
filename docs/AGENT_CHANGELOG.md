@@ -296,3 +296,23 @@ CI и физическая проверка для этого изменения
 - Во второй и третьей сессиях лог заканчивается на `web_show_begin`; без `web_show_end` неизвестно, вернулся ли вызов. Сам по себе этот фрагмент не содержит Atmosphère fatal code/report и не доказывает аварийное завершение.
 - Эти метки относятся к `src-switch/main.cpp` — standalone WebKit host. Они не относятся к `source/main.cpp`, SDL renderer или новому worker в `source/IconCache.hpp`.
 - Чтобы подтвердить конкретный Atmosphère crash, нужен fatal report / код ошибки из экрана Atmosphère и совпадающие по времени `diagnostics.log*`. Не маркировать runtime-проблему закрытой по одному этому фрагменту.
+
+
+## Исправление неверного standalone build target — 18 ноября 2026
+
+### Что было неверно
+- `make` собирал `src-switch/main.cpp`, который открывал HTML через `webOfflineCreate()` и `webConfigShow()`.
+- Полноценный native SDL2 launcher уже находился в `source/main.cpp`, но в standalone target он не попадал. Он использовался HOME library applet и compile-only проверкой.
+- Поэтому пользовательский журнал с `web_show_begin/end` был журналом WebKit wrapper, а не native launcher. Это расхождение возникло из-за неправильной точки входа сборки.
+
+### Исправлено в native-only cutover
+- Root `Makefile.switch` теперь компилирует production `source/*.cpp` и линкует SDL2, SDL2_image, SDL2_ttf, libcurl и libnx в самостоятельный `DeskNX.nro`.
+- Удалён WebKit entry point `src-switch/main.cpp`, React/TypeScript UI, Vite/npm toolchain, JS lockfiles и сгенерированный HTML/JS/CSS RomFS.
+- NRO больше не содержит website RomFS; проверка `scripts/check-nro-assets.py` подтверждает NACP и отклоняет RomFS/WebKit markers.
+- `build.yml` и `build-nro.yml` больше не устанавливают Node-пакеты и не собирают web client. Главный CI теперь линкует actual native standalone NRO, а не только объектный compile check.
+- HOME library applet и экспериментальный qlaunch backend оставлены как отдельный необязательный путь; самостоятельный NRO не запускает их и не нуждается в них.
+- Сохранены Nextendo, каталог, PDM и асинхронный IconCache. Их worker threads работают внутри одного DeskNX процесса; это не внешние процессы.
+
+### Проверка
+- Ожидается новая CI сборка после этого cutover. Предыдущие green runs относились к WebKit standalone artifact плюс native HOME applet cross-build и не являются проверкой нового native NRO.
+- До получения green CI и Switch hardware smoke test не распространять сборку как проверенную. На железе обязательны cold start, каталог, иконки, управление, запуск игры, возврат и лог Atmosphère при возможном сбое.

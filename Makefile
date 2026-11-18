@@ -1,13 +1,9 @@
-#---------------------------------------------------------------------------------
-# DeskNX - Top Level Makefile
-# Directs build to Makefile.switch for devkitA64 / libnx NRO packaging
-#---------------------------------------------------------------------------------
-.PHONY: all clean nro
+# DeskNX native Nintendo Switch build entry point.
+.PHONY: all native clean
 
-all:
-	@$(MAKE) --no-print-directory -f Makefile.switch
+all: native
 
-nro:
+native:
 	@$(MAKE) --no-print-directory -f Makefile.switch
 
 clean:
