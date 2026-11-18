@@ -11,7 +11,19 @@
 Основные файлы:
 
 - `diagnostics.log` и `diagnostics.log.1/.2` — запуск нативного приложения, SDL, renderer, сервисы Horizon, каталог, фоновые задачи и запуск игр/NRO.
-- `catalogue.log` и `catalogue.log.old` — NS, ApplicationView, NACP, PDM, обнаружение игр и сканирование NRO.
+- `catalogue.log` и `catalogue.log.old` — NS, ApplicationView, NACP, PDM, обнаружение игр, получение названий/иконок и сканирование NRO.
+
+Кэш не сбрасывается при каждом запуске. Он хранится на SD-карте:
+
+- `cache/catalogue.tsv` — список игр, NRO и системных виджетов;
+- `cache/game-names.tsv` — разрешённые названия игр по Title ID;
+- `cache/icons/` — изображения игр и Homebrew;
+- `layout.tsv` / `layout.bak` — раскладки рабочих столов;
+- `active-workspace.dat` / `.bak` — выбранный рабочий стол;
+- `settings.ini` / `.bak` — тема, фон, шрифт, язык и стиль значков;
+- `recent.tsv` / `.bak` — история запусков.
+
+Ожидаемые новые события: `persistent_cache_state`, `catalogue_seed`, `game_artwork`, `game_metadata`, `layout loaded/saved`, `async_save_finished`, `keyboard search_create/search_complete`, `gallery launch_begin/return` и `media picker_scan_complete`.
 - `logs/daemon.log`, `daemon.prev.log` — запуск отдельного экспериментального system backend.
 - `logs/ecs.log` — операции ECS для экспериментального backend.
 

@@ -2,6 +2,7 @@
 // Upstream: https://github.com/etonedemid/slaunch
 // GPL-3.0-or-later; see THIRD_PARTY.md and projects/sSystem/COPYING.sLaunch.
 #include "slaunch_applications.hpp"
+#include "../include/desknx/NacpTitleBlock.hpp"
 #include <cstring>
 #include <limits>
 #include <type_traits>
@@ -67,16 +68,27 @@ Result ReadControlData(u64 titleId, NsApplicationControlData& data,
 }
 
 std::string ResolveTitleName(const NacpStruct& nacp) {
-    // libnx renamed NacpStruct::lang to lang_data.lang. Detect the layout at
-    // compile time so this adapter builds with both packaged and upstream SDKs.
-    const NacpLanguageEntry* locales = LanguageEntries(nacp);
-    // SLaunch's title policy: English first; otherwise use the first locale
-    // that actually contains a title. Do not reject records lacking a title.
+    // HOS 21+ can DEFLATE-compress the 32-slot title block. Normalize a private
+    // copy before libnx helpers read it; otherwise names appear as Title IDs.
+    NacpStruct normalized = nacp;
+    if (!desknx::nacp::normalizeCompressedTitleBlock(&normalized, sizeof(normalized)))
+        return {};
+
+    // Prefer the console's selected language, then English, then any populated locale.
+    NacpLanguageEntry* preferred = nullptr;
+    if (R_SUCCEEDED(nacpGetLanguageEntry(&normalized, &preferred)) &&
+        preferred && preferred->name[0] != '\0') {
+        char result[129]{};
+        std::strncpy(result, preferred->name, sizeof(result) - 1);
+        return std::string(result);
+    }
+
+    const NacpLanguageEntry* locales = LanguageEntries(normalized);
     const NacpLanguageEntry* chosen = nullptr;
     if (locales[0].name[0] != '\0') chosen = &locales[0];
-    for (int index = 1; !chosen && index < 16; ++index) {
+    if (!chosen && locales[1].name[0] != '\0') chosen = &locales[1];
+    for (int index = 2; !chosen && index < 16; ++index)
         if (locales[index].name[0] != '\0') chosen = &locales[index];
-    }
     if (!chosen) return {};
     char result[129]{};
     std::strncpy(result, chosen->name, sizeof(result) - 1);

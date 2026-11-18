@@ -19,7 +19,9 @@ DeskNX — нативный домашний экран и лаунчер для
 - Иконки и обложки из NACP/SD и пользовательского icon pack.
 - Асинхронная очередь декодирования изображений с ограничением памяти и GPU-кэша.
 - Виджеты: часы, батарея, системные инструменты, недавние запуски, SD storage и календарь.
-- Темы, шрифты, обои и индивидуальное оформление рабочих столов.
+- Темы, шрифты с кириллицей, русский интерфейс, обои и индивидуальное оформление рабочих столов.
+- Адаптивные макеты шести виджетов для компактных, широких и высоких плиток.
+- Три встроенных стиля системных значков и пользовательские наборы игровых обложек.
 - Nextendo: реальные онлайн-счётчики по играм; отсутствие данных не показывается как ноль.
 - PDM playtime/launch statistics по выбранной игре.
 - Сенсорное управление и управление Joy-Con/Pro Controller.
@@ -58,8 +60,8 @@ DeskNX — нативный домашний экран и лаунчер для
 ## Структура
 
 - `source/main.cpp` — единственная production SDL2 UI entry point для NRO и HOME applet.
-- `source/catalog.cpp` — NS/NACP catalogue, NRO scanning and cache.
-- `source/IconCache.hpp` — bounded asynchronous icon decoder and render-thread texture cache.
+- `source/catalog.cpp` — NS/NACP catalogue, NRO scanning and persistent SD cache. HOS 21+ compressed NACP title blocks are normalized before resolving names.
+- `source/IconCache.hpp` — bounded asynchronous PNG/JPEG icon decoder and render-thread texture cache.
 - `source/NextendoPlayers.cpp` — Nextendo online presence feed.
 - `projects/DeskNXMenu/` — HOME library applet target, собранный из общего native UI.
 - `projects/sSystem/` — необязательный экспериментальный qlaunch backend.

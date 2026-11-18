@@ -12,6 +12,7 @@
 #include "catalog.hpp"
 #include "slaunch_applications.hpp"
 #include "../include/desknx/Diagnostics.hpp"
+#include "../include/desknx/Localization.hpp"
 #include "../include/desknx/NextendoPlayers.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
@@ -81,6 +82,8 @@ std::array<Color,12> COLORS{{
     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}
 }};
 int themeIndex=1;
+bool languageRussian=true;
+int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
 std::string wallpaperPath, fontPath, iconPackPath;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
@@ -238,6 +241,7 @@ desknx::ipc::InitialState g_initialState{};
 
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
+    desknx::diag::Write("ui","status","message=%s",s.c_str());
 }
 
 bool commitSdCard(const char* operation) {
@@ -386,6 +390,8 @@ bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
 
 void loadLauncherSettings() {
     if(!sdMounted){applyThemePalette();return;}
+    languageRussian=true;
+    iconStyle=0;
     std::string selectedPath;
     const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
     for(const char* candidate:candidates) {
@@ -426,6 +432,12 @@ void loadLauncherSettings() {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
             fontPath=value;
+        } else if(key=="language") {
+            languageRussian=(value=="ru" || value=="russian");
+        } else if(key=="iconstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -446,7 +458,9 @@ bool saveLauncherSettings() {
        <<"theme="<<themeIndex<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
        <<"font="<<safeField(fontPath)<<"\n"
-       <<"iconpack="<<safeField(iconPackPath)<<"\n";
+       <<"iconpack="<<safeField(iconPackPath)<<"\n"
+       <<"language="<<(languageRussian?"ru":"en")<<"\n"
+       <<"iconstyle="<<iconStyle<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -578,9 +592,15 @@ void drawWorkspaceBackground(const Workspace& desk) {
 }
 
 void refreshMediaPicker() {
+    const Uint64 started=SDL_GetTicks64();
     mediaPickerEntries.clear();
     DIR* dir=opendir(mediaPickerDirectory.c_str());
-    if(!dir){setStatus("CANNOT OPEN MEDIA FOLDER",2500);return;}
+    if(!dir) {
+        desknx::diag::Write("media","picker_scan_failed","path=%s errno=%d",
+            mediaPickerDirectory.c_str(),errno);
+        setStatus("CANNOT OPEN MEDIA FOLDER",2500);
+        return;
+    }
     while(dirent* entry=readdir(dir)) {
         const char* name=entry->d_name;
         if(!name||name[0]=='.')continue;
@@ -602,6 +622,10 @@ void refreshMediaPicker() {
         std::max(0,static_cast<int>(mediaPickerEntries.size())-1)));
     mediaPickerOffset=std::max(0,std::min(mediaPickerOffset,
         std::max(0,static_cast<int>(mediaPickerEntries.size())-12)));
+    desknx::diag::Write("media","picker_scan_complete",
+        "path=%s entries=%zu elapsed_ms=%llu",
+        mediaPickerDirectory.c_str(),mediaPickerEntries.size(),
+        static_cast<unsigned long long>(SDL_GetTicks64()-started));
 }
 
 void openMediaPicker(MediaPickerType type) {
@@ -772,8 +796,9 @@ std::string fallbackAscii(const std::string& input) {
 // pass ASCII through and draw U+FFFD-style replacement boxes for anything
 // else (default glyph in glyph()) instead of silently dropping characters.
 void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
-    if(gFontRenderer.draw(value,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
-    const std::string s=fallbackAscii(value); color(c); int px=x;
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
+    const std::string s=fallbackAscii(localized); color(c); int px=x;
     for(char ch:s) {
         if(px+5*scale>right) break;
         const auto rows=glyph(ch);
@@ -835,15 +860,21 @@ const std::vector<Candidate>& visibleCatalogueSnapshot() {
 }
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize);
 void searchCatalogue() {
+    const Uint64 keyboardStarted=SDL_GetTicks64();
     SwkbdConfig config{};
-    if(R_FAILED(swkbdCreate(&config,0))){setStatus("SEARCH KEYBOARD UNAVAILABLE",2500);return;}
+    const Result createRc=swkbdCreate(&config,0);
+    desknx::diag::Write("keyboard","search_create","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(createRc),static_cast<unsigned long long>(SDL_GetTicks64()-keyboardStarted));
+    if(R_FAILED(createRc)){setStatus("SEARCH KEYBOARD UNAVAILABLE",2500);return;}
     swkbdConfigMakePresetDefault(&config);
-    swkbdConfigSetHeaderText(&config,"Search games and Homebrew");
+    swkbdConfigSetHeaderText(&config,languageRussian?"Поиск игр и Homebrew":"Search games and Homebrew");
     swkbdConfigSetInitialText(&config,catalogueQuery.c_str());
     char value[128]{};
     std::snprintf(value,sizeof(value),"%s",catalogueQuery.c_str());
     const Result rc=showKeyboard(&config,value,sizeof(value));
     swkbdClose(&config);
+    desknx::diag::Write("keyboard","search_complete","rc=0x%08X total_ms=%llu result_bytes=%zu",
+        static_cast<unsigned int>(rc),static_cast<unsigned long long>(SDL_GetTicks64()-keyboardStarted),std::strlen(value));
     if(R_SUCCEEDED(rc)) {
         catalogueQuery=value;
         ++catalogueViewRevision;
@@ -1030,10 +1061,12 @@ Result sendIpc(Sender sender) {
     return rc;
 }
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
-    const Result busyRc=sendIpc([]{return desknx::ipc::SendBusy(30);});
+    // The independent heartbeat thread remains active while swkbdShow owns the
+    // foreground. A synchronous BUSY IPC round-trip delayed keyboard startup.
+    const Uint64 started=SDL_GetTicks64();
     const Result dialogRc=swkbdShow(config,output,outputSize);
-    if(R_SUCCEEDED(busyRc))
-        (void)sendIpc([]{return desknx::ipc::SendBusyEnd();});
+    desknx::diag::Write("keyboard","dialog_return","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(dialogRc),static_cast<unsigned long long>(SDL_GetTicks64()-started));
     return dialogRc;
 }
 int heartbeatThreadMain(void*) {
@@ -1142,7 +1175,11 @@ void stopHeartbeatThread() {
 }
 #else
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
-    return swkbdShow(config,output,outputSize);
+    const Uint64 started=SDL_GetTicks64();
+    const Result rc=swkbdShow(config,output,outputSize);
+    desknx::diag::Write("keyboard","dialog_return","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(rc),static_cast<unsigned long long>(SDL_GetTicks64()-started));
+    return rc;
 }
 #endif
 bool isSafeNroPath(const std::string& path) {
@@ -1191,17 +1228,21 @@ void loadHistory() {
     std::vector<HistoryEntry> loaded;
     if(readHistoryFile(HISTORY_FILE,loaded)) {
         recentLaunches=std::move(loaded);
+        desknx::diag::Write("history","loaded","path=%s entries=%zu",HISTORY_FILE,recentLaunches.size());
     } else if(readHistoryFile(HISTORY_BAK_FILE,loaded)) {
         recentLaunches=std::move(loaded);
-        desknx::diag::Write("history","backup_restored","path=%s",HISTORY_BAK_FILE);
+        desknx::diag::Write("history","backup_restored","path=%s entries=%zu",HISTORY_BAK_FILE,recentLaunches.size());
         setStatus("RECENT HISTORY RESTORED FROM BACKUP",4000);
     } else {
+        desknx::diag::Write("history","load_empty","primary=%s backup=%s",
+            HISTORY_FILE,HISTORY_BAK_FILE);
         return;
     }
     if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
 }
 void saveHistory() {
     if(!sdMounted)return;
+    const Uint64 started=SDL_GetTicks64();
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     std::ofstream out(HISTORY_TMP,std::ios::binary|std::ios::trunc);
     if(!out){setStatus("RECENT HISTORY SAVE FAILED",3000);return;}
@@ -1224,8 +1265,13 @@ void saveHistory() {
             setStatus("RECENT HISTORY RENAME FAILED", 3000);
         return;
     }
-    if(!commitSdCard("history-publish"))
+    if(!commitSdCard("history-publish")) {
+        desknx::diag::Write("history","save_failed","phase=publish_commit entries=%zu",recentLaunches.size());
         setStatus("RECENT HISTORY COMMIT FAILED; BACKUP KEPT",4000);
+    } else {
+        desknx::diag::Write("history","saved","entries=%zu elapsed_ms=%llu",
+            recentLaunches.size(),static_cast<unsigned long long>(SDL_GetTicks64()-started));
+    }
 }
 void recordRecentLaunch(const Tile& tile) {
     if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;
@@ -1379,6 +1425,7 @@ bool loadActiveWorkspaceState() {
 }
 
 bool saveLayout() {
+    const Uint64 saveStarted=SDL_GetTicks64();
     drainAsyncLayoutSaver();
     if(!sdMounted) {
         setStatus("SAVE FAILED: SD CARD NOT MOUNTED",3500);
@@ -1405,6 +1452,11 @@ bool saveLayout() {
     // changed, do not rewrite every tile or rotate the full-layout backup.
     if(!mustRewritePrimary && saveActiveWorkspaceState()) {
         layoutLoaded=true;
+        size_t tileCount=0;for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
+        desknx::diag::Write("layout","saved",
+            "mode=active_marker workspaces=%zu tiles=%zu active=%d elapsed_ms=%llu",
+            desks.size(),tileCount,deskIndex,
+            static_cast<unsigned long long>(SDL_GetTicks64()-saveStarted));
         return true;
     }
 
@@ -1448,6 +1500,11 @@ bool saveLayout() {
         (void)std::remove(ACTIVE_WORKSPACE_FILE);
     }
     layoutLoaded=true;
+    size_t tileCount=0;for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
+    desknx::diag::Write("layout","saved",
+        "mode=full workspaces=%zu tiles=%zu active=%d bytes=%zu elapsed_ms=%llu",
+        desks.size(),tileCount,deskIndex,serialized.size(),
+        static_cast<unsigned long long>(SDL_GetTicks64()-saveStarted));
     setStatus("LAYOUT SAVED",1600);
     return true;
 }
@@ -1709,16 +1766,32 @@ void drainAsyncLayoutSaver() {
 }
 
 bool loadLayoutFrom(const char* path) {
+    const Uint64 started=SDL_GetTicks64();
     struct stat fileStat{};
-    if (stat(path, &fileStat) != 0 || !S_ISREG(fileStat.st_mode) ||
-        fileStat.st_size <= 0 || fileStat.st_size > 1024 * 1024) return false;
+    if (!path || stat(path, &fileStat) != 0 || !S_ISREG(fileStat.st_mode) ||
+        fileStat.st_size <= 0 || fileStat.st_size > 1024 * 1024) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_size",
+            path?path:"null");
+        return false;
+    }
     std::ifstream file(path, std::ios::binary);
-    if (!file) return false;
+    if (!file) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=open",path);
+        return false;
+    }
     std::ostringstream contents;
     contents << file.rdbuf();
-    if (file.bad()) return false;
+    if (file.bad()) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=read",path);
+        return false;
+    }
+    const std::string serialized=contents.str();
     desknx::layout::LoadResult loaded{};
-    if (!desknx::layout::parse(contents.str(), loaded)) return false;
+    if (!desknx::layout::parse(serialized, loaded)) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=parse bytes=%zu",
+            path,serialized.size());
+        return false;
+    }
     desks = std::move(loaded.workspaces);
     deskIndex = loaded.activeWorkspace;
     layoutNeedsMigration = loaded.needsMigration;
@@ -1732,6 +1805,13 @@ bool loadLayoutFrom(const char* path) {
     // even when the restored workspace contents themselves have not changed.
     layoutPrimaryNeedsRewrite=(std::string(path)!=CFG_FILE)||layoutNeedsMigration;
     selectedX = selectedY = 0;
+    size_t tileCount=0;
+    for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
+    desknx::diag::Write("layout","loaded",
+        "path=%s bytes=%zu workspaces=%zu tiles=%zu active=%d migration=%d recovered=%zu dropped=%zu elapsed_ms=%llu",
+        path,serialized.size(),desks.size(),tileCount,deskIndex,
+        layoutNeedsMigration?1:0,layoutRecoveredTiles,layoutDroppedTiles,
+        static_cast<unsigned long long>(SDL_GetTicks64()-started));
     return true;
 }
 bool loadLayout() { return loadLayoutFrom(CFG_FILE); }
@@ -1783,9 +1863,18 @@ SDL_Rect tileRect(const Tile&t) {
 }
 
 void drawSystemIcon(int kind,int x,int y,int size,Color c) {
+    if(iconStyle==2) {
+        roundRect(x-3,y-3,size+6,size+6,std::max(7,size/4),
+                  Color{static_cast<Uint8>(c.r/5),static_cast<Uint8>(c.g/5),
+                        static_cast<Uint8>(c.b/5),220});
+        c=WHITE; // material-like filled treatment with a high-contrast glyph
+    }
     color(c);
     const int cx=x+size/2,cy=y+size/2;
-    auto line=[&](int x1,int y1,int x2,int y2){SDL_RenderDrawLine(renderer,x1,y1,x2,y2);};
+    auto line=[&](int x1,int y1,int x2,int y2) {
+        SDL_RenderDrawLine(renderer,x1,y1,x2,y2);
+        if(iconStyle==1) SDL_RenderDrawLine(renderer,x1,y1+1,x2,y2+1);
+    };
     auto circle=[&](int radius,bool filled) {
         for(int dy=-radius;dy<=radius;++dy) {
             const int dx=static_cast<int>(std::sqrt(std::max(0,radius*radius-dy*dy)));
@@ -2079,6 +2168,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
+
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,workspace,r,fill);
         if(selected) {
@@ -2087,79 +2177,222 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         }
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
-        if(t.kind==Kind::Clock) {
-        text(clockText(),r.x+18,r.y+18,5,WHITE,r.x+r.w-12);
-        text(clockText(true).substr(6),r.x+20,r.y+74,2,MUTED,r.x+r.w-12);
-        text("CLOCK",r.x+20,r.y+r.h-23,1,BLUE,r.x+r.w-12);
-        } else if(t.kind==Kind::Battery) {
-        text("BATTERY",r.x+20,r.y+14,1,MUTED,r.x+r.w-12);
-        text(battery>=0?std::to_string(battery)+"%":"N/A",r.x+20,r.y+38,4,WHITE,r.x+r.w-12);
-        int maxW=std::max(1,r.w-48),value=battery>=0?maxW*battery/100:4;
-        roundRect(r.x+20,r.y+r.h-25,maxW,7,4,Color{54,66,84,255});
-        roundRect(r.x+20,r.y+r.h-25,std::max(4,value),7,4,battery>=20?GREEN:RED);
-    } else if(t.kind==Kind::System) {
-        roundRect(r.x+18,r.y+18,70,70,20,Color{37,61,91,255});
-        drawSystemIcon(0,r.x+34,r.y+34,38,WHITE);
-        const u32 firmware=hosversionGet();
-        char firmwareText[48]{};
-        std::snprintf(firmwareText,sizeof(firmwareText),"FIRMWARE %u.%u.%u",
-            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
-        text("SYSTEM INFO",r.x+104,r.y+27,2,WHITE,r.x+r.w-12);
-        text(firmwareText,r.x+104,r.y+54,1,MUTED,r.x+r.w-12);
-        text("TRANSWITCH LAUNCHER",r.x+104,r.y+73,1,BLUE,r.x+r.w-12);
-    } else if(t.kind==Kind::Unsupported) {
-        roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
-        text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,r.x+r.w-12);
-        text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,r.x+14,r.y+52,2,MUTED,r.x+r.w-12);
-    } else if(t.kind==Kind::Recent) {
-        text("RECENTLY OPENED",r.x+18,r.y+12,1,MUTED,r.x+r.w-12);
-        if(recentLaunches.empty())text("NOTHING HERE YET",r.x+18,r.y+44,2,WHITE,r.x+r.w-12);
-        else {
-            const size_t visible=std::min<size_t>(2,recentLaunches.size());
-            for(size_t i=0;i<visible;++i) {
-                const auto& e=recentLaunches[i];Tile iconTile{e.kind,e.title,e.data,0,0,1,1,static_cast<int>(i)};
-                const int iy=r.y+37+static_cast<int>(i)*28;drawTileIcon(iconTile,r.x+18,iy,22);
-                text(e.title,r.x+48,iy+5,1,WHITE,r.x+r.w-12);
-            }
-        }
-        text("HISTORY ON THIS CONSOLE",r.x+18,r.y+r.h-18,1,BLUE,r.x+r.w-12);
-    } else if(t.kind==Kind::Storage) {
-        text("SD CARD STORAGE",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
-        if(storageStatsAvailable) {
-            const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
-            const int percent=static_cast<int>(std::min<uint64_t>(
-                100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)));
-            char sizeText[64]{};
-            std::snprintf(sizeText,sizeof(sizeText),"%.1f GB FREE",
+        const bool compact=t.w==1&&t.h==1;
+        const bool wide=t.h==1&&t.w>=2;
+        const int left=r.x+18, right=r.x+r.w-14;
+        const int innerWidth=std::max(1,r.w-36);
+        auto label=[&](const std::string& value,int y) {
+            text(value,left,y,1,MUTED,right);
+        };
+        auto progress=[&](int y,int percent) {
+            const int barWidth=std::max(16,innerWidth);
+            const int bounded=std::max(0,std::min(100,percent));
+            roundRect(left,y,barWidth,8,4,Color{48,62,79,255});
+            roundRect(left,y,std::max(2,barWidth*bounded/100),8,4,
+                      bounded>=80?RED:GREEN);
+        };
+        auto freeSpaceText=[&]() {
+            char value[64]{};
+            std::snprintf(value,sizeof(value),"%.1f GB",
                 static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
-            text(sizeText,r.x+18,r.y+37,3,WHITE,r.x+r.w-14);
-            roundRect(r.x+18,r.y+r.h-29,r.w-36,9,5,Color{48,62,79,255});
-            roundRect(r.x+18,r.y+r.h-29,std::max(3,(r.w-36)*percent/100),9,5,GREEN);
-            text(std::to_string(percent)+"% USED",r.x+18,r.y+r.h-16,1,MUTED,r.x+r.w-14);
-        } else {
-            text("SD STATUS UNAVAILABLE",r.x+18,r.y+45,1,RED,r.x+r.w-14);
-        }
+            return std::string(value);
+        };
+        auto recentLine=[&](size_t index,int y,int iconSize) {
+            if(index>=recentLaunches.size())return;
+            const auto& entry=recentLaunches[index];
+            Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
+            drawTileIcon(iconTile,left,y,iconSize);
+            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
+        };
+
+        if(t.kind==Kind::Clock) {
+            const std::string time=clockText();
+            const std::string date=clockText(true).substr(6);
+            if(compact) {
+                text(time,r.x+10,r.y+20,3,WHITE,right);
+                label(date,r.y+66);
+                text("CLOCK",left,r.y+r.h-18,1,BLUE,right);
+            } else if(wide) {
+                text(time,left,r.y+23,5,WHITE,right);
+                label(date,r.y+78);
+                if(t.w>=3) {
+                    drawSystemIcon(6,r.x+r.w-68,r.y+28,38,accent);
+                    text("LOCAL TIME",r.x+r.w-118,r.y+78,1,BLUE,right);
+                }
+            } else {
+                text(time,left,r.y+24,6,WHITE,right);
+                text(date,left,r.y+105,2,MUTED,right);
+                text(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",left,r.y+160,1,BLUE,right);
+                drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
+            }
+        } else if(t.kind==Kind::Battery) {
+            if(compact) {
+                label("BATTERY",r.y+13);
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+34,3,WHITE,right);
+                progress(r.y+82,battery);
+            } else if(wide) {
+                label("BATTERY",r.y+13);
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+33,t.w>=3?4:3,WHITE,right-70);
+                progress(r.y+82,battery);
+                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
+                if(t.w>=3)text(languageRussian?"ЗАРЯД":"CHARGE",
+                    r.x+r.w-112,r.y+75,1,MUTED,right);
+            } else {
+                label("BATTERY STATUS",r.y+14);
+                drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+50,6,WHITE,right-70);
+                progress(r.y+145,battery);
+                text(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
+                     battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
+                     battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
+                                 (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
+                     left,r.y+172,2,battery>=20?GREEN:RED,right);
+            }
+        } else if(t.kind==Kind::System) {
+            const u32 firmware=hosversionGet();
+            char firmwareText[48]{};
+            std::snprintf(firmwareText,sizeof(firmwareText),"%u.%u.%u",
+                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            if(compact) {
+                drawSystemIcon(0,left,r.y+24,40,accent);
+                label("SYSTEM",r.y+13);
+                text("HOS "+std::string(firmwareText),left,r.y+70,1,WHITE,right);
+            } else if(wide) {
+                drawSystemIcon(0,left,r.y+31,48,accent);
+                label("SYSTEM INFO",r.y+13);
+                text("HOS "+std::string(firmwareText),left+62,r.y+34,2,WHITE,right);
+                text(languageRussian?"DESKNX • NATIVE":"DESKNX • NATIVE",
+                     left+62,r.y+67,1,BLUE,right);
+            } else {
+                roundRect(left,r.y+34,66,66,18,Color{37,61,91,255});
+                drawSystemIcon(0,left+12,r.y+46,42,WHITE);
+                label("SYSTEM INFORMATION",r.y+20);
+                text("HOS "+std::string(firmwareText),left+82,r.y+54,2,WHITE,right);
+                text(languageRussian?"НАТИВНЫЙ ЛАУНЧЕР":"NATIVE LAUNCHER",
+                     left+82,r.y+86,1,BLUE,right);
+                text(languageRussian?"12 РАБОЧИХ СТОЛОВ":"12 WORKSPACES",
+                     left,r.y+132,2,MUTED,right);
+                text("SDL2 / LIBNX",left,r.y+168,1,MUTED,right);
+            }
+        } else if(t.kind==Kind::Recent) {
+            if(compact) {
+                label("RECENT",r.y+13);
+                if(recentLaunches.empty())
+                    text(languageRussian?"ПУСТО":"EMPTY",left,r.y+50,1,WHITE,right);
+                else recentLine(0,r.y+42,26);
+            } else if(wide) {
+                label("RECENTLY OPENED",r.y+12);
+                if(recentLaunches.empty())
+                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
+                         left,r.y+48,2,WHITE,right);
+                else {
+                    recentLine(0,r.y+34,26);
+                    if(t.w>=3)recentLine(1,r.y+67,26);
+                }
+            } else {
+                label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
+                if(recentLaunches.empty()) {
+                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
+                         left,r.y+86,2,WHITE,right);
+                } else {
+                    const size_t count=std::min<size_t>(4,recentLaunches.size());
+                    for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
+                }
+                text(languageRussian?"ИСТОРИЯ ЭТОЙ КОНСОЛИ":"HISTORY ON THIS CONSOLE",
+                     left,r.y+r.h-24,1,BLUE,right);
+            }
+        } else if(t.kind==Kind::Storage) {
+            const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
+            const int percent=storageStatsAvailable
+                ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
+                :-1;
+            if(compact) {
+                label("SD STORAGE",r.y+13);
+                text(storageStatsAvailable?freeSpaceText():"N/A",left,r.y+39,2,WHITE,right);
+                progress(r.y+82,percent);
+            } else if(wide) {
+                label("SD CARD STORAGE",r.y+12);
+                text(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
+                     left,r.y+34,t.w>=3?4:3,WHITE,right-78);
+                if(percent>=0)text(std::to_string(percent)+"% USED",
+                    right-70,r.y+49,1,MUTED,right);
+                progress(r.y+83,percent);
+            } else {
+                label("SD CARD STORAGE",r.y+18);
+                if(storageStatsAvailable) {
+                    text(freeSpaceText()+" GB FREE",left,r.y+50,5,WHITE,right);
+                    if(sdTotalBytes>0) {
+                        char total[64]{};
+                        std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
+                            static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+                        text(total,left,r.y+112,2,MUTED,right);
+                    }
+                    progress(r.y+157,percent);
+                    text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
+                } else text(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
+                            left,r.y+90,2,RED,right);
+            }
         } else if(t.kind==Kind::Calendar) {
-        std::time_t now=std::time(nullptr);
-        std::tm* tmv=std::localtime(&now);
-        char date[48]="--";
-        char day[48]="CALENDAR";
-        if(tmv) {
-            std::strftime(date,sizeof(date),"%d %b %Y",tmv);
-            std::strftime(day,sizeof(day),"%A",tmv);
-        }
-        text("TODAY",r.x+18,r.y+12,1,MUTED,r.x+r.w-14);
-        text(date,r.x+18,r.y+35,3,WHITE,r.x+r.w-14);
-        text(day,r.x+18,r.y+r.h-24,1,BLUE,r.x+r.w-14);
-        } else if(t.w==1&&t.h==1) {
-        drawTileIcon(t,r.x+(r.w-60)/2,r.y+9,60);
-        text(t.title,r.x+9,r.y+r.h-21,1,WHITE,r.x+r.w-8);
-        if(t.kind==Kind::Nro)roundRect(r.x+8,r.y+8,6,6,3,GREEN);
-    } else {
-        const int is=t.h>1?86:66;
-        drawTileIcon(t,r.x+17,r.y+(r.h-is)/2,is);
-        text(t.title,r.x+is+31,r.y+r.h/2-13,2,WHITE,r.x+r.w-12);
-        text(t.kind==Kind::Nro?"HOMEBREW":"GAME",r.x+is+31,r.y+r.h/2+13,1,MUTED,r.x+r.w-12);
+            std::time_t now=std::time(nullptr);
+            std::tm current{};
+            std::tm* nowTm=std::localtime(&now);
+            if(nowTm)current=*nowTm;
+            static const char* enMonths[]={"January","February","March","April","May","June",
+                "July","August","September","October","November","December"};
+            static const char* ruMonths[]={"ЯНВАРЬ","ФЕВРАЛЬ","МАРТ","АПРЕЛЬ","МАЙ","ИЮНЬ",
+                "ИЮЛЬ","АВГУСТ","СЕНТЯБРЬ","ОКТЯБРЬ","НОЯБРЬ","ДЕКАБРЬ"};
+            static const char* enWeek[]={"Mo","Tu","We","Th","Fr","Sa","Su"};
+            static const char* ruWeek[]={"Пн","Вт","Ср","Чт","Пт","Сб","Вс"};
+            const int month=std::max(0,std::min(11,current.tm_mon));
+            const char* monthName=languageRussian?ruMonths[month]:enMonths[month];
+            if(compact) {
+                text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
+                text(monthName,left,r.y+78,1,BLUE,right);
+            } else if(wide) {
+                label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
+                text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
+                     left,r.y+42,3,WHITE,right);
+                text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
+                     left,r.y+83,1,BLUE,right);
+                drawSystemIcon(6,right-34,r.y+38,26,accent);
+            } else {
+                std::tm first=current;
+                first.tm_mday=1; first.tm_hour=12; first.tm_min=0; first.tm_sec=0;
+                (void)std::mktime(&first);
+                std::tm lastDay=first;
+                lastDay.tm_mon+=1;
+                lastDay.tm_mday=0;
+                (void)std::mktime(&lastDay);
+                const int daysInMonth=lastDay.tm_mday;
+                const int startColumn=(first.tm_wday+6)%7;
+                label(monthName,r.y+15);
+                text(std::to_string(current.tm_year+1900),right-45,r.y+15,1,MUTED,right);
+                const int gridX=left,gridY=r.y+52;
+                const int cellW=std::max(24,innerWidth/7),cellH=25;
+                for(int col=0;col<7;++col)
+                    text(languageRussian?ruWeek[col]:enWeek[col],
+                         gridX+col*cellW+2,gridY,1,BLUE,right);
+                for(int day=1;day<=daysInMonth;++day) {
+                    const int index=startColumn+day-1;
+                    const int col=index%7,row=index/7;
+                    const int dx=gridX+col*cellW,dy=gridY+24+row*cellH;
+                    if(day==current.tm_mday)
+                        roundRect(dx,dy-2,std::max(20,cellW-3),22,6,
+                                  Color{42,91,145,255});
+                    text(std::to_string(day),dx+4,dy+3,1,
+                         day==current.tm_mday?WHITE:MUTED,right);
+                }
+                text(languageRussian?"ТЕКУЩАЯ ДАТА":"CURRENT DATE",
+                     left,r.y+r.h-22,1,accent,right);
+            }
+        } else if(t.kind==Kind::Unsupported) {
+            roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
+            text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
+            text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
+                 r.x+14,r.y+52,2,MUTED,right);
         }
     }
     if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
@@ -2616,18 +2849,23 @@ void drawScreen() {
         text("B  BACK",856,143,1,WHITE,926);
         text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
              346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
-        text("FONT  "+(fontPath.empty()?std::string("SYSTEM"):std::string("CUSTOM")),
-             646,190,1,fontPath.empty()?MUTED:BLUE,930);
+        const size_t fontSlash=fontPath.find_last_of('/');
+        const std::string fontLabel=fontPath.empty()?std::string("SYSTEM"):
+            (fontSlash==std::string::npos?fontPath:fontPath.substr(fontSlash+1));
+        text("FONT  "+fontLabel,646,190,1,fontPath.empty()?MUTED:BLUE,930);
         text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
              346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
-            "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE"};
-        for(int i=0;i<9;++i) {
-            const int yy=216+i*38;
-            if(i==appSettingsIndex)roundRect(340,yy,600,33,9,Color{35,61,93,255});
-            text(actions[i],362,yy+9,2,i==appSettingsIndex?WHITE:MUTED,918);
-            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+11,1,BLUE,920);
+            "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+        const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
+        for(int i=0;i<11;++i) {
+            const int yy=214+i*31;
+            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
+            text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
+            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
+            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -2965,10 +3203,14 @@ void renameDesk() {
         setStatus("DROP THE MOVING TILE BEFORE RENAMING");
         return;
     }
+    const Uint64 keyboardStarted=SDL_GetTicks64();
     SwkbdConfig kbd{};
-    if(R_FAILED(swkbdCreate(&kbd,0))){setStatus("KEYBOARD UNAVAILABLE");return;}
+    const Result keyboardCreateRc=swkbdCreate(&kbd,0);
+    desknx::diag::Write("keyboard","rename_create","rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(keyboardCreateRc),static_cast<unsigned long long>(SDL_GetTicks64()-keyboardStarted));
+    if(R_FAILED(keyboardCreateRc)){setStatus("KEYBOARD UNAVAILABLE");return;}
     swkbdConfigMakePresetDefault(&kbd);
-    swkbdConfigSetHeaderText(&kbd,"Rename workspace");
+    swkbdConfigSetHeaderText(&kbd,languageRussian?"Переименовать рабочий стол":"Rename workspace");
     swkbdConfigSetInitialText(&kbd,desks[static_cast<size_t>(deskIndex)].name.c_str());
     // DESKNX3 stores up to 31 UTF-8 codepoints (124 bytes). The larger
     // input buffer permits 31 four-byte characters without truncation.
@@ -3233,12 +3475,20 @@ void activateAppSettings(int action) {
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
         case 8:
-            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;
+            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;iconStyle=0;
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
             gIconCache.setCustomIconPackDir("");
             applyThemePalette();
             if(saveLauncherSettings())setStatus("APPEARANCE RESET");
+            break;
+        case 9:
+            languageRussian=!languageRussian;
+            if(saveLauncherSettings())setStatus(languageRussian?"ЯЗЫК: РУССКИЙ":"LANGUAGE: ENGLISH");
+            break;
+        case 10:
+            iconStyle=(iconStyle+1)%3;
+            if(saveLauncherSettings())setStatus("ICON STYLE");
             break;
         default: break;
     }
@@ -3419,8 +3669,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+8)%9;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%9;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -3739,9 +3989,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=216&&y<558) {
-            const int row=(y-216)/38;
-            if(row>=0&&row<9)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=214&&y<555) {
+            const int row=(y-214)/31;
+            if(row>=0&&row<11)activateAppSettings(row);
         }
         return;
     }
@@ -3900,10 +4150,16 @@ void touchInput(const SDL_Event&e) {
             if(x>=ToolbarStartX&&index>=0&&index<ToolbarButtonCount&&
                x<toolbarButtonX(index)+ToolbarButtonWidth) {
                 switch(index) {
-                    case 0:
-                        if(R_FAILED(albumLaShowAllAlbumFiles()))
-                            setStatus("GALLERY UNAVAILABLE",3000);
+                    case 0: {
+                        const Uint64 galleryStarted=SDL_GetTicks64();
+                        desknx::diag::Write("gallery","launch_begin","applet=album_all_files");
+                        const Result galleryRc=albumLaShowAllAlbumFiles();
+                        desknx::diag::Write("gallery","return","rc=0x%08X elapsed_ms=%llu",
+                            static_cast<unsigned int>(galleryRc),
+                            static_cast<unsigned long long>(SDL_GetTicks64()-galleryStarted));
+                        if(R_FAILED(galleryRc))setStatus("GALLERY UNAVAILABLE",3000);
                         break;
+                    }
                     case 1: appSettingsMenu=true;appSettingsIndex=0; break;
                     case 2: {
                         HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
@@ -4156,11 +4412,28 @@ int main(int,char**) {
         }
     }
 
+    desknx::diag::Write("storage","persistent_paths",
+        "catalogue=sdmc:/switch/DeskNX/cache/catalogue.tsv names=sdmc:/switch/DeskNX/cache/game-names.tsv icons=sdmc:/switch/DeskNX/cache/icons layout=%s active=%s settings=%s history=%s",
+        CFG_FILE,ACTIVE_WORKSPACE_FILE,SETTINGS_FILE,HISTORY_FILE);
+    struct stat catalogueCacheStat{}, nameCacheStat{};
+    const bool catalogueCacheExists=stat("sdmc:/switch/DeskNX/cache/catalogue.tsv",&catalogueCacheStat)==0&&S_ISREG(catalogueCacheStat.st_mode);
+    const bool nameCacheExists=stat("sdmc:/switch/DeskNX/cache/game-names.tsv",&nameCacheStat)==0&&S_ISREG(nameCacheStat.st_mode);
+    desknx::diag::Write("catalogue","persistent_cache_state",
+        "catalogue_exists=%d catalogue_bytes=%lld names_exists=%d names_bytes=%lld",
+        catalogueCacheExists?1:0,
+        catalogueCacheExists?static_cast<long long>(catalogueCacheStat.st_size):0LL,
+        nameCacheExists?1:0,
+        nameCacheExists?static_cast<long long>(nameCacheStat.st_size):0LL);
     loadHistory();
     struct stat layoutStat{}, backupStat{};
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
     layoutLoaded = loadLayout();
+    desknx::diag::Write("layout","startup_primary_result",
+        "loaded=%d primary_exists=%d primary_bytes=%lld backup_exists=%d",
+        layoutLoaded?1:0,layoutExists?1:0,
+        layoutExists?static_cast<long long>(layoutStat.st_size):0LL,
+        backupExists?1:0);
     bool restoredFromBackup = false;
     if (!layoutLoaded && backupExists && loadLayoutFrom(CFG_BAK_FILE)) {
         // The primary may be missing as well as corrupt. Never discard the only
@@ -4175,9 +4448,11 @@ int main(int,char**) {
             layoutSaveBlocked = true;
         defaultLayout();
         defaultLayoutPending=true;
+        desknx::diag::Write("layout","defaults_created","reason=primary_invalid backup_unavailable");
     } else if (!layoutLoaded) {
         defaultLayout();
         defaultLayoutPending=true;
+        desknx::diag::Write("layout","defaults_created","reason=no_persisted_layout");
     }
     if(layoutLoaded && loadActiveWorkspaceState()) {
         setStatus("RESTORED: "+desks[static_cast<size_t>(deskIndex)].name,2500);
@@ -4218,11 +4493,32 @@ int main(int,char**) {
     gIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
+    if(fontPath.empty()) {
+        const char* builtInFonts[]={
+            "sdmc:/switch/DeskNX/media/fonts/NotoSans.ttf",
+            "sdmc:/switch/DeskNX/media/fonts/OpenSans.ttf",
+            "sdmc:/switch/DeskNX/media/fonts/NotoSansMono.ttf"
+        };
+        for(const char* candidate:builtInFonts) {
+            struct stat fontStat{};
+            if(stat(candidate,&fontStat)==0&&S_ISREG(fontStat.st_mode)&&fontStat.st_size>0) {
+                fontPath=candidate;
+                break;
+            }
+        }
+    }
     gIconCache.setCustomIconPackDir(iconPackPath);
     if(!fontPath.empty()&&!gFontRenderer.setCustomFont(fontPath)) {
+        desknx::diag::Write("font","load_failed","path=%s error=%s",
+            fontPath.c_str(),TTF_GetError());
         fontPath.clear();
         setStatus("CUSTOM FONT UNAVAILABLE - USING SYSTEM FONT",3000);
         (void)saveLauncherSettings();
+    } else if(!fontPath.empty()) {
+        desknx::diag::Write("font","loaded","path=%s bundled=%d",fontPath.c_str(),
+            fontPath.find("/media/fonts/")!=std::string::npos?1:0);
+    } else {
+        desknx::diag::Write("font","using_system_fallback","reason=no_builtin_font_found");
     }
     if(!wallpaperPath.empty()&&!loadWallpaperTexture(wallpaperPath)) {
         wallpaperPath.clear();

@@ -228,14 +228,14 @@ bool isCachedNroPath(const std::string& path) {
     return extension == ".nro" && IsRegularFile(path);
 }
 
-bool IsUsableCachedJpeg(const std::string& path);
+bool IsUsableCachedImage(const std::string& path);
 
-bool IsMissingOrUsableCachedJpeg(const std::string& path) {
+bool IsMissingOrUsableCachedImage(const std::string& path) {
     // Some legitimate NACP/NRO files contain no icon. A missing icon is not a
     // reason to discard the entire application catalogue; an existing broken
     // image is, because the next full scan can rebuild it.
     if (!IsRegularFile(path)) return true;
-    return IsUsableCachedJpeg(path);
+    return IsUsableCachedImage(path);
 }
 
 bool EnsureBuiltinWidgets(std::vector<Candidate>& items) {
@@ -319,7 +319,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
             if (!isHexTitleId(item.data)) return false;
             if (!allowStale) {
                 const std::string iconPath=desknx::model::iconCachePath(item.kind,item.data);
-                if (!IsMissingOrUsableCachedJpeg(iconPath)) return false;
+                if (!IsMissingOrUsableCachedImage(iconPath)) return false;
             }
         } else if (item.kind == Kind::Nro) {
             if (!isCachedNroPath(item.data)) {
@@ -328,7 +328,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
             }
             if (!allowStale) {
                 const std::string iconPath=desknx::model::iconCachePath(item.kind,item.data);
-                if (!IsMissingOrUsableCachedJpeg(iconPath)) return false;
+                if (!IsMissingOrUsableCachedImage(iconPath)) return false;
             }
         } else if (!item.data.empty()) {
             return false;
@@ -349,7 +349,29 @@ size_t jpegSize(const u8* data, size_t length) {
     return 0;
 }
 
-bool IsUsableCachedJpeg(const std::string& path) {
+bool pngDimensions(const u8* data, size_t length, size_t& width, size_t& height) {
+    static constexpr u8 signature[] = {137,80,78,71,13,10,26,10};
+    if (!data || length < 24 ||
+        std::memcmp(data, signature, sizeof(signature)) != 0 ||
+        std::memcmp(data + 12, "IHDR", 4) != 0)
+        return false;
+    width = (static_cast<size_t>(data[16]) << 24) |
+            (static_cast<size_t>(data[17]) << 16) |
+            (static_cast<size_t>(data[18]) << 8) | data[19];
+    height = (static_cast<size_t>(data[20]) << 24) |
+             (static_cast<size_t>(data[21]) << 16) |
+             (static_cast<size_t>(data[22]) << 8) | data[23];
+    return width > 0 && height > 0 && width <= 1024 && height <= 1024 &&
+           width * height <= 1024u * 1024u;
+}
+
+size_t imageSize(const u8* data, size_t length) {
+    if (const size_t jpeg = jpegSize(data, length)) return jpeg;
+    size_t width = 0, height = 0;
+    return pngDimensions(data, length, width, height) ? length : 0;
+}
+
+bool IsUsableCachedImage(const std::string& path) {
     struct stat st{};
     constexpr size_t MaxIconBytes = 2 * 1024 * 1024;
     constexpr size_t HeaderBytes = 8 * 1024;
@@ -364,6 +386,8 @@ bool IsUsableCachedJpeg(const std::string& path) {
     input.read(reinterpret_cast<char*>(bytes.data()),
                static_cast<std::streamsize>(bytes.size()));
     const size_t length = static_cast<size_t>(input.gcount());
+    size_t pngWidth = 0, pngHeight = 0;
+    if (pngDimensions(bytes.data(), length, pngWidth, pngHeight)) return true;
     if (length < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8) return false;
 
     // Validate the JPEG frame header before trusting a cached icon. This is
@@ -417,16 +441,16 @@ bool SaveBytes(const std::string& path, const unsigned char* data, size_t length
     }
     return true;
 }
-bool CacheJpegIcon(const std::string& path, const u8* data, size_t length, bool replace = false) {
+bool CacheIconImage(const std::string& path, const u8* data, size_t length, bool replace = false) {
     if (!replace && IsRegularFile(path)) return true;
-    const size_t actual = jpegSize(data, length);
+    const size_t actual = imageSize(data, length);
     return actual != 0 && SaveBytes(path, data, actual);
 }
 
 void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate,
                                bool forceRefresh = false) {
     const std::string iconPath = desknx::model::iconCachePath(Kind::Nro, nro.path);
-    const bool iconValid = IsUsableCachedJpeg(iconPath);
+    const bool iconValid = IsUsableCachedImage(iconPath);
     if (!iconValid && IsRegularFile(iconPath)) std::remove(iconPath.c_str());
     const bool needIcon = forceRefresh || !iconValid;
     std::ifstream file(nro.path, std::ios::binary);
@@ -454,7 +478,7 @@ void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate,
         file.clear();
         file.seekg(static_cast<std::streamoff>(assetPos + asset.icon.offset), std::ios::beg);
         file.read(reinterpret_cast<char*>(image.data()), static_cast<std::streamsize>(image.size()));
-        if (file) CacheJpegIcon(iconPath, image.data(), image.size(), forceRefresh);
+        if (file) CacheIconImage(iconPath, image.data(), image.size(), forceRefresh);
     }
     if (sectionValid(asset.nacp) && asset.nacp.size >= sizeof(NacpStruct)) {
         NacpStruct nacp{};
@@ -472,26 +496,25 @@ bool HasCachedGameIcon(u64 id) {
     std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
     const std::string path = desknx::model::iconCachePath(Kind::Game, hex);
     if (path.empty()) return false;
-    if (IsUsableCachedJpeg(path)) return true;
+    if (IsUsableCachedImage(path)) return true;
     if (IsRegularFile(path)) {
         std::remove(path.c_str());
-        LogDiagnostic("icon_cache invalid_jpeg title_id=%s removed=1", hex);
+        LogDiagnostic("icon_cache invalid_image title_id=%s removed=1", hex);
     }
     return false;
 }
 
-void CacheGameIcon(u64 id, const NsApplicationControlData& data, u64 controlSize) {
-    // nsGetApplicationControlData reports NACP + the actual JPEG byte count.
-    // Do not write the full fixed-size icon buffer: it contains trailing zeros
-    // and can be much larger than the image returned by NS.
-    if (controlSize <= sizeof(NacpStruct)) return;
+bool CacheGameIcon(u64 id, const NsApplicationControlData& data, u64 controlSize) {
+    // NS returns NACP followed by a JPEG or PNG icon. Keep the actual payload
+    // length; the fixed control-data struct has unused bytes after the image.
+    if (controlSize <= sizeof(NacpStruct)) return false;
     const u64 iconBytes = controlSize - sizeof(NacpStruct);
-    if (iconBytes > sizeof(data.icon) || iconBytes > MaxNroAssetBytes) return;
+    if (iconBytes > sizeof(data.icon) || iconBytes > MaxNroAssetBytes) return false;
     char hex[32]{};
     std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
     const std::string path = desknx::model::iconCachePath(Kind::Game, hex);
-    if (!path.empty())
-        CacheJpegIcon(path, data.icon, static_cast<size_t>(iconBytes), true);
+    return !path.empty() &&
+        CacheIconImage(path, data.icon, static_cast<size_t>(iconBytes), true);
 }
 
 using GameNameCache = std::unordered_map<u64, std::string>;
@@ -814,6 +837,9 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     freshNameCache.reserve(games.size());
     bool fetchedControlData = false;
     size_t controlDataOk = 0, controlDataFailed = 0;
+    size_t resolvedGameNames = 0, unresolvedGameNames = 0;
+    size_t cachedGameIcons = 0, failedGameIcons = 0;
+    char firstUnresolvedTitleId[17]{};
     std::uint32_t firstControlDataError = 0;
     size_t colorIndex = 0;
     for (size_t i = 0; i < games.size() && i < gameLimit; ++i) {
@@ -829,6 +855,11 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             !(cachedName->second.compare(0, 5, "Game ") == 0 &&
               desknx::model::isTitleId(cachedName->second.substr(5)));
         std::string title;
+        Result metadataRc=0;
+        bool metadataRead=false;
+        bool iconAvailable=iconCached;
+        const char* nameSource=(cachedNameUsable&&iconCached&&!forceRefresh)
+            ?"cache":"nacp";
         // Name metadata and artwork are independent cache entries. A valid
         // name must never suppress the one-time NACP read needed to repair a
         // missing icon, and a stale title-id placeholder must not be treated
@@ -837,24 +868,36 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
-            Result controlRc = 0;
             if (nsReady)
-                controlRc = desknx::slaunch::ReadControlData(id, control, actual);
-            if (nsReady && R_SUCCEEDED(controlRc)) {
+                metadataRc = desknx::slaunch::ReadControlData(id, control, actual);
+            metadataRead=true;
+            if (nsReady && R_SUCCEEDED(metadataRc)) {
                 ++controlDataOk;
                 const std::string resolved = desknx::slaunch::ResolveTitleName(control.nacp);
                 if (!resolved.empty() && !desknx::model::isTitleId(resolved))
                     title = resolved;
-                else if (cachedNameUsable)
+                else if (cachedNameUsable) {
                     title = cachedName->second;
-                if (forceRefresh || !iconCached) CacheGameIcon(id, control, actual);
+                    nameSource="cache_fallback";
+                }
+                if (forceRefresh || !iconCached) {
+                    if (CacheGameIcon(id, control, actual)) {
+                        ++cachedGameIcons;
+                        iconAvailable=true;
+                    } else {
+                        ++failedGameIcons;
+                        iconAvailable=false;
+                    }
+                }
                 fetchedControlData = true;
             } else {
                 ++controlDataFailed;
                 if (firstControlDataError == 0)
-                    firstControlDataError = static_cast<std::uint32_t>(controlRc);
-                if (cachedNameUsable)
+                    firstControlDataError = static_cast<std::uint32_t>(metadataRc);
+                if (cachedNameUsable) {
                     title = cachedName->second;
+                    nameSource="cache_fallback";
+                }
             }
         }
 
@@ -865,7 +908,19 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         const bool placeholderTitle = desknx::model::isTitleId(title) ||
             (title.compare(0, 5, "Game ") == 0 &&
              desknx::model::isTitleId(title.substr(5)));
-        if (!placeholderTitle) freshNameCache.emplace(id, title);
+        LogDiagnostic("game_metadata title_id=%s name_source=%s resolved=%d icon_available=%d cached_name=%d cached_icon=%d metadata_read=%d rc=0x%08X title=%s",
+            hex,nameSource,placeholderTitle?0:1,iconAvailable?1:0,
+            cachedNameUsable?1:0,iconCached?1:0,metadataRead?1:0,
+            static_cast<unsigned int>(metadataRc),title.c_str());
+        if (!placeholderTitle) {
+            freshNameCache.emplace(id, title);
+            ++resolvedGameNames;
+        } else {
+            ++unresolvedGameNames;
+            if (firstUnresolvedTitleId[0] == '\0')
+                std::snprintf(firstUnresolvedTitleId, sizeof(firstUnresolvedTitleId), "%016llX",
+                    static_cast<unsigned long long>(id));
+        }
         if (i < result.items.size() &&
             result.items[i].kind == Kind::Game && result.items[i].data == hex) {
             result.items[i].title = title;
@@ -885,6 +940,9 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     LogDiagnostic("control_data successful=%zu failed=%zu first_error=0x%08X cached_names=%zu",
                   controlDataOk, controlDataFailed,
                   static_cast<unsigned int>(firstControlDataError), nameCache.size());
+    LogDiagnostic("game_artwork resolved_names=%zu unresolved_names=%zu icons_written=%zu icon_failures=%zu first_unresolved=%s",
+                  resolvedGameNames, unresolvedGameNames, cachedGameIcons,
+                  failedGameIcons, firstUnresolvedTitleId[0] ? firstUnresolvedTitleId : "none");
     if (nsReady && result.nsErrorCode == 0 &&
         (fetchedControlData || freshNameCache.size() != nameCache.size())) {
         const bool namesSaved = WriteGameNameCache(freshNameCache);
