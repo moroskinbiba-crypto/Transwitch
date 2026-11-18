@@ -81,6 +81,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
           /tmp/desknx-protocol-rules-test
 
+      - name: Test compressed NACP title normalization
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror tests/nacp_title_block_test.cpp -lz -o /tmp/desknx-nacp-test
+          /tmp/desknx-nacp-test
+
       - name: Run host IPC parser tests (ТЗ IPC-01/02/04/07)
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
