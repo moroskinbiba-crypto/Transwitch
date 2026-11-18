@@ -428,3 +428,17 @@ The native standalone build has now completed both CI workflows:
 
 - Performance refinement: the NRO directory walk now starts after the launcher has published the initial installed-game IDs and system widgets. This keeps the catalogue usable during SD enumeration instead of blocking the first visible library update behind a slow card.
 - Cache recovery refinement: cached NRO shortcuts are discarded only when the path is confirmed missing/invalid. Transient I/O or access errors keep the previous shortcut in the warm catalogue until a complete directory scan can verify it.
+
+
+## UI/UX overhaul — 18 November 2026
+
+- New branch: `agent/transwitch-ux-polish-20261118`, based on the SD persistence and Homebrew scanner fixes in `c3e53eb`; isolated from `main`.
+- Simplified the persistent header to Gallery, Settings and Pads. Duplicate Tools navigation was removed from the header; quick tools remain reachable through L3/controller navigation and Minus power shortcut.
+- Repositioned profile and status indicators to use the freed header space without overlapping the primary destinations.
+- Converted the application library from a ten-row text list into an artwork-first 3 × 3 card browser. The detail panel remains, including playtime, launch history and NRO path metadata.
+- Added deterministic grid navigation, row-based touch scrolling, viewport projection and host boundary tests.
+- Reorganized launcher settings into visible Appearance, Workspace, Library and System groups. Existing action handlers and settings IDs remain intact through an explicit view-to-action mapping.
+- Kept the desktop grid, empty-cell semantics, drag/drop, tile resize ladder, 10 px game-cover corners and image-fit modes unchanged.
+- No persistence format changes were made.
+- Verification required: native NRO/HOME builds, host grid test, existing interaction/persistence tests and physical Switch checks for touch targets/readability/responsiveness.
+- MP4/video wallpaper, animated covers, weather and temperature widgets remain unexposed pending decoder/platform/network validation.
