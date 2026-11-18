@@ -48,7 +48,7 @@ ifeq ($(strip $(SDL2_TTF_LIBS)),)
 SDL2_TTF_LIBS := -lSDL2_ttf
 endif
 
-LIBS    := $(SDL2_IMAGE_LIBS) $(SDL2_TTF_LIBS) $(SDL2_LIBS) $(CURL_LIBS) -lnx
+LIBS    := $(SDL2_IMAGE_LIBS) $(SDL2_TTF_LIBS) $(SDL2_LIBS) $(CURL_LIBS) -lz -lnx
 LIBDIRS := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
