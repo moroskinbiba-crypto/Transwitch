@@ -117,7 +117,6 @@ public:
         completed_.clear();
         failedUntil_.clear();
         clearTextures();
-        resolvedPaths_.clear();
         renderer_ = nullptr;
     }
 
