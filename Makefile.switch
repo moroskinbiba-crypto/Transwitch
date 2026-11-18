@@ -75,6 +75,8 @@ export HFILES     := $(foreach dir,$(INCLUDES),$(wildcard $(dir)/*.h)) \
 export INCLUDE    := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
                      $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
                      -I$(CURDIR)/$(BUILD)
+CFLAGS += $(INCLUDE)
+CXXFLAGS += $(INCLUDE)
 export LIBPATHS   := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 export LIBS CFLAGS CXXFLAGS ASFLAGS LDFLAGS
 
