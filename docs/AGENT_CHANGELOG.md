@@ -448,3 +448,16 @@ The native standalone build has now completed both CI workflows:
 
 - Interaction polish: added a subtle time-based focus pulse to selected desktop tiles, empty cells and library cards without changing their size or adding extra texture work.
 - Touch accessibility: retained the three primary header tabs and added a compact overflow button beside Pads so touchscreen users can still open Quick Tools after Tools was removed as a top-level destination.
+
+
+## 2026-11-18 — Widget activation, adaptive layouts and Nextendo popular games
+
+- Separated widget activation from application launching. Only installed games and NROs can enter the title/NRO launch path; widget clicks stay inside the UI and are recorded with `widgets/activate_begin` and `widgets/activate_end` diagnostics.
+- Added an adaptive widget layout helper for 1×1, 2×1, 3×1, 2×2, 3×2 and 2×3 footprints. Clock, battery, system, recent launches, storage, calendar and Nextendo use size-aware typography, spacing and row limits.
+- Added a standalone Nextendo popular-games widget to the widget catalogue and the default Widgets desktop. It sorts current counts, merges regional Splatoon 2 title IDs, and opens a larger controller/touch-accessible ranked list.
+- Expanded verified title-name coverage for the current Nextendo games list. Unknown title IDs are not assigned guessed names; expired/missing snapshots remain unavailable rather than being displayed as zero.
+- Cached the ranked fixed-size list when a new network snapshot arrives. Rendering no longer copies and sorts the full per-title hash map every frame.
+- Added host coverage for widget geometry, widget type serialization, HomeNX workspace projection, Nextendo ranking, region merging and top-N limiting.
+- Relevant commits on `agent/homenx-plan-20261118`: `d70e143` (initial widget path and Nextendo widget), `3d737c0` (build repair, cached ranking and ordering fix), `7acbc0a` (broader title coverage and projection tests).
+- The NRO and DeskNX CI workflows passed for `3d737c0`; CI for the expanded title map in `7acbc0a` is running. Physical Switch testing is still required to confirm touch ergonomics and verify that the reported crash no longer occurs on-device.
+
