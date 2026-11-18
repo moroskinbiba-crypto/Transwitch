@@ -821,7 +821,7 @@ void applyMediaPickerSelection(int index) {
         if(!copied){std::remove(temporary.c_str());setStatus("GAME ICON COPY FAILED",3000);return;}
         if(!commitSdCard("game-icon-temp")){std::remove(temporary.c_str());return;}
         const auto replaceRc=desknx::safeio::replaceFilePreservingOnFailure(
-            temporary,target.c_str(),(target+".bak").c_str(),true);
+            temporary.c_str(),target.c_str(),(target+".bak").c_str(),true);
         if(replaceRc!=desknx::safeio::ReplaceStatus::Success) {
             std::remove(temporary.c_str());setStatus("GAME ICON SAVE FAILED",3000);return;
         }
