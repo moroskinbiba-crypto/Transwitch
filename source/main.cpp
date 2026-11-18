@@ -12,6 +12,7 @@
 #include "catalog.hpp"
 #include "slaunch_applications.hpp"
 #include "../include/desknx/Diagnostics.hpp"
+#include "../include/desknx/NextendoPlayers.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
