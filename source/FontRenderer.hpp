@@ -38,7 +38,7 @@ public:
         // gradually. The previous active face remains intact unless the
         // replacement has been read completely and its first size opens.
         if (path.empty()) {
-            closeFonts();
+            closeCustomFonts();
             customFontData_.clear();
             customFontPath_.clear();
             customWarmupIndex_ = 8;
@@ -71,7 +71,7 @@ public:
         TTF_Font* candidate = TTF_OpenFontRW(stream, 1, fontPixelSize(0));
         if (!candidate) return false;
 
-        closeFonts();
+        closeCustomFonts();
         customFontData_ = std::move(candidateData);
         customFonts_[0] = candidate;
         customFontPath_ = path;
@@ -163,15 +163,25 @@ private:
     bool ttfReady_{false};
     bool plReady_{false};
 
+    void closeCustomFonts() {
+        for (auto*& font : customFonts_) {
+            if (font) TTF_CloseFont(font);
+            font = nullptr;
+        }
+    }
+
     void closeFonts() {
         for (auto*& font : fonts_) {
             if (font) TTF_CloseFont(font);
             font = nullptr;
         }
-        for (auto*& font : customFonts_) {
-            if (font) TTF_CloseFont(font);
-            font = nullptr;
-        }
+        closeCustomFonts();
+    }
+
+    bool isCustomFace(const TTF_Font* font) const {
+        for (const auto* candidate : customFonts_)
+            if (candidate == font) return true;
+        return false;
     }
 
     TTF_Font* fontForScale(int scale) {
@@ -192,16 +202,27 @@ private:
         if (!ttfReady_ || !renderer_ || value.empty()) return false;
         const int maxWidth = std::max(0, right - left);
         if (maxWidth == 0) return true;
+        const int fontIndex = std::max(0, std::min(7, scale - 1));
         TTF_Font* font = fontForScale(scale);
         if (!font) return false;
-        const std::string& fitted = fitToWidth(value, font, scale, maxWidth);
-        if (fitted.empty()) return true;
+        const std::string* fitted = &fitToWidth(value, font, scale, maxWidth);
+        if (fitted->empty()) return true;
 
-        const std::string key = makeKey(fitted, scale, color, font);
+        std::string key = makeKey(*fitted, scale, color, font);
         CacheEntry* entry = find(key);
+        if (!entry && newTexturesRemaining_ <= 0 &&
+            isCustomFace(font) && fonts_[fontIndex]) {
+            // During the post-change warm-up, reuse the already cached system
+            // face for strings whose new-font texture has not been rebuilt.
+            // This avoids falling through to bitmap placeholders.
+            font = fonts_[fontIndex];
+            fitted = &fitToWidth(value, font, scale, maxWidth);
+            key = makeKey(*fitted, scale, color, font);
+            entry = find(key);
+        }
         if (!entry) {
             if (newTexturesRemaining_ <= 0) return false;
-            SDL_Surface* surface = TTF_RenderUTF8_Blended(font, fitted.c_str(), color);
+            SDL_Surface* surface = TTF_RenderUTF8_Blended(font, fitted->c_str(), color);
             if (!surface) return false;
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
             const int width = surface->w, height = surface->h;
@@ -270,7 +291,11 @@ private:
 
     std::string makeKey(const std::string& text, int scale, SDL_Color c,
                         const TTF_Font* font) const {
-        return std::to_string(fontGeneration_) + ":" +
+        // Shared/system faces remain alive across custom-font changes. Their
+        // existing cached textures can be used while new custom glyphs warm.
+        const std::string identity = isCustomFace(font)
+            ? std::to_string(fontGeneration_) : std::string("system");
+        return identity + ":" +
                std::to_string(reinterpret_cast<std::uintptr_t>(font)) + ":" +
                std::to_string(scale) + ":" + std::to_string(c.r) + ":" +
                std::to_string(c.g) + ":" + std::to_string(c.b) + ":" +
