@@ -131,6 +131,11 @@ jobs:
           DEVKITPRO: /opt/devkitpro
         run: make -C projects/DeskNXMenu -j2
 
+      - name: Compile native standalone launch path
+        env:
+          DEVKITPRO: /opt/devkitpro
+        run: make -C projects/DeskNXMenu standalone-check
+
       - name: Prepare standalone SD-card package
         run: |
           mkdir -p dist/switch/DeskNX
