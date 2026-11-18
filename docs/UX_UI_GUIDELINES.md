@@ -1,7 +1,7 @@
 # DeskNX — UI/UX implementation notes
 
 ## Navigation
-The persistent header contains Gallery, Settings and Pads only. Quick tools remain accessible through L3/controller navigation; Minus retains the power menu. Remaining header space is reserved for console profile, Nextendo presence, clock and battery.
+The persistent header contains Gallery, Settings and Pads only. Quick tools remain accessible through L3/controller navigation and a compact touch overflow button beside Pads; Minus retains the power menu. Remaining header space is reserved for console profile, Nextendo presence, clock and battery.
 
 ## Home workspace
 The 6 × 3 workspace, up to 12 independent desktops, empty cells and current drag/resize mechanics are preserved. Game/NRO tiles retain full-bleed artwork, title overlay, 10 px corners and per-desktop Cover/Contain/Stretch modes. Widgets retain information-first layouts.

@@ -445,3 +445,6 @@ The native standalone build has now completed both CI workflows:
 
 
 - UI review correction: removed redundant wallpaper/font/icon summary lines that overlapped the new settings category heading; removed an unused library viewport constant; library status and item counts now use the shared Russian localization.
+
+- Interaction polish: added a subtle time-based focus pulse to selected desktop tiles, empty cells and library cards without changing their size or adding extra texture work.
+- Touch accessibility: retained the three primary header tabs and added a compact overflow button beside Pads so touchscreen users can still open Quick Tools after Tools was removed as a top-level destination.
