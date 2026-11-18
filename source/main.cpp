@@ -2258,11 +2258,11 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
             if(compact) {
                 drawSystemIcon(0,left,r.y+24,40,accent);
-                label("SYSTEM");
+                label("SYSTEM",r.y+13);
                 text("HOS "+std::string(firmwareText),left,r.y+70,1,WHITE,right);
             } else if(wide) {
                 drawSystemIcon(0,left,r.y+31,48,accent);
-                label("SYSTEM INFO");
+                label("SYSTEM INFO",r.y+13);
                 text("HOS "+std::string(firmwareText),left+62,r.y+34,2,WHITE,right);
                 text(languageRussian?"DESKNX • NATIVE":"DESKNX • NATIVE",
                      left+62,r.y+67,1,BLUE,right);
