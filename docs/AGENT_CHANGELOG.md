@@ -463,3 +463,15 @@ The native standalone build has now completed both CI workflows:
 - Native NRO packaging and the complete DeskNX host/HOME build workflows passed on `bd02c59`; the `DeskNX-sdcard` package artifact was produced. The experimental system-backend workflow is separate and was still running at this checkpoint.
 - Physical Switch testing is still required to confirm touch ergonomics and verify that the reported crash no longer occurs on-device.
 
+
+## 2026-11-18 — Storage, controller and system widgets; installed version badges
+
+- Expanded the SD/storage widget. Compact tiles retain free-space and short game/homebrew counters; expanded tiles show installed game count, discovered Homebrew NRO count, SD capacity and the current process memory usage/limit from svcGetInfo.
+- Reworked the battery widget to keep the Switch battery percentage and add separate left/right Joy-Con battery levels and charging indicators. The HID API reports coarse 0–4 battery steps, so the UI deliberately shows 0/4…4/4 instead of implying an exact percentage.
+- Added the running Atmosphère version to the system widget. It is queried once from Exosphere config item 65000 through splGetConfig; if the service or config is unavailable the widget shows AMS N/A.
+- Replaced the catalogue's UPDATE AVAILABLE text badge with the installed control.nacp DisplayVersion. The version is stored in the catalogue cache (schema DESKNXCAT4). The badge is green when NS update metadata is available and says no update is pending, yellow when NsApplicationView.flags contains NsViewFlagNeedsUpdate, and muted when NS did not return a usable update-status view.
+- Clarified the source of the update hint: it comes from Nintendo's NS application-view metadata, not from comparing two version strings or scraping the eShop. The installed version text itself comes from the local NACP.
+- Added host tests for Atmosphère version decoding and the coarse Joy-Con battery-level conversion. Added an explicit update-status-known bit to cached game records so missing NS metadata is never mislabeled as green/latest.
+- Improved the expanded storage layout so the free-space headline no longer overlaps the game, Homebrew, RAM and SD-total rows.
+- Validation: native NRO packaging and the regular DeskNX host/HOME build workflows passed on 4353555. The SD-card package artifact was generated. The separate experimental system-backend workflow was still running at the last check; physical Switch testing remains necessary for Joy-Con readings, Atmosphère query availability, and visual spacing on all tile sizes.
+- Commits: d056253 (widget data sources and installed-version cache), dcaf35b (source integration correction), 4353555 (update-status confidence and expanded layout).

@@ -15,6 +15,19 @@ Rendering must adapt to the actual tile footprint instead of drawing one fixed l
 
 The Nextendo widget is a separate live-ranking component. It shows popular games sorted by the latest per-title player counts, merges regional variants into one game row, and opens a larger ranked list on activation. Do not invent player counts, label unknown title IDs with guessed game names, or keep expired online data visible. Ranking is prepared when a network snapshot arrives and the renderer reads a small fixed-size cache.
 
+
+### System and storage data
+
+The storage widget keeps SD free/total space and, at larger sizes, adds the number of installed titles, discovered Homebrew NROs and current-process memory usage/limit. These are local measurements; counts are refreshed with the catalogue/storage cadence.
+
+The battery widget shows the Switch battery separately from the left and right Joy-Con. Joy-Con charge is read through libnx HID power information, whose battery level is a coarse 0–4 step value; show the step count and charging state rather than presenting it as a precise percentage.
+
+The system widget shows both Horizon OS firmware and the running Atmosphère version. Query the latter through SPL/Exosphere config item 65000; show an unavailable state when the service/config cannot be read.
+
+### Installed application versions
+
+Show the installed control.nacp DisplayVersion in the library card and detail panel. Do not replace it with an online version guess. Use the Nintendo NS application-view NeedsUpdate flag only as update-status metadata: green means NS returned a view with no update hint, yellow means NS marks an update available, and muted means the update status is unknown. Never treat missing NS data as proof that an application is up to date.
+
 ## Application library
 The library is an artwork-first 3 × 3 browser. Each card shows cover/icon, title and type/update badge. The fixed detail panel preserves game statistics and Homebrew file metadata. D-pad navigation and touch taps/swipes are supported; vertical swipes move by one row. A host-tested viewport projection keeps selection visible.
 
