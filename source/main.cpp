@@ -2513,10 +2513,14 @@ void drawScreen() {
         text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),56,1,
              item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
     }
-    softCard(402,24,420,48,Color{32,43,59,235},Color{255,255,255,24});
-    drawSystemIcon(7,418,34,27,Color{215,228,246,255});
-    text(selectedUserLabel,458,41,2,WHITE,716);
-    text("CHANGE",738,43,1,BLUE,806);
+    // Compact overflow button keeps the quick tools reachable by touch without
+    // restoring a fourth top-level navigation destination.
+    roundRect(392,24,44,48,14,Color{37,47,62,230});
+    text("...",403,42,2,WHITE,431);
+    softCard(448,24,374,48,Color{32,43,59,235},Color{255,255,255,24});
+    drawSystemIcon(7,464,34,27,Color{215,228,246,255});
+    text(selectedUserLabel,504,41,2,WHITE,710);
+    text("CHANGE",732,43,1,BLUE,806);
     roundRect(832,24,170,48,18,Color{32,43,59,235});
     text(nextendoTotalLabel(),846,43,1,GREEN,990);
     roundRect(1012,24,190,48,18,Color{32,43,59,235});
@@ -4271,7 +4275,12 @@ void touchInput(const SDL_Event&e) {
         if(deletePrompt)return;
         // Three permanent header shortcuts; quick tools stay accessible via L3.
         if(y>=16&&y<=82) {
-            if(x>=402&&x<=822) {
+            if(x>=392&&x<436) {
+                systemMenu=true;
+                systemMenuIndex=0;
+                return;
+            }
+            if(x>=448&&x<=822) {
                 openUserProfile();
                 return;
             }
