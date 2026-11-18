@@ -195,7 +195,7 @@ bool isHexTitleId(const std::string& value) {
     return true;
 }
 
-bool isCachedNroPath(const std::string& path) {
+bool isCachedNroPath(const std::string& path, bool retainUnverifiable = false) {
     constexpr char prefix[] = "sdmc:/switch/";
     if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
         path.find("..") != std::string::npos || path.size() <= sizeof(prefix) + 3)
@@ -203,7 +203,16 @@ bool isCachedNroPath(const std::string& path) {
     std::string extension = path.substr(path.size() - 4);
     for (char& c : extension)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return extension == ".nro" && IsRegularFile(path);
+    if (extension != ".nro") return false;
+
+    struct stat st{};
+    errno = 0;
+    if (stat(path.c_str(), &st) == 0) return S_ISREG(st.st_mode);
+    // ENOENT/ENOTDIR means the shortcut is genuinely stale. For EACCES,
+    // EIO, or a transient filesystem fault, keep the old shortcut while the
+    // full scanner marks the inventory incomplete; do not confuse "unknown"
+    // with "deleted" and erase the user's homebrew entry from the warm cache.
+    return retainUnverifiable && errno != ENOENT && errno != ENOTDIR;
 }
 
 bool IsUsableCachedImage(const std::string& path);
@@ -300,8 +309,8 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
                 if (!IsMissingOrUsableCachedImage(iconPath)) return false;
             }
         } else if (item.kind == Kind::Nro) {
-            if (!isCachedNroPath(item.data)) {
-                if (allowStale) continue; // stale homebrew entry was removed from SD
+            if (!isCachedNroPath(item.data, allowStale)) {
+                if (allowStale) continue; // confirmed missing/invalid shortcut
                 return false;
             }
             if (!allowStale) {

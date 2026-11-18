@@ -427,3 +427,4 @@ The native standalone build has now completed both CI workflows:
 - CI must confirm both native and HOME applet compilation. Hardware validation is still required to confirm SD save/restore and real SD-card scan time on Switch.
 
 - Performance refinement: the NRO directory walk now starts after the launcher has published the initial installed-game IDs and system widgets. This keeps the catalogue usable during SD enumeration instead of blocking the first visible library update behind a slow card.
+- Cache recovery refinement: cached NRO shortcuts are discarded only when the path is confirmed missing/invalid. Transient I/O or access errors keep the previous shortcut in the warm catalogue until a complete directory scan can verify it.
