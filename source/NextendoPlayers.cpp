@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace desknx::nextendo {
 namespace {
@@ -108,11 +109,10 @@ bool parseCounts(const std::string& body, PlayerSnapshot& snapshot, bool onlyNew
     ++p;
     skipSpace(body, p);
     if (p >= body.size() || body[p++] != '{') return false;
-    bool parsed = false;
     for (;;) {
         skipSpace(body, p);
         if (p >= body.size()) return false;
-        if (body[p] == '}') return parsed;
+        if (body[p] == '}') return true;
         std::string title;
         if (!readString(body, p, title)) return false;
         skipSpace(body, p);
@@ -130,12 +130,11 @@ bool parseCounts(const std::string& body, PlayerSnapshot& snapshot, bool onlyNew
         TitleId id = 0;
         if (parseTitleId(title, id) && (!onlyNew || snapshot.perTitle.find(id) == snapshot.perTitle.end())) {
             snapshot.perTitle[id] = static_cast<unsigned>(value);
-            parsed = true;
         }
         p = static_cast<std::size_t>(end - body.c_str());
         skipSpace(body, p);
         if (p < body.size() && body[p] == ',') { ++p; continue; }
-        if (p < body.size() && body[p] == '}') return parsed;
+        if (p < body.size() && body[p] == '}') return true;
         return false;
     }
 }
