@@ -3989,9 +3989,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=216&&y<558) {
-            const int row=(y-216)/38;
-            if(row>=0&&row<9)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=214&&y<555) {
+            const int row=(y-214)/31;
+            if(row>=0&&row<11)activateAppSettings(row);
         }
         return;
     }
