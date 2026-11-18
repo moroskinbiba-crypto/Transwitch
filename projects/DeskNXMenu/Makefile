@@ -38,7 +38,12 @@ TITLE_ID    := 0100000000001000
 APP_JSON    = $(if $(TOPDIR),$(TOPDIR),$(CURDIR))/DeskNXMenu.json
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
-CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__ -DDESKNX_SYSTEM_APPLET
+CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
+ifeq ($(STANDALONE_CHECK),1)
+CFLAGS      += -DDESKNX_STANDALONE_NATIVE_CHECK
+else
+CFLAGS      += -DDESKNX_SYSTEM_APPLET
+endif
 CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
@@ -74,18 +79,29 @@ export INCLUDE := $(foreach dir,$(INCLUDES),-I$(abspath $(CURDIR)/$(dir))) \
                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 export APP_TITLE APP_AUTHOR APP_VERSION APP_JSON
-.PHONY: all clean
+.PHONY: all clean standalone-check
 all: $(BUILD)
 $(BUILD):
 	@mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+# Compile the non-system launch path too. The production HOME applet build
+# defines DESKNX_SYSTEM_APPLET and would otherwise leave the standalone branch
+# of source/main.cpp unchecked by CI.
+standalone-check:
+	@mkdir -p build-standalone-check
+	@$(MAKE) --no-print-directory -C build-standalone-check -f $(CURDIR)/Makefile STANDALONE_CHECK=1 BUILD=build-standalone-check standalone-compile-check
 clean:
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
 	@rm -rf $(CURDIR)/../../SdOut/switch/DeskNX/bin/Menu
 else
 DEPENDS := $(OFILES:.o=.d)
+ifeq ($(STANDALONE_CHECK),1)
+.PHONY: standalone-compile-check
+standalone-compile-check: $(OFILES)
+else
 .PHONY: all
 all: $(OUTDIR)/main $(OUTDIR)/main.npdm
+endif
 
 $(OUTPUT).elf: $(OFILES)
 
