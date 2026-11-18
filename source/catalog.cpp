@@ -121,7 +121,7 @@ std::string GetApplicationDisplayVersion(const NacpStruct& nacp) {
     std::string version(begin,end);
     if(version.size()>15)return {};
     for(char& ch:version)
-        if(ch=='\\t'||ch=='\\n'||ch=='\\r')ch=' ';
+        if(ch=='\t'||ch=='\n'||ch=='\r')ch=' ';
     return version;
 }
 

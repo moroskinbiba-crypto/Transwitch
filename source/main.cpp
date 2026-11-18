@@ -2032,7 +2032,6 @@ void refreshStorageStats() {
     }
 }
 
-std::string initials(
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
     // through, multibyte sequences contribute their lead byte which yields
