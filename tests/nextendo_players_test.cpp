@@ -173,7 +173,27 @@ void testPopularGamesRespectLimitAndEmptySnapshot() {
     const PopularGames empty = rankPopularGames(snapshot);
     assert(empty.available);
     assert(empty.count == 0);
-    const PopularGames limited = rankPopularGames(snapshot, 3);
+    PlayerSnapshot ranked;
+    ranked.perTitle[0x01006A800016E000ull] = 32; // Super Smash Bros. Ultimate
+    ranked.perTitle[0x0100C2500FC20000ull] = 28; // Splatoon 3
+    ranked.perTitle[0x0100152000022000ull] = 26; // Mario Kart 8 Deluxe
+    ranked.perTitle[0x01003BC0000A0000ull] = 12; // Splatoon 2
+    ranked.perTitle[0x01009B500007C000ull] = 11; // ARMS
+    ranked.perTitle[0x010047700D540000ull] = 9;  // Clubhouse Games
+    ranked.perTitle[0x0100BDE00862A000ull] = 8;  // Mario Tennis Aces
+    ranked.perTitle[0x01009B90006DC000ull] = 6;  // Super Mario Maker 2
+    ranked.perTitle[0x0100B04011742000ull] = 4;  // Monster Hunter Rise
+    ranked.perTitle[0x0100F43008C44000ull] = 3;  // Pokemon Legends: Z-A
+    ranked.perTitle[0x0100A250097F0000ull] = 1;  // Dragon Ball FighterZ
+    ranked.total = 140;
+
+    const PopularGames all = rankPopularGames(ranked);
+    assert(all.available);
+    assert(all.count == MaxPopularGames);
+    assert(all.games[0].players == 32);
+    assert(all.games[9].players == 3); // top ten retained despite >10 known titles
+
+    const PopularGames limited = rankPopularGames(ranked, 3);
     assert(limited.available);
     assert(limited.count == 3);
     assert(limited.games[0].players == 32);
