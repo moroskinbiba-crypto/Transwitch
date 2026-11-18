@@ -2947,9 +2947,9 @@ void drawScreen() {
                 "NO SUPPORTED GAMES ARE ONLINE",290,238,2,MUTED,980);
         } else {
             for(std::size_t i=0;i<popular.count;++i) {
-                const int yy=194+static_cast<int>(i)*42;
+                const int yy=184+static_cast<int>(i)*36;
                 const bool selected=static_cast<int>(i)==nextendoSelected;
-                if(selected)roundRect(270,yy-5,740,36,9,Color{39,61,88,255});
+                if(selected)roundRect(270,yy-4,740,32,9,Color{39,61,88,255});
                 roundRect(284,yy+2,26,24,8,Color{32,66,91,255});
                 text(std::to_string(i+1),292,yy+9,1,BLUE,305);
                 text(popular.games[i].title?popular.games[i].title:"Unknown game",
@@ -4201,8 +4201,8 @@ void touchInput(const SDL_Event&e) {
             const int y=static_cast<int>(e.tfinger.y*SH);
             if(x>=920&&x<=1020&&y>=100&&y<=152) {
                 nextendoOpen=false;
-            } else if(y>=185&&y<565) {
-                const int row=(y-189)/42;
+            } else if(y>=180&&y<540) {
+                const int row=(y-180)/36;
                 const auto popular=nextendoPopularSnapshot();
                 if(row>=0&&static_cast<std::size_t>(row)<popular.count)
                     nextendoSelected=row;
