@@ -661,8 +661,46 @@ bool ParseMenuCommand(AppletStorage& storage) {
             // invalid uid into the game's preselected-user parameter.
             g_HasPendingUser = has_uid;
             if (has_uid) g_PendingUser = uid;
-            DaemonLog("ipc: launch title=0x%016llX uid=%d",
-                      static_cast<unsigned long long>(title_id), has_uid ? 1 : 0);
+            DaemonLog("ipc: launch title=0x%016llX uid=%d flags=0x%llX",
+                      static_cast<unsigned long long>(title_id), has_uid ? 1 : 0,
+                      static_cast<unsigned long long>(g_PendingLaunchFlags));
+
+            // HomeNX's launch handoff: when the HOME menu is still alive and
+            // no suspended title owns an AppletApplication holder, start the
+            // requested game behind the closing menu. Do not ask AM for the
+            // foreground yet; HandleMenuClosed() joins the menu holder first,
+            // then the normal backend path hands the display to the game.
+            // If any prerequisite or the early start fails, keep the pending
+            // request intact and let HandleMenuClosed() retry it normally.
+            if (la::IsMenuAlive() && !g_HomebrewLoaderRunning &&
+                !app::g_AppRunning) {
+                AccountUid early_user = g_SelectedUser;
+                if (g_HasPendingUser && accountUidIsValid(&g_PendingUser)) {
+                    early_user = g_PendingUser;
+                } else if (!accountUidIsValid(&early_user)) {
+                    PickSelectedUser();
+                    early_user = g_SelectedUser;
+                }
+
+                if (accountUidIsValid(&early_user)) {
+                    const Result earlyRc = app::Launch(
+                        title_id, early_user, g_PendingLaunchFlags, false);
+                    DaemonLog("app: early background launch title=0x%016llX rc=0x%08X",
+                              static_cast<unsigned long long>(title_id),
+                              static_cast<unsigned int>(earlyRc));
+                    if (R_SUCCEEDED(earlyRc)) {
+                        g_SelectedUser = early_user;
+                        g_PendingTitle = 0;
+                        g_PendingLaunchFlags = 0;
+                        g_HasPendingUser = false;
+                        DaemonLog("app: launch accepted behind HOME; foreground waits for menu close");
+                    } else {
+                        DaemonLog("app: early launch failed; preserving request for post-menu retry");
+                    }
+                } else {
+                    DaemonLog("app: early launch skipped; no valid user is available yet");
+                }
+            }
             return true;
         }
 
