@@ -32,8 +32,8 @@ jobs:
       - name: Verify production HOME applet entry point
         run: bash scripts/check-home-applet-entrypoint.sh
 
-      - name: Install Switch networking dependency
-        run: dkp-pacman -S --noconfirm switch-curl
+      - name: Verify Switch curl dependency
+        run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
