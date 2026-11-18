@@ -376,3 +376,11 @@ The native standalone build has now completed both CI workflows:
 - Applied SDL's low-priority scheduling class to catalogue scanning, artwork-adjacent metadata queries (play statistics), Nextendo polling, and asynchronous layout writes. Heartbeat remains at its existing priority so backend liveness is not deprioritized. This uses the SDL portability layer rather than assuming a Switch-only native thread handle; CPU-core affinity remains deferred until verified against the exact devkitPro SDL/libnx runtime.
 
 - Fixed the experimental system-backend CI workflow: its compressed-NACP host test linked `-lz` but did not install the host zlib development headers. Added the same explicit `zlib1g-dev` setup already used by the regular build workflow.
+
+
+## 2026-11-18 — Persistence shutdown safety
+
+- Fixed a lifecycle hole in the production NRO: asynchronous layout-save jobs are now drained unconditionally before renderer/SDL shutdown and SD unmount, not only when `layoutLoaded` is already true.
+- The final synchronous snapshot is also written when the user changed a first-run workspace while the catalogue scan is still running. An untouched first-run placeholder layout remains deliberately unpersisted so the post-scan Games/Homebrew defaults are still generated.
+- Added `ShutdownPersistence.hpp` and a host test covering loaded layouts, first-run untouched/modified layouts, save-blocked recovery, missing SD, and empty workspace sets.
+- Added the new test to the regular CI workflow.

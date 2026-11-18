@@ -9,6 +9,7 @@
 #include "../include/desknx/Model.hpp"
 #include "../include/desknx/WorkspaceOps.hpp"
 #include "../include/desknx/HomeNXGridAdapter.hpp"
+#include "../include/desknx/ShutdownPersistence.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
 #include "slaunch_applications.hpp"
@@ -4672,8 +4673,29 @@ int main(int,char**) {
 #endif
     SDL_AtomicSet(&nextendoStop,1);
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
-    if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
-        (void)saveLayout();
+
+    // Always retire async SD writers before destroying SDL, unmounting SDMC,
+    // or returning to the caller. On first run layoutLoaded can still be false
+    // while a user-triggered save is already in flight; skipping this drain
+    // allowed the process to exit with the only current snapshot unwritten.
+    const bool asyncSavePendingAtExit =
+        layoutSaveThread || activeLayoutSaveJob || pendingLayoutSaveJob;
+    desknx::diag::Write("layout","shutdown_flush_begin",
+        "loaded=%d default_pending=%d user_modified=%d blocked=%d async_pending=%d",
+        layoutLoaded?1:0,defaultLayoutPending?1:0,layoutUserModified?1:0,
+        layoutSaveBlocked?1:0,asyncSavePendingAtExit?1:0);
+    drainAsyncLayoutSaver();
+
+    const bool shouldSaveAtExit =
+        desknx::persistence::shouldSaveLayoutOnShutdown(
+            sdMounted,!layoutSaveBlocked,!desks.empty(),
+            layoutLoaded,defaultLayoutPending,layoutUserModified);
+    bool finalLayoutSaveOk = true;
+    if(shouldSaveAtExit) finalLayoutSaveOk=saveLayout();
+    desknx::diag::Write("layout","shutdown_flush_end",
+        "async_was_pending=%d save_requested=%d save_ok=%d loaded=%d",
+        asyncSavePendingAtExit?1:0,shouldSaveAtExit?1:0,
+        finalLayoutSaveOk?1:0,layoutLoaded?1:0);
     for(auto& entry:workspaceBackgroundTextures)
         if(entry.texture)SDL_DestroyTexture(entry.texture);
     workspaceBackgroundTextures.clear();

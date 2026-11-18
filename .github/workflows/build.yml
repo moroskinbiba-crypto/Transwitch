@@ -39,6 +39,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test production shutdown persistence decision
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/shutdown_persistence_test.cpp -o /tmp/desknx-shutdown-persistence-test
+          /tmp/desknx-shutdown-persistence-test
+
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update
