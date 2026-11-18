@@ -26,7 +26,8 @@ namespace desknx::system::app {
     // The game's NACP asks for a user at launch (StartupUserAccount set).
     bool WantsUser(u64 app_id);
 
-    Result Launch(u64 app_id, AccountUid user, u64 flags = 0);
+    Result Launch(u64 app_id, AccountUid user, u64 flags = 0,
+                   bool take_foreground = true);
 
     // Give foreground back to the currently suspended application
     Result Resume();
