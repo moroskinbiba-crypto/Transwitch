@@ -4688,7 +4688,7 @@ int main(int,char**) {
 
     const bool shouldSaveAtExit =
         desknx::persistence::shouldSaveLayoutOnShutdown(
-            sdMounted,!layoutSaveBlocked,!desks.empty(),
+            sdMounted,layoutSaveBlocked,!desks.empty(),
             layoutLoaded,defaultLayoutPending,layoutUserModified);
     bool finalLayoutSaveOk = true;
     if(shouldSaveAtExit) finalLayoutSaveOk=saveLayout();

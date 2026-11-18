@@ -384,3 +384,5 @@ The native standalone build has now completed both CI workflows:
 - The final synchronous snapshot is also written when the user changed a first-run workspace while the catalogue scan is still running. An untouched first-run placeholder layout remains deliberately unpersisted so the post-scan Games/Homebrew defaults are still generated.
 - Added `ShutdownPersistence.hpp` and a host test covering loaded layouts, first-run untouched/modified layouts, save-blocked recovery, missing SD, and empty workspace sets.
 - Added the new test to the regular CI workflow.
+
+- Follow-up review corrected the shutdown-policy call-site argument order so the helper receives the actual `layoutSaveBlocked` flag (rather than its inverse). This keeps writes enabled during normal shutdown and disabled when recovery protection is active.
