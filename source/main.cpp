@@ -35,6 +35,7 @@
 #include <utility>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 namespace {
 using namespace desknx::model;
@@ -108,6 +109,10 @@ std::vector<Candidate> catalogue;
 SDL_mutex* catalogueMutex = nullptr;
 SDL_mutex* ipcMutex = nullptr;
 SDL_Thread* catalogueThread = nullptr;
+SDL_Thread* nextendoThread = nullptr;
+SDL_mutex* nextendoMutex = nullptr;
+SDL_atomic_t nextendoStop{};
+desknx::nextendo::PresenceFeed nextendoFeed;
 int catalogueForceRefreshToken = 1;
 #ifdef DESKNX_SYSTEM_APPLET
 SDL_Thread* heartbeatThread = nullptr;
@@ -860,6 +865,63 @@ void readCatalogueState(bool& ready,bool& complete,bool& truncated,
 void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
     publishCatalogue(snapshot);
 }
+int nextendoThreadMain(void*) {
+    bool networkReady = false;
+    std::uint64_t nextAttempt = SDL_GetTicks64() + 8000;
+    while (!SDL_AtomicGet(&nextendoStop)) {
+        const std::uint64_t now = SDL_GetTicks64();
+        if (now >= nextAttempt) {
+            if (!networkReady) {
+                networkReady = desknx::nextendo::initializeNetwork();
+                desknx::diag::Write("nextendo", networkReady ? "network_ready" : "network_init_failed",
+                    "retry_ms=%u", networkReady ? 0u : 30000u);
+                if (!networkReady) {
+                    nextAttempt = now + 30000;
+                    SDL_Delay(250);
+                    continue;
+                }
+            }
+            desknx::nextendo::PlayerSnapshot snapshot;
+            const bool ok = desknx::nextendo::fetchSnapshot(snapshot);
+            if (ok && nextendoMutex) {
+                SDL_LockMutex(nextendoMutex);
+                const bool applied = nextendoFeed.apply(snapshot, SDL_GetTicks64());
+                SDL_UnlockMutex(nextendoMutex);
+                desknx::diag::Write("nextendo", applied ? "snapshot_updated" : "snapshot_rejected",
+                    "titles=%zu total=%u", snapshot.perTitle.size(), snapshot.total);
+            } else {
+                desknx::diag::Write("nextendo", "snapshot_failed",
+                    "network_ready=%d", networkReady ? 1 : 0);
+            }
+            nextAttempt = now + desknx::nextendo::RefreshIntervalMs;
+        }
+        SDL_Delay(250);
+    }
+    if (networkReady) desknx::nextendo::shutdownNetwork();
+    return 0;
+}
+
+unsigned nextendoPlayersForTitle(const std::string& titleId) {
+    if (!nextendoMutex || !desknx::model::isTitleId(titleId)) return 0;
+    char* end = nullptr;
+    const unsigned long long id = std::strtoull(titleId.c_str(), &end, 16);
+    if (end != titleId.c_str() + titleId.size() || id == 0) return 0;
+    SDL_LockMutex(nextendoMutex);
+    const unsigned count = nextendoFeed.playersFor(static_cast<std::uint64_t>(id), SDL_GetTicks64());
+    SDL_UnlockMutex(nextendoMutex);
+    return count;
+}
+
+std::string nextendoTotalLabel() {
+    if (!nextendoMutex) return "NEXTENDO --";
+    SDL_LockMutex(nextendoMutex);
+    const std::uint64_t now = SDL_GetTicks64();
+    const bool fresh = nextendoFeed.hasTotal(now);
+    const unsigned total = nextendoFeed.total(now);
+    SDL_UnlockMutex(nextendoMutex);
+    return fresh ? "NEXTENDO " + std::to_string(total) : "NEXTENDO --";
+}
+
 int catalogueThreadMain(void* context) {
     const bool forceRefresh = context != nullptr;
     desknx::diag::Write("catalogue", "thread_begin",
@@ -1708,6 +1770,18 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
     // wedges afterwards so the actual game artwork follows the tile's 10px
     // rounded silhouette rather than exposing square image corners.
     maskRoundedImageCorners(viewport,UiCornerRadius,cornerFill);
+    if (tile.kind == Kind::Game) {
+        const unsigned online = nextendoPlayersForTitle(tile.data);
+        if (online > 0) {
+            const std::string count = std::to_string(online);
+            const int badgeWidth = 38 + static_cast<int>(count.size()) * 8;
+            roundRect(viewport.x + 8, viewport.y + 8, badgeWidth, 25, 13,
+                      Color{5,18,15,224});
+            roundRect(viewport.x + 15, viewport.y + 16, 9, 9, 5, GREEN);
+            text(count, viewport.x + 29, viewport.y + 15, 1, WHITE,
+                 viewport.x + badgeWidth - 5);
+        }
+    }
 }
 void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     SDL_Rect r=tileRect(t);
@@ -1861,6 +1935,8 @@ void drawScreen() {
     drawSystemIcon(7,486,34,27,Color{215,228,246,255});
     text(selectedUserLabel,526,41,2,WHITE,760);
     text("CHANGE",780,43,1,BLUE,850);
+    roundRect(870,24,142,48,18,Color{32,43,59,235});
+    text(nextendoTotalLabel(),882,43,1,GREEN,1003);
     roundRect(1022,24,180,48,18,Color{32,43,59,235});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,30});
@@ -3739,6 +3815,8 @@ int main(int,char**) {
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
     playStatsMutex=SDL_CreateMutex();
+    nextendoMutex=SDL_CreateMutex();
+    nextendoFeed.setEnabled(true);
 
     // Match SLauncher's startup order: query the real firmware version and
     // publish it to libnx BEFORE initializing version-gated NS services.
@@ -3858,6 +3936,8 @@ int main(int,char**) {
         setStatus(message, 6000);
     }
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
+    nextendoThread=SDL_CreateThread(nextendoThreadMain,"Nextendo online counts",nullptr);
+    if(!nextendoThread)desknx::diag::Write("nextendo","thread_create_failed","online counts disabled");
     if(!catalogueThread){
         desknx::diag::Write("catalogue", "thread_create_failed", "fallback= synchronous_scan");
         setStatus("BACKGROUND SCAN UNAVAILABLE",3000);
@@ -3955,6 +4035,8 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    SDL_AtomicSet(&nextendoStop,1);
+    if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
         (void)saveLayout();
     for(auto& entry:workspaceBackgroundTextures)
@@ -3980,6 +4062,7 @@ int main(int,char**) {
     IMG_Quit();
     if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
+    if (nextendoMutex) SDL_DestroyMutex(nextendoMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
     if (renderer) SDL_DestroyRenderer(renderer);
