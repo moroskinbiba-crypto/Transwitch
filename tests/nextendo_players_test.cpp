@@ -132,24 +132,39 @@ void testClockWrapDoesNotCrash() {
 
 void testPopularGamesAreSortedAndRegionalRowsAreMerged() {
     PlayerSnapshot snapshot;
-    snapshot.perTitle[0x0100152000022000ull] = 14; // Mario Kart 8 Deluxe
+    snapshot.perTitle[0x0100152000022000ull] = 26; // Mario Kart 8 Deluxe
     snapshot.perTitle[0x0100F8F0000A2000ull] = 5;  // Splatoon 2 region A
     snapshot.perTitle[0x01003BC0000A0000ull] = 7;  // Splatoon 2 region B
-    snapshot.perTitle[0x01006A800016E000ull] = 20; // Smash Ultimate
+    snapshot.perTitle[0x0100C2500FC20000ull] = 28; // Splatoon 3
+    snapshot.perTitle[0x01009B90006DC000ull] = 6;  // Mario Maker 2
+    snapshot.perTitle[0x0100B04011742000ull] = 4;  // Monster Hunter Rise
+    snapshot.perTitle[0x0100F43008C44000ull] = 3;  // Pokemon Legends: Z-A
+    snapshot.perTitle[0x0100A250097F0000ull] = 1;  // Dragon Ball FighterZ
+    snapshot.perTitle[0x01006A800016E000ull] = 32; // Smash Ultimate
     snapshot.perTitle[0x0100E65002BB8000ull] = 0;  // not currently online
     snapshot.perTitle[0xDEADBEEFDEADBEEFull] = 99; // unknown IDs are not guessed
-    snapshot.total = 145;
+    snapshot.total = 211;
 
     const PopularGames popular = rankPopularGames(snapshot);
     assert(popular.available);
-    assert(popular.totalPlayers == 145);
-    assert(popular.count == 3);
+    assert(popular.totalPlayers == 211);
+    assert(popular.count == 8);
     assert(std::strcmp(popular.games[0].title, "Super Smash Bros. Ultimate") == 0);
-    assert(popular.games[0].players == 20);
-    assert(std::strcmp(popular.games[1].title, "Mario Kart 8 Deluxe") == 0);
-    assert(popular.games[1].players == 14);
-    assert(std::strcmp(popular.games[2].title, "Splatoon 2") == 0);
-    assert(popular.games[2].players == 12);
+    assert(popular.games[0].players == 32);
+    assert(std::strcmp(popular.games[1].title, "Splatoon 3") == 0);
+    assert(popular.games[1].players == 28);
+    assert(std::strcmp(popular.games[2].title, "Mario Kart 8 Deluxe") == 0);
+    assert(popular.games[2].players == 26);
+    assert(std::strcmp(popular.games[3].title, "Splatoon 2") == 0);
+    assert(popular.games[3].players == 12);
+    assert(std::strcmp(popular.games[4].title, "Super Mario Maker 2") == 0);
+    assert(popular.games[4].players == 6);
+    assert(std::strcmp(popular.games[5].title, "Monster Hunter Rise") == 0);
+    assert(popular.games[5].players == 4);
+    assert(std::strcmp(popular.games[6].title, "Pokemon Legends: Z-A") == 0);
+    assert(popular.games[6].players == 3);
+    assert(std::strcmp(popular.games[7].title, "Dragon Ball FighterZ") == 0);
+    assert(popular.games[7].players == 1);
 }
 
 void testPopularGamesRespectLimitAndEmptySnapshot() {
@@ -158,9 +173,12 @@ void testPopularGamesRespectLimitAndEmptySnapshot() {
     const PopularGames empty = rankPopularGames(snapshot);
     assert(empty.available);
     assert(empty.count == 0);
-    const PopularGames limited = rankPopularGames(makeSnapshot(2, 4, 6), 1);
+    const PopularGames limited = rankPopularGames(snapshot, 3);
     assert(limited.available);
-    assert(limited.count == 0); // synthetic IDs deliberately have no public name mapping
+    assert(limited.count == 3);
+    assert(limited.games[0].players == 32);
+    assert(limited.games[1].players == 28);
+    assert(limited.games[2].players == 26);
 }
 
 void testFreshSnapshotCopyIsSafe() {

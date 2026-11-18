@@ -30,6 +30,9 @@ int main() {
     source.tiles.push_back(Tile{
         Kind::System, "Settings", "settings", 3, 2, 1, 1, 0
     });
+    source.tiles.push_back(Tile{
+        Kind::Nextendo, "Nextendo online", "", 4, 1, 2, 1, 9
+    });
 
     WorkspaceProjection view;
     ProjectionError error = ProjectionError::InvalidText;
@@ -62,6 +65,10 @@ int main() {
     assert(view.entries[2].kind == EntryKind::ClockWidget);
     assert(view.entries[3].kind == EntryKind::RecentWidget);
     assert(view.entries[4].kind == EntryKind::SystemShortcut);
+    assert(view.entries[5].kind == EntryKind::NextendoWidget);
+    assert(view.entries[5].columns == 2 && view.entries[5].rows == 1);
+    assert(view.cells[10].role == CellRole::Primary);
+    assert(view.cells[11].role == CellRole::Continuation);
     assert(view.cells[17].role == CellRole::Empty);
     assert(view.cells[17].entryIndex == -1);
 

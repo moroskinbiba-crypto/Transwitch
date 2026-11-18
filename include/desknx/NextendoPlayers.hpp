@@ -157,6 +157,7 @@ private:
 // an explicit, verified mapping are shown. Regional Splatoon 2 title IDs are
 // combined into one row instead of appearing as duplicate games.
 constexpr std::size_t MaxPopularGames = 10;
+constexpr std::size_t MaxTrackedGames = 32;
 
 struct PopularGame {
     TitleId titleId{0};
@@ -177,6 +178,17 @@ inline const char* displayNameForTitle(TitleId id) {
         case 0x0100F8F0000A2000ull:
         case 0x01003BC0000A0000ull:
         case 0x01003C700009C000ull: return "Splatoon 2";
+        case 0x0100C2500FC20000ull: return "Splatoon 3";
+        case 0x01009B90006DC000ull: return "Super Mario Maker 2";
+        case 0x0100B04011742000ull: return "Monster Hunter Rise";
+        case 0x0100F43008C44000ull: return "Pokemon Legends: Z-A";
+        case 0x0100A250097F0000ull: return "Dragon Ball FighterZ";
+        case 0x01009B500007C000ull: return "ARMS";
+        case 0x010047700D540000ull: return "Clubhouse Games: 51 Worldwide Classics";
+        case 0x0100BDE00862A000ull: return "Mario Tennis Aces";
+        case 0x0100C9C00E25C000ull: return "Mario Golf: Super Rush";
+        case 0x010019401051C000ull: return "Mario Strikers: Battle League";
+        case 0x0100000000010000ull: return "Super Mario Odyssey";
         case 0x01006A800016E000ull: return "Super Smash Bros. Ultimate";
         case 0x01006F8002326000ull: return "Animal Crossing: New Horizons";
         case 0x01006FE013472000ull: return "Mario Party Superstars";
@@ -197,7 +209,7 @@ inline PopularGames rankPopularGames(const PlayerSnapshot& snapshot,
         const char* title{nullptr};
         std::uint64_t players{0};
     };
-    std::array<Aggregate, MaxPopularGames> grouped{};
+    std::array<Aggregate, MaxTrackedGames> grouped{};
     std::size_t groupedCount = 0;
 
     for (const auto& entry : snapshot.perTitle) {
