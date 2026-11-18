@@ -370,3 +370,5 @@ The native standalone build has now completed both CI workflows:
 - Connected the production D-pad focus path in `source/main.cpp` to the existing HomeNX spatial grid adapter. Navigation now moves between tile origins, skips continuation/empty cells, chooses directional neighbours using tile geometry, and remains stationary at an edge. Malformed layouts retain a bounded fallback path.
 - Existing workspace persistence format and manual drag/sort behaviour were intentionally left unchanged.
 - Validation status: changes are committed to an isolated branch; CI/build and real-console font/controls checks remain required before merge.
+
+- Added focused-tile priority to `IconCache`: the selected game's/homebrew cover is decoded before background tiles, and may evict the lowest-priority not-yet-started request when the bounded request queue is full. Queue and decoded-image memory bounds remain unchanged.
