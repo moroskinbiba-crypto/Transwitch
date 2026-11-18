@@ -4501,7 +4501,7 @@ int main(int,char**) {
         const char* builtInFonts[]={
             "sdmc:/switch/DeskNX/media/fonts/NotoSans.ttf",
             "sdmc:/switch/DeskNX/media/fonts/OpenSans.ttf",
-            "sdmc:/switch/DeskNX/media/fonts/PTSans.ttf"
+            "sdmc:/switch/DeskNX/media/fonts/NotoSansMono.ttf"
         };
         for(const char* candidate:builtInFonts) {
             struct stat fontStat{};
