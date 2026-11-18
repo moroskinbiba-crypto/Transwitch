@@ -22,7 +22,7 @@ namespace desknx::nextendo {
 
 using TitleId = std::uint64_t;
 
-constexpr std::uint64_t RefreshIntervalMs = 60u * 1000u;
+constexpr std::uint64_t RefreshIntervalMs = 180u * 1000u;
 // A snapshot older than this is no longer trusted: the poll interval plus two
 // missed rounds. Longer than that and a green dot could point at a session that
 // ended minutes ago.
@@ -43,6 +43,11 @@ enum class Presence : unsigned char {
     Offline,  // fresh snapshot, not playing
     Online,   // fresh snapshot, playing now
 };
+
+// Network transport is kept separate from the feed model so the latter remains host-testable.
+bool initializeNetwork();
+void shutdownNetwork();
+bool fetchSnapshot(PlayerSnapshot& snapshot);
 
 class PresenceFeed final {
 public:
