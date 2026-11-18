@@ -1810,9 +1810,18 @@ SDL_Rect tileRect(const Tile&t) {
 }
 
 void drawSystemIcon(int kind,int x,int y,int size,Color c) {
+    if(iconStyle==2) {
+        roundRect(x-3,y-3,size+6,size+6,std::max(7,size/4),
+                  Color{static_cast<Uint8>(c.r/5),static_cast<Uint8>(c.g/5),
+                        static_cast<Uint8>(c.b/5),220});
+        c=WHITE; // material-like filled treatment with a high-contrast glyph
+    }
     color(c);
     const int cx=x+size/2,cy=y+size/2;
-    auto line=[&](int x1,int y1,int x2,int y2){SDL_RenderDrawLine(renderer,x1,y1,x2,y2);};
+    auto line=[&](int x1,int y1,int x2,int y2) {
+        SDL_RenderDrawLine(renderer,x1,y1,x2,y2);
+        if(iconStyle==1) SDL_RenderDrawLine(renderer,x1,y1+1,x2,y2+1);
+    };
     auto circle=[&](int radius,bool filled) {
         for(int dy=-radius;dy<=radius;++dy) {
             const int dx=static_cast<int>(std::sqrt(std::max(0,radius*radius-dy*dy)));
@@ -2643,18 +2652,23 @@ void drawScreen() {
         text("B  BACK",856,143,1,WHITE,926);
         text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
              346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
-        text("FONT  "+(fontPath.empty()?std::string("SYSTEM"):std::string("CUSTOM")),
-             646,190,1,fontPath.empty()?MUTED:BLUE,930);
+        const size_t fontSlash=fontPath.find_last_of('/');
+        const std::string fontLabel=fontPath.empty()?std::string("SYSTEM"):
+            (fontSlash==std::string::npos?fontPath:fontPath.substr(fontSlash+1));
+        text("FONT  "+fontLabel,646,190,1,fontPath.empty()?MUTED:BLUE,930);
         text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
              346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
-            "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE"};
-        for(int i=0;i<9;++i) {
-            const int yy=216+i*38;
-            if(i==appSettingsIndex)roundRect(340,yy,600,33,9,Color{35,61,93,255});
-            text(actions[i],362,yy+9,2,i==appSettingsIndex?WHITE:MUTED,918);
-            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+11,1,BLUE,920);
+            "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+        const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
+        for(int i=0;i<11;++i) {
+            const int yy=214+i*31;
+            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
+            text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
+            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
+            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -3939,10 +3953,16 @@ void touchInput(const SDL_Event&e) {
             if(x>=ToolbarStartX&&index>=0&&index<ToolbarButtonCount&&
                x<toolbarButtonX(index)+ToolbarButtonWidth) {
                 switch(index) {
-                    case 0:
-                        if(R_FAILED(albumLaShowAllAlbumFiles()))
-                            setStatus("GALLERY UNAVAILABLE",3000);
+                    case 0: {
+                        const Uint64 galleryStarted=SDL_GetTicks64();
+                        desknx::diag::Write("gallery","launch_begin","applet=album_all_files");
+                        const Result galleryRc=albumLaShowAllAlbumFiles();
+                        desknx::diag::Write("gallery","return","rc=0x%08X elapsed_ms=%llu",
+                            static_cast<unsigned int>(galleryRc),
+                            static_cast<unsigned long long>(SDL_GetTicks64()-galleryStarted));
+                        if(R_FAILED(galleryRc))setStatus("GALLERY UNAVAILABLE",3000);
                         break;
+                    }
                     case 1: appSettingsMenu=true;appSettingsIndex=0; break;
                     case 2: {
                         HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
@@ -4257,11 +4277,32 @@ int main(int,char**) {
     gIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
+    if(fontPath.empty()) {
+        const char* builtInFonts[]={
+            "sdmc:/switch/DeskNX/media/fonts/NotoSans.ttf",
+            "sdmc:/switch/DeskNX/media/fonts/OpenSans.ttf",
+            "sdmc:/switch/DeskNX/media/fonts/PTSans.ttf"
+        };
+        for(const char* candidate:builtInFonts) {
+            struct stat fontStat{};
+            if(stat(candidate,&fontStat)==0&&S_ISREG(fontStat.st_mode)&&fontStat.st_size>0) {
+                fontPath=candidate;
+                break;
+            }
+        }
+    }
     gIconCache.setCustomIconPackDir(iconPackPath);
     if(!fontPath.empty()&&!gFontRenderer.setCustomFont(fontPath)) {
+        desknx::diag::Write("font","load_failed","path=%s error=%s",
+            fontPath.c_str(),TTF_GetError());
         fontPath.clear();
         setStatus("CUSTOM FONT UNAVAILABLE - USING SYSTEM FONT",3000);
         (void)saveLauncherSettings();
+    } else if(!fontPath.empty()) {
+        desknx::diag::Write("font","loaded","path=%s bundled=%d",fontPath.c_str(),
+            fontPath.find("/media/fonts/")!=std::string::npos?1:0);
+    } else {
+        desknx::diag::Write("font","using_system_fallback","reason=no_builtin_font_found");
     }
     if(!wallpaperPath.empty()&&!loadWallpaperTexture(wallpaperPath)) {
         wallpaperPath.clear();
