@@ -1339,6 +1339,121 @@ void HandleMenuClosed() {
         LaunchMenu();
 }
 
+// Mirror HomeNX's daemon-side handling of appletRequestLaunchApplication().
+// A regular Application applet cannot own the qlaunch lifecycle; it posts a
+// launch request and the SystemApplet backend receives an AppletApplication
+// handle here. Close that temporary handle, then launch through the same
+// Application manager used by the native HOME menu.
+void HandleExternalLaunchRequest(u64 titleId) {
+    if (titleId == 0) return;
+
+    AccountUid launchUser{};
+    Result userRc = accountGetLastOpenedUser(&launchUser);
+    if (R_FAILED(userRc) || !accountUidIsValid(&launchUser)) {
+        launchUser = g_SelectedUser;
+        if (!accountUidIsValid(&launchUser)) {
+            PickSelectedUser();
+            launchUser = g_SelectedUser;
+        }
+    } else {
+        g_SelectedUser = launchUser;
+    }
+
+    DaemonLog("applet: external launch request title=0x%016llX uid_valid=%d",
+              static_cast<unsigned long long>(titleId),
+              accountUidIsValid(&launchUser) ? 1 : 0);
+
+    // A request received while HOME is still closing must not start a second
+    // foreground transition. If there is no suspended application, use the
+    // HomeNX background-start path; otherwise defer until HandleMenuClosed().
+    if (la::g_MenuRunning) {
+        if (!g_HomebrewLoaderRunning && la::IsMenuAlive() && !app::g_AppRunning) {
+            const Result earlyRc = app::Launch(titleId, launchUser, 0, false);
+            DaemonLog("applet: external background launch title=0x%016llX rc=0x%08X",
+                      static_cast<unsigned long long>(titleId),
+                      static_cast<unsigned int>(earlyRc));
+            if (R_SUCCEEDED(earlyRc)) {
+                DaemonLog("applet: external title started behind HOME; foreground waits for menu close");
+                return;
+            }
+        }
+
+        if (!g_HomebrewLoaderRunning && g_PendingTitle == 0 &&
+            !g_PendingHomebrew && !g_PendingReturnToGame) {
+            g_PendingTitle = titleId;
+            g_PendingLaunchFlags = 0;
+            g_HasPendingUser = accountUidIsValid(&launchUser);
+            if (g_HasPendingUser) g_PendingUser = launchUser;
+            DaemonLog("applet: external launch queued until HOME closes");
+        } else {
+            DaemonLog("applet: external launch deferred; HOME already has a pending operation");
+        }
+        return;
+    }
+
+    if (app::g_AppRunning) {
+        if (app::g_AppId == titleId) {
+            const Result focusRc = app::FocusApplication();
+            TransitionTo(BackendState::GameRunning, "external request for already running title");
+            DaemonLog("applet: requested title already active; focus rc=0x%08X",
+                      static_cast<unsigned int>(focusRc));
+            return;
+        }
+
+        const u64 previousTitle = app::g_AppId;
+        const Result terminateRc = app::Terminate();
+        if (R_FAILED(terminateRc)) {
+            const Result focusRc = app::FocusApplication();
+            g_LastLaunchRc = static_cast<u32>(terminateRc);
+            g_LastLaunchTitle = titleId;
+            TransitionTo(BackendState::GameRunning, "external launch refused; previous title retained");
+            DaemonLog("applet: cannot replace title=0x%016llX (terminate=0x%08X focus=0x%08X)",
+                      static_cast<unsigned long long>(previousTitle),
+                      static_cast<unsigned int>(terminateRc),
+                      static_cast<unsigned int>(focusRc));
+            return;
+        }
+    }
+
+    const Result launchRc = app::Launch(titleId, launchUser, 0, true);
+    DaemonLog("applet: external foreground launch title=0x%016llX rc=0x%08X",
+              static_cast<unsigned long long>(titleId),
+              static_cast<unsigned int>(launchRc));
+    if (R_FAILED(launchRc)) {
+        g_LastLaunchRc = static_cast<u32>(launchRc);
+        g_LastLaunchTitle = titleId;
+        TransitionTo(BackendState::MenuStarting, "external application launch failed");
+        LaunchMenu();
+    } else {
+        g_LastLaunchRc = 0;
+        g_LastLaunchTitle = 0;
+        TransitionTo(BackendState::GameRunning, "external application launch accepted");
+    }
+}
+
+void TakeLaunchRequests() {
+    // Keep the launch request in AM until current HOME/menu operations have
+    // finished. This mirrors HomeNX's queued action handling and avoids losing
+    // an external request while a normal menu command is being committed.
+    if (g_PendingTitle != 0 || g_PendingHomebrew || g_PendingReturnToGame)
+        return;
+
+    AppletApplication requested{};
+    const Result popRc = appletPopLaunchRequestedApplication(&requested);
+    if (R_FAILED(popRc)) return;
+
+    u64 titleId = 0;
+    const Result idRc = appletApplicationGetApplicationId(&requested, &titleId);
+    appletApplicationClose(&requested);
+    if (R_FAILED(idRc) || titleId == 0) {
+        DaemonLog("applet: discarded launch request with invalid application id rc=0x%08X",
+                  static_cast<unsigned int>(idRc));
+        return;
+    }
+
+    HandleExternalLaunchRequest(titleId);
+}
+
 void RunMainLoop() {
     InitializeMenuSlots();
     DaemonLog("backend: starting; current slot=%s", CurrentMenuSlot().name);
@@ -1369,6 +1484,7 @@ void RunMainLoop() {
 
         if (la::IsMenuAlive()) DrainMenuCommands();
         PumpAppletMessages();
+        TakeLaunchRequests();
 
         // Poll even while DeskNX is open. If a suspended game exits naturally,
         // close its holder without requesting foreground away from the menu.
