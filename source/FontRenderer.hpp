@@ -30,18 +30,45 @@ public:
 
     bool setCustomFont(const std::string& path) {
         if (path == customFontPath_) return true;
+        if (!ttfReady_) return false;
+
+        // An empty path explicitly restores the system shared font. For a
+        // replacement font, validate the file and open a candidate BEFORE
+        // touching the currently active font/cache. A corrupt or truncated
+        // user file must never leave the renderer without its previous font.
+        if (path.empty()) {
+            clearCache();
+            fittedTextCache_.clear();
+            for (auto*& font : fonts_) {
+                if (font) TTF_CloseFont(font);
+                font = nullptr;
+            }
+            customFontPath_.clear();
+            return true;
+        }
+        constexpr Sint64 MaxCustomFontBytes = 16 * 1024 * 1024;
+        if (path.size() > 512) return false;
+        SDL_RWops* file = SDL_RWFromFile(path.c_str(), "rb");
+        if (!file) return false;
+        const Sint64 fileSize = SDL_RWsize(file);
+        SDL_RWclose(file);
+        if (fileSize <= 0 || fileSize > MaxCustomFontBytes) return false;
+
+        TTF_Font* candidate = TTF_OpenFont(path.c_str(), fontPixelSize(0));
+        if (!candidate) return false;
+
+        // Commit only after the candidate has opened successfully. Other
+        // sizes remain lazy-loaded by fontForScale(), but the first frame
+        // after changing fonts is guaranteed to have a valid face.
         clearCache();
         fittedTextCache_.clear();
         for (auto*& font : fonts_) {
             if (font) TTF_CloseFont(font);
             font = nullptr;
         }
+        fonts_[0] = candidate;
         customFontPath_ = path;
-        if (path.empty() || !ttfReady_) return true;
-        fonts_[0] = TTF_OpenFont(path.c_str(), fontPixelSize(0));
-        if (fonts_[0]) return true;
-        customFontPath_.clear();
-        return false;
+        return true;
     }
 
     const std::string& customFontPath() const { return customFontPath_; }

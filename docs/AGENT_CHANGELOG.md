@@ -362,3 +362,11 @@ The native standalone build has now completed both CI workflows:
 - Изменения рабочих столов и active-workspace marker теперь записываются через отдельный SDL worker; повторные правки объединяются в последний актуальный snapshot. Синхронный checked save сохранён перед запуском/завершением приложения.
 - SD commits сериализованы отдельным mutex, а завершение фоновой записи отражается в диагностике async_save_finished.
 - CI проверит native NRO и host tests. Физический тест на Switch всё ещё обязателен: особенно проверить старый catalogue cache, фильтр Widgets, появление 90 игр до завершения metadata scan, drag/resize/add/remove, переключение рабочих столов и перезапуск во время активного сохранения.
+
+
+## 2026-11-18 — HomeNX plan, implementation tranche 1
+
+- Hardened custom font replacement in `source/FontRenderer.hpp`: rejects unreadable, empty, oversized, and overlong font files; opens a candidate before releasing the active font; preserves the previous font on failure; and treats an empty path as an explicit return to the system shared font.
+- Connected the production D-pad focus path in `source/main.cpp` to the existing HomeNX spatial grid adapter. Navigation now moves between tile origins, skips continuation/empty cells, chooses directional neighbours using tile geometry, and remains stationary at an edge. Malformed layouts retain a bounded fallback path.
+- Existing workspace persistence format and manual drag/sort behaviour were intentionally left unchanged.
+- Validation status: changes are committed to an isolated branch; CI/build and real-console font/controls checks remain required before merge.
