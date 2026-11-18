@@ -18,6 +18,7 @@
 #include "../include/desknx/Localization.hpp"
 #include "../include/desknx/NextendoPlayers.hpp"
 #include "../include/desknx/WidgetLayout.hpp"
+#include "../include/desknx/WidgetSensors.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
@@ -215,9 +216,21 @@ std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
+struct JoyconBatteryState {
+    bool connected{false};
+    int level{-1}; // libnx reports 0..4, not an exact percentage.
+    bool charging{false};
+};
+JoyconBatteryState joyconLeft{},joyconRight{};
+Uint32 lastJoyconBatteryTick=0;
+bool joyconBatteryAvailable=false;
+std::string atmosphereVersion;
+bool atmosphereVersionAvailable=false,atmosphereVersionChecked=false;
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
+uint64_t processRamUsed=0,processRamTotal=0;
+size_t installedGameCount=0,installedHomebrewCount=0;
 Uint32 lastStorageUpdate=0;
-bool storageStatsAvailable=false;
+bool storageStatsAvailable=false,processRamStatsAvailable=false;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
 bool widgetPickerMode=false;
@@ -1892,15 +1905,103 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
     desks[2].tiles.push_back(Tile{Kind::Nextendo,"Nextendo online","",3,1,3,1,9});
 }
-void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
-    if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
+void updateJoyconBatteryState(JoyconBatteryState& target,
+                              const HidPowerInfo& info) {
+    target.connected=true;
+    target.level=static_cast<int>(std::min<u32>(info.battery_level,4));
+    target.charging=info.is_charging;
 }
+
+void refreshJoyconBattery() {
+    const Uint32 now=SDL_GetTicks();
+    if(lastJoyconBatteryTick!=0&&now-lastJoyconBatteryTick<3000)return;
+    lastJoyconBatteryTick=now;
+    joyconLeft=JoyconBatteryState{};
+    joyconRight=JoyconBatteryState{};
+
+    auto inspectNpad=[&](HidNpadIdType id) {
+        const u32 device=hidGetNpadDeviceType(id);
+        const bool leftConnected=(device&
+            (HidDeviceTypeBits_JoyLeft|HidDeviceTypeBits_HandheldLeft))!=0;
+        const bool rightConnected=(device&
+            (HidDeviceTypeBits_JoyRight|HidDeviceTypeBits_HandheldRight))!=0;
+        if(!leftConnected&&!rightConnected)return;
+
+        if(leftConnected&&rightConnected) {
+            HidPowerInfo left{},right{};
+            hidGetNpadPowerInfoSplit(id,&left,&right);
+            if(!joyconLeft.connected)updateJoyconBatteryState(joyconLeft,left);
+            if(!joyconRight.connected)updateJoyconBatteryState(joyconRight,right);
+            return;
+        }
+
+        HidPowerInfo single{};
+        hidGetNpadPowerInfoSingle(id,&single);
+        if(leftConnected&&!joyconLeft.connected)
+            updateJoyconBatteryState(joyconLeft,single);
+        if(rightConnected&&!joyconRight.connected)
+            updateJoyconBatteryState(joyconRight,single);
+    };
+
+    // Prefer the attached pair in handheld mode, then paired controllers.
+    inspectNpad(HidNpadIdType_Handheld);
+    for(int i=0;i<8;++i)
+        inspectNpad(static_cast<HidNpadIdType>(i));
+    joyconBatteryAvailable=joyconLeft.connected||joyconRight.connected;
+}
+
+void refreshAtmosphereVersion() {
+    if(atmosphereVersionChecked)return;
+    atmosphereVersionChecked=true;
+
+    const Result initRc=splInitialize();
+    if(R_FAILED(initRc)) {
+        desknx::diag::Write("system_info","atmosphere_unavailable",
+            "spl_init_rc=0x%08X",static_cast<unsigned int>(initRc));
+        return;
+    }
+
+    u64 packed=0;
+    const Result versionRc=splGetConfig(static_cast<SplConfigItem>(65000),&packed);
+    splExit();
+    if(R_FAILED(versionRc)) {
+        desknx::diag::Write("system_info","atmosphere_unavailable",
+            "spl_config_rc=0x%08X",static_cast<unsigned int>(versionRc));
+        return;
+    }
+
+    const auto decoded=desknx::widget_sensors::decodeAtmosphereConfig(packed);
+    if(!decoded.available)return;
+    char version[32]{};
+    std::snprintf(version,sizeof(version),"%u.%u.%u",
+        decoded.major,decoded.minor,decoded.patch);
+    atmosphereVersion=version;
+    atmosphereVersionAvailable=true;
+    desknx::diag::Write("system_info","atmosphere_version",
+        "version=%s raw=0x%016llX",atmosphereVersion.c_str(),
+        static_cast<unsigned long long>(packed));
+}
+
+void refreshBattery() {
+    const Uint32 now=SDL_GetTicks();
+    if(lastBatteryTick==0||now-lastBatteryTick>=10000) {
+        lastBatteryTick=now;
+        if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
+        if(psmReady) {
+            u32 pct=0;
+            if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))
+                battery=static_cast<int>(pct);
+        }
+    }
+    refreshJoyconBattery();
+    refreshAtmosphereVersion();
+}
+
 void refreshStorageStats() {
     const Uint32 now=SDL_GetTicks();
     if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
     lastStorageUpdate=now;
+
     struct statvfs fs{};
     if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
         const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
@@ -1912,7 +2013,26 @@ void refreshStorageStats() {
         sdFreeBytes=0;
         storageStatsAvailable=false;
     }
+
+    const auto items=catalogueSnapshot();
+    installedGameCount=static_cast<size_t>(std::count_if(items.begin(),items.end(),
+        [](const Candidate& item){return item.kind==Kind::Game;}));
+    installedHomebrewCount=static_cast<size_t>(std::count_if(items.begin(),items.end(),
+        [](const Candidate& item){return item.kind==Kind::Nro;}));
+
+    u64 used=0,total=0;
+    const Result usedRc=svcGetInfo(&used,InfoType_UsedMemorySize,CUR_PROCESS_HANDLE,0);
+    const Result totalRc=svcGetInfo(&total,InfoType_TotalMemorySize,CUR_PROCESS_HANDLE,0);
+    processRamStatsAvailable=R_SUCCEEDED(usedRc)&&R_SUCCEEDED(totalRc)&&total>0;
+    if(processRamStatsAvailable) {
+        processRamUsed=used;
+        processRamTotal=total;
+    } else {
+        processRamUsed=processRamTotal=0;
+    }
 }
+
+std::string initials(
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
     // through, multibyte sequences contribute their lead byte which yields
@@ -2308,55 +2428,73 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 if(!portrait)drawSystemIcon(6,right-42,metrics.clampY(bodyTop+8,36),34,accent);
             }
         } else if(t.kind==Kind::Battery) {
+            auto joyconLabel=[&](const JoyconBatteryState& joy,const char* side) {
+                if(!joy.connected)return std::string(side)+"  --";
+                std::string value=std::string(side)+"  "+
+                    std::to_string(joy.level)+"/4";
+                if(joy.charging)value+="  CHG";
+                return value;
+            };
             if(compact) {
                 label("BATTERY",r.y+14);
                 textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
-                             center,r.y+38,3,WHITE,left,right);
-                progress(r.y+r.h-24,battery);
+                             center,r.y+35,2,WHITE,left,right);
+                text(joyconBatteryAvailable
+                    ?joyconLabel(joyconLeft,"L")+"  "+joyconLabel(joyconRight,"R")
+                    :"JOY-CONS N/A",left,r.y+65,1,
+                    (joyconLeft.charging||joyconRight.charging)?GREEN:MUTED,right);
+                progress(r.y+r.h-15,battery);
             } else if(banner) {
-                label("BATTERY",r.y+13);
-                textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
-                             center,r.y+38,3,WHITE,left,right);
-                progress(r.y+r.h-20,battery);
-                if(r.w>250)drawSystemIcon(3,right-38,r.y+29,30,battery>=20?GREEN:RED);
+                label("SWITCH + JOY-CONS",r.y+13);
+                textCentered(battery>=0?"SWITCH  "+std::to_string(battery)+"%":
+                    "SWITCH  N/A",center,r.y+34,3,WHITE,left,right);
+                text(joyconBatteryAvailable
+                    ?joyconLabel(joyconLeft,"L")+"     "+joyconLabel(joyconRight,"R")
+                    :"JOY-CONS NOT CONNECTED",
+                    left,r.y+72,1,
+                    (joyconLeft.charging||joyconRight.charging)?GREEN:MUTED,right);
+                progress(r.y+r.h-13,battery);
             } else {
-                label("BATTERY STATUS",r.y+18);
+                label(languageRussian?"ЗАРЯД БАТАРЕИ":"BATTERY & JOY-CONS",
+                      metrics.headerY);
                 const int scale=portrait?5:6;
                 textCentered(battery>=0?std::to_string(battery)+"%":"N/A",
-                             center,metrics.clampY(r.y+r.h/3,7*scale),
-                             scale,WHITE,left,right);
-                drawSystemIcon(3,right-52,metrics.clampY(r.y+r.h/3-4,42),42,
-                               battery>=20?GREEN:RED);
-                const int percent=bottom-r.y>100
-                    ?(battery>=0?battery:-1):-1;
-                progress(bottom-44,percent);
-                textCentered(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
-                    battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
-                    battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
-                                (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
-                    center,bottom-25,1,battery>=20?GREEN:RED,left,right);
+                    center,metrics.clampY(r.y+r.h/4,7*scale),
+                    scale,WHITE,left,right);
+                const int row1=metrics.clampY(r.y+r.h/2+5,10);
+                const int row2=metrics.clampY(r.y+r.h/2+39,10);
+                text(joyconLabel(joyconLeft,"JOY-CON L"),left,row1,1,
+                    joyconLeft.charging?GREEN:MUTED,right);
+                text(joyconLabel(joyconRight,"JOY-CON R"),left,row2,1,
+                    joyconRight.charging?GREEN:MUTED,right);
+                progress(bottom-15,battery);
             }
         } else if(t.kind==Kind::System) {
             const u32 firmware=hosversionGet();
             char firmwareText[48]{};
             std::snprintf(firmwareText,sizeof(firmwareText),"%u.%u.%u",
                 HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            const std::string atmosphereText=atmosphereVersionAvailable
+                ?"AMS "+atmosphereVersion:"AMS N/A";
             if(compact) {
                 label("SYSTEM",r.y+14);
-                drawSystemIcon(0,left+2,r.y+34,32,accent);
-                text("HOS "+std::string(firmwareText),left+43,r.y+48,1,WHITE,right);
+                text("HOS "+std::string(firmwareText),left,r.y+38,1,WHITE,right);
+                text(atmosphereText,left,r.y+61,1,
+                    atmosphereVersionAvailable?GREEN:MUTED,right);
             } else if(banner) {
                 label("SYSTEM INFO",r.y+13);
-                drawSystemIcon(0,left+2,r.y+37,38,accent);
-                text("HOS "+std::string(firmwareText),left+49,r.y+43,2,WHITE,right);
-                text("DESKNX  /  NATIVE",left+49,r.y+70,1,BLUE,right);
+                drawSystemIcon(0,left+2,r.y+37,34,accent);
+                text("HOS "+std::string(firmwareText),left+46,r.y+41,2,WHITE,right);
+                text(atmosphereText,left+46,r.y+72,1,
+                    atmosphereVersionAvailable?GREEN:MUTED,right);
             } else {
                 const int iconSize=portrait?54:62;
                 drawSystemIcon(0,left,r.y+bodyTop-r.y+8,iconSize,accent);
                 text("HOS "+std::string(firmwareText),left+iconSize+14,
-                     metrics.clampY(r.y+bodyTop+13,14),2,WHITE,right);
-                text("DESKNX  /  NATIVE",left+iconSize+14,
-                     metrics.clampY(r.y+bodyTop+43,8),1,BLUE,right);
+                     metrics.clampY(r.y+bodyTop+10,14),2,WHITE,right);
+                text(atmosphereText,left+iconSize+14,
+                     metrics.clampY(r.y+bodyTop+39,10),1,
+                     atmosphereVersionAvailable?GREEN:MUTED,right);
                 text(languageRussian?"12 РАБОЧИХ СТОЛОВ":"12 WORKSPACES",
                      left,metrics.clampY(bottom-36,14),2,MUTED,right);
                 text("SDL2  /  LIBNX",left,metrics.clampY(bottom-16,8),1,MUTED,right);
@@ -2381,34 +2519,48 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const int percent=storageStatsAvailable
                 ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
                 :-1;
+            const std::string libraryLine="GAMES "+std::to_string(installedGameCount)+
+                "   HB "+std::to_string(installedHomebrewCount);
+            std::string ramLine="RAM N/A";
+            if(processRamStatsAvailable) {
+                char ram[64]{};
+                std::snprintf(ram,sizeof(ram),"RAM %.0f / %.0f MB",
+                    static_cast<double>(processRamUsed)/(1024.0*1024.0),
+                    static_cast<double>(processRamTotal)/(1024.0*1024.0));
+                ramLine=ram;
+            }
             if(compact) {
-                label("SD STORAGE",r.y+14);
+                label("SD / LIBRARY",r.y+13);
                 textCentered(storageStatsAvailable?freeSpaceText():"N/A",
-                             center,r.y+41,2,WHITE,left,right);
-                progress(r.y+r.h-24,percent);
+                             center,r.y+36,2,WHITE,left,right);
+                textCentered(libraryLine,center,r.y+65,1,MUTED,left,right);
+                progress(r.y+r.h-13,percent);
             } else if(banner) {
-                label("SD CARD STORAGE",r.y+13);
+                label("SD CARD  /  LIBRARY",r.y+12);
                 textCentered(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
-                             center,r.y+37,3,WHITE,left,right);
-                textCentered(percent>=0?std::to_string(percent)+"% USED":"--",
-                             center,r.y+62,1,MUTED,left,right);
-                progress(r.y+r.h-20,percent);
+                             center,r.y+32,3,WHITE,left,right);
+                textCentered(libraryLine,center,r.y+64,1,MUTED,left,right);
+                textCentered(ramLine,center,r.y+80,1,BLUE,left,right);
+                progress(r.y+r.h-12,percent);
             } else {
-                label("SD CARD STORAGE",metrics.headerY);
+                label(languageRussian?"ПАМЯТЬ И БИБЛИОТЕКА":"STORAGE & LIBRARY",
+                      metrics.headerY);
                 const int scale=portrait?4:5;
                 textCentered(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
                              center,metrics.clampY(r.y+r.h/4,7*scale),
                              scale,WHITE,left,right);
+                text("INSTALLED GAMES  "+std::to_string(installedGameCount),
+                     left,metrics.clampY(bodyTop+19,12),1,WHITE,right);
+                text("HOMEBREW APPS  "+std::to_string(installedHomebrewCount),
+                     left,metrics.clampY(bodyTop+47,12),1,WHITE,right);
+                text(ramLine,left,metrics.clampY(bodyTop+75,12),1,BLUE,right);
                 if(sdTotalBytes>0) {
                     char total[64]{};
-                    std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
+                    std::snprintf(total,sizeof(total),"SD TOTAL  %.1f GB",
                         static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
-                    textCentered(total,center,metrics.clampY(r.y+r.h/2+8,14),
-                                 2,MUTED,left,right);
+                    text(total,left,metrics.clampY(bodyTop+103,12),1,MUTED,right);
                 }
-                progress(bottom-42,percent);
-                textCentered(percent>=0?std::to_string(percent)+"% USED":"--",
-                             center,bottom-22,1,BLUE,left,right);
+                progress(bottom-14,percent);
             }
         } else if(t.kind==Kind::Calendar) {
             std::time_t now=std::time(nullptr);
@@ -2722,11 +2874,11 @@ void drawScreen() {
                     std::string appBadge=typeName(candidate.kind);
                     Color badgeColor=selectedCard?BLUE:MUTED;
                     if(candidate.kind==Kind::Game) {
-                        if(candidate.viewFlags&NsViewFlagNeedsUpdate) {
-                            appBadge=languageRussian?"ЕСТЬ ОБНОВЛЕНИЕ":"UPDATE AVAILABLE";
-                            badgeColor=Color{255,177,74,255};
-                        } else if(candidate.viewFlags&NsViewFlagIsGameCard)
-                            appBadge=languageRussian?"КАРТРИДЖ":"GAME CARD";
+                        appBadge=candidate.displayVersion.empty()
+                            ?(languageRussian?"ВЕРСИЯ Н/Д":"VERSION N/A")
+                            :"v"+candidate.displayVersion;
+                        badgeColor=(candidate.viewFlags&NsViewFlagNeedsUpdate)
+                            ?Color{255,196,87,255}:GREEN;
                     }
                     textCentered(appBadge,x+cardW/2,y+101,1,badgeColor,x+8,x+cardW-8);
                 }
@@ -2740,11 +2892,15 @@ void drawScreen() {
             drawTileIcon(preview,mx+866,my+128,78);
             text(selected.title,mx+798,my+218,2,WHITE,mx+mw-30);
             std::string detailType=typeName(selected.kind);
-            if(selected.kind==Kind::Game&&(selected.viewFlags&NsViewFlagNeedsUpdate))
-                detailType="UPDATE AVAILABLE";
-            else if(selected.kind==Kind::Game&&(selected.viewFlags&NsViewFlagIsGameCard))
-                detailType="GAME CARD";
-            text(detailType,mx+800,my+252,1,BLUE,mx+mw-30);
+            Color detailColor=BLUE;
+            if(selected.kind==Kind::Game) {
+                detailType=selected.displayVersion.empty()
+                    ?(languageRussian?"ВЕРСИЯ Н/Д":"VERSION N/A")
+                    :"VERSION "+selected.displayVersion;
+                detailColor=(selected.viewFlags&NsViewFlagNeedsUpdate)
+                    ?Color{255,196,87,255}:GREEN;
+            }
+            text(detailType,mx+800,my+252,1,detailColor,mx+mw-30);
             if(selected.kind==Kind::Game) {
                 text("TITLE ID",mx+800,my+282,1,MUTED,mx+mw-30);
                 text(selected.data,mx+800,my+300,1,WHITE,mx+mw-30);

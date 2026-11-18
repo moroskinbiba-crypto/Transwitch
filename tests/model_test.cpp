@@ -5,6 +5,7 @@
 #include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
 #include <desknx/Artwork.hpp>
+#include <desknx/WidgetSensors.hpp>
 #include <desknx/WidgetLayout.hpp>
 #include "../source/catalog_view.hpp"
 
@@ -566,6 +567,16 @@ int main() {
     }
     assert(typeCode(Kind::Nextendo)=="P");
     assert(parseKind("P")==Kind::Nextendo);
+
+    const auto atmosphere=desknx::widget_sensors::decodeAtmosphereConfig(
+        static_cast<std::uint64_t>(0x010C02ull)<<40);
+    assert(atmosphere.available);
+    assert(atmosphere.major==1&&atmosphere.minor==12&&atmosphere.patch==2);
+    assert(!desknx::widget_sensors::decodeAtmosphereConfig(0).available);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(0)==0);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(2)==50);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(4)==100);
+    assert(desknx::widget_sensors::joyconPercentFromLevel(5)==100);
 
     return 0;
 }

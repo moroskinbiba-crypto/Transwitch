@@ -114,6 +114,17 @@ std::string GetApplicationName(const NacpStruct& nacp) {
     return desknx::slaunch::ResolveTitleName(nacp);
 }
 
+std::string GetApplicationDisplayVersion(const NacpStruct& nacp) {
+    const char* begin=nacp.display_version;
+    const char* end=std::find(begin,begin+sizeof(nacp.display_version),
+                              static_cast<char>(0));
+    std::string version(begin,end);
+    if(version.size()>15)return {};
+    for(char& ch:version)
+        if(ch=='\\t'||ch=='\\n'||ch=='\\r')ch=' ';
+    return version;
+}
+
 // NRO traversal is shared with the host regression suite in NroScanner.hpp.
 // It uses directory-entry types when available and stats only NROs or entries
 // whose type is unknown.
@@ -266,7 +277,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     std::string line;
     if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
-    if (header.size() != 4 || header[0] != "DESKNXCAT2") return false;
+    if (header.size() != 4 || header[0] != "DESKNXCAT3") return false;
     if (!allowStale) {
         char gameHash[32]{}, sdHash[32]{};
         std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
@@ -279,8 +290,9 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     while (std::getline(input, line)) {
         if (line.size() > MaxCacheLineBytes || items.size() >= MaxItems) return false;
         const auto fields = desknx::model::splitTabs(line);
-        if (fields.size() != 8 || fields[0] != "C" ||
-            fields[1].size() > 16 || fields[2].size() > 512 || fields[3].size() > 512)
+        if (fields.size() != 9 || fields[0] != "C" ||
+            fields[1].size() > 16 || fields[2].size() > 512 ||
+            fields[3].size() > 512 || fields[8].size() > 15)
             return false;
 
         Candidate item{};
@@ -288,6 +300,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
         if (item.kind == Kind::Unsupported) return false;
         item.title = fields[2];
         item.data = fields[3];
+        item.displayVersion = fields[8];
         char* flagsEnd = nullptr;
         errno = 0;
         const unsigned long parsedFlags = std::strtoul(fields[7].c_str(), &flagsEnd, 10);
@@ -568,13 +581,14 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     char gameHash[32]{}, sdHash[32]{};
     std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
-    output << "DESKNXCAT2\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
+    output << "DESKNXCAT3\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
     for (const auto& item : result.items) {
         output << "C\t" << desknx::model::typeCode(item.kind) << '\t'
                << desknx::model::safeField(item.title) << '\t'
                << desknx::model::safeField(item.data) << '\t'
                << item.w << '\t' << item.h << '\t' << item.color << '\t'
-               << item.viewFlags << '\n';
+               << item.viewFlags << '\t'
+               << desknx::model::safeField(item.displayVersion) << '\n';
     }
     output.flush();
     const bool good = output.good();
@@ -863,49 +877,45 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             !(cachedName->second.compare(0, 5, "Game ") == 0 &&
               desknx::model::isTitleId(cachedName->second.substr(5)));
         std::string title;
+        std::string displayVersion;
         Result metadataRc=0;
         bool metadataRead=false;
         bool iconAvailable=iconCached;
         const char* nameSource=(cachedNameUsable&&iconCached&&!forceRefresh)
             ?"cache":"nacp";
-        // Name metadata and artwork are independent cache entries. A valid
-        // name must never suppress the one-time NACP read needed to repair a
-        // missing icon, and a stale title-id placeholder must not be treated
-        // as a resolved game name.
-        if (!forceRefresh && cachedNameUsable && iconCached) {
-            title = cachedName->second;
+        // A stable catalogue returns from ReadCache above. On a cache miss,
+        // refresh installed control.nacp so the visible version is current.
+        u64 actual = 0;
+        if (nsReady)
+            metadataRc = desknx::slaunch::ReadControlData(id, control, actual);
+        metadataRead=true;
+        if (nsReady && R_SUCCEEDED(metadataRc)) {
+            ++controlDataOk;
+            const std::string resolved = desknx::slaunch::ResolveTitleName(control.nacp);
+            if (!resolved.empty() && !desknx::model::isTitleId(resolved))
+                title = resolved;
+            else if (cachedNameUsable) {
+                title = cachedName->second;
+                nameSource="cache_fallback";
+            }
+            displayVersion=GetApplicationDisplayVersion(control.nacp);
+            if (forceRefresh || !iconCached) {
+                if (CacheGameIcon(id, control, actual)) {
+                    ++cachedGameIcons;
+                    iconAvailable=true;
+                } else {
+                    ++failedGameIcons;
+                    iconAvailable=false;
+                }
+            }
+            fetchedControlData = true;
         } else {
-            u64 actual = 0;
-            if (nsReady)
-                metadataRc = desknx::slaunch::ReadControlData(id, control, actual);
-            metadataRead=true;
-            if (nsReady && R_SUCCEEDED(metadataRc)) {
-                ++controlDataOk;
-                const std::string resolved = desknx::slaunch::ResolveTitleName(control.nacp);
-                if (!resolved.empty() && !desknx::model::isTitleId(resolved))
-                    title = resolved;
-                else if (cachedNameUsable) {
-                    title = cachedName->second;
-                    nameSource="cache_fallback";
-                }
-                if (forceRefresh || !iconCached) {
-                    if (CacheGameIcon(id, control, actual)) {
-                        ++cachedGameIcons;
-                        iconAvailable=true;
-                    } else {
-                        ++failedGameIcons;
-                        iconAvailable=false;
-                    }
-                }
-                fetchedControlData = true;
-            } else {
-                ++controlDataFailed;
-                if (firstControlDataError == 0)
-                    firstControlDataError = static_cast<std::uint32_t>(metadataRc);
-                if (cachedNameUsable) {
-                    title = cachedName->second;
-                    nameSource="cache_fallback";
-                }
+            ++controlDataFailed;
+            if (firstControlDataError == 0)
+                firstControlDataError = static_cast<std::uint32_t>(metadataRc);
+            if (cachedNameUsable) {
+                title = cachedName->second;
+                nameSource="cache_fallback";
             }
         }
 
@@ -932,14 +942,16 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         if (i < result.items.size() &&
             result.items[i].kind == Kind::Game && result.items[i].data == hex) {
             result.items[i].title = title;
+            result.items[i].displayVersion = displayVersion;
             result.items[i].viewFlags = games[i].viewFlags;
             result.items[i].color = static_cast<int>(colorIndex++ % 12);
         } else {
             // Defensive fallback for a malformed staging snapshot.
+            Candidate fallback{Kind::Game, title, hex, 1, 1,
+                static_cast<int>(colorIndex++ % 12), games[i].viewFlags};
+            fallback.displayVersion=displayVersion;
             result.items.insert(result.items.begin() + static_cast<std::ptrdiff_t>(
-                std::min(i, result.items.size())),
-                Candidate{Kind::Game, title, hex, 1, 1,
-                          static_cast<int>(colorIndex++ % 12), games[i].viewFlags});
+                std::min(i, result.items.size())), std::move(fallback));
         }
         if ((i + 1) % 3 == 0 || i + 1 == games.size()) report(false);
     }

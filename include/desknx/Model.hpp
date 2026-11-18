@@ -45,6 +45,7 @@ struct Candidate {
     uint32_t launchCount{0};
     bool playStatsQueried{false};
     bool playStatsAvailable{false};
+    std::string displayVersion{}; // Installed control.nacp DisplayVersion, if available.
 };
 
 inline bool isTitleId(const std::string& value) {
