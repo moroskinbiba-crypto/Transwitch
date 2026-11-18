@@ -80,10 +80,12 @@ namespace desknx::system::app {
         if (rc != 0) return rc;
         rc = appletStorageWrite(&st, 0, &param, sizeof(param));
         if (rc != 0) { appletStorageClose(&st); return rc; }
-        rc = appletApplicationPushLaunchParameter(
+        // libnx consumes and closes this storage inside
+        // appletApplicationPushLaunchParameter(), including on failure.
+        // Closing it again double-closes the underlying applet storage handle
+        // and can corrupt the launch handoff before appletApplicationStart().
+        return appletApplicationPushLaunchParameter(
             &g_AppHolder, AppletLaunchParameterKind_PreselectedUser, &st);
-        appletStorageClose(&st);
-        return rc;
     }
 
     // Stock qlaunch creates a game's save data before launching it, and games
