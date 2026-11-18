@@ -2930,33 +2930,30 @@ void launch(const Tile& t) {
         appletRequestExitToSelf();
         running=false;
 #else
-        const Result initRc = nsInitialize();
-        desknx::diag::Write("launch", "standalone_ns_init", "rc=0x%08X",
-                            static_cast<unsigned int>(initRc));
-        if(R_FAILED(initRc)){setStatus("NS SERVICE UNAVAILABLE IN THIS CONTEXT",4000);return;}
-        desknx::diag::Write("launch", "game_request_begin", "title_id=%016llX",
-                            static_cast<unsigned long long>(id));
-        NsApplicationControlData launchControl{};
-        u64 launchControlSize=0;
-        const Result launchControlRc=desknx::slaunch::ReadControlData(
-            id,launchControl,launchControlSize);
-        const bool appManagesPlayers=R_SUCCEEDED(launchControlRc)&&
-            launchControl.nacp.startup_user_account==0;
-        const AccountUid selectedUser=uiHasSelectedUser?uiSelectedUser:AccountUid{};
-        const AccountUid* launchUser=(!appManagesPlayers&&
-            accountUidIsValid(&selectedUser))?&selectedUser:nullptr;
-        desknx::diag::Write("launch","player_policy",
-            "title_id=%016llX nacp_rc=0x%08X startup_user=%u has_user=%d",
+        // NS was initialized once during launcher startup and is shared with the
+        // catalogue worker. Do not initialize/exit the process-wide service
+        // around a single launch request: doing so can invalidate the worker's
+        // live session if the request is rejected and the launcher stays open.
+        desknx::diag::Write("launch", "applet_launch_request_begin",
+            "title_id=%016llX applet_type=%d user_policy=system_preselected",
             static_cast<unsigned long long>(id),
-            static_cast<unsigned int>(launchControlRc),
-            R_SUCCEEDED(launchControlRc)?launchControl.nacp.startup_user_account:255,
-            launchUser?1:0);
-        const Result rc=appletRequestLaunchApplication(id,launchUser);
-        desknx::diag::Write("launch", "game_request_end", "rc=0x%08X",
-                            static_cast<unsigned int>(rc));
-        nsExit();
-        if(R_FAILED(rc)){char b[64]{};std::snprintf(b,sizeof(b),"GAME LAUNCH FAILED: 0X%08X",static_cast<unsigned int>(rc));setStatus(b,4000);}
-        else {recordRecentLaunch(t);setStatus("LAUNCH REQUEST SENT");}
+            static_cast<int>(appletGetAppletType()));
+        // The public libnx API accepts an optional AppletStorage here, not an
+        // AccountUid. User selection is only available through the HOME/system
+        // backend; standalone applications use Horizon's preselected user.
+        const Result rc=appletRequestLaunchApplication(id,nullptr);
+        desknx::diag::Write("launch", "applet_launch_request_end",
+            "title_id=%016llX rc=0x%08X",
+            static_cast<unsigned long long>(id),static_cast<unsigned int>(rc));
+        if(R_FAILED(rc)) {
+            char b[64]{};
+            std::snprintf(b,sizeof(b),"GAME LAUNCH FAILED: 0X%08X",
+                          static_cast<unsigned int>(rc));
+            setStatus(b,4000);
+        } else {
+            recordRecentLaunch(t);
+            setStatus("LAUNCH REQUEST ACCEPTED");
+        }
 #endif
         return;
     }
