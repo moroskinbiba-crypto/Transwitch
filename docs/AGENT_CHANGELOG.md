@@ -279,3 +279,20 @@ CI и физическая проверка для этого изменения
 - Cross-build HOME applet обнаружил это на этапе компиляции: `source/IconCache.hpp:120:9: error: 'resolvedPaths_' was not declared in this scope`.
 - Удалён единственный устаревший вызов. Поведение очередей, worker thread и жизненного цикла текстур не менялось.
 - До повторного успешного cross-build эту ветку нельзя считать собирающейся; запуск на Switch после этой правки ещё не подтверждён.
+
+
+## Проверка пользовательских логов и CI — 18 ноября 2026
+
+### Результат cross-build после фикса
+- Коммит фикса: `5ac6eacaae678ca5b770c2f89064a369cef02088`; запись в changelog: `b303741d257d9ed8f62ce529f6acb453807c09eb`.
+- PR workflow `Build DeskNX`, run `44252212096`: **success**. Успешно скомпилированы production HOME library applet и native standalone launch path; все host tests и упаковочные шаги прошли.
+- Workflow `Build Nintendo Switch NRO`, run `44252212151`: **success**. Это отдельная сборка WebKit wrapper; её успех не проверяет нативный SDL IconCache.
+- В первом прогоне HOME applet build падал на оставшемся `resolvedPaths_.clear()` в `IconCache::shutdown()`; ссылка удалена. Ошибка исправлена и повторная сборка прошла.
+- Switch runtime и Atmosphère crash stability не подтверждены — cross-build не заменяет тест на реальной консоли.
+
+### Разбор предоставленных логов
+- `applet_type=0 is_applet=0` означает, что NRO запущен как Application, не в Album applet mode.
+- `web_offline_create rc=0` и первый `web_show_end rc=0`, затем `libnx_exit orderly_exit=1` показывают успешное создание offline WebKit page и штатный возврат из `webConfigShow()` в этой сессии.
+- Во второй и третьей сессиях лог заканчивается на `web_show_begin`; без `web_show_end` неизвестно, вернулся ли вызов. Сам по себе этот фрагмент не содержит Atmosphère fatal code/report и не доказывает аварийное завершение.
+- Эти метки относятся к `src-switch/main.cpp` — standalone WebKit host. Они не относятся к `source/main.cpp`, SDL renderer или новому worker в `source/IconCache.hpp`.
+- Чтобы подтвердить конкретный Atmosphère crash, нужен fatal report / код ошибки из экрана Atmosphère и совпадающие по времени `diagnostics.log*`. Не маркировать runtime-проблему закрытой по одному этому фрагменту.
