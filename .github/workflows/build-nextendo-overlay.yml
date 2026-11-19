@@ -31,7 +31,8 @@ jobs:
         run: dkp-pacman -S --needed --noconfirm switch-dev switch-portlibs
 
       - name: Fetch libtesla headers
-        run: git clone --depth 1 https://github.com/Doutea/Nextendo-status-ovl.git /tmp/nextendo-status-ovl
+        run: |
+          git clone --depth 1 https://github.com/Doutea/Nextendo-status-ovl.git /tmp/nextendo-status-ovl
           cp -R /tmp/nextendo-status-ovl/libs/libtesla overlays/NextendoOnline/libs/libtesla
 
       - name: Run host parser tests
