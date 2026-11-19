@@ -45,6 +45,7 @@ struct Candidate {
     uint32_t launchCount{0};
     bool playStatsQueried{false};
     bool playStatsAvailable{false};
+    uint64_t sizeBytes{0}; // NS occupied content size; zero means unknown
 };
 
 inline bool isTitleId(const std::string& value) {
