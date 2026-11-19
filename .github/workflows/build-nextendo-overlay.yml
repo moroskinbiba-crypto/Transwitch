@@ -33,6 +33,7 @@ jobs:
       - name: Fetch libtesla headers
         run: |
           git clone --depth 1 https://github.com/Doutea/Nextendo-status-ovl.git /tmp/nextendo-status-ovl
+          mkdir -p overlays/NextendoOnline/libs
           cp -R /tmp/nextendo-status-ovl/libs/libtesla overlays/NextendoOnline/libs/libtesla
 
       - name: Run host parser tests
