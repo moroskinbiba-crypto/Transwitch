@@ -36,10 +36,12 @@ sdmc:/switch/NextendoOnline/online-cache.tsv
 
 ## Сборка
 
-Нужны devkitPro/devkitA64, libnx, Switch portlibs (включая libcurl) и libtesla.
+Нужны devkitPro/devkitA64, libnx, Switch portlibs (включая libcurl) и libtesla с Switch-совместимыми патчами из используемой Tesla-реализации. CI автоматически получает её из Doutea/Nextendo-status-ovl.
 
 ```bash
-git clone https://github.com/WerWolv/libtesla.git libs/libtesla
+git clone --depth 1 https://github.com/Doutea/Nextendo-status-ovl.git /tmp/nextendo-status-ovl
+mkdir -p libs
+cp -R /tmp/nextendo-status-ovl/libs/libtesla libs/libtesla
 make -j2
 cp nextendo-online.nro nextendo-online.ovl
 ```
