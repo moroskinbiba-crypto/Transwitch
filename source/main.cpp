@@ -18,6 +18,8 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "SteamGridDbClient.hpp"
+#include "SteamGridDbCache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -181,6 +183,40 @@ bool accountServiceReady=false;
 int userPickerIndex=0;
 AccountUid uiSelectedUser{};
 std::string selectedUserLabel="SELECT PLAYER";
+std::string steamGridDbApiKey;
+
+namespace sgdb = desknx::steamgriddb_api;
+struct SteamGridArtworkChoice {
+    sgdb::IconAsset asset;
+    std::string type;
+};
+enum class SteamGridPickerStage { Closed, SearchingGames, ChooseGame, LoadingArtwork, ChooseArtwork, Applying };
+enum class SteamGridJob { None, SearchGames, LoadArtwork, ApplyArtwork };
+struct SteamGridTask {
+    SteamGridJob job{SteamGridJob::None};
+    std::string apiKey, query, gameName, assetUrl;
+    std::uint64_t titleId{0}, gameId{0};
+};
+struct SteamGridWorkerResult {
+    bool success{false};
+    bool applied{false};
+    std::string error;
+    std::vector<sgdb::GameMatch> games;
+    std::vector<SteamGridArtworkChoice> artwork;
+};
+SDL_mutex* steamGridMutex=nullptr;
+SDL_Thread* steamGridThread=nullptr;
+SDL_atomic_t steamGridDone{};
+SteamGridJob steamGridActiveJob=SteamGridJob::None;
+SteamGridWorkerResult steamGridWorkerResult;
+bool steamGridPickerOpen=false;
+SteamGridPickerStage steamGridPickerStage=SteamGridPickerStage::Closed;
+std::uint64_t steamGridTargetTitleId=0;
+std::string steamGridTargetTitle, steamGridSearchQuery, steamGridSelectedGameName;
+std::vector<sgdb::GameMatch> steamGridGames;
+std::vector<SteamGridArtworkChoice> steamGridArtwork;
+std::string steamGridError;
+int steamGridListIndex=0, steamGridListOffset=0;
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
@@ -560,6 +596,11 @@ void loadLauncherSettings() {
             char* end=nullptr;
             const long parsed=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
+        } else if(key=="steamgriddb_key") {
+            bool valid=value.size()<=160;
+            for(unsigned char ch:value)
+                if(ch<0x21||ch>0x7E)valid=false;
+            if(valid)steamGridDbApiKey=value;
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -583,7 +624,8 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n"
+       <<"steamgriddb_key="<<safeField(steamGridDbApiKey)<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -1037,6 +1079,258 @@ void searchCatalogue() {
         setStatus(catalogueQuery.empty()?"SEARCH CLEARED":"SEARCH: "+catalogueQuery,2500);
     }
 }
+void editSteamGridDbApiKey() {
+    SwkbdConfig config{};
+    const Result createRc=swkbdCreate(&config,0);
+    if(R_FAILED(createRc)){setStatus("STEAMGRIDDB KEYBOARD UNAVAILABLE");return;}
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,"SteamGridDB API key (empty clears it)");
+    swkbdConfigSetInitialText(&config,steamGridDbApiKey.c_str());
+    char value[192]{};
+    std::snprintf(value,sizeof(value),"%s",steamGridDbApiKey.c_str());
+    const Result rc=showKeyboard(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_FAILED(rc))return;
+    std::string next=value;
+    bool valid=next.size()<=160;
+    for(unsigned char ch:next)if(ch<0x21||ch>0x7E)valid=false;
+    if(!valid){setStatus("INVALID API KEY FORMAT",3000);return;}
+    steamGridDbApiKey=next;
+    if(saveLauncherSettings())setStatus(steamGridDbApiKey.empty()
+        ?"STEAMGRIDDB KEY CLEARED":"STEAMGRIDDB KEY SAVED");
+}
+
+int SDLCALL steamGridWorkerEntry(void* context) {
+    auto* task=static_cast<SteamGridTask*>(context);
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+    SteamGridWorkerResult result;
+    if(task->job==SteamGridJob::SearchGames) {
+        result.success=sgdb::searchGames(task->apiKey,task->query,result.games,result.error);
+        if(result.success&&result.games.empty())result.success=false;
+    } else if(task->job==SteamGridJob::LoadArtwork) {
+        const char* types[]={"heroes","grids","icons"};
+        for(const char* type:types) {
+            std::vector<sgdb::IconAsset> found;
+            std::string error;
+            if(sgdb::listArtwork(task->apiKey,task->gameId,type,found,error)) {
+                for(auto& item:found) {
+                    result.artwork.push_back({std::move(item),type});
+                    if(result.artwork.size()>=36)break;
+                }
+            } else if(result.error.empty())result.error=error;
+            if(result.artwork.size()>=36)break;
+        }
+        result.success=!result.artwork.empty();
+        if(!result.success&&result.error.empty())
+            result.error="No SteamGridDB artwork found for this game.";
+    } else if(task->job==SteamGridJob::ApplyArtwork) {
+        std::vector<unsigned char> bytes;
+        if(sgdb::downloadImage(task->assetUrl,bytes,result.error)) {
+            desknx::steamgriddb::SteamGridDbCache cache;
+            if(cache.ensureDirectories()) {
+                char id[32]{};
+                std::snprintf(id,sizeof(id),"%016llX",
+                    static_cast<unsigned long long>(task->titleId));
+                const std::string temporary=std::string(
+                    desknx::steamgriddb::SteamGridDbCache::kCacheRoot)+
+                    "/download-"+id+".tmp";
+                FILE* output=std::fopen(temporary.c_str(),"wb");
+                bool written=false;
+                if(output) {
+                    written=bytes.empty()||
+                        std::fwrite(bytes.data(),1,bytes.size(),output)==bytes.size();
+                    if(std::fclose(output)!=0)written=false;
+                }
+                if(written) {
+                    result.applied=cache.saveArtworkFromFile(
+                        task->titleId,
+                        desknx::steamgriddb::SteamGridDbCache::ArtworkKind::Hero,
+                        temporary);
+                    if(!result.applied)result.error="Could not publish artwork to SD cache.";
+                } else result.error="Could not write downloaded artwork to SD card.";
+                std::remove(temporary.c_str());
+                result.success=result.applied;
+            } else {
+                result.error="Cannot create SteamGridDB cache on SD card.";
+            }
+        }
+    }
+    if(steamGridMutex)SDL_LockMutex(steamGridMutex);
+    steamGridWorkerResult=std::move(result);
+    if(steamGridMutex)SDL_UnlockMutex(steamGridMutex);
+    SDL_AtomicSet(&steamGridDone,1);
+    delete task;
+    return 0;
+}
+
+bool startSteamGridJob(SteamGridTask* task) {
+    if(!task||steamGridThread||!steamGridMutex) {
+        delete task;
+        setStatus("STEAMGRIDDB WORKER BUSY OR UNAVAILABLE",3000);
+        return false;
+    }
+    steamGridActiveJob=task->job;
+    steamGridWorkerResult=SteamGridWorkerResult{};
+    SDL_AtomicSet(&steamGridDone,0);
+    steamGridThread=SDL_CreateThread(steamGridWorkerEntry,"Transwitch SteamGridDB",task);
+    if(!steamGridThread) {
+        delete task;
+        steamGridActiveJob=SteamGridJob::None;
+        setStatus("STEAMGRIDDB WORKER COULD NOT START",3000);
+        return false;
+    }
+    return true;
+}
+
+void pumpSteamGridWorker() {
+    if(!steamGridThread||!SDL_AtomicGet(&steamGridDone))return;
+    SDL_WaitThread(steamGridThread,nullptr);
+    steamGridThread=nullptr;
+    SteamGridWorkerResult result;
+    if(steamGridMutex)SDL_LockMutex(steamGridMutex);
+    result=std::move(steamGridWorkerResult);
+    steamGridWorkerResult=SteamGridWorkerResult{};
+    if(steamGridMutex)SDL_UnlockMutex(steamGridMutex);
+    const SteamGridJob completed=steamGridActiveJob;
+    steamGridActiveJob=SteamGridJob::None;
+    if(!steamGridPickerOpen)return;
+    if(!result.success) {
+        steamGridError=result.error.empty()?"SteamGridDB request failed.":result.error;
+        if(completed==SteamGridJob::SearchGames)steamGridPickerStage=SteamGridPickerStage::ChooseGame;
+        else if(completed==SteamGridJob::LoadArtwork)steamGridPickerStage=SteamGridPickerStage::ChooseArtwork;
+        else steamGridPickerStage=SteamGridPickerStage::ChooseArtwork;
+        setStatus("STEAMGRIDDB: "+steamGridError,4000);
+        return;
+    }
+    steamGridError.clear();
+    if(completed==SteamGridJob::SearchGames) {
+        steamGridGames=std::move(result.games);
+        steamGridListIndex=steamGridListOffset=0;
+        steamGridPickerStage=SteamGridPickerStage::ChooseGame;
+    } else if(completed==SteamGridJob::LoadArtwork) {
+        steamGridArtwork=std::move(result.artwork);
+        steamGridListIndex=steamGridListOffset=0;
+        steamGridPickerStage=SteamGridPickerStage::ChooseArtwork;
+    } else if(completed==SteamGridJob::ApplyArtwork) {
+        gIconCache.invalidateAll();
+        steamGridPickerOpen=false;
+        steamGridPickerStage=SteamGridPickerStage::Closed;
+        setStatus("STEAMGRIDDB COVER SAVED - AVAILABLE OFFLINE",4500);
+    }
+}
+
+void requestSteamGridSearch() {
+    if(steamGridDbApiKey.empty()) {
+        setStatus("ADD A STEAMGRIDDB API KEY IN LAUNCHER SETTINGS",4000);
+        return;
+    }
+    SwkbdConfig config{};
+    const Result createRc=swkbdCreate(&config,0);
+    if(R_FAILED(createRc)){setStatus("SEARCH KEYBOARD UNAVAILABLE");return;}
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,"Search SteamGridDB by game title");
+    swkbdConfigSetInitialText(&config,steamGridSearchQuery.c_str());
+    char query[192]{};
+    std::snprintf(query,sizeof(query),"%s",steamGridSearchQuery.c_str());
+    const Result rc=showKeyboard(&config,query,sizeof(query));
+    swkbdClose(&config);
+    if(R_FAILED(rc))return;
+    steamGridSearchQuery=query;
+    if(steamGridSearchQuery.empty()){setStatus("ENTER A GAME TITLE");return;}
+    auto* task=new(std::nothrow) SteamGridTask{};
+    if(!task){setStatus("STEAMGRIDDB OUT OF MEMORY");return;}
+    task->job=SteamGridJob::SearchGames;
+    task->apiKey=steamGridDbApiKey;
+    task->query=steamGridSearchQuery;
+    steamGridPickerOpen=true;
+    steamGridPickerStage=SteamGridPickerStage::SearchingGames;
+    steamGridError.clear();
+    steamGridListIndex=steamGridListOffset=0;
+    (void)startSteamGridJob(task);
+}
+
+void openSteamGridPicker(const Candidate& candidate) {
+    if(candidate.kind!=Kind::Game||!desknx::model::isTitleId(candidate.data)) {
+        setStatus("STEAMGRIDDB ARTWORK IS AVAILABLE FOR INSTALLED GAMES",3000);
+        return;
+    }
+    steamGridTargetTitleId=std::strtoull(candidate.data.c_str(),nullptr,16);
+    steamGridTargetTitle=candidate.title;
+    steamGridSearchQuery=candidate.title;
+    steamGridSelectedGameName.clear();
+    steamGridGames.clear();steamGridArtwork.clear();steamGridError.clear();
+    steamGridPickerOpen=true;
+    requestSteamGridSearch();
+    if(steamGridPickerStage==SteamGridPickerStage::Closed)
+        steamGridPickerOpen=false;
+}
+
+void chooseSteamGridGame() {
+    if(steamGridListIndex<0||steamGridListIndex>=static_cast<int>(steamGridGames.size()))return;
+    const auto game=steamGridGames[static_cast<size_t>(steamGridListIndex)];
+    auto* task=new(std::nothrow) SteamGridTask{};
+    if(!task){setStatus("STEAMGRIDDB OUT OF MEMORY");return;}
+    task->job=SteamGridJob::LoadArtwork;
+    task->apiKey=steamGridDbApiKey;
+    task->titleId=steamGridTargetTitleId;
+    task->gameId=game.id;
+    task->gameName=game.name;
+    steamGridSelectedGameName=game.name;
+    steamGridPickerStage=SteamGridPickerStage::LoadingArtwork;
+    steamGridError.clear();
+    (void)startSteamGridJob(task);
+}
+
+void applySelectedSteamGridArtwork() {
+    if(steamGridListIndex<0||steamGridListIndex>=static_cast<int>(steamGridArtwork.size()))return;
+    const auto choice=steamGridArtwork[static_cast<size_t>(steamGridListIndex)];
+    auto* task=new(std::nothrow) SteamGridTask{};
+    if(!task){setStatus("STEAMGRIDDB OUT OF MEMORY");return;}
+    task->job=SteamGridJob::ApplyArtwork;
+    task->apiKey=steamGridDbApiKey;
+    task->titleId=steamGridTargetTitleId;
+    task->assetUrl=choice.asset.url;
+    steamGridPickerStage=SteamGridPickerStage::Applying;
+    steamGridError.clear();
+    (void)startSteamGridJob(task);
+}
+
+void cycleSteamGridSelection(int direction) {
+    const size_t count=steamGridPickerStage==SteamGridPickerStage::ChooseGame
+        ?steamGridGames.size():steamGridArtwork.size();
+    if(count==0)return;
+    steamGridListIndex=(steamGridListIndex+direction+static_cast<int>(count))%
+        static_cast<int>(count);
+    constexpr int visible=9;
+    if(steamGridListIndex<steamGridListOffset)steamGridListOffset=steamGridListIndex;
+    if(steamGridListIndex>=steamGridListOffset+visible)
+        steamGridListOffset=steamGridListIndex-visible+1;
+}
+
+void handleSteamGridPickerInput(u64 keys) {
+    if(keys&HidNpadButton_B) {
+        if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
+            steamGridArtwork.clear();
+            steamGridPickerStage=SteamGridPickerStage::ChooseGame;
+            steamGridListIndex=steamGridListOffset=0;
+        } else {
+            steamGridPickerOpen=false;
+            steamGridPickerStage=SteamGridPickerStage::Closed;
+        }
+        return;
+    }
+    if(steamGridPickerStage==SteamGridPickerStage::SearchingGames||
+       steamGridPickerStage==SteamGridPickerStage::LoadingArtwork||
+       steamGridPickerStage==SteamGridPickerStage::Applying)return;
+    if(keys&HidNpadButton_Y){requestSteamGridSearch();return;}
+    if(keys&HidNpadButton_Up)cycleSteamGridSelection(-1);
+    if(keys&HidNpadButton_Down)cycleSteamGridSelection(1);
+    if(keys&HidNpadButton_A) {
+        if(steamGridPickerStage==SteamGridPickerStage::ChooseGame)chooseSteamGridGame();
+        else if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)applySelectedSteamGridArtwork();
+    }
+}
+
 void cycleCatalogueFilter(int direction) {
     constexpr int count=4;
     int current=static_cast<int>(catalogueFilter);
@@ -2933,13 +3227,89 @@ void drawScreen() {
             }
             text(std::to_string(listIndex+1)+" OF "+std::to_string(available.size()),
                  mx+800,my+438,1,MUTED,mx+mw-30);
-            roundRect(mx+792,my+462,228,42,12,Color{49,119,199,255});
-            text("A  ADD TO WORKSPACE",mx+823,my+477,1,WHITE,mx+mw-30);
+            if(selected.kind==Kind::Game) {
+                roundRect(mx+792,my+462,112,42,12,Color{46,91,139,255});
+                text("ZL  COVER",mx+810,my+477,1,WHITE,mx+904);
+                roundRect(mx+916,my+462,104,42,12,Color{49,119,199,255});
+                text("A  ADD",mx+941,my+477,1,WHITE,mx+1020);
+            } else {
+                roundRect(mx+792,my+462,228,42,12,Color{49,119,199,255});
+                text("A  ADD TO WORKSPACE",mx+823,my+477,1,WHITE,mx+mw-30);
+            }
         }
         const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
+    }
+    if(steamGridPickerOpen) {
+        rect(0,0,SW,SH,Color{2,6,13,214});
+        softCard(230,92,820,536,Color{15,24,38,252},Color{255,255,255,38});
+        text("STEAMGRIDDB ARTWORK",270,119,3,WHITE,980);
+        text(steamGridTargetTitle,272,158,1,MUTED,980);
+        roundRect(928,112,82,34,10,Color{48,57,72,255});
+        text("B BACK",945,123,1,WHITE,1004);
+        const bool choosingGames=steamGridPickerStage==SteamGridPickerStage::ChooseGame||
+            steamGridPickerStage==SteamGridPickerStage::SearchingGames;
+        const bool choosingArt=steamGridPickerStage==SteamGridPickerStage::ChooseArtwork||
+            steamGridPickerStage==SteamGridPickerStage::LoadingArtwork||
+            steamGridPickerStage==SteamGridPickerStage::Applying;
+        text(choosingGames?"1 / 2  SELECT THE MATCH":"2 / 2  SELECT THE ARTWORK",
+             272,184,1,BLUE,980);
+        if(steamGridPickerStage==SteamGridPickerStage::SearchingGames)
+            text("SEARCHING STEAMGRIDDB...",290,248,2,WHITE,970);
+        else if(steamGridPickerStage==SteamGridPickerStage::LoadingArtwork)
+            text("LOADING AVAILABLE ARTWORK...",290,248,2,WHITE,970);
+        else if(steamGridPickerStage==SteamGridPickerStage::Applying)
+            text("DOWNLOADING AND SAVING TO SD CARD...",290,248,2,WHITE,970);
+        else if(choosingGames) {
+            if(steamGridGames.empty())text("NO MATCHES FOUND. PRESS Y TO SEARCH AGAIN.",290,246,1,WHITE,970);
+            const int count=static_cast<int>(steamGridGames.size());
+            steamGridListIndex=std::max(0,std::min(steamGridListIndex,std::max(0,count-1)));
+            const int maxOffset=std::max(0,count-9);
+            steamGridListOffset=std::max(0,std::min(steamGridListOffset,maxOffset));
+            if(steamGridListIndex<steamGridListOffset)steamGridListOffset=steamGridListIndex;
+            if(steamGridListIndex>=steamGridListOffset+9)steamGridListOffset=steamGridListIndex-8;
+            for(int row=0;row<9;++row) {
+                const int index=steamGridListOffset+row;
+                if(index>=count)break;
+                const int yy=218+row*36;
+                if(index==steamGridListIndex)roundRect(274,yy,732,31,9,Color{38,72,111,255});
+                text(steamGridGames[static_cast<size_t>(index)].name,294,yy+10,1,
+                     index==steamGridListIndex?WHITE:MUTED,980);
+                text("#"+std::to_string(steamGridGames[static_cast<size_t>(index)].id),
+                     868,yy+10,1,index==steamGridListIndex?BLUE:MUTED,994);
+            }
+        } else if(choosingArt) {
+            const int count=static_cast<int>(steamGridArtwork.size());
+            steamGridListIndex=std::max(0,std::min(steamGridListIndex,std::max(0,count-1)));
+            const int maxOffset=std::max(0,count-9);
+            steamGridListOffset=std::max(0,std::min(steamGridListOffset,maxOffset));
+            if(steamGridListIndex<steamGridListOffset)steamGridListOffset=steamGridListIndex;
+            if(steamGridListIndex>=steamGridListOffset+9)steamGridListOffset=steamGridListIndex-8;
+            text("MATCH: "+steamGridSelectedGameName,274,208,1,MUTED,980);
+            if(steamGridArtwork.empty()&&steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)
+                text("NO ARTWORK FOUND. PRESS B TO CHOOSE ANOTHER MATCH.",290,248,1,WHITE,970);
+            for(int row=0;row<9;++row) {
+                const int index=steamGridListOffset+row;
+                if(index>=count)break;
+                const auto& item=steamGridArtwork[static_cast<size_t>(index)];
+                const int yy=238+row*34;
+                if(index==steamGridListIndex)roundRect(274,yy,732,30,9,Color{38,72,111,255});
+                const char* kind=item.type=="heroes"?"HERO":item.type=="grids"?"GRID":"ICON";
+                text(kind,294,yy+9,1,index==steamGridListIndex?BLUE:MUTED,400);
+                text(std::to_string(item.asset.width)+" x "+std::to_string(item.asset.height),
+                     422,yy+9,1,index==steamGridListIndex?WHITE:MUTED,640);
+                text("#"+std::to_string(item.asset.id),868,yy+9,1,
+                     index==steamGridListIndex?BLUE:MUTED,994);
+            }
+        }
+        if(!steamGridError.empty())
+            text(steamGridError,274,555,1,RED,1002);
+        else if(steamGridPickerStage==SteamGridPickerStage::ChooseGame||
+                steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)
+            text("UP / DOWN SELECT     A CHOOSE / DOWNLOAD     Y SEARCH AGAIN     B BACK",
+                 274,585,1,BLUE,1004);
     }
     if(workspaceMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
@@ -3128,7 +3498,7 @@ void drawScreen() {
         rect(0,0,SW,SH,Color{3,7,14,198});
         softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
-        text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
+        text("Appearance, widgets and SteamGridDB integration",346,168,1,MUTED,930);
         roundRect(842,132,92,32,10,Color{54,57,66,255});
         text("B  BACK",856,143,1,WHITE,926);
         text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
@@ -3142,15 +3512,18 @@ void drawScreen() {
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR PALETTE","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE","VISUAL THEME"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE","VISUAL THEME",
+            "STEAMGRIDDB API KEY"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<12;++i) {
-            const int yy=214+i*28;
-            if(i==appSettingsIndex)roundRect(340,yy,600,26,8,Color{35,61,93,255});
-            text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
-            if(i==3)text("PALETTE "+std::to_string(themeIndex+1)+"/8",790,yy+7,1,BLUE,920);
-            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+7,1,BLUE,920);
-            if(i==11)text(useSocomaTheme()?"SOCOMA":"V0.1",790,yy+7,1,BLUE,920);
+        for(int i=0;i<13;++i) {
+            const int yy=214+i*26;
+            if(i==appSettingsIndex)roundRect(340,yy,600,24,8,Color{35,61,93,255});
+            text(actions[i],362,yy+6,1,i==appSettingsIndex?WHITE:MUTED,730);
+            if(i==3)text("PALETTE "+std::to_string(themeIndex+1)+"/8",790,yy+6,1,BLUE,920);
+            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+6,1,BLUE,920);
+            if(i==11)text(useSocomaTheme()?"SOCOMA":"V0.1",790,yy+6,1,BLUE,920);
+            if(i==12)text(steamGridDbApiKey.empty()?"NOT SET":"CONFIGURED",
+                          790,yy+6,1,steamGridDbApiKey.empty()?MUTED:GREEN,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -3781,6 +4154,9 @@ void activateAppSettings(int action) {
                 useSocomaTheme()?"socoma":"v0.1",themeIndex);
             if(saveLauncherSettings())setStatus(useSocomaTheme()?"SOCOMA THEME APPLIED":"V0.1 THEME RESTORED");
             break;
+        case 12:
+            editSteamGridDbApiKey();
+            break;
         default: break;
     }
 }
@@ -3955,6 +4331,10 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
+    if(steamGridPickerOpen) {
+        handleSteamGridPickerInput(keys);
+        return;
+    }
     if(consoleSettingsOpen) {
         if(keys&HidNpadButton_B){consoleSettingsOpen=false;return;}
         if(keys&HidNpadButton_Up)consoleSettingsIndex=(consoleSettingsIndex+4)%5;
@@ -3966,8 +4346,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+11)%12;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%12;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+12)%13;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%13;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -4121,6 +4501,12 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_R){cycleCatalogueFilter(1);return;}
         if(keys&HidNpadButton_Minus){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);return;}
         if(keys&HidNpadButton_StickR){restartCatalogueScan();return;}
+        if(keys&HidNpadButton_ZL) {
+            if(!available.empty()&&listIndex>=0&&listIndex<static_cast<int>(available.size()))
+                openSteamGridPicker(available[static_cast<size_t>(listIndex)]);
+            else setStatus("SELECT AN INSTALLED GAME FIRST");
+            return;
+        }
         if(available.empty())return;
         if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
         if(keys&HidNpadButton_Up) {
@@ -4302,6 +4688,21 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(e.type==SDL_FINGERDOWN && steamGridPickerOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=928&&x<=1010&&y>=112&&y<=146) {
+            handleSteamGridPickerInput(HidNpadButton_B);
+        } else if(steamGridPickerStage==SteamGridPickerStage::ChooseGame||
+                  steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
+            if(y>=218&&y<542) {
+                const int row=(y-(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork?238:218))/
+                    (steamGridPickerStage==SteamGridPickerStage::ChooseArtwork?34:36);
+                steamGridListIndex=steamGridListOffset+row;
+                handleSteamGridPickerInput(HidNpadButton_A);
+            }
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && consoleSettingsOpen) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=812&&x<=890&&y>=151&&y<=184)consoleSettingsOpen=false;
@@ -4315,9 +4716,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<550) {
-            const int row=(y-214)/28;
-            if(row>=0&&row<12)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=214&&y<552) {
+            const int row=(y-214)/26;
+            if(row>=0&&row<13)activateAppSettings(row);
         }
         return;
     }
@@ -4444,7 +4845,12 @@ void touchInput(const SDL_Event&e) {
                 return;
             }
             if(y>=532&&y<=576&&x>=900&&x<=1150) {
-                addSelected();
+                const auto& available=visibleCatalogueSnapshot();
+                if(!available.empty()&&listIndex>=0&&listIndex<static_cast<int>(available.size())&&
+                   available[static_cast<size_t>(listIndex)].kind==Kind::Game) {
+                    if(x<1014)openSteamGridPicker(available[static_cast<size_t>(listIndex)]);
+                    else addSelected();
+                } else addSelected();
                 return;
             }
             if(y>=180&&y<580&&x>=130&&x<874) {
@@ -4709,6 +5115,7 @@ int main(int,char**) {
         static_cast<unsigned int>(rendererInfo.flags),rendererVsync?1:0);
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
+    steamGridMutex=SDL_CreateMutex();
     storageCommitMutex=SDL_CreateMutex();
     playStatsMutex=SDL_CreateMutex();
     nextendoMutex=SDL_CreateMutex();
@@ -4955,6 +5362,7 @@ int main(int,char**) {
         }
         pumpAsyncLayoutSaver();
         pumpPlayStatsQuery();
+        pumpSteamGridWorker();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
@@ -4983,6 +5391,8 @@ int main(int,char**) {
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
     playStatsPending=false;
+    if(steamGridThread){SDL_WaitThread(steamGridThread,nullptr);steamGridThread=nullptr;}
+    if(steamGridMutex){SDL_DestroyMutex(steamGridMutex);steamGridMutex=nullptr;}
     if(playStatsThread) {
         SDL_WaitThread(playStatsThread,nullptr);
         playStatsThread=nullptr;
