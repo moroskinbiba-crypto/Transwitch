@@ -265,11 +265,16 @@ bool searchGames(const std::string& apiKey,const std::string& query,
     return true;
 }
 
-bool listIcons(const std::string& apiKey,std::uint64_t gameId,
-               std::vector<IconAsset>& results,std::string& error) {
+bool listArtwork(const std::string& apiKey,std::uint64_t gameId,
+                 const std::string& artworkType,
+                 std::vector<IconAsset>& results,std::string& error) {
     results.clear();error.clear();
     if(apiKey.empty()||gameId==0){error="SteamGridDB API key or game match is missing.";return false;}
-    const std::string url=std::string(ApiRoot)+"/icons/game/"+
+    if(artworkType!="heroes"&&artworkType!="grids"&&artworkType!="icons") {
+        error="Unsupported SteamGridDB artwork type.";
+        return false;
+    }
+    const std::string url=std::string(ApiRoot)+"/"+artworkType+"/game/"+
         std::to_string(gameId)+"?types=static&mimes=image%2Fpng%2Cimage%2Fjpeg&nsfw=false&humor=false";
     std::vector<unsigned char> bytes;
     if(!performGet(url,apiKey,MaxJsonBytes,bytes,error))return false;
@@ -286,10 +291,15 @@ bool listIcons(const std::string& apiKey,std::uint64_t gameId,
         asset.height=static_cast<unsigned>(std::min<std::uint64_t>(height,8192));
         if(asset.url.compare(0,8,"https://")==0)
             results.push_back(std::move(asset));
-        if(results.size()>=60)break;
+        if(results.size()>=40)break;
     }
-    if(results.empty())error="No icon artwork found for this SteamGridDB match.";
+    if(results.empty())error="No "+artworkType+" artwork found for this SteamGridDB match.";
     return true;
+}
+
+bool listIcons(const std::string& apiKey,std::uint64_t gameId,
+               std::vector<IconAsset>& results,std::string& error) {
+    return listArtwork(apiKey,gameId,"icons",results,error);
 }
 
 bool downloadImage(const std::string& url,std::vector<unsigned char>& bytes,
