@@ -81,9 +81,7 @@ std::array<Color,12> COLORS{{
     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255},
     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}
 }};
-int themeIndex=1; // v0.1 palette preset; retained for backwards compatibility
-int visualThemeIndex=0; // 0 = v0.1 legacy renderer, 1 = socoma renderer
-bool useSocomaTheme() { return visualThemeIndex==1; }
+int themeIndex=1;
 bool languageRussian=true;
 int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
 std::string wallpaperPath, fontPath, iconPackPath;
@@ -364,13 +362,6 @@ void applyThemePalette() {
                      {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}}};
             break;
     }
-    if(useSocomaTheme()) {
-        BG={7,12,21,255};
-        THEME_TOP={13,25,42,255};
-        THEME_BOTTOM={5,9,18,255};
-        MUTED={166,181,201,255};
-        // BLUE/GREEN/RED and COLORS remain controlled by the familiar palette picker.
-    }
 }
 
 bool hasExtension(const std::string& path,const char* const* extensions,size_t count) {
@@ -437,9 +428,6 @@ void loadLauncherSettings() {
             const long valueLong=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&valueLong>=0&&valueLong<=7)
                 themeIndex=static_cast<int>(valueLong);
-        } else if(key=="visual_theme") {
-            if(value=="socoma")visualThemeIndex=1;
-            else if(value=="v0.1"||value=="legacy")visualThemeIndex=0;
         } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
@@ -468,7 +456,6 @@ bool saveLauncherSettings() {
     if(!out){setStatus("SETTINGS SAVE FAILED",3000);return false;}
     out<<"DESKNXSET1\n"
        <<"theme="<<themeIndex<<"\n"
-       <<"visual_theme="<<(useSocomaTheme()?"socoma":"v0.1")<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
@@ -552,7 +539,7 @@ void drawWallpaper() {
     SDL_RenderSetClipRect(renderer,&viewport);
     SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
     SDL_RenderSetClipRect(renderer,nullptr);
-    SDL_SetRenderDrawColor(renderer,3,7,14,useSocomaTheme()?58:92);
+    SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
 }
 
@@ -600,25 +587,8 @@ void drawWorkspaceBackground(const Workspace& desk) {
     SDL_RenderSetClipRect(renderer,&viewport);
     SDL_RenderCopy(renderer,texture,nullptr,&dst);
     SDL_RenderSetClipRect(renderer,nullptr);
-    SDL_SetRenderDrawColor(renderer,3,7,14,useSocomaTheme()?58:92);
+    SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
-}
-
-void drawSocomaAtmosphere() {
-    // Lightweight atmospheric shading: no framebuffer blur or shader dependency.
-    // The bands are a fixed, small number of draw calls and do not touch texture caches.
-    for(int i=0;i<7;++i) {
-        const Uint8 topAlpha=static_cast<Uint8>(42-i*5);
-        const Uint8 bottomAlpha=static_cast<Uint8>(24+i*6);
-        rect(0,i*12,SW,12,Color{2,7,16,topAlpha});
-        rect(0,SH-(i+1)*12,SW,12,Color{2,6,14,bottomAlpha});
-    }
-    for(int i=0;i<4;++i) {
-        const Uint8 alpha=static_cast<Uint8>(18-i*3);
-        const int width=12+i*5;
-        rect(0,88,width,SH-176,Color{1,5,12,alpha});
-        rect(SW-width,88,width,SH-176,Color{1,5,12,alpha});
-    }
 }
 
 void refreshMediaPicker() {
@@ -770,21 +740,6 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
     }
 }
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
-    if(useSocomaTheme()) {
-        roundRect(x,y+6,w,h,UiCornerRadius,Color{0,0,0,82});
-        Color glass=fill;
-        glass.r=static_cast<Uint8>((static_cast<unsigned>(fill.r)*55U+18U*45U)/100U);
-        glass.g=static_cast<Uint8>((static_cast<unsigned>(fill.g)*55U+31U*45U)/100U);
-        glass.b=static_cast<Uint8>((static_cast<unsigned>(fill.b)*55U+49U*45U)/100U);
-        glass.a=std::min<Uint8>(fill.a,218);
-        roundRect(x,y,w,h,UiCornerRadius,glass);
-        Color stroke{std::max<Uint8>(edge.r,132),std::max<Uint8>(edge.g,151),
-                     std::max<Uint8>(edge.b,174),std::max<Uint8>(edge.a,42)};
-        roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,stroke);
-        if(w>36)rect(x+UiCornerRadius+4,y+1,w-2*(UiCornerRadius+4),1,
-                     Color{255,255,255,22});
-        return;
-    }
     roundRect(x,y+5,w,h,UiCornerRadius,Color{0,0,0,54});
     roundRect(x,y,w,h,UiCornerRadius,fill);
     roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
@@ -2172,44 +2127,21 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
              bounds.y+(bounds.h-7*scale)/2,scale,WHITE,bounds.x+bounds.w-8);
     }
 
-    const size_t maxChars=static_cast<size_t>(std::max(8,
-        useSocomaTheme()?(bounds.w-18)/9:(bounds.w-20)/12));
+    const size_t maxChars=static_cast<size_t>(std::max(8,(bounds.w-20)/12));
     const auto& titleLines=cachedTileTitleLines(tile.title,maxChars);
     const int stripHeight=titleLines.size()>1?44:32;
     const int overlay=std::max(0,std::min(255,workspace.labelOpacity));
-    if(useSocomaTheme()) {
-        if(overlay>0) {
-            const int gradientHeight=std::min(viewport.h,std::max(36,viewport.h/2));
-            constexpr int gradientSteps=7;
-            for(int step=0;step<gradientSteps;++step) {
-                const int bandTop=viewport.y+viewport.h-gradientHeight+
-                    gradientHeight*step/gradientSteps;
-                const int bandBottom=viewport.y+viewport.h-gradientHeight+
-                    gradientHeight*(step+1)/gradientSteps;
-                const int alpha=(18+step*17)*overlay/196;
-                rect(viewport.x,bandTop,viewport.w,std::max(1,bandBottom-bandTop),
-                     Color{3,7,15,static_cast<Uint8>(std::min(150,alpha))});
-            }
-        }
-        if(titleLines.size()==1) {
-            text(titleLines[0],bounds.x+10,bounds.y+bounds.h-22,1,WHITE,bounds.x+bounds.w-10);
-        } else {
-            text(titleLines[0],bounds.x+10,bounds.y+bounds.h-30,1,WHITE,bounds.x+bounds.w-10);
-            text(titleLines[1],bounds.x+10,bounds.y+bounds.h-17,1,WHITE,bounds.x+bounds.w-10);
-        }
+    if(overlay>0)
+        rect(viewport.x,viewport.y+viewport.h-stripHeight,viewport.w,stripHeight,
+             Color{5,9,16,static_cast<Uint8>(overlay)});
+    if(titleLines.size()==1) {
+        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+8,
+             2,WHITE,bounds.x+bounds.w-10);
     } else {
-        if(overlay>0)
-            rect(viewport.x,viewport.y+viewport.h-stripHeight,viewport.w,stripHeight,
-                 Color{5,9,16,static_cast<Uint8>(overlay)});
-        if(titleLines.size()==1) {
-            text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+8,
-                 2,WHITE,bounds.x+bounds.w-10);
-        } else {
-            text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+3,
-                 2,WHITE,bounds.x+bounds.w-10);
-            text(titleLines[1],bounds.x+10,bounds.y+bounds.h-stripHeight+22,
-                 2,WHITE,bounds.x+bounds.w-10);
-        }
+        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+3,
+             2,WHITE,bounds.x+bounds.w-10);
+        text(titleLines[1],bounds.x+10,bounds.y+bounds.h-stripHeight+22,
+             2,WHITE,bounds.x+bounds.w-10);
     }
     // Texture rendering uses a rectangular clip; paint only the four corner
     // wedges afterwards so the actual game artwork follows the tile's 10px
@@ -2230,32 +2162,18 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
 }
 void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     SDL_Rect r=tileRect(t);
-    if(useSocomaTheme()&&selected) {
-        const double pulse=0.5+0.5*std::sin(static_cast<double>(SDL_GetTicks())*0.0042);
-        const int grow=1+static_cast<int>(pulse*2.0);
-        r.x-=grow;r.y-=grow;r.w+=grow*2;r.h+=grow*2;
-    }
     const Color accent=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
-    const Color fill=useSocomaTheme()
-        ?(selected?Color{19,39,62,218}:Color{12,23,38,205})
-        :(selected?Color{29,48,73,255}:Color{22,29,42,255});
+    const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
 
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,workspace,r,fill);
         if(selected) {
-            if(useSocomaTheme()) {
-                const double pulse=0.5+0.5*std::sin(static_cast<double>(SDL_GetTicks())*0.0042);
-                const Uint8 glow=static_cast<Uint8>(150.0+pulse*85.0);
-                outline(r.x-1,r.y-1,r.w+2,r.h+2,Color{BLUE.r,BLUE.g,BLUE.b,glow});
-                outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,105});
-            } else {
-                outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
-                outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
-            }
+            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
+            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
         }
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
@@ -2480,9 +2398,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
 }
 void drawDotted(int x,int y,int w,int h) {
-    const Color dot=useSocomaTheme()?Color{137,165,198,92}:Color{67,79,98,180};
-    for(int xx=x;xx<x+w;xx+=12){rect(xx,y,6,2,dot);rect(xx,y+h-2,6,2,dot);}
-    for(int yy=y;yy<y+h;yy+=12){rect(x,yy,2,6,dot);rect(x+w-2,yy,2,6,dot);}
+    for(int xx=x;xx<x+w;xx+=12){rect(xx,y,6,2,Color{67,79,98,180});rect(xx,y+h-2,6,2,Color{67,79,98,180});}
+    for(int yy=y;yy<y+h;yy+=12){rect(x,yy,2,6,Color{67,79,98,180});rect(x+w-2,yy,2,6,Color{67,79,98,180});}
 }
 int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
@@ -2515,9 +2432,9 @@ void drawScreen() {
             std::min(deskIndex,static_cast<int>(desks.size())-1)))]);
     else
         drawWallpaper();
-    if(useSocomaTheme())drawSocomaAtmosphere();
 
-    // Floating system bar. Hit targets remain identical for touch and controller users.
+    // Compact, labelled system toolbar. Each control has a generous touch
+    // target and a visible name; the same tools are available from the gamepad.
     softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
@@ -2527,12 +2444,9 @@ void drawScreen() {
     for(int i=0;i<ToolbarButtonCount;++i) {
         const auto& item=headerTools[i];
         const int x=toolbarButtonX(i);
-        const Color navFill=useSocomaTheme()
-            ?(item.active?Color{45,91,145,224}:Color{20,34,51,190})
-            :(item.active?Color{48,82,124,255}:Color{37,47,62,230});
-        roundRect(x,24,ToolbarButtonWidth,48,13,navFill);
-        if(item.active)outline(x,24,ToolbarButtonWidth,48,
-            useSocomaTheme()?Color{BLUE.r,BLUE.g,BLUE.b,175}:Color{120,174,235,150});
+        roundRect(x,24,ToolbarButtonWidth,48,13,
+            item.active?Color{48,82,124,255}:Color{37,47,62,230});
+        if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
         drawSystemIcon(item.icon,x+12,31,24,item.active?WHITE:Color{204,214,228,255});
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
         text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),56,1,
@@ -2550,35 +2464,18 @@ void drawScreen() {
     text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
          battery>=20?GREEN:RED,1198);
 
+    // Single desktop surface under the tiles and widgets.
+    softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
-    if(useSocomaTheme()) {
-        text("WORKSPACE",66,100,1,BLUE,420);
-        text(d.name,66,116,2,WHITE,520);
-        text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
-             1092,121,1,MUTED,1206);
-    } else {
-        // v0.1 keeps its original single desktop surface unchanged.
-        softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
-    }
     if(d.tiles.empty()) {
-        if(useSocomaTheme()) {
-            softCard(420,282,440,126,Color{17,30,48,190},Color{255,255,255,34});
-            roundRect(452,309,48,48,16,Color{38,76,119,205});
-            drawSystemIcon(4,465,322,22,WHITE);
-            text("A SPACE FOR YOUR GAMES",520,304,2,WHITE,830);
-            text("Add apps and widgets to start building this desktop.",520,338,1,MUTED,830);
-            roundRect(520,365,138,30,12,Color{43,111,190,220});
-            text("Y  ADD APPS",540,374,1,WHITE,650);
-        } else {
-            softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
-            roundRect(390,302,46,46,14,Color{38,76,119,255});
-            drawSystemIcon(4,402,314,22,WHITE);
-            text("THIS DESKTOP IS EMPTY",454,302,2,WHITE,880);
-            text("Add games, homebrew and widgets to get started.",454,337,1,MUTED,880);
-            roundRect(454,370,176,38,12,Color{43,111,190,255});
-            text("Y  ADD APPS",493,383,1,WHITE,620);
-            text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
-        }
+        softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
+        roundRect(390,302,46,46,14,Color{38,76,119,255});
+        drawSystemIcon(4,402,314,22,WHITE);
+        text("THIS DESKTOP IS EMPTY",454,302,2,WHITE,880);
+        text("Add games, homebrew and widgets to get started.",454,337,1,MUTED,880);
+        roundRect(454,370,176,38,12,Color{43,111,190,255});
+        text("Y  ADD APPS",493,383,1,WHITE,620);
+        text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
     }
     if(editing)for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
         int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
@@ -2627,14 +2524,8 @@ void drawScreen() {
         const int x=DeskTabX+i*DeskTabStep;
         const bool active=index==deskIndex;
         roundRect(x,641,DeskTabWidth,48,14,
-            useSocomaTheme()
-                ?(active?Color{45,91,145,205}:Color{17,29,44,175})
-                :(active?Color{53,91,139,255}:Color{34,43,58,235}));
-        if(active) {
-            outline(x,641,DeskTabWidth,48,useSocomaTheme()
-                ?Color{BLUE.r,BLUE.g,BLUE.b,145}:Color{144,189,244,110});
-            if(useSocomaTheme())roundRect(x+18,684,DeskTabWidth-36,2,1,BLUE);
-        }
+            active?Color{53,91,139,255}:Color{34,43,58,235});
+        if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
         text(desks[static_cast<size_t>(index)].name,x+12,658,1,
              active?WHITE:MUTED,x+DeskTabWidth-8);
     }
@@ -2646,9 +2537,7 @@ void drawScreen() {
     text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
          916,658,1,MUTED,1040);
     roundRect(1096,638,128,54,16,
-        useSocomaTheme()
-            ?(editing?Color{45,91,145,220}:Color{19,34,52,195})
-            :(editing?Color{53,100,156,255}:Color{34,46,64,255}));
+        editing?Color{53,100,156,255}:Color{34,46,64,255});
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
     if(listOpen) {
@@ -2967,17 +2856,16 @@ void drawScreen() {
         text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
              346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
-            "CHANGE COLOR PALETTE","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
+            "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE","VISUAL THEME"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<12;++i) {
-            const int yy=214+i*28;
-            if(i==appSettingsIndex)roundRect(340,yy,600,26,8,Color{35,61,93,255});
+        for(int i=0;i<11;++i) {
+            const int yy=214+i*31;
+            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
             text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
-            if(i==3)text("PALETTE "+std::to_string(themeIndex+1)+"/8",790,yy+7,1,BLUE,920);
-            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+7,1,BLUE,920);
-            if(i==11)text(useSocomaTheme()?"SOCOMA":"V0.1",790,yy+7,1,BLUE,920);
+            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
+            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -3562,7 +3450,7 @@ void activateAppSettings(int action) {
             themeIndex=(themeIndex+1)%8;
             applyThemePalette();
             if(saveLauncherSettings())
-                setStatus("PALETTE "+std::to_string(themeIndex+1)+" APPLIED");
+                setStatus("THEME "+std::to_string(themeIndex+1)+" APPLIED");
             break;
         case 4:
             widgetPickerPreviousFilter=catalogueFilter;
@@ -3587,7 +3475,7 @@ void activateAppSettings(int action) {
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
         case 8:
-            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;visualThemeIndex=0;iconStyle=0;
+            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;iconStyle=0;
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
             gIconCache.setCustomIconPackDir("");
@@ -3601,13 +3489,6 @@ void activateAppSettings(int action) {
         case 10:
             iconStyle=(iconStyle+1)%3;
             if(saveLauncherSettings())setStatus("ICON STYLE");
-            break;
-        case 11:
-            visualThemeIndex=useSocomaTheme()?0:1;
-            applyThemePalette();
-            desknx::diag::Write("ui","visual_theme_changed","theme=%s palette=%d",
-                useSocomaTheme()?"socoma":"v0.1",themeIndex);
-            if(saveLauncherSettings())setStatus(useSocomaTheme()?"SOCOMA THEME APPLIED":"V0.1 THEME RESTORED");
             break;
         default: break;
     }
@@ -3788,8 +3669,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+11)%12;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%12;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -4108,9 +3989,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<550) {
-            const int row=(y-214)/28;
-            if(row>=0&&row<12)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=214&&y<555) {
+            const int row=(y-214)/31;
+            if(row>=0&&row<11)activateAppSettings(row);
         }
         return;
     }
