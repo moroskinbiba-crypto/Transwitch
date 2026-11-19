@@ -71,6 +71,10 @@ clean:
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp
 
 else
+# The recursive make re-evaluates CFLAGS/CXXFLAGS. Re-add the absolute include
+# paths exported by the outer invocation so source headers remain visible.
+CFLAGS   += $(INCLUDE)
+CXXFLAGS += $(INCLUDE)
 DEPENDS := $(OFILES:.o=.d)
 
 .PHONY: all
