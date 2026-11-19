@@ -5,6 +5,7 @@
 // and card presentation follow projects/cards/src/CardsActivity.cpp.
 
 #include <switch.h>
+#include "../include/desknx/CurlGlobal.hpp"
 #include <curl/curl.h>
 
 #include <cstdio>
@@ -178,7 +179,7 @@ bool readConnected(const std::string& body, unsigned& connected) {
 bool initializeNetwork() {
     const Result socketRc = socketInitializeDefault();
     if (R_FAILED(socketRc)) return false;
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+    if (!desknx::network::acquireCurl()) {
         socketExit();
         return false;
     }
@@ -186,7 +187,7 @@ bool initializeNetwork() {
 }
 
 void shutdownNetwork() {
-    curl_global_cleanup();
+    desknx::network::releaseCurl();
     socketExit();
 }
 

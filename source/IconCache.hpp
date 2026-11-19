@@ -34,6 +34,25 @@ public:
         uploadCompleted();
     }
 
+    // Called on the renderer thread after replacing a cached image file.
+    // Pending worker results are invalidated before textures are discarded.
+    void invalidateAll() {
+        if(mutex_) {
+            SDL_LockMutex(mutex_);
+            ++generation_;
+            requests_.clear();
+            completed_.clear();
+            pendingKeys_.clear();
+            SDL_CondBroadcast(condition_);
+            SDL_UnlockMutex(mutex_);
+        } else {
+            ++generation_;
+            pendingKeys_.clear();
+        }
+        failedUntil_.clear();
+        clearTextures();
+    }
+
     void setCustomIconPackDir(const std::string& path) {
         if (path == customIconPackDir_) return;
         customIconPackDir_ = path;
