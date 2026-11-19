@@ -278,9 +278,7 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     std::string line;
     if (!std::getline(input, line) || line.size() > 256) return false;
     const auto header = desknx::model::splitTabs(line);
-    if (header.size() != 4 ||
-        (header[0] != "DESKNXCAT2" && header[0] != "DESKNXCAT3")) return false;
-    const bool hasSizeField=header[0]=="DESKNXCAT3";
+    if (header.size() != 4 || header[0] != "DESKNXCAT2") return false;
     if (!allowStale) {
         char gameHash[32]{}, sdHash[32]{};
         std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
@@ -293,9 +291,8 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
     while (std::getline(input, line)) {
         if (line.size() > MaxCacheLineBytes || items.size() >= MaxItems) return false;
         const auto fields = desknx::model::splitTabs(line);
-        if ((fields.size() != 8 && fields.size() != 9) || fields[0] != "C" ||
-            fields[1].size() > 16 || fields[2].size() > 512 || fields[3].size() > 512 ||
-            (hasSizeField && fields.size()!=9))
+        if (fields.size() != 8 || fields[0] != "C" ||
+            fields[1].size() > 16 || fields[2].size() > 512 || fields[3].size() > 512)
             return false;
 
         Candidate item{};
@@ -310,14 +307,6 @@ bool ReadCache(const Signatures& sig, ScanResult& result, bool allowStale = fals
             *flagsEnd != '\0' || parsedFlags > 0xFFFFFFFFul)
             return false;
         item.viewFlags = static_cast<uint32_t>(parsedFlags);
-        if(fields.size()==9) {
-            char* sizeEnd=nullptr;
-            errno=0;
-            const unsigned long long parsedSize=std::strtoull(fields[8].c_str(),&sizeEnd,10);
-            if(errno!=0||sizeEnd==fields[8].c_str()||!sizeEnd||*sizeEnd!='\0'||
-               parsedSize>=(1ULL<<40))return false;
-            item.sizeBytes=static_cast<uint64_t>(parsedSize);
-        }
         if (!desknx::strict::parseInt32(fields[4], item.w) ||
             !desknx::strict::parseInt32(fields[5], item.h) ||
             !desknx::strict::parseInt32(fields[6], item.color))
@@ -591,13 +580,13 @@ bool WriteCache(const Signatures& sig, const ScanResult& result) {
     char gameHash[32]{}, sdHash[32]{};
     std::snprintf(gameHash, sizeof(gameHash), "%016llX", static_cast<unsigned long long>(sig.gameHash));
     std::snprintf(sdHash, sizeof(sdHash), "%016llX", static_cast<unsigned long long>(sig.sdHash));
-    output << "DESKNXCAT3\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
+    output << "DESKNXCAT2\t" << sig.gameCount << '\t' << gameHash << '\t' << sdHash << '\n';
     for (const auto& item : result.items) {
         output << "C\t" << desknx::model::typeCode(item.kind) << '\t'
                << desknx::model::safeField(item.title) << '\t'
                << desknx::model::safeField(item.data) << '\t'
                << item.w << '\t' << item.h << '\t' << item.color << '\t'
-               << item.viewFlags << '\t' << item.sizeBytes << '\n';
+               << item.viewFlags << '\n';
     }
     output.flush();
     const bool good = output.good();
@@ -972,31 +961,6 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     }
     if (games.size() > gameLimit || nros.size() >= MaxItems) result.truncated = true;
     (void)EnsureBuiltinWidgets(result.items);
-    // Query occupied game content sizes on the catalogue worker, never from
-    // the renderer. Results are persisted in CAT3 for subsequent offline use.
-    size_t sizesQueried=0,sizesAvailable=0;
-    if(nsReady&&result.nsErrorCode==0) {
-        for(auto& item:result.items) {
-            if(item.kind!=Kind::Game||item.sizeBytes>0||
-               !desknx::model::isTitleId(item.data))continue;
-            const u64 titleId=std::strtoull(item.data.c_str(),nullptr,16);
-            NsApplicationOccupiedSize occupied{};
-            if(R_SUCCEEDED(nsCalculateApplicationOccupiedSize(titleId,&occupied))) {
-                uint64_t best=0;
-                for(size_t offset=0;offset+sizeof(uint64_t)<=sizeof(occupied.unk_x0);
-                    offset+=sizeof(uint64_t)) {
-                    uint64_t candidate=0;
-                    std::memcpy(&candidate,&occupied.unk_x0[offset],sizeof(candidate));
-                    if(candidate>best&&candidate<(1ULL<<40))best=candidate;
-                }
-                item.sizeBytes=best;
-                if(best>0)++sizesAvailable;
-            }
-            ++sizesQueried;
-            if((sizesQueried%8)==0)report(false);
-        }
-    }
-    LogDiagnostic("game_sizes queried=%zu available=%zu",sizesQueried,sizesAvailable);
     // Preserve the last known-good catalogue if NS enumeration failed.
     if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
     LogDiagnostic("scan_done games=%zu nros=%zu items=%zu truncated=%d ns_error=0x%08X elapsed=%llds",

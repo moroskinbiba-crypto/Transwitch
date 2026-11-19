@@ -213,17 +213,6 @@ int main() {
                resizeDesk.tiles[0].w==1 && sx==Columns-1);
     }
 
-    {
-        std::vector<Workspace> order{{"A",{}},{"B",{}},{"C",{}}};
-        int active=1;
-        assert(desknx::workspace_ops::reorderWorkspace(order,active,0,2));
-        assert(order[0].name=="C"&&order[2].name=="A");
-        assert(active==1);
-        assert(desknx::workspace_ops::reorderWorkspace(order,active,1,0));
-        assert(active==0&&order[0].name=="B");
-        assert(!desknx::workspace_ops::reorderWorkspace(order,active,0,0));
-    }
-
     // The Recent widget is intentionally 3x1. It must survive a
     // save/load cycle unchanged and remain resizable like every other tile.
     {
@@ -410,12 +399,6 @@ int main() {
     assert(filtered.size()==1 && filtered[0].title=="Zelda Adventure");
     filtered=FilterAndSort(catalog,"Perevod",FilterMode::All,SortMode::Name,{});
     assert(filtered.size()==1 && filtered[0].title=="Русский перевод");
-    catalog[0].sizeBytes=64ULL*1024*1024;
-    catalog.insert(catalog.begin()+1,Candidate{Kind::Game,"Small game","0200",1,1,0});
-    catalog[1].sizeBytes=12ULL*1024*1024;
-    filtered=FilterAndSort(catalog,"",FilterMode::Games,SortMode::Size,{});
-    assert(filtered.size()==2&&filtered[0].title=="Zelda Adventure"&&
-           filtered[1].title=="Small game");
     filtered=FilterAndSort(catalog,"",FilterMode::Homebrew,SortMode::Size,{});
     assert(filtered.size()==2 && filtered[0].title=="Русский перевод");
     std::vector<RecentKey> recent{{Kind::Game,"0100"}};
