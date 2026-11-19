@@ -220,7 +220,11 @@ int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, workspaceReorderOpen=false, consoleSettingsOpen=false, deletePrompt=false, running=true;
+int workspaceReorderIndex=0, consoleSettingsIndex=0;
+bool consoleWifiEnabled=true, consoleBluetoothEnabled=true, consoleAirplaneMode=false;
+bool consoleSettingsLblReady=false;
+float consoleBrightness=0.5f;
 int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
@@ -244,6 +248,112 @@ desknx::ipc::InitialState g_initialState{};
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
     desknx::diag::Write("ui","status","message=%s",s.c_str());
+}
+
+Result setConsoleAirplaneMode(bool enabled) {
+    Service root{},general{};
+    Result rc=smGetService(&root,"nifm:s");
+    if(R_SUCCEEDED(rc))rc=serviceConvertToDomain(&root);
+    if(R_SUCCEEDED(rc)) {
+        serviceAssumeDomain(&root);
+        const u64 reserved=0;
+        rc=serviceDispatchIn(&root,5,reserved,.in_send_pid=true,
+            .out_num_objects=1,.out_objects=&general);
+    }
+    if(R_SUCCEEDED(rc)) {
+        serviceAssumeDomain(&general);
+        const u8 wirelessEnabled=enabled?0:1;
+        rc=serviceDispatchIn(&general,16,wirelessEnabled);
+    }
+    serviceClose(&general);
+    serviceClose(&root);
+    return rc;
+}
+
+bool readConsoleAirplaneMode(bool& enabled) {
+    Service root{},general{};
+    Result rc=smGetService(&root,"nifm:s");
+    if(R_SUCCEEDED(rc))rc=serviceConvertToDomain(&root);
+    if(R_SUCCEEDED(rc)) {
+        serviceAssumeDomain(&root);
+        const u64 reserved=0;
+        rc=serviceDispatchIn(&root,5,reserved,.in_send_pid=true,
+            .out_num_objects=1,.out_objects=&general);
+    }
+    if(R_SUCCEEDED(rc)) {
+        serviceAssumeDomain(&general);
+        u8 wirelessEnabled=1;
+        rc=serviceDispatchOut(&general,17,wirelessEnabled);
+        if(R_SUCCEEDED(rc))enabled=(wirelessEnabled&1)==0;
+    }
+    serviceClose(&general);
+    serviceClose(&root);
+    return R_SUCCEEDED(rc);
+}
+
+void refreshConsoleSettings() {
+    (void)setsysGetWirelessLanEnableFlag(&consoleWifiEnabled);
+    (void)setsysGetBluetoothEnableFlag(&consoleBluetoothEnabled);
+    (void)readConsoleAirplaneMode(consoleAirplaneMode);
+    if(!consoleSettingsLblReady&&R_SUCCEEDED(lblInitialize()))
+        consoleSettingsLblReady=true;
+    if(consoleSettingsLblReady) {
+        float value=consoleBrightness;
+        if(R_SUCCEEDED(lblGetCurrentBrightnessSetting(&value)))
+            consoleBrightness=std::max(0.05f,std::min(1.0f,value));
+    }
+}
+
+void adjustConsoleBrightness(float delta) {
+    if(!consoleSettingsLblReady&&R_SUCCEEDED(lblInitialize()))
+        consoleSettingsLblReady=true;
+    if(!consoleSettingsLblReady) {
+        setStatus("DISPLAY CONTROL UNAVAILABLE");
+        return;
+    }
+    consoleBrightness=std::max(0.05f,std::min(1.0f,consoleBrightness+delta));
+    const Result rc=lblSetCurrentBrightnessSetting(consoleBrightness);
+    if(R_FAILED(rc))setStatus("BRIGHTNESS CHANGE FAILED");
+}
+
+void activateConsoleSetting(int action) {
+    Result rc=0;
+    switch(action) {
+        case 0:
+            if(!consoleWifiEnabled&&consoleAirplaneMode) {
+                rc=setConsoleAirplaneMode(false);
+                if(R_FAILED(rc))break;
+                consoleAirplaneMode=false;
+            }
+            rc=setsysSetWirelessLanEnableFlag(!consoleWifiEnabled);
+            break;
+        case 1:
+            rc=setsysSetBluetoothEnableFlag(!consoleBluetoothEnabled);
+            break;
+        case 2:
+            rc=setConsoleAirplaneMode(!consoleAirplaneMode);
+            break;
+        case 3:
+            adjustConsoleBrightness(0.1f);
+            return;
+        case 4: {
+            HidLaControllerSupportArg arg{};
+            hidLaCreateControllerSupportArg(&arg);
+            HidLaControllerSupportResultInfo result{};
+            rc=hidLaShowControllerSupport(&result,&arg);
+            break;
+        }
+        default:return;
+    }
+    if(R_FAILED(rc)) {
+        char message[64]{};
+        std::snprintf(message,sizeof(message),"CONSOLE SETTING FAILED: 0X%08X",
+                      static_cast<unsigned int>(rc));
+        setStatus(message,3500);
+    } else {
+        refreshConsoleSettings();
+        setStatus("CONSOLE SETTINGS UPDATED");
+    }
 }
 
 bool commitSdCard(const char* operation) {
@@ -1050,6 +1160,23 @@ int catalogueThreadMain(void* context) {
         result.truncated ? 1 : 0);
     return 0;
 }
+std::string formatBytes(uint64_t bytes) {
+    char value[40]{};
+    if(bytes>=1024ULL*1024ULL*1024ULL)
+        std::snprintf(value,sizeof(value),"%.1f GB",
+            static_cast<double>(bytes)/(1024.0*1024.0*1024.0));
+    else if(bytes>=1024ULL*1024ULL)
+        std::snprintf(value,sizeof(value),"%.0f MB",
+            static_cast<double>(bytes)/(1024.0*1024.0));
+    else if(bytes>=1024ULL)
+        std::snprintf(value,sizeof(value),"%.0f KB",
+            static_cast<double>(bytes)/1024.0);
+    else
+        std::snprintf(value,sizeof(value),"%llu B",
+            static_cast<unsigned long long>(bytes));
+    return value;
+}
+
 uint64_t cachedNroFileSize(const std::string& path) {
     const auto cached=nroSizeCache.find(path);
     if(cached!=nroSizeCache.end())return cached->second;
@@ -2137,9 +2264,7 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
 
 void drawTileCover(const Tile& tile,const Workspace& workspace,
                    const SDL_Rect& bounds,Color cornerFill) {
-    const Color fallback=workspace.accentColor>=0
-        ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
-        :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
+    const Color fallback=COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
     const SDL_Rect viewport{bounds.x+1,bounds.y+1,
         std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
     roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
@@ -2235,9 +2360,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         const int grow=1+static_cast<int>(pulse*2.0);
         r.x-=grow;r.y-=grow;r.w+=grow*2;r.h+=grow*2;
     }
-    const Color accent=workspace.accentColor>=0
-        ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
-        :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
+    const Color accent=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     const Color fill=useSocomaTheme()
         ?(selected?Color{19,39,62,218}:Color{12,23,38,205})
         :(selected?Color{29,48,73,255}:Color{22,29,42,255});
@@ -2398,14 +2521,14 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else if(wide) {
                 label("SD CARD STORAGE",r.y+12);
                 text(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
-                     left,r.y+34,t.w>=3?4:3,WHITE,right-78);
+                     left,r.y+34,t.w>=3?3:2,WHITE,right-78);
                 if(percent>=0)text(std::to_string(percent)+"% USED",
-                    right-70,r.y+49,1,MUTED,right);
-                progress(r.y+83,percent);
+                    right-70,r.y+63,1,MUTED,right);
+                progress(r.y+86,percent);
             } else {
                 label("SD CARD STORAGE",r.y+18);
                 if(storageStatsAvailable) {
-                    text(freeSpaceText()+" GB FREE",left,r.y+50,5,WHITE,right);
+                    text(freeSpaceText()+" FREE",left,r.y+50,4,WHITE,right);
                     if(sdTotalBytes>0) {
                         char total[64]{};
                         std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
@@ -2718,8 +2841,15 @@ void drawScreen() {
                 if(i==listIndex)roundRect(mx+27,yy,730,35,10,Color{35,58,88,255});
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                 drawTileIcon(iconTile,mx+38,yy+4,27);
-                text(candidate.title,mx+78,yy+8,2,
+                text(candidate.title,mx+78,yy+4,2,
                      i==listIndex?WHITE:MUTED,mx+592);
+                if(candidate.kind==Kind::Game) {
+                    std::string meta=candidate.sizeBytes
+                        ?formatBytes(candidate.sizeBytes):"SIZE UNKNOWN";
+                    const unsigned online=nextendoPlayersForTitle(candidate.data);
+                    if(online>0)meta+="   /   "+std::to_string(online)+" ONLINE";
+                    text(meta,mx+78,yy+24,1,BLUE,mx+592);
+                }
                 std::string appBadge=typeName(candidate.kind);
                 if(candidate.kind==Kind::Game) {
                     if(candidate.viewFlags&NsViewFlagNeedsUpdate)appBadge="UPDATE";
@@ -2746,10 +2876,15 @@ void drawScreen() {
             if(selected.kind==Kind::Game) {
                 text("TITLE ID",mx+800,my+282,1,MUTED,mx+mw-30);
                 text(selected.data,mx+800,my+300,1,WHITE,mx+mw-30);
+                text(selected.sizeBytes?("SIZE  "+formatBytes(selected.sizeBytes)):"SIZE  UNKNOWN",
+                     mx+800,my+326,1,MUTED,mx+mw-30);
+                const unsigned online=nextendoPlayersForTitle(selected.data);
+                text(online?("ONLINE NOW  "+std::to_string(online)):"ONLINE NOW  —",
+                     mx+800,my+346,1,online?GREEN:MUTED,mx+mw-30);
                 if(!selected.playStatsQueried) {
-                    text("PLAY STATS NOT LOADED",mx+800,my+332,1,MUTED,mx+mw-30);
+                    text("PLAY STATS NOT LOADED",mx+800,my+374,1,MUTED,mx+mw-30);
                 } else if(!selected.playStatsAvailable) {
-                    text("PLAY STATS UNAVAILABLE",mx+800,my+332,1,RED,mx+mw-30);
+                    text("PLAY STATS UNAVAILABLE",mx+800,my+374,1,RED,mx+mw-30);
                 } else {
                     char playLabel[48]{};
                     const unsigned long long minutes=
@@ -2759,20 +2894,19 @@ void drawScreen() {
                     else
                         std::snprintf(playLabel,sizeof(playLabel),"PLAY TIME  %lluH %02lluM",
                                       minutes/60,minutes%60);
-                    text(playLabel,mx+800,my+332,1,MUTED,mx+mw-30);
+                    text(playLabel,mx+800,my+374,1,MUTED,mx+mw-30);
                     char launchLabel[48]{};
-                    std::snprintf(launchLabel,sizeof(launchLabel),"LAUNCHES  %u",
-                                  selected.launchCount);
-                    text(launchLabel,mx+800,my+354,1,MUTED,mx+mw-30);
+                    std::snprintf(launchLabel,sizeof(launchLabel),"LAUNCHES  %u",selected.launchCount);
+                    text(launchLabel,mx+800,my+394,1,MUTED,mx+mw-30);
                     if(selected.lastPlayed!=0) {
                         const std::time_t stamp=static_cast<std::time_t>(selected.lastPlayed);
                         std::tm local{};
                         char dateLabel[48]{};
                         if(localtime_r(&stamp,&local)&&
                            std::strftime(dateLabel,sizeof(dateLabel),"LAST PLAYED  %d.%m.%Y",&local))
-                            text(dateLabel,mx+800,my+376,1,MUTED,mx+mw-30);
+                            text(dateLabel,mx+800,my+414,1,MUTED,mx+mw-30);
                     } else {
-                        text("NOT PLAYED YET",mx+800,my+376,1,MUTED,mx+mw-30);
+                        text("NOT PLAYED YET",mx+800,my+414,1,MUTED,mx+mw-30);
                     }
                 }
             } else if(selected.kind==Kind::Nro) {
@@ -2809,20 +2943,20 @@ void drawScreen() {
     }
     if(workspaceMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
-        text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
+        softCard(340,150,600,420,Color{18,25,37,255},Color{255,255,255,26});
+        text("WORKSPACE OPTIONS",390,170,3,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
         const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE","CUSTOMIZE DESKTOP",
-                               "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
-        for(int i=0;i<6;++i) {
-            const int yy=238+i*44;
-            if(i==workspaceMenuIndex)roundRect(390,yy,500,38,10,Color{45,61,82,255});
+                               "RENAME WORKSPACE","DELETE WORKSPACE","REORDER WORKSPACES","CANCEL"};
+        for(int i=0;i<7;++i) {
+            const int yy=214+i*42;
+            if(i==workspaceMenuIndex)roundRect(390,yy,500,36,10,Color{45,61,82,255});
             const Color labelColor=(i==1&&!canMoveTile)?Color{91,101,118,255}:
                                    (i==workspaceMenuIndex?WHITE:MUTED);
             text(actions[i],412,yy+12,1,labelColor,875);
         }
-        text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
+        text("REORDER DESKTOPS WITHOUT MOVING THEIR CONTENTS",390,520,1,MUTED,900);
     }
     if(workspaceSettingsMenu) {
         rect(0,0,SW,SH,Color{3,7,14,198});
@@ -2834,16 +2968,15 @@ void drawScreen() {
         text("B  BACK",856,143,1,WHITE,926);
         const char* fitNames[]={"COVER","CONTAIN","STRETCH"};
         const char* labels[]={"CHOOSE DESKTOP BACKGROUND","BACKGROUND FIT","GAME ART FIT",
-                              "TITLE OVERLAY","ACCENT COLOR","RESET DESKTOP STYLE","DONE"};
+                              "TITLE OVERLAY","RESET DESKTOP STYLE","DONE"};
         const std::string values[]={
             desk.backgroundPath.empty()?"GLOBAL WALLPAPER":"CUSTOM IMAGE",
             fitNames[std::max(0,std::min(2,desk.backgroundFit))],
             fitNames[std::max(0,std::min(2,desk.artworkMode))],
             std::to_string(desk.labelOpacity)+" / 255",
-            desk.accentColor<0?"AUTO / TILE COLORS":"PALETTE "+std::to_string(desk.accentColor+1),
             "RESTORE DEFAULTS","CLOSE THIS MENU"
         };
-        for(int i=0;i<7;++i) {
+        for(int i=0;i<6;++i) {
             const int yy=216+i*48;
             if(i==workspaceSettingsIndex)roundRect(340,yy,600,40,10,Color{35,61,93,255});
             text(labels[i],360,yy+8,1,i==workspaceSettingsIndex?WHITE:MUTED,700);
@@ -2851,6 +2984,22 @@ void drawScreen() {
         }
         text("COVER FILLS THE TILE; CONTAIN SHOWS THE WHOLE IMAGE",346,568,1,MUTED,930);
         text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
+    }
+    if(workspaceReorderOpen) {
+        rect(0,0,SW,SH,Color{3,7,14,205});
+        softCard(350,110,580,500,Color{18,25,37,248},Color{255,255,255,30});
+        text("REORDER WORKSPACES",394,138,3,WHITE,900);
+        text("Choose where the current desktop should appear.",396,176,1,MUTED,900);
+        for(size_t i=0;i<desks.size();++i) {
+            const int yy=205+static_cast<int>(i)*28;
+            const bool selected=static_cast<int>(i)==workspaceReorderIndex;
+            const bool active=static_cast<int>(i)==deskIndex;
+            if(selected)roundRect(390,yy,500,25,7,Color{45,68,99,255});
+            text(desks[i].name,410,yy+7,1,selected?WHITE:(active?BLUE:MUTED),760);
+            text(active?"CURRENT":(selected?"TARGET":std::to_string(i+1)),
+                 790,yy+7,1,selected?BLUE:MUTED,875);
+        }
+        text("UP / DOWN SELECT TARGET     A MOVE HERE     B CANCEL",394,574,1,BLUE,906);
     }
     if(workspacePicker) {
         rect(0,0,SW,SH,Color{3,7,14,194});
@@ -2923,7 +3072,7 @@ void drawScreen() {
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
         text("TOOLS",146,130,3,WHITE,1020);
-        text("Library, recent apps, widgets and system actions.",
+        text("Library, recent apps and real console controls.",
              148,168,1,MUTED,1020);
         struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
@@ -2931,7 +3080,7 @@ void drawScreen() {
             {496,218,6,"RECENT","RECENTLY LAUNCHED APPS"},
             {836,218,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
             {156,382,5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
-            {496,382,0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
+            {496,382,0,"CONSOLE SETTINGS","WI-FI, BLUETOOTH, AIRPLANE MODE, BRIGHTNESS"},
             {836,382,4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
@@ -2950,6 +3099,30 @@ void drawScreen() {
         roundRect(1058,136,82,34,10,Color{54,57,66,255});
         text("B BACK",1074,147,1,WHITE,1130);
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
+    }
+    if(consoleSettingsOpen) {
+        rect(0,0,SW,SH,Color{3,7,14,204});
+        softCard(350,126,580,470,Color{17,24,36,248},Color{255,255,255,32});
+        text("CONSOLE SETTINGS",394,154,3,WHITE,900);
+        text("Switch hardware controls",396,190,1,MUTED,900);
+        roundRect(812,151,78,32,9,Color{48,57,72,255});
+        text("B BACK",826,162,1,WHITE,888);
+        const char* labels[]={"WI-FI","BLUETOOTH","AIRPLANE MODE","SCREEN BRIGHTNESS","PAIR CONTROLLERS"};
+        const std::string values[]={
+            consoleWifiEnabled?"ON":"OFF",
+            consoleBluetoothEnabled?"ON":"OFF",
+            consoleAirplaneMode?"ON":"OFF",
+            std::to_string(static_cast<int>(consoleBrightness*100.0f))+"%",
+            "OPEN"
+        };
+        for(int i=0;i<5;++i) {
+            const int yy=224+i*58;
+            if(i==consoleSettingsIndex)roundRect(392,yy,496,48,11,Color{42,67,98,255});
+            const bool on=(i==0?consoleWifiEnabled:i==1?consoleBluetoothEnabled:i==2?!consoleAirplaneMode:true);
+            text(labels[i],414,yy+17,1,i==consoleSettingsIndex?WHITE:MUTED,700);
+            text(values[i],750,yy+17,1,i==consoleSettingsIndex?BLUE:(on?GREEN:MUTED),870);
+        }
+        text("A TOGGLE / ADJUST     LEFT / RIGHT BRIGHTNESS     B BACK",396,548,1,BLUE,900);
     }
     if(appSettingsMenu) {
         rect(0,0,SW,SH,Color{3,7,14,198});
@@ -3541,11 +3714,10 @@ void activateWorkspaceAppearance(int action) {
             desk.labelOpacity=steps[next];
             break;
         }
-        case 4: desk.accentColor=desk.accentColor>=static_cast<int>(COLORS.size())-1?-1:desk.accentColor+1; break;
-        case 5:
+        case 4:
             desk.backgroundPath.clear();desk.backgroundFit=0;desk.artworkMode=0;
             desk.labelOpacity=196;desk.accentColor=-1;break;
-        case 6: workspaceSettingsMenu=false;return;
+        case 5: workspaceSettingsMenu=false;return;
         default:return;
     }
     layoutUserModified=true;
@@ -3636,17 +3808,14 @@ void launch(const Tile& t) {
         u64 launchControlSize=0;
         const Result launchControlRc=desknx::slaunch::ReadControlData(
             id,launchControl,launchControlSize);
-        const bool appManagesPlayers=R_SUCCEEDED(launchControlRc)&&
-            launchControl.nacp.startup_user_account==0;
         const bool hasChosenUser=accountUidIsValid(&uid);
-        const u64 flags=appManagesPlayers
-            ?desknx::ipc::LaunchFlagNoPreuser
-            :(hasChosenUser?desknx::ipc::LaunchFlagHasUser:0);
+        // The profile selected in the top bar is authoritative. Never request
+        // an additional user chooser because an individual game's NACP asks for it.
+        const u64 flags=hasChosenUser?desknx::ipc::LaunchFlagHasUser:0;
         desknx::diag::Write("launch","player_policy",
-            "title_id=%016llX nacp_rc=0x%08X startup_user=%u has_user=%d flags=0x%llX",
+            "title_id=%016llX policy=header_selected_profile nacp_rc=0x%08X has_user=%d flags=0x%llX",
             static_cast<unsigned long long>(id),
             static_cast<unsigned int>(launchControlRc),
-            R_SUCCEEDED(launchControlRc)?launchControl.nacp.startup_user_account:255,
             hasChosenUser?1:0,static_cast<unsigned long long>(flags));
         desknx::diag::Write("launch", "game_ipc_begin", "title_id=%016llX",
                             static_cast<unsigned long long>(id));
@@ -3786,6 +3955,15 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
+    if(consoleSettingsOpen) {
+        if(keys&HidNpadButton_B){consoleSettingsOpen=false;return;}
+        if(keys&HidNpadButton_Up)consoleSettingsIndex=(consoleSettingsIndex+4)%5;
+        if(keys&HidNpadButton_Down)consoleSettingsIndex=(consoleSettingsIndex+1)%5;
+        if(consoleSettingsIndex==3&&(keys&HidNpadButton_Left||keys&HidNpadButton_Right))
+            adjustConsoleBrightness((keys&HidNpadButton_Right)?0.05f:-0.05f);
+        if(keys&HidNpadButton_A)activateConsoleSetting(consoleSettingsIndex);
+        return;
+    }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
         if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+11)%12;
@@ -3795,8 +3973,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(workspaceSettingsMenu) {
         if(keys&HidNpadButton_B){workspaceSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)workspaceSettingsIndex=(workspaceSettingsIndex+6)%7;
-        if(keys&HidNpadButton_Down)workspaceSettingsIndex=(workspaceSettingsIndex+1)%7;
+        if(keys&HidNpadButton_Up)workspaceSettingsIndex=(workspaceSettingsIndex+5)%6;
+        if(keys&HidNpadButton_Down)workspaceSettingsIndex=(workspaceSettingsIndex+1)%6;
         if(keys&HidNpadButton_A)activateWorkspaceAppearance(workspaceSettingsIndex);
         return;
     }
@@ -3819,8 +3997,27 @@ void keyInput(u64 keys, bool fromRepeat) {
                 editing=!editing;
                 if(!editing&&dragging){dragging=false;saveNow();}
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-            } else if(action==4)activateAppSettings(4);
-            else if(action==5)restartCatalogueScan();
+            } else if(action==4) {
+                consoleSettingsOpen=true;consoleSettingsIndex=0;refreshConsoleSettings();
+            } else if(action==5)restartCatalogueScan();
+        }
+        return;
+    }
+    if(workspaceReorderOpen) {
+        const int count=static_cast<int>(desks.size());
+        if(keys&HidNpadButton_B){workspaceReorderOpen=false;return;}
+        if(keys&HidNpadButton_Up&&count>0)
+            workspaceReorderIndex=(workspaceReorderIndex-1+count)%count;
+        if(keys&HidNpadButton_Down&&count>0)
+            workspaceReorderIndex=(workspaceReorderIndex+1)%count;
+        if(keys&HidNpadButton_A) {
+            const int from=deskIndex,to=workspaceReorderIndex;
+            workspaceReorderOpen=false;
+            if(desknx::workspace_ops::reorderWorkspace(desks,deskIndex,from,to)) {
+                layoutUserModified=true;
+                scheduleActiveWorkspaceSave();
+                if(saveNow())setStatus("WORKSPACES REORDERED");
+            }
         }
         return;
     }
@@ -3837,9 +4034,9 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(workspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
         if(keys&HidNpadButton_Up)
-            workspaceMenuIndex=(workspaceMenuIndex+5)%6;
+            workspaceMenuIndex=(workspaceMenuIndex+6)%7;
         if(keys&HidNpadButton_Down)
-            workspaceMenuIndex=(workspaceMenuIndex+1)%6;
+            workspaceMenuIndex=(workspaceMenuIndex+1)%7;
         if(keys&HidNpadButton_A) {
             const int action=workspaceMenuIndex;
             workspaceMenu=false;
@@ -3848,6 +4045,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             else if(action==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
             else if(action==3)renameDesk();
             else if(action==4)deleteDesk();
+            else if(action==5){workspaceReorderOpen=true;workspaceReorderIndex=deskIndex;}
         }
         return;
     }
@@ -4104,6 +4302,15 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(e.type==SDL_FINGERDOWN && consoleSettingsOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=812&&x<=890&&y>=151&&y<=184)consoleSettingsOpen=false;
+        else if(x>=392&&x<=888&&y>=224&&y<514) {
+            consoleSettingsIndex=std::max(0,std::min(4,(y-224)/58));
+            activateConsoleSetting(consoleSettingsIndex);
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
@@ -4119,7 +4326,7 @@ void touchInput(const SDL_Event&e) {
         if(x>=842&&x<=934&&y>=132&&y<=164)workspaceSettingsMenu=false;
         else if(x>=340&&x<=940&&y>=216&&y<552) {
             const int row=(y-216)/48;
-            if(row>=0&&row<7){workspaceSettingsIndex=row;activateWorkspaceAppearance(row);}
+            if(row>=0&&row<6){workspaceSettingsIndex=row;activateWorkspaceAppearance(row);}
         }
         return;
     }
@@ -4140,6 +4347,16 @@ void touchInput(const SDL_Event&e) {
         keyInput(HidNpadButton_A,false);
         return;
     }
+    if(e.type==SDL_FINGERDOWN && workspaceReorderOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=390&&x<=890&&y>=205&&y<205+static_cast<int>(desks.size())*28) {
+            workspaceReorderIndex=std::max(0,std::min(static_cast<int>(desks.size())-1,(y-205)/28));
+            keyInput(HidNpadButton_A,false);
+        } else if(x>=390&&x<=910&&y>=560&&y<=600) {
+            keyInput(HidNpadButton_B,false);
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && workspacePicker) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=744&&x<=920&&y>=590&&y<=628) {
@@ -4152,15 +4369,16 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && workspaceMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=390&&x<=890&&y>=238&&y<502) {
-            const int row=(y-238)/44;
-            if(row>=0&&row<6) {
+        if(x>=390&&x<=890&&y>=214&&y<510) {
+            const int row=(y-214)/42;
+            if(row>=0&&row<7) {
                 workspaceMenu=false;
                 if(row==0)openWorkspacePicker(false);
                 else if(row==1)openWorkspacePicker(true);
                 else if(row==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
                 else if(row==3)renameDesk();
                 else if(row==4)deleteDesk();
+                else if(row==5){workspaceReorderOpen=true;workspaceReorderIndex=deskIndex;}
             }
         }
         return;
@@ -4776,6 +4994,7 @@ int main(int,char**) {
         accountServiceReady=false;
     }
     if (setsysReady) setsysExit();
+    if(consoleSettingsLblReady){lblExit();consoleSettingsLblReady=false;}
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();
