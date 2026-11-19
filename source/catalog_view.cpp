@@ -72,6 +72,7 @@ bool matchesFilter(model::Kind kind, FilterMode filter) {
     return true;
 }
 uint64_t fileSize(const model::Candidate& item) {
+    if(item.kind==model::Kind::Game)return item.sizeBytes;
     if(item.kind!=model::Kind::Nro) return 0;
     struct stat st{};
     if(stat(item.data.c_str(),&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) return 0;
@@ -96,6 +97,9 @@ std::vector<model::Candidate> FilterAndSort(
         std::string titleKey;
         uint64_t sizeBytes{0};
         size_t recentOrder{0};
+        uint64_t lastPlayed{0};
+        uint64_t playtimeSeconds{0};
+        uint32_t launchCount{0};
     };
 
     const std::string queryKey=searchKey(query);
@@ -115,13 +119,21 @@ std::vector<model::Candidate> FilterAndSort(
         // Filesystem metadata and transliterated sort keys are prepared once,
         // never recomputed from inside std::sort's O(n log n) comparator.
         if(sort==SortMode::Size)entry.sizeBytes=fileSize(item);
-        if(sort==SortMode::Recent)entry.recentOrder=recentRank(item,recent);
+        if(sort==SortMode::Recent) {
+            entry.recentOrder=recentRank(item,recent);
+            entry.lastPlayed=item.lastPlayed;
+            entry.playtimeSeconds=item.playtimeSeconds;
+            entry.launchCount=item.launchCount;
+        }
         entries.push_back(std::move(entry));
     }
 
     std::sort(entries.begin(),entries.end(),[&](const SortEntry& a,const SortEntry& b) {
         if(sort==SortMode::Recent) {
             if(a.recentOrder!=b.recentOrder)return a.recentOrder<b.recentOrder;
+            if(a.lastPlayed!=b.lastPlayed)return a.lastPlayed>b.lastPlayed;
+            if(a.launchCount!=b.launchCount)return a.launchCount>b.launchCount;
+            if(a.playtimeSeconds!=b.playtimeSeconds)return a.playtimeSeconds>b.playtimeSeconds;
         } else if(sort==SortMode::Size) {
             if(a.sizeBytes!=b.sizeBytes)return a.sizeBytes>b.sizeBytes;
         }
