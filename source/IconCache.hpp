@@ -312,8 +312,10 @@ private:
         if (stat(result.path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
             return result;
 
-        const int maxDimension=isSteamGridArtwork?1600:MaxIconDimension;
-        const std::uint32_t maxPixels=isSteamGridArtwork?2500000u:1024u*1024u;
+        // Landscape 1080p hero images are common on SteamGridDB; the 4 MP
+        // ceiling keeps their decoded CPU/GPU footprint bounded (16 MiB RGBA).
+        const int maxDimension=isSteamGridArtwork?2048:MaxIconDimension;
+        const std::uint32_t maxPixels=isSteamGridArtwork?4000000u:1024u*1024u;
         if (st.st_size <= 0 ||
             static_cast<std::uint64_t>(st.st_size) >
                 (isSteamGridArtwork?8u*1024u*1024u:MaxCompressedIconBytes) ||
