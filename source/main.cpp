@@ -41,6 +41,7 @@
 #include <vector>
 #include <map>
 #include <memory>
+#include <new>
 
 namespace {
 using namespace desknx::model;
@@ -1165,7 +1166,13 @@ int SDLCALL steamGridWorkerEntry(void* context) {
 
 bool startSteamGridJob(SteamGridTask* task) {
     if(!task||steamGridThread||!steamGridMutex) {
-        delete task;
+        if(task)delete task;
+        steamGridError="SteamGridDB worker is busy or unavailable.";
+        if(steamGridPickerStage==SteamGridPickerStage::SearchingGames)
+            steamGridPickerStage=SteamGridPickerStage::ChooseGame;
+        else if(steamGridPickerStage==SteamGridPickerStage::LoadingArtwork||
+                steamGridPickerStage==SteamGridPickerStage::Applying)
+            steamGridPickerStage=SteamGridPickerStage::ChooseArtwork;
         setStatus("STEAMGRIDDB WORKER BUSY OR UNAVAILABLE",3000);
         return false;
     }
@@ -1176,6 +1183,12 @@ bool startSteamGridJob(SteamGridTask* task) {
     if(!steamGridThread) {
         delete task;
         steamGridActiveJob=SteamGridJob::None;
+        steamGridError="Could not start SteamGridDB worker thread.";
+        if(steamGridPickerStage==SteamGridPickerStage::SearchingGames)
+            steamGridPickerStage=SteamGridPickerStage::ChooseGame;
+        else if(steamGridPickerStage==SteamGridPickerStage::LoadingArtwork||
+                steamGridPickerStage==SteamGridPickerStage::Applying)
+            steamGridPickerStage=SteamGridPickerStage::ChooseArtwork;
         setStatus("STEAMGRIDDB WORKER COULD NOT START",3000);
         return false;
     }
@@ -1213,13 +1226,19 @@ void pumpSteamGridWorker() {
         steamGridPickerStage=SteamGridPickerStage::ChooseArtwork;
     } else if(completed==SteamGridJob::ApplyArtwork) {
         gIconCache.invalidateAll();
+        const bool committed=!sdMounted||commitSdCard("steamgriddb-artwork");
         steamGridPickerOpen=false;
         steamGridPickerStage=SteamGridPickerStage::Closed;
-        setStatus("STEAMGRIDDB COVER SAVED - AVAILABLE OFFLINE",4500);
+        setStatus(committed?"STEAMGRIDDB COVER SAVED - AVAILABLE OFFLINE":
+            "COVER SAVED, BUT SD COMMIT FAILED",4500);
     }
 }
 
 void requestSteamGridSearch() {
+    if(steamGridThread) {
+        setStatus("WAIT FOR THE PREVIOUS STEAMGRIDDB REQUEST",3000);
+        return;
+    }
     if(steamGridDbApiKey.empty()) {
         setStatus("ADD A STEAMGRIDDB API KEY IN LAUNCHER SETTINGS",4000);
         return;
@@ -1250,6 +1269,14 @@ void requestSteamGridSearch() {
 }
 
 void openSteamGridPicker(const Candidate& candidate) {
+    if(steamGridThread) {
+        setStatus("WAIT FOR THE PREVIOUS STEAMGRIDDB REQUEST",3000);
+        return;
+    }
+    if(!sdMounted) {
+        setStatus("SD CARD REQUIRED FOR OFFLINE ARTWORK CACHE",3500);
+        return;
+    }
     if(candidate.kind!=Kind::Game||!desknx::model::isTitleId(candidate.data)) {
         setStatus("STEAMGRIDDB ARTWORK IS AVAILABLE FOR INSTALLED GAMES",3000);
         return;
