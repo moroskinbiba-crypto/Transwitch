@@ -35,6 +35,7 @@ jobs:
           git clone --depth 1 https://github.com/Doutea/Nextendo-status-ovl.git /tmp/nextendo-status-ovl
           mkdir -p overlays/NextendoOnline/libs
           cp -R /tmp/nextendo-status-ovl/libs/libtesla overlays/NextendoOnline/libs/libtesla
+          python3 overlays/NextendoOnline/scripts/patch-libtesla-gcc15.py overlays/NextendoOnline/libs/libtesla/include/tesla.hpp
 
       - name: Run host parser tests
         working-directory: overlays/NextendoOnline
