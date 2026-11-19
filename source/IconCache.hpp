@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../include/desknx/Model.hpp"
+#include "SteamGridDbCache.hpp"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <algorithm>
@@ -283,10 +284,27 @@ private:
             desknx::model::iconCachePath(request.kind, request.data);
         if (defaultPath.empty()) return result;
 
+        // A selected SteamGridDB hero is the preferred game-card artwork.
+        // It stays on SD and therefore remains available without a network.
+        std::string steamGridPath;
+        if (request.kind == desknx::model::Kind::Game &&
+            desknx::model::isTitleId(request.data)) {
+            const auto titleId = static_cast<std::uint64_t>(
+                std::strtoull(request.data.c_str(), nullptr, 16));
+            const std::string candidate =
+                desknx::steamgriddb::SteamGridDbCache::heroPath(titleId);
+            struct stat artStat{};
+            if (titleId != 0 && stat(candidate.c_str(), &artStat) == 0 &&
+                S_ISREG(artStat.st_mode) && artStat.st_size > 0 &&
+                static_cast<std::uint64_t>(artStat.st_size) <= MaxCompressedIconBytes)
+                steamGridPath = candidate;
+        }
+
         const std::string customPath =
             customPathFor(request.kind, request.data, request.customDirectory);
-        result.isCustom = !customPath.empty();
-        result.path = result.isCustom ? customPath : defaultPath;
+        result.isCustom = steamGridPath.empty() && !customPath.empty();
+        result.path = !steamGridPath.empty() ? steamGridPath
+                    : result.isCustom ? customPath : defaultPath;
 
         struct stat st{};
         if (stat(result.path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
