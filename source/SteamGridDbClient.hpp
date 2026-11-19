@@ -21,6 +21,9 @@ struct IconAsset {
 
 bool searchGames(const std::string& apiKey,const std::string& query,
                  std::vector<GameMatch>& results,std::string& error);
+bool listArtwork(const std::string& apiKey,std::uint64_t gameId,
+                 const std::string& artworkType,
+                 std::vector<IconAsset>& results,std::string& error);
 bool listIcons(const std::string& apiKey,std::uint64_t gameId,
                std::vector<IconAsset>& results,std::string& error);
 bool downloadImage(const std::string& url,std::vector<unsigned char>& bytes,
