@@ -1441,6 +1441,10 @@ void openSteamGridPicker(const Candidate& candidate) {
 }
 
 void chooseSteamGridGame() {
+    if(steamGridThread) {
+        setStatus("WAIT FOR THE PREVIOUS STEAMGRIDDB REQUEST",1800);
+        return;
+    }
     if(steamGridListIndex<0||steamGridListIndex>=static_cast<int>(steamGridGames.size()))return;
     const auto game=steamGridGames[static_cast<size_t>(steamGridListIndex)];
     auto* task=new(std::nothrow) SteamGridTask{};
@@ -1458,6 +1462,10 @@ void chooseSteamGridGame() {
 }
 
 void applySelectedSteamGridArtwork() {
+    if(steamGridThread) {
+        setStatus("WAIT FOR THE ARTWORK PREVIEW",1800);
+        return;
+    }
     if(steamGridListIndex<0||steamGridListIndex>=static_cast<int>(steamGridArtwork.size()))return;
     const auto choice=steamGridArtwork[static_cast<size_t>(steamGridListIndex)];
     auto* task=new(std::nothrow) SteamGridTask{};
@@ -3426,7 +3434,7 @@ void drawScreen() {
                     recentLaunches,Kind::Game,selected.data);
                 const std::uint64_t localLast=desknx::launch_history::lastTimestamp(
                     recentLaunches,Kind::Game,selected.data);
-                std::string localHistory="TRANSWITCH  "+std::to_string(localRuns)+" RUNS";
+                std::string localHistory="TRANSWITCH  "+std::to_string(localRuns)+" RECORDED";
                 if(localLast!=0)localHistory+="  /  "+historyTimestampText(localLast,true);
                 text(localHistory,mx+800,my+434,1,BLUE,mx+mw-30);
             } else if(selected.kind==Kind::Nro) {
@@ -3451,7 +3459,7 @@ void drawScreen() {
                     recentLaunches,Kind::Nro,selected.data);
                 const std::uint64_t localLast=desknx::launch_history::lastTimestamp(
                     recentLaunches,Kind::Nro,selected.data);
-                std::string localHistory="TRANSWITCH  "+std::to_string(localRuns)+" RUNS";
+                std::string localHistory="TRANSWITCH  "+std::to_string(localRuns)+" RECORDED";
                 if(localLast!=0)localHistory+="  /  "+historyTimestampText(localLast,true);
                 text(localHistory,mx+800,my+414,1,BLUE,mx+mw-30);
             } else {
