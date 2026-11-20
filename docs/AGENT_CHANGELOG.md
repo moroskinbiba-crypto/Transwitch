@@ -362,3 +362,13 @@ The native standalone build has now completed both CI workflows:
 - Изменения рабочих столов и active-workspace marker теперь записываются через отдельный SDL worker; повторные правки объединяются в последний актуальный snapshot. Синхронный checked save сохранён перед запуском/завершением приложения.
 - SD commits сериализованы отдельным mutex, а завершение фоновой записи отражается в диагностике async_save_finished.
 - CI проверит native NRO и host tests. Физический тест на Switch всё ещё обязателен: особенно проверить старый catalogue cache, фильтр Widgets, появление 90 игр до завершения metadata scan, drag/resize/add/remove, переключение рабочих столов и перезапуск во время активного сохранения.
+
+
+## Regression fixes — 20 November 2026
+
+- SteamGridDB: pressing ZL in the installed-games library now opens the artwork picker immediately and starts the initial search using the selected game's title. The on-screen keyboard is reserved for the explicit Y (search/edit query) action; it no longer blocks the initial ZL action. If the API key is missing, the picker remains open and explains how to configure it instead of silently returning to the library.
+- Added diagnostics for picker opening and search start, including the selected title ID and whether the query keyboard was requested.
+- Nextendo: failed snapshots are retried after 15 seconds instead of waiting a full three-minute refresh interval. After three consecutive failures the socket/curl transport is reinitialized and retried after five seconds. Successful snapshots retain the normal three-minute refresh cadence.
+- Added failure/retry counters to the Nextendo diagnostic events.
+- Changes are in `feat/theme-socoma`; commits: `fa2c396bdccf868c01a5a84e6b336fa9399723c5` (SteamGridDB picker) and `186e4284249b22c3019fa8c37a785a6d53a1fac5` (Nextendo retry recovery).
+- These are source-level fixes only. CI and physical Switch runtime testing are still required; the Nextendo endpoint response and SteamGridDB API flow have not yet been verified on hardware.
