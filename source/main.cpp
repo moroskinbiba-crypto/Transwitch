@@ -1418,6 +1418,7 @@ void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
 }
 int nextendoThreadMain(void*) {
     bool networkReady = false;
+    unsigned consecutiveFailures = 0;
     std::uint64_t nextAttempt = SDL_GetTicks64() + 8000;
     while (!SDL_AtomicGet(&nextendoStop)) {
         const std::uint64_t now = SDL_GetTicks64();
@@ -1425,9 +1426,9 @@ int nextendoThreadMain(void*) {
             if (!networkReady) {
                 networkReady = desknx::nextendo::initializeNetwork();
                 desknx::diag::Write("nextendo", networkReady ? "network_ready" : "network_init_failed",
-                    "retry_ms=%u", networkReady ? 0u : 30000u);
+                    "retry_ms=%u", networkReady ? 0u : 15000u);
                 if (!networkReady) {
-                    nextAttempt = now + 30000;
+                    nextAttempt = now + 15000;
                     SDL_Delay(250);
                     continue;
                 }
@@ -1438,13 +1439,29 @@ int nextendoThreadMain(void*) {
                 SDL_LockMutex(nextendoMutex);
                 const bool applied = nextendoFeed.apply(snapshot, SDL_GetTicks64());
                 SDL_UnlockMutex(nextendoMutex);
+                consecutiveFailures = applied ? 0u : consecutiveFailures + 1u;
                 desknx::diag::Write("nextendo", applied ? "snapshot_updated" : "snapshot_rejected",
-                    "titles=%zu total=%u", snapshot.perTitle.size(), snapshot.total);
+                    "titles=%zu total=%u failures=%u", snapshot.perTitle.size(),
+                    snapshot.total, consecutiveFailures);
+                nextAttempt = SDL_GetTicks64() + desknx::nextendo::RefreshIntervalMs;
             } else {
+                ++consecutiveFailures;
                 desknx::diag::Write("nextendo", "snapshot_failed",
-                    "network_ready=%d", networkReady ? 1 : 0);
+                    "network_ready=%d failures=%u retry_ms=%u",
+                    networkReady ? 1 : 0, consecutiveFailures,
+                    consecutiveFailures >= 3u ? 5000u : 15000u);
+                // A transient outage should not leave the widget stuck on UNKNOWN
+                // for an entire three-minute polling interval. Recreate the
+                // socket/curl transport after repeated failures and retry quickly.
+                if (consecutiveFailures >= 3u) {
+                    desknx::nextendo::shutdownNetwork();
+                    networkReady = false;
+                    consecutiveFailures = 0;
+                    nextAttempt = SDL_GetTicks64() + 5000;
+                } else {
+                    nextAttempt = SDL_GetTicks64() + 15000;
+                }
             }
-            nextAttempt = now + desknx::nextendo::RefreshIntervalMs;
         }
         SDL_Delay(250);
     }
