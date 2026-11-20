@@ -26,6 +26,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
