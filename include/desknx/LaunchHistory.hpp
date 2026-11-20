@@ -67,7 +67,11 @@ inline bool parse(const std::string& contents, std::vector<Entry>& output,
 
         std::uint64_t timestamp = 0;
         if (hasTimestamps) {
-            if (fields[3].empty() || fields[3][0] == '-') continue;
+            if (fields[3].empty()) continue;
+            bool digitsOnly=true;
+            for(unsigned char digit:fields[3])
+                if(digit<'0'||digit>'9')digitsOnly=false;
+            if(!digitsOnly)continue;
             errno = 0;
             char* parsedEnd = nullptr;
             const unsigned long long value = std::strtoull(fields[3].c_str(), &parsedEnd, 10);
@@ -89,8 +93,19 @@ inline std::string serialize(const std::vector<Entry>& events) {
         if ((event.kind != model::Kind::Game && event.kind != model::Kind::Nro) ||
             event.title.empty() || event.title.size() > 512 ||
             event.data.empty() || event.data.size() > 512 ||
-            (event.kind == model::Kind::Game && !model::isTitleId(event.data)))
+            (event.kind == model::Kind::Game && !model::isTitleId(event.data)) ||
+            (event.kind == model::Kind::Nro &&
+             (event.data.compare(0,13,"sdmc:/switch/")!=0 ||
+              event.data.size()<18 ||
+              event.data.find("..")!=std::string::npos ||
+              event.data.find('\\0')!=std::string::npos)))
             return {};
+        if(event.kind==model::Kind::Nro) {
+            std::string extension=event.data.substr(event.data.size()-4);
+            for(char& ch:extension)
+                if(ch>='A'&&ch<='Z')ch=static_cast<char>(ch-'A'+'a');
+            if(extension!=".nro")return {};
+        }
         output += model::typeCode(event.kind);
         output += '\t';
         output += model::safeField(event.title);
