@@ -1234,28 +1234,35 @@ void pumpSteamGridWorker() {
     }
 }
 
-void requestSteamGridSearch() {
+void requestSteamGridSearch(bool editQuery=true) {
     if(steamGridThread) {
         setStatus("WAIT FOR THE PREVIOUS STEAMGRIDDB REQUEST",3000);
         return;
     }
     if(steamGridDbApiKey.empty()) {
-        setStatus("ADD A STEAMGRIDDB API KEY IN LAUNCHER SETTINGS",4000);
+        steamGridError="ADD A STEAMGRIDDB API KEY IN LAUNCHER SETTINGS";
+        steamGridPickerOpen=true;
+        steamGridPickerStage=SteamGridPickerStage::ChooseGame;
+        setStatus(steamGridError,4000);
         return;
     }
-    SwkbdConfig config{};
-    const Result createRc=swkbdCreate(&config,0);
-    if(R_FAILED(createRc)){setStatus("SEARCH KEYBOARD UNAVAILABLE");return;}
-    swkbdConfigMakePresetDefault(&config);
-    swkbdConfigSetHeaderText(&config,"Search SteamGridDB by game title");
-    swkbdConfigSetInitialText(&config,steamGridSearchQuery.c_str());
-    char query[192]{};
-    std::snprintf(query,sizeof(query),"%s",steamGridSearchQuery.c_str());
-    const Result rc=showKeyboard(&config,query,sizeof(query));
-    swkbdClose(&config);
-    if(R_FAILED(rc))return;
-    steamGridSearchQuery=query;
-    if(steamGridSearchQuery.empty()){setStatus("ENTER A GAME TITLE");return;}
+    // Opening the picker with ZL must be immediate. The selected game's own
+    // title is already a useful search query; only Y opens the keyboard.
+    if(editQuery) {
+        SwkbdConfig config{};
+        const Result createRc=swkbdCreate(&config,0);
+        if(R_FAILED(createRc)){setStatus("SEARCH KEYBOARD UNAVAILABLE");return;}
+        swkbdConfigMakePresetDefault(&config);
+        swkbdConfigSetHeaderText(&config,"Search SteamGridDB by game title");
+        swkbdConfigSetInitialText(&config,steamGridSearchQuery.c_str());
+        char query[192]{};
+        std::snprintf(query,sizeof(query),"%s",steamGridSearchQuery.c_str());
+        const Result rc=showKeyboard(&config,query,sizeof(query));
+        swkbdClose(&config);
+        if(R_FAILED(rc))return;
+        steamGridSearchQuery=query;
+        if(steamGridSearchQuery.empty()){setStatus("ENTER A GAME TITLE");return;}
+    }
     auto* task=new(std::nothrow) SteamGridTask{};
     if(!task){setStatus("STEAMGRIDDB OUT OF MEMORY");return;}
     task->job=SteamGridJob::SearchGames;
@@ -1265,6 +1272,9 @@ void requestSteamGridSearch() {
     steamGridPickerStage=SteamGridPickerStage::SearchingGames;
     steamGridError.clear();
     steamGridListIndex=steamGridListOffset=0;
+    desknx::diag::Write("steamgriddb","search_begin","title_id=%016llX prompt=%d query=%s",
+        static_cast<unsigned long long>(steamGridTargetTitleId),editQuery?1:0,
+        steamGridSearchQuery.c_str());
     (void)startSteamGridJob(task);
 }
 
@@ -1286,10 +1296,12 @@ void openSteamGridPicker(const Candidate& candidate) {
     steamGridSearchQuery=candidate.title;
     steamGridSelectedGameName.clear();
     steamGridGames.clear();steamGridArtwork.clear();steamGridError.clear();
+    steamGridListIndex=steamGridListOffset=0;
     steamGridPickerOpen=true;
-    requestSteamGridSearch();
-    if(steamGridPickerStage==SteamGridPickerStage::Closed)
-        steamGridPickerOpen=false;
+    steamGridPickerStage=SteamGridPickerStage::ChooseGame;
+    desknx::diag::Write("steamgriddb","picker_open","title_id=%016llX title=%s",
+        static_cast<unsigned long long>(steamGridTargetTitleId),steamGridTargetTitle.c_str());
+    requestSteamGridSearch(false);
 }
 
 void chooseSteamGridGame() {
