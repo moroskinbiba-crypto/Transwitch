@@ -1397,6 +1397,7 @@ void requestSteamGridSearch(bool editQuery=true) {
         steamGridSearchQuery=query;
         if(steamGridSearchQuery.empty()){setStatus("ENTER A GAME TITLE");return;}
     }
+    clearSteamGridPreview();
     auto* task=new(std::nothrow) SteamGridTask{};
     if(!task){setStatus("STEAMGRIDDB OUT OF MEMORY");return;}
     task->job=SteamGridJob::SearchGames;
@@ -1506,7 +1507,13 @@ void handleSteamGridPickerInput(u64 keys) {
     if(keys&HidNpadButton_Down)cycleSteamGridSelection(1);
     if(keys&HidNpadButton_A) {
         if(steamGridPickerStage==SteamGridPickerStage::ChooseGame)chooseSteamGridGame();
-        else if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)applySelectedSteamGridArtwork();
+        else if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
+            if(steamGridPreviewLoading) {
+                setStatus("WAIT FOR THE ARTWORK PREVIEW",1800);
+                return;
+            }
+            applySelectedSteamGridArtwork();
+        }
     }
 }
 
@@ -3556,8 +3563,9 @@ void drawScreen() {
                 text("NO PREVIEW AVAILABLE",750,330,1,MUTED,980);
             }
             if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
-                roundRect(820,548,186,38,11,Color{49,119,199,255});
-                text("A  APPLY COVER",852,560,1,WHITE,994);
+                const bool canApply=!steamGridPreviewLoading;
+                roundRect(820,548,186,38,11,canApply?Color{49,119,199,255}:Color{48,62,79,255});
+                text("A  APPLY COVER",852,560,1,canApply?WHITE:MUTED,994);
             }
         }
         if(!steamGridError.empty())
@@ -3685,7 +3693,6 @@ void drawScreen() {
         } else {
             recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
             constexpr int rowsVisible=10;
-            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
             const int maxOffset=std::max(0,static_cast<int>(recentLaunches.size())-rowsVisible);
             recentOffset=std::max(0,std::min(recentOffset,maxOffset));
             if(recentIndex<recentOffset)recentOffset=recentIndex;
