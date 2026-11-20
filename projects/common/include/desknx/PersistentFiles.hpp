@@ -107,6 +107,7 @@ inline WriteStatus writeAtomically(
     const auto replaced = safeio::replaceFilePreservingOnFailure(
         temporary, destination, backup, true);
     if (replaced == safeio::ReplaceStatus::RollbackFailed) {
+        (void)std::remove(temporary);
         return WriteStatus::RollbackFailed;
     }
     if (replaced != safeio::ReplaceStatus::Success) {
