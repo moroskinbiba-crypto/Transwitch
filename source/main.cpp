@@ -7,6 +7,7 @@
 #include <desknx/Protocol.hpp>
 #include <desknx/SafeReplace.hpp>
 #include "../include/desknx/Model.hpp"
+#include "../include/desknx/LaunchHistory.hpp"
 #include "../include/desknx/WorkspaceOps.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
@@ -192,11 +193,11 @@ struct SteamGridArtworkChoice {
     std::string type;
 };
 enum class SteamGridPickerStage { Closed, SearchingGames, ChooseGame, LoadingArtwork, ChooseArtwork, Applying };
-enum class SteamGridJob { None, SearchGames, LoadArtwork, ApplyArtwork };
+enum class SteamGridJob { None, SearchGames, LoadArtwork, PreviewArtwork, ApplyArtwork };
 struct SteamGridTask {
     SteamGridJob job{SteamGridJob::None};
     std::string apiKey, query, gameName, assetUrl;
-    std::uint64_t titleId{0}, gameId{0};
+    std::uint64_t titleId{0}, gameId{0}, assetId{0};
 };
 struct SteamGridWorkerResult {
     bool success{false};
@@ -204,6 +205,8 @@ struct SteamGridWorkerResult {
     std::string error;
     std::vector<sgdb::GameMatch> games;
     std::vector<SteamGridArtworkChoice> artwork;
+    std::vector<unsigned char> previewBytes;
+    std::uint64_t previewAssetId{0};
 };
 SDL_mutex* steamGridMutex=nullptr;
 SDL_Thread* steamGridThread=nullptr;
@@ -217,12 +220,22 @@ std::string steamGridTargetTitle, steamGridSearchQuery, steamGridSelectedGameNam
 std::vector<sgdb::GameMatch> steamGridGames;
 std::vector<SteamGridArtworkChoice> steamGridArtwork;
 std::string steamGridError;
+SDL_Texture* steamGridPreviewTexture=nullptr;
+int steamGridPreviewWidth=0, steamGridPreviewHeight=0;
+std::uint64_t steamGridPreviewAssetId=0, steamGridPreviewWantedAssetId=0;
+bool steamGridPreviewLoading=false;
+std::string steamGridPreviewError;
 int steamGridListIndex=0, steamGridListOffset=0;
+bool startSteamGridJob(SteamGridTask* task);
+void requestSteamGridPreview();
+void clearSteamGridPreview();
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
-struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
+using HistoryEntry = desknx::launch_history::Entry;
 std::vector<HistoryEntry> recentLaunches;
+std::vector<HistoryEntry> recentUniqueCache;
+uint64_t recentUniqueCacheRevision=UINT64_MAX;
 struct PdmQuerySnapshot {
     char titleId[17]{};
     bool available{false};
@@ -262,7 +275,7 @@ int workspaceReorderIndex=0, consoleSettingsIndex=0;
 bool consoleWifiEnabled=true, consoleBluetoothEnabled=true, consoleAirplaneMode=false;
 bool consoleSettingsLblReady=false;
 float consoleBrightness=0.5f;
-int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
+int recentIndex=0, recentOffset=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -1010,6 +1023,24 @@ std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
 }
+const std::vector<HistoryEntry>& recentUniqueLaunches() {
+    if(recentUniqueCacheRevision!=recentLaunchRevision) {
+        recentUniqueCache=desknx::launch_history::uniqueRecent(recentLaunches);
+        recentUniqueCacheRevision=recentLaunchRevision;
+    }
+    return recentUniqueCache;
+}
+
+std::string historyTimestampText(std::uint64_t timestamp,bool compact=false) {
+    if(timestamp==0)return compact?"TIME UNKNOWN":"DATE UNKNOWN";
+    const std::time_t stamp=static_cast<std::time_t>(timestamp);
+    std::tm local{};
+    if(!localtime_r(&stamp,&local))return compact?"TIME UNKNOWN":"DATE UNKNOWN";
+    char value[40]{};
+    const char* format=compact?"%d.%m %H:%M":"%d.%m.%Y %H:%M";
+    return std::strftime(value,sizeof(value),format,&local)?std::string(value):std::string("DATE UNKNOWN");
+}
+
 std::string typeName(Kind k) {
     switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
         case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT";
@@ -1048,7 +1079,7 @@ const std::vector<Candidate>& visibleCatalogueSnapshot() {
     }
     std::vector<desknx::catalog_view::RecentKey> recent;
     recent.reserve(recentLaunches.size());
-    for(const auto& item:recentLaunches) recent.push_back({item.kind,item.data});
+    for(const auto& item:recentUniqueLaunches()) recent.push_back({item.kind,item.data});
     visibleCatalogueCache = desknx::catalog_view::FilterAndSort(
         all,catalogueQuery,catalogueFilter,catalogueSort,recent);
     visibleCacheCatalogueRevision = revision;
@@ -1371,7 +1402,7 @@ void handleSteamGridPickerInput(u64 keys) {
 }
 
 void cycleCatalogueFilter(int direction) {
-    constexpr int count=4;
+    constexpr int count=5;
     int current=static_cast<int>(catalogueFilter);
     current=(current+direction+count)%count;
     catalogueFilter=static_cast<desknx::catalog_view::FilterMode>(current);
@@ -1720,25 +1751,34 @@ bool isSafeNroPath(const std::string& path) {
 
 bool readHistoryFile(const char* path,std::vector<HistoryEntry>& output) {
     struct stat historyStat{};
-    constexpr size_t MaxHistoryBytes=64*1024;
+    constexpr size_t MaxHistoryBytes=128*1024;
     if(!path||stat(path,&historyStat)!=0||!S_ISREG(historyStat.st_mode)||
        historyStat.st_size<=0||static_cast<uint64_t>(historyStat.st_size)>MaxHistoryBytes)
         return false;
     std::ifstream input(path,std::ios::binary);
     std::string line;
-    if(!input||!std::getline(input,line)||line.size()>32||line!="DESKNXH1")
-        return false;
+    if(!input||!std::getline(input,line)||line.size()>32||
+       (line!="DESKNXH1"&&line!="DESKNXH2"))return false;
+    const bool hasTimestamps=line=="DESKNXH2";
     std::vector<HistoryEntry> parsed;
-    while(std::getline(input,line)&&parsed.size()<10) {
+    while(std::getline(input,line)&&parsed.size()<desknx::launch_history::MaxEntries) {
         if(line.size()>2048)continue;
         auto fields=splitTabs(line);
-        if(fields.size()!=3||fields[0].size()>16||fields[1].empty()||
+        if(fields.size()!=(hasTimestamps?4u:3u)||fields[0].size()>16||fields[1].empty()||
            fields[1].size()>512||fields[2].empty()||fields[2].size()>512)continue;
         Kind kind=parseKind(fields[0]);
         if(kind!=Kind::Game&&kind!=Kind::Nro)continue;
         if(kind==Kind::Game&&!desknx::model::isTitleId(fields[2]))continue;
         if(kind==Kind::Nro&&!isSafeNroPath(fields[2]))continue;
-        parsed.push_back({kind,fields[1],fields[2]});
+        std::uint64_t timestamp=0;
+        if(hasTimestamps) {
+            if(fields[3].empty()||fields[3][0]=='-')continue;
+            char* end=nullptr;
+            const unsigned long long parsedTimestamp=std::strtoull(fields[3].c_str(),&end,10);
+            if(end==fields[3].c_str()||!end||*end!=0)continue;
+            timestamp=static_cast<std::uint64_t>(parsedTimestamp);
+        }
+        parsed.push_back({kind,fields[1],fields[2],timestamp});
     }
     if(input.bad())return false;
     output=std::move(parsed);
@@ -1760,6 +1800,8 @@ void loadHistory() {
             HISTORY_FILE,HISTORY_BAK_FILE);
         return;
     }
+    ++recentLaunchRevision;
+    recentUniqueCacheRevision=UINT64_MAX;
     if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
 }
 void saveHistory() {
@@ -1768,8 +1810,10 @@ void saveHistory() {
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     std::ofstream out(HISTORY_TMP,std::ios::binary|std::ios::trunc);
     if(!out){setStatus("RECENT HISTORY SAVE FAILED",3000);return;}
-    out<<"DESKNXH1\n";
-    for(const auto& e:recentLaunches)out<<typeCode(e.kind)<<'\t'<<safeField(e.title)<<'\t'<<safeField(e.data)<<'\n';
+    out<<"DESKNXH2\n";
+    for(const auto& e:recentLaunches)
+        out<<typeCode(e.kind)<<'\t'<<safeField(e.title)<<'\t'<<safeField(e.data)
+           <<'\t'<<e.timestamp<<'\n';
     out.flush();bool good=out.good();out.close();
     if(!good){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY WRITE FAILED",3000);return;}
     if(!commitSdCard("history-temp")) {
@@ -1797,11 +1841,13 @@ void saveHistory() {
 }
 void recordRecentLaunch(const Tile& tile) {
     if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;
-    recentLaunches.erase(std::remove_if(recentLaunches.begin(),recentLaunches.end(),
-        [&](const HistoryEntry& e){return e.kind==tile.kind&&e.data==tile.data;}),recentLaunches.end());
-    recentLaunches.insert(recentLaunches.begin(),{tile.kind,tile.title,tile.data});
+    const std::time_t now=std::time(nullptr);
+    const std::uint64_t timestamp=now>0?static_cast<std::uint64_t>(now):0;
+    recentLaunches.insert(recentLaunches.begin(),{tile.kind,tile.title,tile.data,timestamp});
     ++recentLaunchRevision;
-    if(recentLaunches.size()>10)recentLaunches.resize(10);
+    recentUniqueCacheRevision=UINT64_MAX;
+    if(recentLaunches.size()>desknx::launch_history::MaxEntries)
+        recentLaunches.resize(desknx::launch_history::MaxEntries);
     lastLaunched=tile.title;saveHistory();
 }
 bool backupBrokenLayout() {
