@@ -6,6 +6,8 @@
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
 #include <desknx/SafeReplace.hpp>
+#include <desknx/PersistentFiles.hpp>
+#include "../include/desknx/SettingsFile.hpp"
 #include "../include/desknx/Model.hpp"
 #include "../include/desknx/LaunchHistory.hpp"
 #include "../include/desknx/WorkspaceOps.hpp"
@@ -422,6 +424,14 @@ bool commitSdCard(const char* operation) {
                         operation ? operation : "unknown");
     return true;
 }
+bool commitPersistentFile(void*,const char* phase) {
+    return commitSdCard(phase);
+}
+
+bool validateSettingsFile(const std::string& contents,void*) {
+    std::vector<desknx::settings_file::Entry> entries;
+    return desknx::settings_file::parse(contents,entries);
+}
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
 void rect(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
@@ -562,37 +572,26 @@ void loadLauncherSettings() {
     if(!sdMounted){applyThemePalette();return;}
     languageRussian=true;
     iconStyle=0;
-    std::string selectedPath;
-    const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
-    for(const char* candidate:candidates) {
-        struct stat st{};
-        if(stat(candidate,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>4096)
-            continue;
-        std::ifstream in(candidate,std::ios::binary);
-        std::string header;
-        if(in && std::getline(in,header) && header=="DESKNXSET1") {
-            selectedPath=candidate;
-            break;
-        }
-    }
-    if(selectedPath.empty()) {
+    std::string serialized;
+    const auto source=desknx::persist::readValidatedWithBackup(
+        SETTINGS_FILE,SETTINGS_BAK,desknx::settings_file::MaxBytes,
+        validateSettingsFile,nullptr,serialized);
+    if(source==desknx::persist::FileSource::None) {
         applyThemePalette();
         return;
     }
-    if(selectedPath!=SETTINGS_FILE) {
-        desknx::diag::Write("settings","backup_restored","path=%s",selectedPath.c_str());
+    if(source==desknx::persist::FileSource::Backup) {
+        desknx::diag::Write("settings","backup_restored","path=%s",SETTINGS_BAK);
         setStatus("APPEARANCE SETTINGS RESTORED FROM BACKUP",4000);
     }
-    std::ifstream in(selectedPath,std::ios::binary);
-    std::string line;
-    if(!std::getline(in,line)||line!="DESKNXSET1") {
+    std::vector<desknx::settings_file::Entry> entries;
+    if(!desknx::settings_file::parse(serialized,entries)) {
         applyThemePalette();
         return;
     }
-    while(std::getline(in,line)) {
-        const size_t eq=line.find('=');
-        if(eq==std::string::npos)continue;
-        const std::string key=line.substr(0,eq),value=line.substr(eq+1);
+    for(const auto& entry:entries) {
+        const std::string& key=entry.key;
+        const std::string& value=entry.value;
         if(key=="theme") {
             char* end=nullptr;
             const long valueLong=std::strtol(value.c_str(),&end,10);
@@ -630,9 +629,8 @@ void loadLauncherSettings() {
 bool saveLauncherSettings() {
     if(!sdMounted){setStatus("SD CARD REQUIRED TO SAVE APPEARANCE",3000);return false;}
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
-    std::ofstream out(SETTINGS_TMP,std::ios::binary|std::ios::trunc);
-    if(!out){setStatus("SETTINGS SAVE FAILED",3000);return false;}
-    out<<"DESKNXSET1\n"
+    std::ostringstream contents;
+    contents<<"DESKNXSET1\n"
        <<"theme="<<themeIndex<<"\n"
        <<"visual_theme="<<(useSocomaTheme()?"socoma":"v0.1")<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
@@ -641,22 +639,22 @@ bool saveLauncherSettings() {
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
        <<"iconstyle="<<iconStyle<<"\n"
        <<"steamgriddb_key="<<safeField(steamGridDbApiKey)<<"\n";
-    out.flush();const bool good=out.good();out.close();
-    if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
-    if(!commitSdCard("settings-temp")) {
-        std::remove(SETTINGS_TMP);
-        setStatus("SETTINGS SD COMMIT FAILED",3000);
-        return false;
-    }
-    const auto rc=desknx::safeio::replaceFilePreservingOnFailure(
-        SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,true);
-    if(rc!=desknx::safeio::ReplaceStatus::Success) {
-        std::remove(SETTINGS_TMP);
-        setStatus("SETTINGS PUBLISH FAILED",3000);
-        return false;
-    }
-    if(!commitSdCard("settings-publish")) {
-        setStatus("SETTINGS COMMIT FAILED; BACKUP KEPT",4000);
+    const auto status=desknx::persist::writeAtomically(
+        SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,contents.str(),
+        commitPersistentFile,nullptr,"settings-temp","settings-publish",true);
+    if(status!=desknx::persist::WriteStatus::Success) {
+        if(status==desknx::persist::WriteStatus::TempCommitFailed)
+            setStatus("SETTINGS SD COMMIT FAILED",3000);
+        else if(status==desknx::persist::WriteStatus::PublishCommitFailed)
+            setStatus("SETTINGS COMMIT FAILED; BACKUP KEPT",4000);
+        else if(status==desknx::persist::WriteStatus::RollbackFailed)
+            setStatus("SETTINGS RECOVERY NEEDED; KEEP settings.bak",4500);
+        else if(status==desknx::persist::WriteStatus::OpenFailed)
+            setStatus("SETTINGS SAVE FAILED",3000);
+        else if(status==desknx::persist::WriteStatus::WriteFailed)
+            setStatus("SETTINGS WRITE FAILED",3000);
+        else
+            setStatus("SETTINGS PUBLISH FAILED",3000);
         return false;
     }
     return true;
