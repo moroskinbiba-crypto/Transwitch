@@ -2171,24 +2171,11 @@ bool writeActiveWorkspaceSnapshot(const LayoutSaveJob& job) {
     }
     mkdir("sdmc:/switch",0777);
     mkdir(CFG_DIR,0777);
-    std::ofstream out(ACTIVE_WORKSPACE_TMP,std::ios::binary|std::ios::trunc);
-    if(!out) return false;
-    out.write(job.activeWorkspaceState.data(),
-              static_cast<std::streamsize>(job.activeWorkspaceState.size()));
-    out.flush();
-    const bool good=out.good();
-    out.close();
-    if(!good) {
-        std::remove(ACTIVE_WORKSPACE_TMP);
-        return false;
-    }
-    const auto status=desknx::safeio::replaceFilePreservingOnFailure(
-        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
-    if(status!=desknx::safeio::ReplaceStatus::Success) {
-        std::remove(ACTIVE_WORKSPACE_TMP);
-        return false;
-    }
-    return commitSdCard("active-workspace-async-publish");
+    return desknx::persist::writeAtomically(
+        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,
+        job.activeWorkspaceState,commitPersistentFile,nullptr,
+        "active-workspace-async-temp","active-workspace-async-publish",false)==
+        desknx::persist::WriteStatus::Success;
 }
 
 int layoutSaveThreadMain(void* context) {
@@ -2201,48 +2188,33 @@ int layoutSaveThreadMain(void* context) {
     if(job->rewritePrimary) {
         mkdir("sdmc:/switch",0777);
         mkdir(CFG_DIR,0777);
-        std::ofstream out(CFG_TMP,std::ios::binary|std::ios::trunc);
-        if(!out) {
-            primaryOk=false;
-            std::snprintf(outcome.message,sizeof(outcome.message),
-                          "SAVE FAILED: SD CARD NOT WRITABLE");
+        const auto writeStatus=desknx::persist::writeAtomically(
+            CFG_TMP,CFG_FILE,CFG_BAK_FILE,job->serializedLayout,
+            commitPersistentFile,nullptr,"layout-async-temp","layout-async-publish",true);
+        if(writeStatus==desknx::persist::WriteStatus::Success) {
+            outcome.primaryWritten=true;
         } else {
-            out.write(job->serializedLayout.data(),
-                      static_cast<std::streamsize>(job->serializedLayout.size()));
-            out.flush();
-            const bool good=out.good();
-            out.close();
-            if(!good) {
-                std::remove(CFG_TMP);
-                primaryOk=false;
-                std::snprintf(outcome.message,sizeof(outcome.message),
-                              "SAVE FAILED: WRITE ERROR");
-            } else if(!commitSdCard("layout-async-temp")) {
-                std::remove(CFG_TMP);
-                primaryOk=false;
+            primaryOk=false;
+            outcome.blocked=writeStatus==desknx::persist::WriteStatus::RollbackFailed||
+                writeStatus==desknx::persist::WriteStatus::PublishCommitFailed;
+            if(writeStatus==desknx::persist::WriteStatus::TempCommitFailed)
                 std::snprintf(outcome.message,sizeof(outcome.message),
                               "LAYOUT SD COMMIT FAILED; OLD FILE KEPT");
-            } else {
-                const auto replaceStatus=desknx::safeio::replaceFilePreservingOnFailure(
-                    CFG_TMP,CFG_FILE,CFG_BAK_FILE,true);
-                if(replaceStatus!=desknx::safeio::ReplaceStatus::Success) {
-                    std::remove(CFG_TMP);
-                    primaryOk=false;
-                    outcome.blocked=
-                        replaceStatus==desknx::safeio::ReplaceStatus::RollbackFailed;
-                    std::snprintf(outcome.message,sizeof(outcome.message),
-                        outcome.blocked
-                            ? "LAYOUT RECOVERY NEEDED: KEEP layout.bak"
-                            : "SAVE FAILED: RENAME ERROR");
-                } else if(!commitSdCard("layout-async-publish")) {
-                    primaryOk=false;
-                    outcome.blocked=true;
-                    std::snprintf(outcome.message,sizeof(outcome.message),
-                                  "LAYOUT COMMIT FAILED; KEEP layout.bak");
-                } else {
-                    outcome.primaryWritten=true;
-                }
-            }
+            else if(writeStatus==desknx::persist::WriteStatus::PublishCommitFailed)
+                std::snprintf(outcome.message,sizeof(outcome.message),
+                              "LAYOUT COMMIT FAILED; KEEP layout.bak");
+            else if(writeStatus==desknx::persist::WriteStatus::RollbackFailed)
+                std::snprintf(outcome.message,sizeof(outcome.message),
+                              "LAYOUT RECOVERY NEEDED: KEEP layout.bak");
+            else if(writeStatus==desknx::persist::WriteStatus::OpenFailed)
+                std::snprintf(outcome.message,sizeof(outcome.message),
+                              "SAVE FAILED: SD CARD NOT WRITABLE");
+            else if(writeStatus==desknx::persist::WriteStatus::WriteFailed)
+                std::snprintf(outcome.message,sizeof(outcome.message),
+                              "SAVE FAILED: WRITE ERROR");
+            else
+                std::snprintf(outcome.message,sizeof(outcome.message),
+                              "SAVE FAILED: RENAME ERROR");
         }
     }
 
@@ -2416,25 +2388,12 @@ void drainAsyncLayoutSaver() {
 
 bool loadLayoutFrom(const char* path) {
     const Uint64 started=SDL_GetTicks64();
-    struct stat fileStat{};
-    if (!path || stat(path, &fileStat) != 0 || !S_ISREG(fileStat.st_mode) ||
-        fileStat.st_size <= 0 || fileStat.st_size > 1024 * 1024) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_size",
+    std::string serialized;
+    if(!desknx::persist::readBoundedFile(path,1024*1024,serialized)) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_read",
             path?path:"null");
         return false;
     }
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=open",path);
-        return false;
-    }
-    std::ostringstream contents;
-    contents << file.rdbuf();
-    if (file.bad()) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=read",path);
-        return false;
-    }
-    const std::string serialized=contents.str();
     desknx::layout::LoadResult loaded{};
     if (!desknx::layout::parse(serialized, loaded)) {
         desknx::diag::Write("layout","load_failed","path=%s reason=parse bytes=%zu",
