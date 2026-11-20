@@ -68,6 +68,7 @@ bool matchesFilter(model::Kind kind, FilterMode filter) {
         case FilterMode::Games: return kind==model::Kind::Game;
         case FilterMode::Homebrew: return kind==model::Kind::Nro;
         case FilterMode::Widgets: return isWidget(kind);
+        case FilterMode::RecentlyLaunched: return kind==model::Kind::Game || kind==model::Kind::Nro;
     }
     return true;
 }
@@ -107,6 +108,7 @@ std::vector<model::Candidate> FilterAndSort(
     entries.reserve(candidates.size());
     for(const auto& item:candidates) {
         if(!matchesFilter(item.kind,filter))continue;
+        if(filter==FilterMode::RecentlyLaunched && recentRank(item,recent)>=recent.size())continue;
         std::string titleKey=searchKey(item.title);
         if(!queryKey.empty() &&
            titleKey.find(queryKey)==std::string::npos &&
@@ -119,7 +121,7 @@ std::vector<model::Candidate> FilterAndSort(
         // Filesystem metadata and transliterated sort keys are prepared once,
         // never recomputed from inside std::sort's O(n log n) comparator.
         if(sort==SortMode::Size)entry.sizeBytes=fileSize(item);
-        if(sort==SortMode::Recent) {
+        if(sort==SortMode::Recent || filter==FilterMode::RecentlyLaunched) {
             entry.recentOrder=recentRank(item,recent);
             entry.lastPlayed=item.lastPlayed;
             entry.playtimeSeconds=item.playtimeSeconds;
@@ -129,7 +131,7 @@ std::vector<model::Candidate> FilterAndSort(
     }
 
     std::sort(entries.begin(),entries.end(),[&](const SortEntry& a,const SortEntry& b) {
-        if(sort==SortMode::Recent) {
+        if(sort==SortMode::Recent || filter==FilterMode::RecentlyLaunched) {
             if(a.recentOrder!=b.recentOrder)return a.recentOrder<b.recentOrder;
             if(a.lastPlayed!=b.lastPlayed)return a.lastPlayed>b.lastPlayed;
             if(a.launchCount!=b.launchCount)return a.launchCount>b.launchCount;
@@ -154,6 +156,7 @@ const char* FilterName(FilterMode filter) {
         case FilterMode::Games: return "GAMES";
         case FilterMode::Homebrew: return "HOMEBREW";
         case FilterMode::Widgets: return "WIDGETS";
+        case FilterMode::RecentlyLaunched: return "RECENTLY LAUNCHED";
     }
     return "ALL";
 }
