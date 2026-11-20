@@ -6,7 +6,7 @@
 
 namespace desknx::catalog_view {
 
-enum class FilterMode { All, Games, Homebrew, Widgets };
+enum class FilterMode { All, Games, Homebrew, Widgets, RecentlyLaunched };
 enum class SortMode { Name, Recent, Size };
 
 struct RecentKey {

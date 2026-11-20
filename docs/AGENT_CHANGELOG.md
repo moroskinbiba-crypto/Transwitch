@@ -28,7 +28,8 @@
    - active desk: active-workspace.dat + .tmp + .bak;
    - appearance: settings.ini + .tmp + .bak;
    - launch history: recent.tsv + .tmp + .bak.
-   - source/PersistenceStore.* — отдельный JSON-модуль с round-trip host test; production HOME UI source/main.cpp сейчас его не вызывает. projects/DeskNXMenu/source/LayoutStore.* относится к prototype entry point, который исключён из release.
+   - source/PersistenceStore.* — отдельный JSON-модуль с round-trip host test; production HOME UI не использует его.
+   - Production HOME persistence использует `projects/common/include/desknx/PersistentFiles.hpp` для bounded primary/backup reads и двухфазной atomic write с injected SD-commit callback. `SettingsFile.hpp` и `LaunchHistory.hpp` содержат тестируемые production parsers/serializers. projects/DeskNXMenu/source/LayoutStore.* относится к prototype entry point, который исключён из release.
 4. System backend использует отдельные projects/sSystem lifecycle / ECS / hbloader компоненты. Нужна runtime-проверка запуска, возврата из игры/NRO, sleep/wake и recovery на железе.
 
 ## Ранее сделанные изменения (до текущего цикла)
@@ -66,7 +67,7 @@
 ### Следующие задачи (приоритет)
 
 1. P0 — завершить проверку experimental HOME backend: ECS register/unregister, HOME lifecycle, повторный возврат из игры и sleep/wake.
-2. P0 — добавить host tests для production parser/layout recovery/settings/history backup recovery и проверок fsdevCommitDevice fail points.
+2. [x] P0 — host tests для production parser/layout recovery/settings/history backup recovery и обоих fsdevCommitDevice fail points добавлены; CI ещё должен подтвердить выполнение.
 3. P1 — проверить installer/uninstaller при прерывании на каждом шаге, повторное выполнение и безопасное обновление без потери резервной копии.
 4. P1 — профилировать catalogue/artwork pipeline по времени и памяти; проверить lazy decode и texture eviction под Switch memory budget.
 5. P1 — аудит touchInput/keyInput: edge cases multi-touch, drag/drop, modal focus, controller/touch handoff, управление пустыми ячейками.
@@ -362,3 +363,45 @@ The native standalone build has now completed both CI workflows:
 - Изменения рабочих столов и active-workspace marker теперь записываются через отдельный SDL worker; повторные правки объединяются в последний актуальный snapshot. Синхронный checked save сохранён перед запуском/завершением приложения.
 - SD commits сериализованы отдельным mutex, а завершение фоновой записи отражается в диагностике async_save_finished.
 - CI проверит native NRO и host tests. Физический тест на Switch всё ещё обязателен: особенно проверить старый catalogue cache, фильтр Widgets, появление 90 игр до завершения metadata scan, drag/resize/add/remove, переключение рабочих столов и перезапуск во время активного сохранения.
+
+
+## Regression fixes — 20 November 2026
+
+- SteamGridDB: pressing ZL in the installed-games library now opens the artwork picker immediately and starts the initial search using the selected game's title. The on-screen keyboard is reserved for the explicit Y (search/edit query) action; it no longer blocks the initial ZL action. If the API key is missing, the picker remains open and explains how to configure it instead of silently returning to the library.
+- Added diagnostics for picker opening and search start, including the selected title ID and whether the query keyboard was requested.
+- Nextendo: failed snapshots are retried after 15 seconds instead of waiting a full three-minute refresh interval. After three consecutive failures the socket/curl transport is reinitialized and retried after five seconds. Successful snapshots retain the normal three-minute refresh cadence.
+- Added failure/retry counters to the Nextendo diagnostic events.
+- Changes are in `feat/theme-socoma`; commits: `fa2c396bdccf868c01a5a84e6b336fa9399723c5` (SteamGridDB picker) and `186e4284249b22c3019fa8c37a785a6d53a1fac5` (Nextendo retry recovery).
+- These are source-level fixes only. CI and physical Switch runtime testing are still required; the Nextendo endpoint response and SteamGridDB API flow have not yet been verified on hardware.
+
+
+## Launch history and artwork preview — 20 November 2026
+
+- Added a persistent launch-event history for installed games and Homebrew applications. Each event records its own timestamp; the history retains the latest 100 events.
+- Migrated legacy `DESKNXH1` history files on read and writes the timestamped `DESKNXH2` format on the next save. Legacy entries remain readable and show an unknown timestamp.
+- The Tools → Launch History screen now lists individual launch events with date/time and supports scrolling/relaunching.
+- The Recently Launched library filter shows only apps present in launch history and sorts them by most recent launch. The Recent widget continues to show unique apps, not duplicate launch events.
+- Game and Homebrew details now show Transwitch launch count and the last launch time, separately from the Switch system's aggregate play statistics.
+- SteamGridDB artwork choices now load bounded thumbnails asynchronously and display a contain-fit preview before applying. Touch row selection only changes the preview; applying requires the dedicated button or controller confirmation.
+- These changes are source-level and host-test additions. GitHub Actions and physical Switch validation are still required; preview rendering, history persistence and touch/controller interactions have not yet been verified on hardware.
+
+
+## Этап 2 — production persistence и recovery tests — 20 ноября 2026
+
+Цель этапа: закрыть разрыв между тестами отдельного JSON-прототипа и реальными файлами, которые читает/пишет production UI в `source/main.cpp`.
+
+### Что изменено
+
+- Добавлен `projects/common/include/desknx/PersistentFiles.hpp`: общий ограниченный reader, чтение primary с fallback на backup после полной валидации и атомарная запись через temp → durability commit → replace с backup → publish commit.
+- Commit callback инъецируется в helper. В production он вызывает реальный `fsdevCommitDevice("sdmc")`; в host tests callback позволяет детерминированно отказать на первой или второй точке commit.
+- Production settings теперь читаются через общий validator/fallback, а разбор ограниченного `DESKNXSET1` вынесен в `include/desknx/SettingsFile.hpp`.
+- Production launch history переведена на общий primary/backup reader; разбор legacy `DESKNXH1` и timestamped `DESKNXH2`, строгая проверка timestamp, сериализация H2 вынесены в `include/desknx/LaunchHistory.hpp`.
+- Active-workspace marker, full layout save, asynchronous layout save, settings save и launch-history save используют один testable write transaction. Для active-workspace marker сохранена семантика одного commit после публикации; полные файлы используют commit перед и после replace.
+- Production layout loading теперь выбирает только целиком валидный primary или backup тем же helper, после чего сохраняет прежнюю логику сохранения повреждённого primary перед восстановлением из backup.
+- Добавлен `tests/production_persistence_test.cpp`: тесты настроек, layout recovery, active marker, H1/H2 history, размера файла, сохранения предыдущего состояния, отказа первого commit, отказа publish commit и однократного commit marker.
+- Новый host test добавлен в `.github/workflows/build.yml`; production HOME entrypoint guard теперь проверяет использование общих persistence helpers.
+
+### Риски и проверка
+
+- Host-тест имитирует результат `fsdevCommitDevice` через callback; реальный SD controller / power-loss / физическое извлечение SD этим не моделируются.
+- CI и native NRO/HOME applet build должны пройти до того, как считать этап закрытым. Аппаратная проверка Switch не выполнена.

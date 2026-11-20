@@ -111,6 +111,13 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/homenx_grid_edit_test.cpp source/Layout.cpp -o /tmp/desknx-homenx-grid-edit-test
           /tmp/desknx-homenx-grid-edit-test
 
+      - name: Test production settings, layout, history and SD commit recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/production_persistence_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-production-persistence-test
+          /tmp/desknx-production-persistence-test
+
       - name: Test persistence JSON round-trip without exceptions
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test

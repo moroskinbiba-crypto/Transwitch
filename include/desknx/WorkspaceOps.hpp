@@ -196,6 +196,18 @@ inline bool moveSelectedTileToWorkspace(std::vector<model::Workspace>& workspace
     return true;
 }
 
+inline bool reorderWorkspace(std::vector<model::Workspace>& workspaces,
+                             int& activeWorkspace,int from,int to) {
+    const int count=static_cast<int>(workspaces.size());
+    if(from<0||from>=count||to<0||to>=count||from==to||
+       activeWorkspace<0||activeWorkspace>=count)return false;
+    std::swap(workspaces[static_cast<size_t>(from)],
+              workspaces[static_cast<size_t>(to)]);
+    if(activeWorkspace==from)activeWorkspace=to;
+    else if(activeWorkspace==to)activeWorkspace=from;
+    return true;
+}
+
 inline bool deleteWorkspace(std::vector<model::Workspace>& workspaces,
                             int& activeWorkspace, int workspaceIndex) {
     if (workspaces.size() <= 1 ||
