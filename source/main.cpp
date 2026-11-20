@@ -151,6 +151,7 @@ bool defaultLayoutPending = false;
 uint64_t persistedLayoutShapeHash = 0;
 bool persistedLayoutShapeKnown = false;
 bool layoutPrimaryNeedsRewrite = true;
+bool layoutLoadedFromBackup = false;
 bool activeWorkspaceMarkerPending=false;
 Uint32 activeWorkspaceMarkerDue=0;
 bool activeWorkspaceMarkerKnown=false;
@@ -2421,7 +2422,44 @@ bool loadLayoutFrom(const char* path) {
         static_cast<unsigned long long>(SDL_GetTicks64()-started));
     return true;
 }
-bool loadLayout() { return loadLayoutFrom(CFG_FILE); }
+bool validateLayoutContents(const std::string& contents,void* opaque) {
+    auto* parsed=static_cast<desknx::layout::LoadResult*>(opaque);
+    return parsed&&desknx::layout::parse(contents,*parsed);
+}
+bool loadLayout() {
+    const Uint64 started=SDL_GetTicks64();
+    desknx::layout::LoadResult loaded{};
+    std::string serialized;
+    const auto source=desknx::persist::readValidatedWithBackup(
+        CFG_FILE,CFG_BAK_FILE,1024*1024,validateLayoutContents,&loaded,serialized);
+    if(source==desknx::persist::FileSource::None) {
+        layoutLoadedFromBackup=false;
+        desknx::diag::Write("layout","load_failed",
+            "path=%s reason=primary_and_backup_invalid",CFG_FILE);
+        return false;
+    }
+    const char* path=source==desknx::persist::FileSource::Backup?CFG_BAK_FILE:CFG_FILE;
+    desks=std::move(loaded.workspaces);
+    deskIndex=loaded.activeWorkspace;
+    layoutNeedsMigration=loaded.needsMigration;
+    layoutRecoveredTiles=loaded.recoveredTiles;
+    layoutDroppedTiles=loaded.droppedTiles;
+    const std::string shape=desknx::layout::serialize(desks,0);
+    persistedLayoutShapeKnown=!shape.empty();
+    persistedLayoutShapeHash=persistedLayoutShapeKnown?
+        desknx::model::stableHash(shape):0;
+    layoutLoadedFromBackup=source==desknx::persist::FileSource::Backup;
+    layoutPrimaryNeedsRewrite=layoutLoadedFromBackup||layoutNeedsMigration;
+    selectedX=selectedY=0;
+    size_t tileCount=0;
+    for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
+    desknx::diag::Write("layout","loaded",
+        "path=%s bytes=%zu workspaces=%zu tiles=%zu active=%d migration=%d recovered=%zu dropped=%zu elapsed_ms=%llu",
+        path,serialized.size(),desks.size(),tileCount,deskIndex,
+        layoutNeedsMigration?1:0,layoutRecoveredTiles,layoutDroppedTiles,
+        static_cast<unsigned long long>(SDL_GetTicks64()-started));
+    return true;
+}
 void defaultLayout() {
     const auto available=catalogueSnapshot();
     desks={{"Games",{}},{"Homebrew",{}},{"Widgets",{}}};int gi=0,hi=0;
@@ -5388,15 +5426,13 @@ int main(int,char**) {
         layoutLoaded?1:0,layoutExists?1:0,
         layoutExists?static_cast<long long>(layoutStat.st_size):0LL,
         backupExists?1:0);
-    bool restoredFromBackup = false;
-    if (!layoutLoaded && backupExists && loadLayoutFrom(CFG_BAK_FILE)) {
-        // The primary may be missing as well as corrupt. Never discard the only
-        // valid backup until the old primary has been preserved or is absent.
-        if (layoutExists && !backupBrokenLayout())
-            layoutSaveBlocked = true;
-        layoutLoaded = true;
-        restoredFromBackup = true;
-        setStatus("LAYOUT RESTORED FROM BACKUP", 5000);
+    bool restoredFromBackup = layoutLoadedFromBackup;
+    if(restoredFromBackup) {
+        // Preserve a corrupt primary before any attempt to rewrite it. The
+        // validated backup remains the last known-good layout throughout.
+        if(layoutExists && !backupBrokenLayout())
+            layoutSaveBlocked=true;
+        setStatus("LAYOUT RESTORED FROM BACKUP",5000);
     } else if (layoutExists && !layoutLoaded) {
         if (!backupBrokenLayout())
             layoutSaveBlocked = true;
