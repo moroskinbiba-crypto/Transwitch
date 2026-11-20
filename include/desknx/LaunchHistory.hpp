@@ -98,7 +98,7 @@ inline std::string serialize(const std::vector<Entry>& events) {
              (event.data.compare(0,13,"sdmc:/switch/")!=0 ||
               event.data.size()<18 ||
               event.data.find("..")!=std::string::npos ||
-              event.data.find('\\0')!=std::string::npos)))
+              event.data.find('\0')!=std::string::npos)))
             return {};
         if(event.kind==model::Kind::Nro) {
             std::string extension=event.data.substr(event.data.size()-4);
