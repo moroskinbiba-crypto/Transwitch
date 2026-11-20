@@ -28,7 +28,8 @@
    - active desk: active-workspace.dat + .tmp + .bak;
    - appearance: settings.ini + .tmp + .bak;
    - launch history: recent.tsv + .tmp + .bak.
-   - source/PersistenceStore.* — отдельный JSON-модуль с round-trip host test; production HOME UI source/main.cpp сейчас его не вызывает. projects/DeskNXMenu/source/LayoutStore.* относится к prototype entry point, который исключён из release.
+   - source/PersistenceStore.* — отдельный JSON-модуль с round-trip host test; production HOME UI не использует его.
+   - Production HOME persistence использует `projects/common/include/desknx/PersistentFiles.hpp` для bounded primary/backup reads и двухфазной atomic write с injected SD-commit callback. `SettingsFile.hpp` и `LaunchHistory.hpp` содержат тестируемые production parsers/serializers. projects/DeskNXMenu/source/LayoutStore.* относится к prototype entry point, который исключён из release.
 4. System backend использует отдельные projects/sSystem lifecycle / ECS / hbloader компоненты. Нужна runtime-проверка запуска, возврата из игры/NRO, sleep/wake и recovery на железе.
 
 ## Ранее сделанные изменения (до текущего цикла)
@@ -66,7 +67,7 @@
 ### Следующие задачи (приоритет)
 
 1. P0 — завершить проверку experimental HOME backend: ECS register/unregister, HOME lifecycle, повторный возврат из игры и sleep/wake.
-2. P0 — добавить host tests для production parser/layout recovery/settings/history backup recovery и проверок fsdevCommitDevice fail points.
+2. [x] P0 — host tests для production parser/layout recovery/settings/history backup recovery и обоих fsdevCommitDevice fail points добавлены; CI ещё должен подтвердить выполнение.
 3. P1 — проверить installer/uninstaller при прерывании на каждом шаге, повторное выполнение и безопасное обновление без потери резервной копии.
 4. P1 — профилировать catalogue/artwork pipeline по времени и памяти; проверить lazy decode и texture eviction под Switch memory budget.
 5. P1 — аудит touchInput/keyInput: edge cases multi-touch, drag/drop, modal focus, controller/touch handoff, управление пустыми ячейками.
@@ -383,3 +384,24 @@ The native standalone build has now completed both CI workflows:
 - Game and Homebrew details now show Transwitch launch count and the last launch time, separately from the Switch system's aggregate play statistics.
 - SteamGridDB artwork choices now load bounded thumbnails asynchronously and display a contain-fit preview before applying. Touch row selection only changes the preview; applying requires the dedicated button or controller confirmation.
 - These changes are source-level and host-test additions. GitHub Actions and physical Switch validation are still required; preview rendering, history persistence and touch/controller interactions have not yet been verified on hardware.
+
+
+## Этап 2 — production persistence и recovery tests — 20 ноября 2026
+
+Цель этапа: закрыть разрыв между тестами отдельного JSON-прототипа и реальными файлами, которые читает/пишет production UI в `source/main.cpp`.
+
+### Что изменено
+
+- Добавлен `projects/common/include/desknx/PersistentFiles.hpp`: общий ограниченный reader, чтение primary с fallback на backup после полной валидации и атомарная запись через temp → durability commit → replace с backup → publish commit.
+- Commit callback инъецируется в helper. В production он вызывает реальный `fsdevCommitDevice("sdmc")`; в host tests callback позволяет детерминированно отказать на первой или второй точке commit.
+- Production settings теперь читаются через общий validator/fallback, а разбор ограниченного `DESKNXSET1` вынесен в `include/desknx/SettingsFile.hpp`.
+- Production launch history переведена на общий primary/backup reader; разбор legacy `DESKNXH1` и timestamped `DESKNXH2`, строгая проверка timestamp, сериализация H2 вынесены в `include/desknx/LaunchHistory.hpp`.
+- Active-workspace marker, full layout save, asynchronous layout save, settings save и launch-history save используют один testable write transaction. Для active-workspace marker сохранена семантика одного commit после публикации; полные файлы используют commit перед и после replace.
+- Production layout loading теперь выбирает только целиком валидный primary или backup тем же helper, после чего сохраняет прежнюю логику сохранения повреждённого primary перед восстановлением из backup.
+- Добавлен `tests/production_persistence_test.cpp`: тесты настроек, layout recovery, active marker, H1/H2 history, размера файла, сохранения предыдущего состояния, отказа первого commit, отказа publish commit и однократного commit marker.
+- Новый host test добавлен в `.github/workflows/build.yml`; production HOME entrypoint guard теперь проверяет использование общих persistence helpers.
+
+### Риски и проверка
+
+- Host-тест имитирует результат `fsdevCommitDevice` через callback; реальный SD controller / power-loss / физическое извлечение SD этим не моделируются.
+- CI и native NRO/HOME applet build должны пройти до того, как считать этап закрытым. Аппаратная проверка Switch не выполнена.
