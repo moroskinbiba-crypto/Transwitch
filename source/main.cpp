@@ -2798,9 +2798,10 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
             return std::string(value);
         };
+        const auto& recentApps=recentUniqueLaunches();
         auto recentLine=[&](size_t index,int y,int iconSize) {
-            if(index>=recentLaunches.size())return;
-            const auto& entry=recentLaunches[index];
+            if(index>=recentApps.size())return;
+            const auto& entry=recentApps[index];
             Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
             drawTileIcon(iconTile,left,y,iconSize);
             text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
@@ -2881,12 +2882,12 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         } else if(t.kind==Kind::Recent) {
             if(compact) {
                 label("RECENT",r.y+13);
-                if(recentLaunches.empty())
+                if(recentApps.empty())
                     text(languageRussian?"ПУСТО":"EMPTY",left,r.y+50,1,WHITE,right);
                 else recentLine(0,r.y+42,26);
             } else if(wide) {
                 label("RECENTLY OPENED",r.y+12);
-                if(recentLaunches.empty())
+                if(recentApps.empty())
                     text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
                          left,r.y+48,2,WHITE,right);
                 else {
@@ -2895,11 +2896,11 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 }
             } else {
                 label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
-                if(recentLaunches.empty()) {
+                if(recentApps.empty()) {
                     text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
                          left,r.y+86,2,WHITE,right);
                 } else {
-                    const size_t count=std::min<size_t>(4,recentLaunches.size());
+                    const size_t count=std::min<size_t>(4,recentApps.size());
                     for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
                 }
                 text(languageRussian?"ИСТОРИЯ ЭТОЙ КОНСОЛИ":"HISTORY ON THIS CONSOLE",
@@ -3292,7 +3293,7 @@ void drawScreen() {
                                       minutes/60,minutes%60);
                     text(playLabel,mx+800,my+374,1,MUTED,mx+mw-30);
                     char launchLabel[48]{};
-                    std::snprintf(launchLabel,sizeof(launchLabel),"LAUNCHES  %u",selected.launchCount);
+                    std::snprintf(launchLabel,sizeof(launchLabel),"SYSTEM LAUNCHES  %u",selected.launchCount);
                     text(launchLabel,mx+800,my+394,1,MUTED,mx+mw-30);
                     if(selected.lastPlayed!=0) {
                         const std::time_t stamp=static_cast<std::time_t>(selected.lastPlayed);
@@ -3305,6 +3306,13 @@ void drawScreen() {
                         text("NOT PLAYED YET",mx+800,my+414,1,MUTED,mx+mw-30);
                     }
                 }
+                const std::size_t localRuns=desknx::launch_history::count(
+                    recentLaunches,Kind::Game,selected.data);
+                const std::uint64_t localLast=desknx::launch_history::lastTimestamp(
+                    recentLaunches,Kind::Game,selected.data);
+                std::string localHistory="TRANSWITCH  "+std::to_string(localRuns)+" RUNS";
+                if(localLast!=0)localHistory+="  /  "+historyTimestampText(localLast,true);
+                text(localHistory,mx+800,my+434,1,BLUE,mx+mw-30);
             } else if(selected.kind==Kind::Nro) {
                 std::string fileName=selected.data;
                 const size_t slash=fileName.find_last_of('/');
@@ -3323,12 +3331,17 @@ void drawScreen() {
                         std::snprintf(sizeLabel,sizeof(sizeLabel),"SIZE  %llu KB",bytes/1024ULL);
                     text(sizeLabel,mx+800,my+370,1,MUTED,mx+mw-30);
                 }
+                const std::size_t localRuns=desknx::launch_history::count(
+                    recentLaunches,Kind::Nro,selected.data);
+                const std::uint64_t localLast=desknx::launch_history::lastTimestamp(
+                    recentLaunches,Kind::Nro,selected.data);
+                std::string localHistory="TRANSWITCH  "+std::to_string(localRuns)+" RUNS";
+                if(localLast!=0)localHistory+="  /  "+historyTimestampText(localLast,true);
+                text(localHistory,mx+800,my+414,1,BLUE,mx+mw-30);
             } else {
                 text("SYSTEM WIDGET",mx+800,my+282,1,MUTED,mx+mw-30);
                 text("Adds live information to your desktop.",mx+800,my+302,1,WHITE,mx+mw-30);
             }
-            text(std::to_string(listIndex+1)+" OF "+std::to_string(available.size()),
-                 mx+800,my+438,1,MUTED,mx+mw-30);
             if(selected.kind==Kind::Game) {
                 roundRect(mx+792,my+462,112,42,12,Color{46,91,139,255});
                 text("ZL  COVER",mx+810,my+477,1,WHITE,mx+904);
@@ -3515,27 +3528,35 @@ void drawScreen() {
     if(recentOpen) {
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
-        text("RECENTLY OPENED",266,104,3,WHITE,850);
+        text("LAUNCH HISTORY",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
         text("B BACK",850,118,1,WHITE,912);
         roundRect(924,108,88,30,9,Color{10,132,255,255});
         text("LAUNCH",936,118,1,WHITE,1006);
-        text("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,1,MUTED,850);
+        text("UP / DOWN SCROLL     A RE-LAUNCH     B CLOSE",282,153,1,MUTED,850);
         if(recentLaunches.empty()) {
-            text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
-            text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
+            text("NO LAUNCH HISTORY YET",310,245,2,WHITE,970);
+            text("LAUNCH A GAME OR HOMEBREW APP TO BUILD YOUR HISTORY",310,280,1,MUTED,970);
         } else {
             recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-            const int visible=std::min(10,static_cast<int>(recentLaunches.size()));
-            for(int row=0;row<visible;++row) {
-                const auto& entry=recentLaunches[static_cast<size_t>(row)];
+            constexpr int rowsVisible=10;
+            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+            const int maxOffset=std::max(0,static_cast<int>(recentLaunches.size())-rowsVisible);
+            recentOffset=std::max(0,std::min(recentOffset,maxOffset));
+            if(recentIndex<recentOffset)recentOffset=recentIndex;
+            if(recentIndex>=recentOffset+rowsVisible)recentOffset=recentIndex-rowsVisible+1;
+            for(int row=0;row<rowsVisible;++row) {
+                const int index=recentOffset+row;
+                if(index>=static_cast<int>(recentLaunches.size()))break;
+                const auto& entry=recentLaunches[static_cast<size_t>(index)];
                 const int yy=190+row*39;
-                if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
-                Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
+                if(index==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,index%12};
                 drawTileIcon(iconTile,290,yy+4,27);
-                text(entry.title,330,yy+8,2,row==recentIndex?WHITE:MUTED,850);
-                text(entry.kind==Kind::Game?"GAME":"HOMEBREW",870,yy+11,1,
-                     row==recentIndex?BLUE:MUTED,990);
+                text(entry.title,330,yy+8,2,index==recentIndex?WHITE:MUTED,850);
+                const std::string meta=std::string(entry.kind==Kind::Game?"GAME":"HOMEBREW")+
+                    "  /  "+historyTimestampText(entry.timestamp,true);
+                text(meta,866,yy+11,1,index==recentIndex?BLUE:MUTED,994);
             }
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
@@ -3549,7 +3570,7 @@ void drawScreen() {
         struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
             {156,218,4,"APP LIBRARY","INSTALLED GAMES AND HOMEBREW"},
-            {496,218,6,"RECENT","RECENTLY LAUNCHED APPS"},
+            {496,218,6,"LAUNCH HISTORY","RECENT GAME AND HOMEBREW STARTS"},
             {836,218,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
             {156,382,5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
             {496,382,0,"CONSOLE SETTINGS","WI-FI, BLUETOOTH, AIRPLANE MODE, BRIGHTNESS"},
@@ -4473,7 +4494,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             const int action=systemMenuIndex;
             systemMenu=false;
             if(action==0)openList();
-            else if(action==1){recentIndex=0;recentOpen=true;}
+            else if(action==1){recentIndex=0;recentOffset=0;recentOpen=true;}
             else if(action==2){powerMenu=true;powerIndex=0;}
             else if(action==3) {
                 editing=!editing;
@@ -4539,6 +4560,9 @@ void keyInput(u64 keys, bool fromRepeat) {
             recentIndex=(recentIndex-1+static_cast<int>(recentLaunches.size()))%static_cast<int>(recentLaunches.size());
         if(keys&HidNpadButton_Down)
             recentIndex=(recentIndex+1)%static_cast<int>(recentLaunches.size());
+        constexpr int rowsVisible=10;
+        if(recentIndex<recentOffset)recentOffset=recentIndex;
+        if(recentIndex>=recentOffset+rowsVisible)recentOffset=recentIndex-rowsVisible+1;
         if(keys&HidNpadButton_A) {
             const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
             recentOpen=false;
@@ -4926,7 +4950,7 @@ void touchInput(const SDL_Event&e) {
                     launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
                 }
             } else if(y>=190&&y<580&&!recentLaunches.empty()) {
-                const int index=(y-190)/39;
+                const int index=recentOffset+(y-190)/39;
                 if(index>=0&&static_cast<size_t>(index)<recentLaunches.size())
                     recentIndex=index;
             }
