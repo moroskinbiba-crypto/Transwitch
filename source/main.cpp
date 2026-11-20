@@ -1875,33 +1875,32 @@ bool validateHistoryNroPath(const std::string& path,void*) {
     return isSafeNroPath(path);
 }
 
-bool readHistoryFile(const char* path,std::vector<HistoryEntry>& output) {
-    std::string serialized;
-    if(!desknx::persist::readBoundedFile(
-           path,desknx::launch_history::MaxFileBytes,serialized))
-        return false;
-    std::vector<HistoryEntry> parsed;
-    if(!desknx::launch_history::parse(
-           serialized,parsed,validateHistoryNroPath,nullptr))
-        return false;
-    output=std::move(parsed);
-    return true;
+bool validateHistoryContents(const std::string& contents,void* opaque) {
+    auto* parsed=static_cast<std::vector<HistoryEntry>*>(opaque);
+    return parsed&&desknx::launch_history::parse(
+        contents,*parsed,validateHistoryNroPath,nullptr);
 }
 
 void loadHistory() {
     if(!sdMounted)return;
     std::vector<HistoryEntry> loaded;
-    if(readHistoryFile(HISTORY_FILE,loaded)) {
-        recentLaunches=std::move(loaded);
-        desknx::diag::Write("history","loaded","path=%s entries=%zu",HISTORY_FILE,recentLaunches.size());
-    } else if(readHistoryFile(HISTORY_BAK_FILE,loaded)) {
-        recentLaunches=std::move(loaded);
-        desknx::diag::Write("history","backup_restored","path=%s entries=%zu",HISTORY_BAK_FILE,recentLaunches.size());
-        setStatus("RECENT HISTORY RESTORED FROM BACKUP",4000);
-    } else {
+    std::string serialized;
+    const auto source=desknx::persist::readValidatedWithBackup(
+        HISTORY_FILE,HISTORY_BAK_FILE,desknx::launch_history::MaxFileBytes,
+        validateHistoryContents,&loaded,serialized);
+    if(source==desknx::persist::FileSource::None) {
         desknx::diag::Write("history","load_empty","primary=%s backup=%s",
             HISTORY_FILE,HISTORY_BAK_FILE);
         return;
+    }
+    recentLaunches=std::move(loaded);
+    if(source==desknx::persist::FileSource::Backup) {
+        desknx::diag::Write("history","backup_restored","path=%s entries=%zu",
+            HISTORY_BAK_FILE,recentLaunches.size());
+        setStatus("RECENT HISTORY RESTORED FROM BACKUP",4000);
+    } else {
+        desknx::diag::Write("history","loaded","path=%s entries=%zu",
+            HISTORY_FILE,recentLaunches.size());
     }
     ++recentLaunchRevision;
     recentUniqueCacheRevision=UINT64_MAX;
