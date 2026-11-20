@@ -1871,38 +1871,19 @@ bool isSafeNroPath(const std::string& path) {
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
+bool validateHistoryNroPath(const std::string& path,void*) {
+    return isSafeNroPath(path);
+}
+
 bool readHistoryFile(const char* path,std::vector<HistoryEntry>& output) {
-    struct stat historyStat{};
-    constexpr size_t MaxHistoryBytes=128*1024;
-    if(!path||stat(path,&historyStat)!=0||!S_ISREG(historyStat.st_mode)||
-       historyStat.st_size<=0||static_cast<uint64_t>(historyStat.st_size)>MaxHistoryBytes)
+    std::string serialized;
+    if(!desknx::persist::readBoundedFile(
+           path,desknx::launch_history::MaxFileBytes,serialized))
         return false;
-    std::ifstream input(path,std::ios::binary);
-    std::string line;
-    if(!input||!std::getline(input,line)||line.size()>32||
-       (line!="DESKNXH1"&&line!="DESKNXH2"))return false;
-    const bool hasTimestamps=line=="DESKNXH2";
     std::vector<HistoryEntry> parsed;
-    while(std::getline(input,line)&&parsed.size()<desknx::launch_history::MaxEntries) {
-        if(line.size()>2048)continue;
-        auto fields=splitTabs(line);
-        if(fields.size()!=(hasTimestamps?4u:3u)||fields[0].size()>16||fields[1].empty()||
-           fields[1].size()>512||fields[2].empty()||fields[2].size()>512)continue;
-        Kind kind=parseKind(fields[0]);
-        if(kind!=Kind::Game&&kind!=Kind::Nro)continue;
-        if(kind==Kind::Game&&!desknx::model::isTitleId(fields[2]))continue;
-        if(kind==Kind::Nro&&!isSafeNroPath(fields[2]))continue;
-        std::uint64_t timestamp=0;
-        if(hasTimestamps) {
-            if(fields[3].empty()||fields[3][0]=='-')continue;
-            char* end=nullptr;
-            const unsigned long long parsedTimestamp=std::strtoull(fields[3].c_str(),&end,10);
-            if(end==fields[3].c_str()||!end||*end!=0)continue;
-            timestamp=static_cast<std::uint64_t>(parsedTimestamp);
-        }
-        parsed.push_back({kind,fields[1],fields[2],timestamp});
-    }
-    if(input.bad())return false;
+    if(!desknx::launch_history::parse(
+           serialized,parsed,validateHistoryNroPath,nullptr))
+        return false;
     output=std::move(parsed);
     return true;
 }
@@ -1930,36 +1911,32 @@ void saveHistory() {
     if(!sdMounted)return;
     const Uint64 started=SDL_GetTicks64();
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
-    std::ofstream out(HISTORY_TMP,std::ios::binary|std::ios::trunc);
-    if(!out){setStatus("RECENT HISTORY SAVE FAILED",3000);return;}
-    out<<"DESKNXH2\n";
-    for(const auto& e:recentLaunches)
-        out<<typeCode(e.kind)<<'\t'<<safeField(e.title)<<'\t'<<safeField(e.data)
-           <<'\t'<<e.timestamp<<'\n';
-    out.flush();bool good=out.good();out.close();
-    if(!good){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY WRITE FAILED",3000);return;}
-    if(!commitSdCard("history-temp")) {
-        std::remove(HISTORY_TMP);
-        setStatus("RECENT HISTORY SD COMMIT FAILED",3000);
+    const std::string serialized=desknx::launch_history::serialize(recentLaunches);
+    if(serialized.empty()) {
+        setStatus("RECENT HISTORY INVALID; SAVE REFUSED",3000);
         return;
     }
-    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
-        HISTORY_TMP, HISTORY_FILE, HISTORY_BAK_FILE, true);
-    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
-        std::remove(HISTORY_TMP);
-        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed)
-            setStatus("RECENT HISTORY RECOVERY NEEDED: KEEP recent.bak", 5000);
+    const auto status=desknx::persist::writeAtomically(
+        HISTORY_TMP,HISTORY_FILE,HISTORY_BAK_FILE,serialized,
+        commitPersistentFile,nullptr,"history-temp","history-publish",true);
+    if(status!=desknx::persist::WriteStatus::Success) {
+        if(status==desknx::persist::WriteStatus::TempCommitFailed)
+            setStatus("RECENT HISTORY SD COMMIT FAILED",3000);
+        else if(status==desknx::persist::WriteStatus::PublishCommitFailed) {
+            desknx::diag::Write("history","save_failed","phase=publish_commit entries=%zu",recentLaunches.size());
+            setStatus("RECENT HISTORY COMMIT FAILED; BACKUP KEPT",4000);
+        } else if(status==desknx::persist::WriteStatus::RollbackFailed)
+            setStatus("RECENT HISTORY RECOVERY NEEDED: KEEP recent.bak",5000);
+        else if(status==desknx::persist::WriteStatus::OpenFailed)
+            setStatus("RECENT HISTORY SAVE FAILED",3000);
+        else if(status==desknx::persist::WriteStatus::WriteFailed)
+            setStatus("RECENT HISTORY WRITE FAILED",3000);
         else
-            setStatus("RECENT HISTORY RENAME FAILED", 3000);
+            setStatus("RECENT HISTORY RENAME FAILED",3000);
         return;
     }
-    if(!commitSdCard("history-publish")) {
-        desknx::diag::Write("history","save_failed","phase=publish_commit entries=%zu",recentLaunches.size());
-        setStatus("RECENT HISTORY COMMIT FAILED; BACKUP KEPT",4000);
-    } else {
-        desknx::diag::Write("history","saved","entries=%zu elapsed_ms=%llu",
-            recentLaunches.size(),static_cast<unsigned long long>(SDL_GetTicks64()-started));
-    }
+    desknx::diag::Write("history","saved","entries=%zu elapsed_ms=%llu",
+        recentLaunches.size(),static_cast<unsigned long long>(SDL_GetTicks64()-started));
 }
 void recordRecentLaunch(const Tile& tile) {
     if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;
