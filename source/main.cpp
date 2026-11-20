@@ -3518,20 +3518,56 @@ void drawScreen() {
                 if(index>=count)break;
                 const auto& item=steamGridArtwork[static_cast<size_t>(index)];
                 const int yy=238+row*34;
-                if(index==steamGridListIndex)roundRect(274,yy,732,30,9,Color{38,72,111,255});
+                if(index==steamGridListIndex)roundRect(274,yy,424,30,9,Color{38,72,111,255});
                 const char* kind=item.type=="heroes"?"HERO":item.type=="grids"?"GRID":"ICON";
-                text(kind,294,yy+9,1,index==steamGridListIndex?BLUE:MUTED,400);
+                text(kind,294,yy+9,1,index==steamGridListIndex?BLUE:MUTED,390);
                 text(std::to_string(item.asset.width)+" x "+std::to_string(item.asset.height),
-                     422,yy+9,1,index==steamGridListIndex?WHITE:MUTED,640);
-                text("#"+std::to_string(item.asset.id),868,yy+9,1,
-                     index==steamGridListIndex?BLUE:MUTED,994);
+                     410,yy+9,1,index==steamGridListIndex?WHITE:MUTED,690);
+            }
+            softCard(716,226,290,310,Color{22,31,45,255},Color{255,255,255,25});
+            rect(728,238,266,214,Color{9,14,22,255});
+            if(count>0&&steamGridListIndex>=0&&steamGridListIndex<count) {
+                const auto& selected=steamGridArtwork[static_cast<size_t>(steamGridListIndex)];
+                if(steamGridPreviewTexture&&
+                   steamGridPreviewAssetId==selected.asset.id&&
+                   steamGridPreviewWidth>0&&steamGridPreviewHeight>0) {
+                    const double scale=std::min(258.0/static_cast<double>(steamGridPreviewWidth),
+                                                206.0/static_cast<double>(steamGridPreviewHeight));
+                    const int width=std::max(1,static_cast<int>(steamGridPreviewWidth*scale));
+                    const int height=std::max(1,static_cast<int>(steamGridPreviewHeight*scale));
+                    SDL_Rect destination{732+(258-width)/2,242+(206-height)/2,width,height};
+                    SDL_RenderCopy(renderer,steamGridPreviewTexture,nullptr,&destination);
+                } else if(steamGridPreviewLoading) {
+                    text("LOADING PREVIEW...",758,330,1,WHITE,980);
+                } else if(!steamGridPreviewError.empty()) {
+                    text("PREVIEW UNAVAILABLE",750,330,1,MUTED,980);
+                    text("A STILL DOWNLOADS FULL IMAGE",738,356,1,MUTED,990);
+                } else {
+                    text("SELECT AN ARTWORK",770,330,1,MUTED,980);
+                }
+                const char* selectedKind=selected.type=="heroes"?"HERO":
+                    selected.type=="grids"?"GRID":"ICON";
+                text(selectedKind,738,468,2,BLUE,980);
+                text(std::to_string(selected.asset.width)+" x "+
+                     std::to_string(selected.asset.height),738,496,1,WHITE,980);
+                text("ARTWORK ID  #"+std::to_string(selected.asset.id),738,516,1,MUTED,990);
+            } else {
+                text("NO PREVIEW AVAILABLE",750,330,1,MUTED,980);
+            }
+            if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
+                roundRect(820,548,186,38,11,Color{49,119,199,255});
+                text("A  APPLY COVER",852,560,1,WHITE,994);
             }
         }
         if(!steamGridError.empty())
-            text(steamGridError,274,555,1,RED,1002);
-        else if(steamGridPickerStage==SteamGridPickerStage::ChooseGame||
-                steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)
-            text("UP / DOWN SELECT     A CHOOSE / DOWNLOAD     Y SEARCH AGAIN     B BACK",
+            text(steamGridError,274,555,1,RED,810);
+        else if(!steamGridPreviewError.empty()&&steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)
+            text("THUMBNAIL UNAVAILABLE - FULL IMAGE CAN STILL BE APPLIED",274,555,1,MUTED,810);
+        if(steamGridPickerStage==SteamGridPickerStage::ChooseGame||
+           steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)
+            text(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork
+                ?"UP / DOWN PREVIEW     A APPLY     Y SEARCH AGAIN     B BACK"
+                :"UP / DOWN SELECT     A CHOOSE     Y SEARCH AGAIN     B BACK",
                  274,585,1,BLUE,1004);
     }
     if(workspaceMenu) {
@@ -4926,12 +4962,21 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=928&&x<=1010&&y>=112&&y<=146) {
             handleSteamGridPickerInput(HidNpadButton_B);
-        } else if(steamGridPickerStage==SteamGridPickerStage::ChooseGame||
-                  steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
-            if(y>=218&&y<542) {
-                const int row=(y-(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork?238:218))/
-                    (steamGridPickerStage==SteamGridPickerStage::ChooseArtwork?34:36);
+        } else if(steamGridPickerStage==SteamGridPickerStage::ChooseGame) {
+            if(x>=274&&x<=1006&&y>=218&&y<542) {
+                const int row=(y-218)/36;
                 steamGridListIndex=steamGridListOffset+row;
+                handleSteamGridPickerInput(HidNpadButton_A);
+            }
+        } else if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
+            if(x>=274&&x<=700&&y>=238&&y<544) {
+                const int row=(y-238)/34;
+                const int selected=steamGridListOffset+row;
+                if(selected>=0&&selected<static_cast<int>(steamGridArtwork.size())) {
+                    steamGridListIndex=selected;
+                    requestSteamGridPreview();
+                }
+            } else if(x>=820&&x<=1006&&y>=548&&y<=586) {
                 handleSteamGridPickerInput(HidNpadButton_A);
             }
         }
