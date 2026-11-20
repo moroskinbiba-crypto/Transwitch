@@ -2386,42 +2386,6 @@ void drainAsyncLayoutSaver() {
         pumpAsyncLayoutSaver(true);
 }
 
-bool loadLayoutFrom(const char* path) {
-    const Uint64 started=SDL_GetTicks64();
-    std::string serialized;
-    if(!desknx::persist::readBoundedFile(path,1024*1024,serialized)) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_read",
-            path?path:"null");
-        return false;
-    }
-    desknx::layout::LoadResult loaded{};
-    if (!desknx::layout::parse(serialized, loaded)) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=parse bytes=%zu",
-            path,serialized.size());
-        return false;
-    }
-    desks = std::move(loaded.workspaces);
-    deskIndex = loaded.activeWorkspace;
-    layoutNeedsMigration = loaded.needsMigration;
-    layoutRecoveredTiles = loaded.recoveredTiles;
-    layoutDroppedTiles = loaded.droppedTiles;
-    const std::string shape=desknx::layout::serialize(desks,0);
-    persistedLayoutShapeKnown=!shape.empty();
-    persistedLayoutShapeHash=persistedLayoutShapeKnown?
-        desknx::model::stableHash(shape):0;
-    // A backup restore or legacy format must be published back to layout.tsv,
-    // even when the restored workspace contents themselves have not changed.
-    layoutPrimaryNeedsRewrite=(std::string(path)!=CFG_FILE)||layoutNeedsMigration;
-    selectedX = selectedY = 0;
-    size_t tileCount=0;
-    for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
-    desknx::diag::Write("layout","loaded",
-        "path=%s bytes=%zu workspaces=%zu tiles=%zu active=%d migration=%d recovered=%zu dropped=%zu elapsed_ms=%llu",
-        path,serialized.size(),desks.size(),tileCount,deskIndex,
-        layoutNeedsMigration?1:0,layoutRecoveredTiles,layoutDroppedTiles,
-        static_cast<unsigned long long>(SDL_GetTicks64()-started));
-    return true;
-}
 bool validateLayoutContents(const std::string& contents,void* opaque) {
     auto* parsed=static_cast<desknx::layout::LoadResult*>(opaque);
     return parsed&&desknx::layout::parse(contents,*parsed);
@@ -5421,7 +5385,7 @@ int main(int,char**) {
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
     layoutLoaded = loadLayout();
-    desknx::diag::Write("layout","startup_primary_result",
+    desknx::diag::Write("layout","startup_load_result",
         "loaded=%d primary_exists=%d primary_bytes=%lld backup_exists=%d",
         layoutLoaded?1:0,layoutExists?1:0,
         layoutExists?static_cast<long long>(layoutStat.st_size):0LL,
