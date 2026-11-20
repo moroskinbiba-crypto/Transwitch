@@ -45,13 +45,10 @@ inline bool readBoundedFile(const char* path, std::size_t maxBytes,
     contents.resize(static_cast<std::size_t>(st.st_size));
     const std::size_t read = std::fread(&contents[0], 1, contents.size(), input);
     const bool readOk = read == contents.size() && std::ferror(input) == 0;
+    const int extra = readOk ? std::fgetc(input) : EOF;
+    const bool exactSize = readOk && extra == EOF && std::feof(input) != 0;
     const bool closeOk = std::fclose(input) == 0;
-    if (!readOk || !closeOk) return false;
-
-    // Detect a file that grew between stat() and read(), rather than silently
-    // accepting a truncated snapshot or allocating beyond the caller's bound.
-    const int extra = std::fgetc(std::fopen(path, "rb"));
-    (void)extra;
+    if (!exactSize || !closeOk) return false;
 
     output.swap(contents);
     return true;
