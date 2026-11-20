@@ -92,13 +92,13 @@ inline std::string serialize(const std::vector<Entry>& events) {
             (event.kind == model::Kind::Game && !model::isTitleId(event.data)))
             return {};
         output += model::typeCode(event.kind);
-        output += '\\t';
+        output += '\t';
         output += model::safeField(event.title);
-        output += '\\t';
+        output += '\t';
         output += model::safeField(event.data);
-        output += '\\t';
+        output += '\t';
         output += std::to_string(event.timestamp);
-        output += '\\n';
+        output += '\n';
     }
     if (output.size() > MaxFileBytes) return {};
     return output;
