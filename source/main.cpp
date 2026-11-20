@@ -1155,6 +1155,9 @@ int SDLCALL steamGridWorkerEntry(void* context) {
         result.success=!result.artwork.empty();
         if(!result.success&&result.error.empty())
             result.error="No SteamGridDB artwork found for this game.";
+    } else if(task->job==SteamGridJob::PreviewArtwork) {
+        result.previewAssetId=task->assetId;
+        result.success=sgdb::downloadImage(task->assetUrl,result.previewBytes,result.error);
     } else if(task->job==SteamGridJob::ApplyArtwork) {
         std::vector<unsigned char> bytes;
         if(sgdb::downloadImage(task->assetUrl,bytes,result.error)) {
@@ -1226,6 +1229,59 @@ bool startSteamGridJob(SteamGridTask* task) {
     return true;
 }
 
+void clearSteamGridPreview() {
+    if(steamGridPreviewTexture) {
+        SDL_DestroyTexture(steamGridPreviewTexture);
+        steamGridPreviewTexture=nullptr;
+    }
+    steamGridPreviewWidth=steamGridPreviewHeight=0;
+    steamGridPreviewAssetId=steamGridPreviewWantedAssetId=0;
+    steamGridPreviewLoading=false;
+    steamGridPreviewError.clear();
+}
+
+void requestSteamGridPreview() {
+    if(!steamGridPickerOpen||steamGridPickerStage!=SteamGridPickerStage::ChooseArtwork||
+       steamGridListIndex<0||steamGridListIndex>=static_cast<int>(steamGridArtwork.size())) {
+        steamGridPreviewLoading=false;
+        return;
+    }
+    const auto& choice=steamGridArtwork[static_cast<size_t>(steamGridListIndex)];
+    const std::uint64_t wanted=choice.asset.id;
+    steamGridPreviewWantedAssetId=wanted;
+    if(wanted==0) {
+        steamGridPreviewLoading=false;
+        steamGridPreviewError="Preview is not available for this artwork.";
+        return;
+    }
+    if(steamGridPreviewTexture&&steamGridPreviewAssetId==wanted) {
+        steamGridPreviewLoading=false;
+        steamGridPreviewError.clear();
+        return;
+    }
+    if(steamGridThread) {
+        // The single network worker is shared with search and download. Its
+        // completion pump will request the latest selected preview.
+        steamGridPreviewLoading=true;
+        return;
+    }
+    auto* task=new(std::nothrow) SteamGridTask{};
+    if(!task) {
+        steamGridPreviewLoading=false;
+        steamGridPreviewError="Not enough memory to load preview.";
+        return;
+    }
+    task->job=SteamGridJob::PreviewArtwork;
+    task->assetId=wanted;
+    task->assetUrl=choice.asset.thumb.empty()?choice.asset.url:choice.asset.thumb;
+    steamGridPreviewLoading=true;
+    steamGridPreviewError.clear();
+    if(!startSteamGridJob(task)) {
+        steamGridPreviewLoading=false;
+        steamGridPreviewError="Preview request could not be started.";
+    }
+}
+
 void pumpSteamGridWorker() {
     if(!steamGridThread||!SDL_AtomicGet(&steamGridDone))return;
     SDL_WaitThread(steamGridThread,nullptr);
@@ -1238,6 +1294,50 @@ void pumpSteamGridWorker() {
     const SteamGridJob completed=steamGridActiveJob;
     steamGridActiveJob=SteamGridJob::None;
     if(!steamGridPickerOpen)return;
+
+    if(completed==SteamGridJob::PreviewArtwork) {
+        steamGridPreviewLoading=false;
+        if(result.previewAssetId==steamGridPreviewWantedAssetId &&
+           steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
+            if(!result.success||result.previewBytes.empty()) {
+                steamGridPreviewError=result.error.empty()?"Preview download failed.":result.error;
+            } else if(result.previewBytes.size()>static_cast<size_t>(INT_MAX)) {
+                steamGridPreviewError="Preview image is too large.";
+            } else {
+                SDL_RWops* rw=SDL_RWFromConstMem(result.previewBytes.data(),
+                    static_cast<int>(result.previewBytes.size()));
+                SDL_Surface* surface=rw?IMG_Load_RW(rw,1):nullptr;
+                if(!surface) {
+                    steamGridPreviewError="Preview image could not be decoded.";
+                } else {
+                    const std::uint64_t pixels=surface->w>0&&surface->h>0
+                        ?static_cast<std::uint64_t>(surface->w)*static_cast<std::uint64_t>(surface->h):0;
+                    if(surface->w<=0||surface->h<=0||surface->w>2048||surface->h>2048||
+                       pixels>4000000u) {
+                        steamGridPreviewError="Preview dimensions exceed the safe limit.";
+                    } else {
+                        SDL_Texture* texture=SDL_CreateTextureFromSurface(renderer,surface);
+                        if(texture) {
+                            if(steamGridPreviewTexture)SDL_DestroyTexture(steamGridPreviewTexture);
+                            steamGridPreviewTexture=texture;
+                            steamGridPreviewWidth=surface->w;
+                            steamGridPreviewHeight=surface->h;
+                            steamGridPreviewAssetId=result.previewAssetId;
+                            steamGridPreviewError.clear();
+                        } else {
+                            steamGridPreviewError="Preview texture could not be created.";
+                        }
+                    }
+                    SDL_FreeSurface(surface);
+                }
+            }
+        }
+        if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork &&
+           steamGridPreviewWantedAssetId!=result.previewAssetId)
+            requestSteamGridPreview();
+        return;
+    }
+
     if(!result.success) {
         steamGridError=result.error.empty()?"SteamGridDB request failed.":result.error;
         if(completed==SteamGridJob::SearchGames)steamGridPickerStage=SteamGridPickerStage::ChooseGame;
@@ -1255,9 +1355,11 @@ void pumpSteamGridWorker() {
         steamGridArtwork=std::move(result.artwork);
         steamGridListIndex=steamGridListOffset=0;
         steamGridPickerStage=SteamGridPickerStage::ChooseArtwork;
+        requestSteamGridPreview();
     } else if(completed==SteamGridJob::ApplyArtwork) {
         gIconCache.invalidateAll();
         const bool committed=!sdMounted||commitSdCard("steamgriddb-artwork");
+        clearSteamGridPreview();
         steamGridPickerOpen=false;
         steamGridPickerStage=SteamGridPickerStage::Closed;
         setStatus(committed?"STEAMGRIDDB COVER SAVED - AVAILABLE OFFLINE":
@@ -1322,6 +1424,7 @@ void openSteamGridPicker(const Candidate& candidate) {
         setStatus("STEAMGRIDDB ARTWORK IS AVAILABLE FOR INSTALLED GAMES",3000);
         return;
     }
+    clearSteamGridPreview();
     steamGridTargetTitleId=std::strtoull(candidate.data.c_str(),nullptr,16);
     steamGridTargetTitle=candidate.title;
     steamGridSearchQuery=candidate.title;
@@ -1345,6 +1448,7 @@ void chooseSteamGridGame() {
     task->titleId=steamGridTargetTitleId;
     task->gameId=game.id;
     task->gameName=game.name;
+    clearSteamGridPreview();
     steamGridSelectedGameName=game.name;
     steamGridPickerStage=SteamGridPickerStage::LoadingArtwork;
     steamGridError.clear();
@@ -1375,15 +1479,19 @@ void cycleSteamGridSelection(int direction) {
     if(steamGridListIndex<steamGridListOffset)steamGridListOffset=steamGridListIndex;
     if(steamGridListIndex>=steamGridListOffset+visible)
         steamGridListOffset=steamGridListIndex-visible+1;
+    if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork)
+        requestSteamGridPreview();
 }
 
 void handleSteamGridPickerInput(u64 keys) {
     if(keys&HidNpadButton_B) {
         if(steamGridPickerStage==SteamGridPickerStage::ChooseArtwork) {
+            clearSteamGridPreview();
             steamGridArtwork.clear();
             steamGridPickerStage=SteamGridPickerStage::ChooseGame;
             steamGridListIndex=steamGridListOffset=0;
         } else {
+            clearSteamGridPreview();
             steamGridPickerOpen=false;
             steamGridPickerStage=SteamGridPickerStage::Closed;
         }
@@ -5518,6 +5626,7 @@ int main(int,char**) {
                         catalogueThread ? 1 : 0);
     playStatsPending=false;
     if(steamGridThread){SDL_WaitThread(steamGridThread,nullptr);steamGridThread=nullptr;}
+    clearSteamGridPreview();
     if(steamGridMutex){SDL_DestroyMutex(steamGridMutex);steamGridMutex=nullptr;}
     if(playStatsThread) {
         SDL_WaitThread(playStatsThread,nullptr);
