@@ -2000,33 +2000,17 @@ bool saveActiveWorkspaceState() {
             return true;
         }
     }
-    std::ofstream out(ACTIVE_WORKSPACE_TMP,std::ios::binary|std::ios::trunc);
-    if(!out) return false;
-    out.write(state.data(),static_cast<std::streamsize>(state.size()));
-    out.flush();
-    const bool good=out.good();
-    out.close();
-    if(!good) {
-        std::remove(ACTIVE_WORKSPACE_TMP);
-        return false;
-    }
-    // This is a tiny, replaceable navigation marker. Flushing the temp file
-    // to the SD controller and then committing it before rename caused two
-    // expensive synchronous SD commits for every desktop switch. The atomic
-    // replace retains the previous marker as .bak; one commit after publish
-    // makes the new marker durable without blocking the UI twice.
-    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
-        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
-    if(replaceStatus != desknx::safeio::ReplaceStatus::Success)
-        return false;
-    const bool committed=commitSdCard("active-workspace-publish");
-    if(committed) {
-        persistedActiveWorkspaceMarker=state;
-        activeWorkspaceMarkerKnown=true;
-        activeWorkspaceMarkerPending=false;
-        activeWorkspaceMarkerDue=0;
-    }
-    return committed;
+    // The marker is a tiny navigation hint. Commit once after its atomic
+    // publication; the retained backup allows recovery if the commit fails.
+    const auto status=desknx::persist::writeAtomically(
+        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,state,
+        commitPersistentFile,nullptr,"active-workspace-temp","active-workspace-publish",false);
+    if(status!=desknx::persist::WriteStatus::Success) return false;
+    persistedActiveWorkspaceMarker=state;
+    activeWorkspaceMarkerKnown=true;
+    activeWorkspaceMarkerPending=false;
+    activeWorkspaceMarkerDue=0;
+    return true;
 }
 
 void scheduleActiveWorkspaceSave() {
@@ -2051,44 +2035,49 @@ bool flushActiveWorkspaceSave() {
     return false;
 }
 
+struct ActiveMarkerValidation {
+    const std::vector<Workspace>* workspaces{nullptr};
+    int restoredIndex{0};
+};
+bool validateActiveMarkerFile(const std::string& contents,void* opaque) {
+    auto* context=static_cast<ActiveMarkerValidation*>(opaque);
+    if(!context||!context->workspaces)return false;
+    int candidate=context->restoredIndex;
+    if(!desknx::layout::parseActiveWorkspaceState(
+           contents,*context->workspaces,candidate))return false;
+    context->restoredIndex=candidate;
+    return true;
+}
+
 bool loadActiveWorkspaceState() {
     if(!sdMounted || desks.empty()) return false;
-    const char* candidates[]={ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK};
-    for(std::size_t candidateIndex=0;candidateIndex<2;++candidateIndex) {
-        const char* path=candidates[candidateIndex];
-        struct stat st{};
-        if(stat(path,&st)!=0 || !S_ISREG(st.st_mode) ||
-           st.st_size<=0 || st.st_size>512) continue;
-        std::ifstream in(path,std::ios::binary);
-        if(!in)continue;
-        std::ostringstream contents;
-        contents<<in.rdbuf();
-        if(in.bad())continue;
-        int restored=deskIndex;
-        if(!desknx::layout::parseActiveWorkspaceState(contents.str(),desks,restored))
-            continue;
-        deskIndex=restored;
-        if(candidateIndex==0) {
-            persistedActiveWorkspaceMarker=contents.str();
-            activeWorkspaceMarkerKnown=true;
-        } else {
-            persistedActiveWorkspaceMarker.clear();
-            activeWorkspaceMarkerKnown=false;
-        }
-        activeWorkspaceMarkerPending=false;
-        activeWorkspaceMarkerDue=0;
-        selectedX=selectedY=0;
-        if(candidateIndex!=0) {
-            desknx::diag::Write("layout","active_workspace_backup_restored",
-                "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
-            setStatus("ACTIVE DESKTOP RESTORED FROM BACKUP",4000);
-        } else {
-            desknx::diag::Write("layout","active_workspace_restored",
-                "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
-        }
-        return true;
+    ActiveMarkerValidation validation{&desks,deskIndex};
+    std::string contents;
+    const auto source=desknx::persist::readValidatedWithBackup(
+        ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,512,
+        validateActiveMarkerFile,&validation,contents);
+    if(source==desknx::persist::FileSource::None)return false;
+
+    deskIndex=validation.restoredIndex;
+    if(source==desknx::persist::FileSource::Primary) {
+        persistedActiveWorkspaceMarker=contents;
+        activeWorkspaceMarkerKnown=true;
+    } else {
+        persistedActiveWorkspaceMarker.clear();
+        activeWorkspaceMarkerKnown=false;
     }
-    return false;
+    activeWorkspaceMarkerPending=false;
+    activeWorkspaceMarkerDue=0;
+    selectedX=selectedY=0;
+    if(source==desknx::persist::FileSource::Backup) {
+        desknx::diag::Write("layout","active_workspace_backup_restored",
+            "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
+        setStatus("ACTIVE DESKTOP RESTORED FROM BACKUP",4000);
+    } else {
+        desknx::diag::Write("layout","active_workspace_restored",
+            "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
+    }
+    return true;
 }
 
 bool saveLayout() {
@@ -2128,31 +2117,24 @@ bool saveLayout() {
     }
 
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
-    std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
-    if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return false;}
-    f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
-    f.flush();const bool good=f.good();f.close();
-    if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return false;}
-    if(!commitSdCard("layout-temp")) {
-        std::remove(CFG_TMP);
-        setStatus("LAYOUT SD COMMIT FAILED; OLD FILE KEPT",4000);
-        return false;
-    }
-    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
-        CFG_TMP, CFG_FILE, CFG_BAK_FILE, true);
-    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
-        std::remove(CFG_TMP);
-        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed) {
-            layoutSaveBlocked = true;
-            setStatus("LAYOUT RECOVERY NEEDED: KEEP layout.bak", 5000);
-        } else {
-            setStatus("SAVE FAILED: RENAME ERROR", 3500);
-        }
-        return false;
-    }
-    if(!commitSdCard("layout-publish")) {
-        layoutSaveBlocked = true; // retain layout.bak as the last known-good copy
-        setStatus("LAYOUT COMMIT FAILED; KEEP layout.bak",5000);
+    const auto writeStatus=desknx::persist::writeAtomically(
+        CFG_TMP,CFG_FILE,CFG_BAK_FILE,serialized,
+        commitPersistentFile,nullptr,"layout-temp","layout-publish",true);
+    if(writeStatus!=desknx::persist::WriteStatus::Success) {
+        if(writeStatus==desknx::persist::WriteStatus::TempCommitFailed)
+            setStatus("LAYOUT SD COMMIT FAILED; OLD FILE KEPT",4000);
+        else if(writeStatus==desknx::persist::WriteStatus::PublishCommitFailed) {
+            layoutSaveBlocked=true;
+            setStatus("LAYOUT COMMIT FAILED; KEEP layout.bak",5000);
+        } else if(writeStatus==desknx::persist::WriteStatus::RollbackFailed) {
+            layoutSaveBlocked=true;
+            setStatus("LAYOUT RECOVERY NEEDED: KEEP layout.bak",5000);
+        } else if(writeStatus==desknx::persist::WriteStatus::OpenFailed)
+            setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);
+        else if(writeStatus==desknx::persist::WriteStatus::WriteFailed)
+            setStatus("SAVE FAILED: WRITE ERROR",3500);
+        else
+            setStatus("SAVE FAILED: RENAME ERROR",3500);
         return false;
     }
     persistedLayoutShapeHash=shapeHash;
