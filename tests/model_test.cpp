@@ -5,6 +5,7 @@
 #include <desknx/SafeReplace.hpp>
 #include <desknx/Layout.hpp>
 #include <desknx/Artwork.hpp>
+#include <desknx/LaunchHistory.hpp>
 #include "../source/catalog_view.hpp"
 
 #include <cassert>
@@ -421,6 +422,32 @@ int main() {
     std::vector<RecentKey> recent{{Kind::Game,"0100"}};
     filtered=FilterAndSort(catalog,"",FilterMode::All,SortMode::Recent,recent);
     assert(!filtered.empty() && filtered[0].kind==Kind::Game);
+    std::vector<RecentKey> recentlyLaunched{{Kind::Nro,"/tmp/desknx-large.nro"},
+                                             {Kind::Game,"0200"}};
+    filtered=FilterAndSort(catalog,"",FilterMode::RecentlyLaunched,
+                           SortMode::Name,recentlyLaunched);
+    assert(filtered.size()==2);
+    assert(filtered[0].kind==Kind::Nro && filtered[1].data=="0200");
+    assert(std::string(FilterName(FilterMode::RecentlyLaunched))=="RECENTLY LAUNCHED");
+
+    // Launch history keeps individual launch events but exposes a de-duplicated
+    // newest-first view for the Recently Launched filter and desktop widget.
+    {
+        using desknx::launch_history::Entry;
+        const std::vector<Entry> events{
+            {Kind::Game,"Zelda","0100",300},
+            {Kind::Nro,"Retro","/switch/retro.nro",250},
+            {Kind::Game,"Zelda","0100",200},
+            {Kind::Game,"Small game","0200",100}
+        };
+        const auto unique=desknx::launch_history::uniqueRecent(events);
+        assert(unique.size()==3);
+        assert(unique[0].data=="0100" && unique[0].timestamp==300);
+        assert(unique[1].data=="/switch/retro.nro");
+        assert(desknx::launch_history::count(events,Kind::Game,"0100")==2);
+        assert(desknx::launch_history::lastTimestamp(events,Kind::Game,"0100")==300);
+        assert(desknx::launch_history::count(events,Kind::Nro,"/switch/retro.nro")==1);
+    }
     std::remove("/tmp/desknx-small.nro");std::remove("/tmp/desknx-large.nro");
     assert(std::string(FilterName(FilterMode::Homebrew))=="HOMEBREW");
     assert(std::string(SortName(SortMode::Recent))=="RECENT");
