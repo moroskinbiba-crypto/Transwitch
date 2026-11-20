@@ -372,3 +372,14 @@ The native standalone build has now completed both CI workflows:
 - Added failure/retry counters to the Nextendo diagnostic events.
 - Changes are in `feat/theme-socoma`; commits: `fa2c396bdccf868c01a5a84e6b336fa9399723c5` (SteamGridDB picker) and `186e4284249b22c3019fa8c37a785a6d53a1fac5` (Nextendo retry recovery).
 - These are source-level fixes only. CI and physical Switch runtime testing are still required; the Nextendo endpoint response and SteamGridDB API flow have not yet been verified on hardware.
+
+
+## Launch history and artwork preview — 20 November 2026
+
+- Added a persistent launch-event history for installed games and Homebrew applications. Each event records its own timestamp; the history retains the latest 100 events.
+- Migrated legacy `DESKNXH1` history files on read and writes the timestamped `DESKNXH2` format on the next save. Legacy entries remain readable and show an unknown timestamp.
+- The Tools → Launch History screen now lists individual launch events with date/time and supports scrolling/relaunching.
+- The Recently Launched library filter shows only apps present in launch history and sorts them by most recent launch. The Recent widget continues to show unique apps, not duplicate launch events.
+- Game and Homebrew details now show Transwitch launch count and the last launch time, separately from the Switch system's aggregate play statistics.
+- SteamGridDB artwork choices now load bounded thumbnails asynchronously and display a contain-fit preview before applying. Touch row selection only changes the preview; applying requires the dedicated button or controller confirmation.
+- These changes are source-level and host-test additions. GitHub Actions and physical Switch validation are still required; preview rendering, history persistence and touch/controller interactions have not yet been verified on hardware.
