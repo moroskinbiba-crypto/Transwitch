@@ -52,12 +52,13 @@ bool validateActive(const std::string& contents,void* opaque) {
     context->index=candidate;
     return true;
 }
-bool validateHistory(const std::string& contents,void* opaque) {
+bool validateHistoryNroPath(const std::string& path,void*) {
+    return path=="sdmc:/switch/emulator.nro";
+}
+bool validateHistoryFile(const std::string& contents,void* opaque) {
     auto* output=static_cast<std::vector<desknx::launch_history::Entry>*>(opaque);
     return output&&desknx::launch_history::parse(
-        contents,*output,[](const std::string& path,void*) {
-            return path=="sdmc:/switch/emulator.nro";
-        },nullptr);
+        contents,*output,validateHistoryNroPath,nullptr);
 }
 
 struct CommitPlan {
@@ -153,20 +154,20 @@ int main() {
     const std::string legacyHistory=
         "DESKNXH1\nG\tZelda\t0100000000000001\nN\tRetro\tsdmc:/switch/emulator.nro\n";
     std::vector<Entry> history;
-    assert(desknx::launch_history::parse(legacyHistory,history,validateHistory,&history));
+    assert(desknx::launch_history::parse(legacyHistory,history,validateHistoryNroPath,nullptr));
     assert(history.size()==2&&history[0].timestamp==0);
     history[0].timestamp=1770000000;
     const std::string savedHistory=desknx::launch_history::serialize(history);
     assert(savedHistory.find("DESKNXH2\n")==0);
     std::vector<Entry> historyRoundTrip;
-    assert(desknx::launch_history::parse(savedHistory,historyRoundTrip,validateHistory,&historyRoundTrip));
+    assert(desknx::launch_history::parse(savedHistory,historyRoundTrip,validateHistoryNroPath,nullptr));
     assert(historyRoundTrip.size()==2&&historyRoundTrip[0].timestamp==1770000000);
     writeFile(primary,"BAD HISTORY\n");
     writeFile(backup,savedHistory);
     history.clear();
     source=desknx::persist::readValidatedWithBackup(
         primary.c_str(),backup.c_str(),desknx::launch_history::MaxFileBytes,
-        validateHistory,&history,loaded);
+        validateHistoryFile,&history,loaded);
     assert(source==desknx::persist::FileSource::Backup&&history.size()==2);
 
     // Inject failure at the first SD durability boundary: publication must not
