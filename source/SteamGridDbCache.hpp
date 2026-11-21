@@ -25,6 +25,7 @@ public:
  ArtworkKind selectedKind(std::uint64_t id)const;
  std::uint64_t mappedGameId(std::uint64_t id)const;
  bool saveGameMapping(std::uint64_t titleId,std::uint64_t gameId,const std::string& gameName);
+ bool activateCachedArtwork(std::uint64_t titleId,ArtworkKind kind);
  bool saveArtworkFromFile(std::uint64_t titleId,ArtworkKind kind,const std::string& sourceFile,
                           std::uint64_t gameId,std::uint64_t assetId,const std::string& gameName,
                           bool makeActive=true);
