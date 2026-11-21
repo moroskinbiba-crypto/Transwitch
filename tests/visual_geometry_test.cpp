@@ -40,7 +40,7 @@ int main() {
         const SpanRect& top = spans[1 + i * 2];
         const SpanRect& bottom = spans[2 + i * 2];
         assert(top.x == bottom.x && top.w == bottom.w && top.h == bottom.h);
-        assert(top.y + bottom.y + top.h == 20 + 60);
+        assert(top.y + bottom.y + top.h == 2 * 20 + 60);
     }
 
     SpanRect shortBuffer[2]{};
