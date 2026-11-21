@@ -9,14 +9,18 @@ constexpr std::uint16_t CurrentVersion = 2;
 constexpr std::uint32_t MaxPayloadSize = 0x3F00;
 constexpr std::uint32_t MaxBusySeconds = 120;
 
-// LaunchTitle v2 user-policy bits. A valid user chosen in DeskNX takes
-// precedence over NACP's StartupUserAccount hint; NoPreuser is only used
-// when the menu has no valid profile to pass.
+// LaunchTitle v2 user-policy bits. A title with NACP
+// StartupUserAccount=None manages its own player selection; otherwise a
+// valid profile chosen in DeskNX is preselected. Unknown NACP preserves the
+// legacy behavior and uses the selected profile when one is available.
 constexpr std::uint64_t LaunchFlagHasUser   = 1ULL << 0;
 constexpr std::uint64_t LaunchFlagNoPreuser = 1ULL << 1;
 
-constexpr std::uint64_t LaunchFlagsForSelectedUser(bool has_valid_user) {
-    return has_valid_user ? LaunchFlagHasUser : LaunchFlagNoPreuser;
+constexpr std::uint64_t LaunchFlagsForTitle(bool nacp_available,
+                                             bool nacp_wants_user,
+                                             bool has_valid_user) {
+    if (nacp_available && !nacp_wants_user) return LaunchFlagNoPreuser;
+    return has_valid_user ? LaunchFlagHasUser : 0;
 }
 
 constexpr bool ShouldPushPreselectedUser(std::uint64_t flags,
