@@ -2904,25 +2904,28 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 batteryChargerType!=PsmChargerType_Unconnected;
             const std::string powerLabel=batteryChargerType<0?"POWER UNKNOWN":
                 (powerConnected?"POWER CONNECTED":"ON BATTERY");
+            const std::string batteryHeading=config.style==1?"CHARGE":
+                (config.style==2?"BATTERY / POWER":"BATTERY");
             if(compact) {
-                label("BATTERY",r.y+13);
+                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+34,3,WHITE,right);
                 if(dataA)progress(r.y+82,battery);
                 if(dataB)label(powerLabel,r.y+92);
             } else if(wide) {
-                label("BATTERY",r.y+13);
+                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+33,3,WHITE,right-70);
-                if(dataA)progress(r.y+82,battery);
-                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
+                if(dataA&&config.style!=1)progress(r.y+82,battery);
+                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,
+                    config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
                 if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
-                label("BATTERY STATUS",r.y+14);
+                label(batteryHeading+" STATUS",r.y+14);
                 drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+50,6,WHITE,right-70);
-                if(dataA)progress(r.y+145,battery);
+                if(dataA&&config.style!=1)progress(r.y+145,battery);
                 text(battery<0?"UNAVAILABLE":
                      battery>=80?"HIGH CHARGE":
                      battery>=20?"NORMAL":"LOW BATTERY",
@@ -2944,28 +2947,52 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             if(systemGpuClockAvailable)std::snprintf(gpuText,sizeof(gpuText),"%u MHz",systemGpuClockHz/1000000u);
             else std::snprintf(gpuText,sizeof(gpuText),"N/A");
             if(compact) {
-                label("SYSTEM MONITOR",r.y+13);
-                text(dataA?socText:"HOS "+std::string(firmwareText),left,r.y+38,2,WHITE,right);
-                if(dataB)label("CPU "+std::string(cpuText),r.y+78);
+                label(config.style==1?"THERMAL MONITOR":
+                    (config.style==2?"CLOCK MONITOR":"SYSTEM MONITOR"),r.y+13);
+                if(config.style==2&&dataB)
+                    text(cpuText,left,r.y+38,2,WHITE,right);
+                else text(dataA?socText:"HOS "+std::string(firmwareText),left,r.y+38,2,WHITE,right);
+                if(dataB)label("GPU "+std::string(gpuText),r.y+78);
+                else if(dataA)label("PCB "+std::string(pcbText),r.y+78);
             } else if(wide) {
-                label("SYSTEM MONITOR",r.y+12);
-                if(dataA)text("SOC "+std::string(socText),left,r.y+35,2,WHITE,right);
-                if(dataA)label("PCB "+std::string(pcbText),left,r.y+65);
-                if(dataB) {
-                    text("CPU "+std::string(cpuText),left+150,r.y+35,1,BLUE,right);
-                    text("GPU "+std::string(gpuText),left+150,r.y+65,1,BLUE,right);
+                label(config.style==1?"THERMAL / SYSTEM":
+                    (config.style==2?"CLOCK / SYSTEM":"SYSTEM MONITOR"),r.y+12);
+                if(config.style==2) {
+                    if(dataB) {
+                        text("CPU "+std::string(cpuText),left,r.y+35,2,WHITE,right);
+                        text("GPU "+std::string(gpuText),left+150,r.y+35,2,BLUE,right);
+                    }
+                    if(dataA)label("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),left,r.y+72);
+                } else {
+                    if(dataA)text("SOC "+std::string(socText),left,r.y+35,2,WHITE,right);
+                    if(dataA)label("PCB "+std::string(pcbText),left,r.y+65);
+                    if(dataB) {
+                        text("CPU "+std::string(cpuText),left+150,r.y+35,1,BLUE,right);
+                        text("GPU "+std::string(gpuText),left+150,r.y+65,1,BLUE,right);
+                    }
                 }
                 if(!dataA&&!dataB)text("HOS "+std::string(firmwareText),left,r.y+43,2,WHITE,right);
             } else {
-                label("SYSTEM MONITOR  /  HOS "+std::string(firmwareText),r.y+14);
-                if(dataA) {
-                    text("SOC",left,r.y+48,1,MUTED,right);
-                    text(socText,left,r.y+66,3,WHITE,right);
-                    text("PCB  "+std::string(pcbText),left,r.y+111,1,MUTED,right);
-                }
-                if(dataB) {
-                    text("CPU  "+std::string(cpuText),left,r.y+151,2,BLUE,right);
-                    text("GPU  "+std::string(gpuText),left,r.y+184,2,BLUE,right);
+                label(config.style==1?"THERMAL  /  HOS "+std::string(firmwareText):
+                    (config.style==2?"FREQUENCIES  /  HOS "+std::string(firmwareText):
+                     "SYSTEM MONITOR  /  HOS "+std::string(firmwareText)),r.y+14);
+                if(config.style==2) {
+                    if(dataB) {
+                        text("CPU  "+std::string(cpuText),left,r.y+48,3,WHITE,right);
+                        text("GPU  "+std::string(gpuText),left,r.y+100,3,BLUE,right);
+                    }
+                    if(dataA)text("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),
+                        left,r.y+161,1,MUTED,right);
+                } else {
+                    if(dataA) {
+                        text("SOC",left,r.y+48,1,MUTED,right);
+                        text(socText,left,r.y+66,3,WHITE,right);
+                        text("PCB  "+std::string(pcbText),left,r.y+111,1,MUTED,right);
+                    }
+                    if(dataB) {
+                        text("CPU  "+std::string(cpuText),left,r.y+151,2,BLUE,right);
+                        text("GPU  "+std::string(gpuText),left,r.y+184,2,BLUE,right);
+                    }
                 }
                 if(!dataA&&!dataB)text("NATIVE LIBNX SERVICES",left,r.y+90,2,MUTED,right);
             }
@@ -2995,10 +3022,12 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 label("RECENT GAMES",r.y+12);
                 if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
-                    const size_t count=std::min<std::size_t>(dataA?config.itemCount:1,
+                    const size_t count=std::min<std::size_t>(
+                        config.style==2?1:(dataA?config.itemCount:1),
                         std::min<std::size_t>(2,entries.size()));
                     for(size_t i=0;i<count;++i)
-                        recentGameLine(i,r.y+32+static_cast<int>(i)*35,25);
+                        recentGameLine(i,r.y+32+static_cast<int>(i)*(config.style==2?0:35),
+                            config.style==2?32:25);
                 }
             } else {
                 label("RECENT GAMES",r.y+17);
@@ -3163,9 +3192,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     text(game.title,x+2,r.y+81,1,WHITE,x+cellWidth-3);
                 }
             } else {
-                const int iconSize=wide?24:32;
-                const int rowStep=wide?27:42;
-                const int maxRows=wide?2:std::min<int>(4,config.itemCount);
+                const int iconSize=wide?(config.style==2?18:24):(config.style==2?24:32);
+                const int rowStep=wide?(config.style==2?22:27):(config.style==2?32:42);
+                const int maxRows=wide?(config.style==2?3:2):std::min<int>(4,config.itemCount);
                 const int count=std::min<int>(
                     std::min<int>(config.itemCount,maxRows),static_cast<int>(games.size()));
                 for(int i=0;i<count;++i) {
