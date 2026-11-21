@@ -7,6 +7,14 @@ The persistent header contains Gallery, Settings and Pads only. Quick tools rema
 The 6 × 3 workspace, up to 12 independent desktops, empty cells and current drag/resize mechanics are preserved. Game/NRO tiles retain full-bleed artwork, title overlay, 10 px corners and per-desktop Cover/Contain/Stretch modes. Widgets retain information-first layouts.
 
 
+## Reusable component layer
+
+Use `source/UiComponents.hpp` for repeated surfaces and controls rather than reimplementing their states at each call site. Shared components include layered surfaces, buttons (Glass, Rail, Minimal, Chip and Solid) and dividers. Active, focused and disabled states are resolved independently from input routing.
+
+The active theme supplies accent/focus tokens. The common corner radius remains capped at 10 px to preserve existing launcher geometry. The shared soft-card helper now uses the component surface renderer, so workspace, widget and modal panels share the same shadow, fill and inset-edge treatment. Header controls, desktop tabs, footer action chips and library filter chips use the shared button renderer.
+
+Component adoption must not change layout bounds, touch hit regions, controller mappings, keyboard ownership or game/homebrew launch routing. Keep icon textures and artwork on their existing caches; UI components must not perform file I/O or create textures from worker threads.
+
 ## Widgets
 
 Widgets are UI components, never title-launch targets. A tile click is routed to a dedicated widget handler; it must not reach the game/NRO chain-load path. Keep widget actions safe when a feed or system statistic is unavailable.
