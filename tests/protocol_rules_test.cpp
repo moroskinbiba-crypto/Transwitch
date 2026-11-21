@@ -24,6 +24,22 @@ int main() {
     static_assert(IsValidBusySeconds(120));
     static_assert(!IsValidBusySeconds(121));
 
+    // A profile explicitly chosen in the launcher wins even when a title's
+    // NACP says StartupUserAccount=None. NoPreuser is only valid when no
+    // profile was chosen, and invalid UIDs are never pushed.
+    static_assert(LaunchFlagsForSelectedUser(true) == LaunchFlagHasUser);
+    static_assert(LaunchFlagsForSelectedUser(false) == LaunchFlagNoPreuser);
+    static_assert(ShouldPushPreselectedUser(
+        LaunchFlagsForSelectedUser(true), false, true));
+    static_assert(ShouldPushPreselectedUser(
+        LaunchFlagsForSelectedUser(true), true, true));
+    static_assert(!ShouldPushPreselectedUser(
+        LaunchFlagsForSelectedUser(false), true, true));
+    static_assert(!ShouldPushPreselectedUser(
+        LaunchFlagsForSelectedUser(true), false, false));
+    static_assert(ShouldPushPreselectedUser(0, true, true)); // legacy NACP fallback
+    static_assert(!ShouldPushPreselectedUser(0, false, true));
+
     assert(IsSupportedVersion(1));
     assert(IsSupportedVersion(2));
     assert(!IsSupportedVersion(65535));
@@ -37,6 +53,11 @@ int main() {
     assert(IsValidBusySeconds(120));
     assert(!IsValidBusySeconds(0));
     assert(!IsValidBusySeconds(121));
+    assert(LaunchFlagsForSelectedUser(true) == LaunchFlagHasUser);
+    assert(LaunchFlagsForSelectedUser(false) == LaunchFlagNoPreuser);
+    assert(ShouldPushPreselectedUser(LaunchFlagHasUser, false, true));
+    assert(!ShouldPushPreselectedUser(LaunchFlagNoPreuser, true, true));
+    assert(!ShouldPushPreselectedUser(LaunchFlagHasUser, false, false));
 
     // AppletId values from libnx. 0x0A..0x0D are Auth/Cabinet/Controller/DataErase,
     // not Web/Shop/PhotoViewer/Settings.
