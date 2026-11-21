@@ -1113,6 +1113,10 @@ void steamGridDbApplyCurrentCached() {
         steamGridDbClosePicker();
     } else setStatus("THIS ARTWORK TYPE IS NOT CACHED",2200);
 }
+void readCatalogueState(bool& ready,bool& complete,bool& truncated,
+                        bool* nsAvailable=nullptr,std::uint32_t* nsError=nullptr,
+                        size_t* gameCount=nullptr,size_t* nroCount=nullptr);
+
 void pumpSteamGridDbCacheCleanup() {
     if(steamGridDbStartupPruned||!sdMounted||!catalogueMutex)return;
     bool ready=false,complete=false,truncated=false;
@@ -1234,8 +1238,8 @@ void publishCatalogue(const desknx::catalog::ScanResult& result) {
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
 void readCatalogueState(bool& ready,bool& complete,bool& truncated,
-                        bool* nsAvailable=nullptr,std::uint32_t* nsError=nullptr,
-                        size_t* gameCount=nullptr,size_t* nroCount=nullptr) {
+                        bool* nsAvailable,std::uint32_t* nsError,
+                        size_t* gameCount,size_t* nroCount) {
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
     ready=catalogueReady;
     complete=catalogueScanComplete;
