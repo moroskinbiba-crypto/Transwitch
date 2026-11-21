@@ -29,9 +29,16 @@ std::string encode(const std::string& in){
   else{out.push_back('%');out.push_back(h[c>>4]);out.push_back(h[c&15]);}
  }return out;
 }
-bool request(const std::string& key,const std::string& url,std::string& body,std::string& error){
+struct CancelInfo { CancelCheck check{nullptr}; void* context{nullptr}; };
+int transferProgress(void* opaque,curl_off_t,curl_off_t,curl_off_t,curl_off_t){
+ auto* info=static_cast<CancelInfo*>(opaque);
+ return info&&info->check&&info->check(info->context)?1:0;
+}
+bool request(const std::string& key,const std::string& url,std::string& body,
+             std::string& error,CancelCheck shouldCancel,void* cancelContext){
+ if(shouldCancel&&shouldCancel(cancelContext)){error="Request cancelled";return false;}
  CURL* c=curl_easy_init();if(!c){error="SteamGridDB: HTTP client unavailable";return false;}
- Body b;curl_slist* headers=nullptr;const std::string auth="Authorization: Bearer "+key;
+ Body b;CancelInfo cancellation{shouldCancel,cancelContext};curl_slist* headers=nullptr;const std::string auth="Authorization: Bearer "+key;
  headers=curl_slist_append(headers,auth.c_str());headers=curl_slist_append(headers,"Accept: application/json");
  curl_easy_setopt(c,CURLOPT_URL,url.c_str());curl_easy_setopt(c,CURLOPT_HTTPHEADER,headers);
  curl_easy_setopt(c,CURLOPT_USERAGENT,"Transwitch/DeskNX");curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L);
@@ -41,10 +48,16 @@ bool request(const std::string& key,const std::string& url,std::string& body,std
  curl_easy_setopt(c,CURLOPT_PROTOCOLS,CURLPROTO_HTTPS);curl_easy_setopt(c,CURLOPT_REDIR_PROTOCOLS,CURLPROTO_HTTPS);
  curl_easy_setopt(c,CURLOPT_ACCEPT_ENCODING,"");curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,receive);
  curl_easy_setopt(c,CURLOPT_WRITEDATA,&b);
+ if(shouldCancel){
+  curl_easy_setopt(c,CURLOPT_NOPROGRESS,0L);
+  curl_easy_setopt(c,CURLOPT_XFERINFOFUNCTION,transferProgress);
+  curl_easy_setopt(c,CURLOPT_XFERINFODATA,&cancellation);
+ }
  const CURLcode rc=curl_easy_perform(c);long status=0;if(rc==CURLE_OK)curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&status);
  curl_slist_free_all(headers);curl_easy_cleanup(c);
  if(rc!=CURLE_OK||status!=200||b.overflow){
-  if(status==401||status==403)error="SteamGridDB: API key rejected";
+  if(shouldCancel&&shouldCancel(cancelContext))error="Request cancelled";
+  else if(status==401||status==403)error="SteamGridDB: API key rejected";
   else if(b.overflow)error="SteamGridDB: response too large";
   else if(rc!=CURLE_OK)error=std::string("SteamGridDB: ")+curl_easy_strerror(rc);
   else error="SteamGridDB: HTTP "+std::to_string(status);return false;
@@ -123,18 +136,23 @@ float titleMatchScore(const std::string& q,const std::string& c){
   cur[j]=std::min({prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]==b[j-1]?0u:1u)});prev.swap(cur);}
  return std::max(0.0f,1.0f-static_cast<float>(prev[b.size()])/static_cast<float>(n));
 }
-bool searchGames(const std::string& key,const std::string& title,std::vector<GameResult>& out,std::string& error){
+bool searchGames(const std::string& key,const std::string& title,std::vector<GameResult>& out,
+                 std::string& error,CancelCheck shouldCancel,void* cancelContext){
  out.clear();if(key.empty()||title.empty()){error="Enter an API key and game title";return false;}
- std::string body;if(!request(key,std::string(Api)+"/search/autocomplete/"+encode(title),body,error))return false;
+ std::string body;if(!request(key,std::string(Api)+"/search/autocomplete/"+encode(title),
+                              body,error,shouldCancel,cancelContext))return false;
  if(!success(body)){error="SteamGridDB search response invalid";return false;}
  std::vector<std::string> objects;if(!dataObjects(body,objects,24)){error="Cannot parse SteamGridDB game list";return false;}
  for(const auto& o:objects){GameResult g;g.id=uintField(o,"id");if(g.id&&stringField(o,"name",g.name)){g.matchScore=titleMatchScore(title,g.name);out.push_back(std::move(g));}}
  std::stable_sort(out.begin(),out.end(),[](const GameResult& a,const GameResult& b){return a.matchScore>b.matchScore;});return true;
 }
-bool fetchAssets(const std::string& key,std::uint64_t gameId,ArtworkKind kind,std::vector<ArtworkAsset>& out,std::string& error){
+bool fetchAssets(const std::string& key,std::uint64_t gameId,ArtworkKind kind,
+                 std::vector<ArtworkAsset>& out,std::string& error,
+                 CancelCheck shouldCancel,void* cancelContext){
  out.clear();if(key.empty()||gameId==0){error="Missing API key or SteamGridDB game mapping";return false;}
  const char* ep=kind==ArtworkKind::Hero?"heroes":kind==ArtworkKind::Logo?"logos":kind==ArtworkKind::Icon?"icons":"grids";
- std::string body;if(!request(key,std::string(Api)+"/"+ep+"/game/"+std::to_string(gameId)+"?types=static",body,error))return false;
+ std::string body;if(!request(key,std::string(Api)+"/"+ep+"/game/"+
+     std::to_string(gameId)+"?types=static",body,error,shouldCancel,cancelContext))return false;
  if(!success(body)){error="SteamGridDB artwork response invalid";return false;}
  std::vector<std::string> objects;if(!dataObjects(body,objects,96)){error="Cannot parse SteamGridDB artwork list";return false;}
  for(const auto& o:objects){ArtworkAsset a;a.id=uintField(o,"id");stringField(o,"url",a.url);stringField(o,"thumb",a.thumb);
@@ -142,20 +160,32 @@ bool fetchAssets(const std::string& key,std::uint64_t gameId,ArtworkKind kind,st
   if(!a.id||!safeUrl(a.url)||!supported(a.mime,a.url))continue;if(!safeUrl(a.thumb))a.thumb=a.url;out.push_back(std::move(a));}
  return true;
 }
-bool downloadImage(const std::string& url,const std::string& destination,std::string& error){
+bool downloadImage(const std::string& url,const std::string& destination,std::string& error,
+                   CancelCheck shouldCancel,void* cancelContext){
+ if(shouldCancel&&shouldCancel(cancelContext)){error="Request cancelled";return false;}
  if(!safeUrl(url)||destination.empty()){error="Unsupported SteamGridDB image URL";return false;}
  FILE* f=std::fopen(destination.c_str(),"wb");if(!f){error="Cannot create temporary image";return false;}
  CURL* c=curl_easy_init();if(!c){std::fclose(f);std::remove(destination.c_str());error="HTTP client unavailable";return false;}
- FileSink sink;sink.f=f;curl_easy_setopt(c,CURLOPT_URL,url.c_str());curl_easy_setopt(c,CURLOPT_USERAGENT,"Transwitch/DeskNX");
+ FileSink sink;sink.f=f;CancelInfo cancellation{shouldCancel,cancelContext};
+ curl_easy_setopt(c,CURLOPT_URL,url.c_str());curl_easy_setopt(c,CURLOPT_USERAGENT,"Transwitch/DeskNX");
  curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L);curl_easy_setopt(c,CURLOPT_MAXREDIRS,3L);curl_easy_setopt(c,CURLOPT_NOSIGNAL,1L);
  curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT_MS,6000L);curl_easy_setopt(c,CURLOPT_TIMEOUT_MS,30000L);
  curl_easy_setopt(c,CURLOPT_SSL_VERIFYPEER,1L);curl_easy_setopt(c,CURLOPT_SSL_VERIFYHOST,2L);
  curl_easy_setopt(c,CURLOPT_PROTOCOLS,CURLPROTO_HTTPS);curl_easy_setopt(c,CURLOPT_REDIR_PROTOCOLS,CURLPROTO_HTTPS);
  curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,receiveFile);curl_easy_setopt(c,CURLOPT_WRITEDATA,&sink);
+ if(shouldCancel){
+  curl_easy_setopt(c,CURLOPT_NOPROGRESS,0L);
+  curl_easy_setopt(c,CURLOPT_XFERINFOFUNCTION,transferProgress);
+  curl_easy_setopt(c,CURLOPT_XFERINFODATA,&cancellation);
+ }
  CURLcode rc=curl_easy_perform(c);long status=0;if(rc==CURLE_OK)curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&status);curl_easy_cleanup(c);
  bool closed=std::fclose(f)==0;if(rc!=CURLE_OK||status!=200||sink.overflow||sink.bytes==0||!closed){
-  std::remove(destination.c_str());if(sink.overflow)error="Image exceeds 16 MiB";
-  else if(rc!=CURLE_OK)error=std::string("Download failed: ")+curl_easy_strerror(rc);else error="Image server returned HTTP "+std::to_string(status);return false;
+  std::remove(destination.c_str());
+  if(shouldCancel&&shouldCancel(cancelContext))error="Request cancelled";
+  else if(sink.overflow)error="Image exceeds 16 MiB";
+  else if(rc!=CURLE_OK)error=std::string("Download failed: ")+curl_easy_strerror(rc);
+  else error="Image server returned HTTP "+std::to_string(status);
+  return false;
  }return true;
 }
 } // namespace desknx::steamgriddb
