@@ -185,7 +185,7 @@ FontRenderer gFontRenderer;
 IconCache gIconCache;
 desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
 enum class SteamGridDbPickerView { Matches, Assets };
-bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false;
+bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false, steamGridDbStartupPruned=false;
 int steamGridDbMatchIndex=0, steamGridDbMatchOffset=0;
 int steamGridDbKindIndex=1, steamGridDbAssetOffset=0;
 std::string steamGridDbPreviewLoadedPath;
@@ -1094,6 +1094,25 @@ void steamGridDbApplyCurrentCached() {
         setStatus("CACHED "+std::string(steamGridDbKindLabel(steamGridDbKindIndex))+" ARTWORK SELECTED",3000);
         steamGridDbClosePicker();
     } else setStatus("THIS ARTWORK TYPE IS NOT CACHED",2200);
+}
+void pumpSteamGridDbCacheCleanup() {
+    if(steamGridDbStartupPruned||!sdMounted||!catalogueMutex)return;
+    bool ready=false,complete=false,truncated=false;
+    readCatalogueState(ready,complete,truncated);
+    if(!complete)return;
+    std::vector<std::uint64_t> installed;
+    SDL_LockMutex(catalogueMutex);
+    for(const auto& entry:catalogue) {
+        if(entry.kind!=Kind::Game||!desknx::model::isTitleId(entry.data))continue;
+        char* end=nullptr;
+        const auto id=std::strtoull(entry.data.c_str(),&end,16);
+        if(id&&end==entry.data.c_str()+entry.data.size())
+            installed.push_back(static_cast<std::uint64_t>(id));
+    }
+    SDL_UnlockMutex(catalogueMutex);
+    (void)gSteamGridDbService.cache().prune(
+        desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed);
+    steamGridDbStartupPruned=true;
 }
 void pumpSteamGridDbPicker() {
     if(!steamGridDbPickerOpen)return;
