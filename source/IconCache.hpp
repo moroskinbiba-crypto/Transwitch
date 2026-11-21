@@ -85,28 +85,28 @@ public:
     void setCustomIconPackDir(const std::string& path) {
         if (path == customIconPackDir_) return;
         customIconPackDir_ = path;
-
-        // Any result already being decoded belongs to the old icon pack. Bump
-        // the generation and discard queued/completed work without joining the
-        // worker or blocking the HOME thread.
+        // Changing a shared pack invalidates all old paths. Keep this rare path
+        // global, but do not make it wait for the decoder worker.
         if (mutex_) {
             SDL_LockMutex(mutex_);
             ++generation_;
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
+            keyGenerations_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
             ++generation_;
             pendingKeys_.clear();
+            keyGenerations_.clear();
         }
-
         failedUntil_.clear();
+        requestRetryAt_.clear();
         clearTextures();
     }
 
-    void setGameIconOverridesDir(const std::string& path) {
+void setGameIconOverridesDir(const std::string& path) {
         if (path == gameIconOverridesDir_) return;
         gameIconOverridesDir_ = path;
         if (mutex_) {
@@ -115,13 +115,16 @@ public:
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
+            keyGenerations_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
             ++generation_;
             pendingKeys_.clear();
+            keyGenerations_.clear();
         }
         failedUntil_.clear();
+        requestRetryAt_.clear();
         clearTextures();
     }
 
@@ -139,20 +142,40 @@ public:
             }
         }
 
-        const std::string defaultPath =
-            desknx::model::iconCachePath(tile.kind, tile.data);
-        if (defaultPath.empty()) return nullptr;
-
         const std::string key = makeKey(tile.kind, tile.data);
+        // Repeated draw calls must not retry the same SD lookup/worker request.
+        // Cooldown is cleared as soon as a decoded result is consumed.
+        const auto retry = requestRetryAt_.find(key);
+        if (retry != requestRetryAt_.end()) {
+            if (static_cast<Sint32>(now - retry->second) < 0) return nullptr;
+            requestRetryAt_.erase(retry);
+        }
         const auto failed = failedUntil_.find(key);
         if (failed != failedUntil_.end()) {
             if (static_cast<Sint32>(now - failed->second) < 0) return nullptr;
             failedUntil_.erase(failed);
         }
 
-        // Queueing is non-blocking. Missing artwork is represented by the
-        // caller's placeholder until the worker finishes decoding it.
-        enqueue(tile, key, highPriority ? 2 : 0);
+        const std::string defaultPath =
+            desknx::model::iconCachePath(tile.kind, tile.data);
+        if (defaultPath.empty()) return nullptr;
+        const bool queued = enqueue(tile, key, highPriority ? 2 : 0);
+        if (queued) {
+            // If the worker is slow, repeated frames still avoid queue searches.
+            requestRetryAt_[key] = now + RequestRetryThrottleMs;
+        } else {
+            // Queue-full / worker-unavailable paths retry soon, not every frame.
+            requestRetryAt_[key] = now + QueueRetryThrottleMs;
+        }
+        if (requestRetryAt_.size() > 512) {
+            for (auto it = requestRetryAt_.begin(); it != requestRetryAt_.end();) {
+                if (static_cast<Sint32>(now - it->second) >= 0)
+                    it = requestRetryAt_.erase(it);
+                else ++it;
+            }
+            if (requestRetryAt_.size() > 512)
+                requestRetryAt_.erase(requestRetryAt_.begin());
+        }
         return nullptr;
     }
 
@@ -165,31 +188,42 @@ public:
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
+            keyGenerations_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
             ++generation_;
             pendingKeys_.clear();
+            keyGenerations_.clear();
         }
         failedUntil_.clear();
+        requestRetryAt_.clear();
         clearTextures();
     }
 
     void invalidate(desknx::model::Kind kind, const std::string& data) {
         const std::string key = makeKey(kind, data);
+        // Per-title invalidation must not discard other games' queued/completed art.
         if (mutex_) {
             SDL_LockMutex(mutex_);
-            ++generation_;
-            requests_.clear();
-            completed_.clear();
-            pendingKeys_.clear();
+            ++keyGenerations_[key];
+            for (auto it = requests_.begin(); it != requests_.end();) {
+                if (it->key == key) it = requests_.erase(it);
+                else ++it;
+            }
+            for (auto it = completed_.begin(); it != completed_.end();) {
+                if (it->key == key) it = completed_.erase(it);
+                else ++it;
+            }
+            pendingKeys_.erase(key);
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
-            ++generation_;
-            pendingKeys_.clear();
+            ++keyGenerations_[key];
+            pendingKeys_.erase(key);
         }
         failedUntil_.erase(key);
+        requestRetryAt_.erase(key);
         for (auto it = entries_.begin(); it != entries_.end();) {
             if (it->kind == kind && it->data == data) {
                 if (it->texture) SDL_DestroyTexture(it->texture);
@@ -240,6 +274,7 @@ private:
         std::string customDirectory;
         std::string gameOverrideDirectory;
         std::uint64_t generation{0};
+        std::uint64_t keyGeneration{0};
         int priority{0};
     };
 
@@ -249,6 +284,7 @@ private:
         std::string key;
         std::string path;
         std::uint64_t generation{0};
+        std::uint64_t keyGeneration{0};
         int width{0};
         int height{0};
         bool isCustom{false};
@@ -270,6 +306,8 @@ private:
     static constexpr std::size_t MaxTextureBytes = 32u * 1024u * 1024u;
     static constexpr Uint32 CacheIdleLifetimeMs = 45000;
     static constexpr Uint32 CachePruneIntervalMs = 5000;
+    static constexpr Uint32 RequestRetryThrottleMs = 1500;
+    static constexpr Uint32 QueueRetryThrottleMs = 180;
     static constexpr std::size_t MaxPrunePerFrame = 8;
     static constexpr std::size_t MaxCompressedIconBytes = 16u * 1024u * 1024u;
     static constexpr std::size_t MaxQueuedRequests = 48;
@@ -339,7 +377,10 @@ private:
             Decoded decoded = decode(request);
 
             SDL_LockMutex(mutex_);
-            if (!stopWorker_ && request.generation == generation_) {
+            const auto version = keyGenerations_.find(request.key);
+            const bool keyCurrent = version != keyGenerations_.end() &&
+                version->second == request.keyGeneration;
+            if (!stopWorker_ && request.generation == generation_ && keyCurrent) {
                 completed_.push_back(std::move(decoded));
             }
             SDL_CondBroadcast(condition_);
@@ -398,6 +439,7 @@ private:
         request.gameOverrideDirectory = gameIconOverridesDir_;
         request.priority = priority;
         request.generation = generation_;
+        request.keyGeneration = keyGenerations_[key];
         const auto position = std::find_if(
             requests_.begin(), requests_.end(),
             [&](const Request& queued) { return queued.priority < priority; });
@@ -413,6 +455,7 @@ private:
         result.data=request.data;
         result.key=request.key;
         result.generation=request.generation;
+        result.keyGeneration=request.keyGeneration;
         const std::string defaultPath=desknx::model::iconCachePath(request.kind,request.data);
         if(defaultPath.empty())return result;
         // A one-off user-selected cover must be authoritative. Keep it separate
@@ -492,10 +535,14 @@ private:
             decoded = std::move(completed_.front());
             completed_.pop_front();
             SDL_CondSignal(condition_);
-            const bool currentGeneration = decoded.generation == generation_;
+            const auto version = keyGenerations_.find(decoded.key);
+            const bool keyCurrent = version != keyGenerations_.end() &&
+                version->second == decoded.keyGeneration;
+            const bool currentGeneration = decoded.generation == generation_ && keyCurrent;
             SDL_UnlockMutex(mutex_);
 
             pendingKeys_.erase(decoded.key);
+            requestRetryAt_.erase(decoded.key);
             if (!currentGeneration) continue;
 
             if (!decoded.success || decoded.rgba.empty() ||
@@ -849,6 +896,10 @@ private:
     std::string customIconPackDir_;
     std::string gameIconOverridesDir_;
     std::unordered_map<std::string, Uint32> failedUntil_;
+    // The cooldown is read/written only on the render thread.
+    std::unordered_map<std::string, Uint32> requestRetryAt_;
+    // Protected by mutex_: cancel one in-flight title without flushing the queue.
+    std::unordered_map<std::string, std::uint64_t> keyGenerations_;
     std::unordered_set<std::string> pendingKeys_;
     std::deque<Request> requests_;
     std::deque<Decoded> completed_;
