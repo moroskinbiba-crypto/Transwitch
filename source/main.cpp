@@ -7520,9 +7520,6 @@ int main(int,char**) {
         "async_was_pending=%d save_requested=%d save_ok=%d loaded=%d",
         asyncSavePendingAtExit?1:0,shouldSaveAtExit?1:0,
         finalLayoutSaveOk?1:0,layoutLoaded?1:0);
-    for(auto& entry:workspaceBackgroundTextures)
-        if(entry.texture)SDL_DestroyTexture(entry.texture);
-    workspaceBackgroundTextures.clear();
     if(roundedCornerMaskTexture){SDL_DestroyTexture(roundedCornerMaskTexture);roundedCornerMaskTexture=nullptr;}
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
