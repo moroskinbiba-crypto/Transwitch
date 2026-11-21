@@ -679,7 +679,12 @@ void scheduleLauncherSettingsSave(Uint32 debounceMs=450) {
 void pumpLauncherSettingsSave() {
     if(!launcherSettingsSavePending ||
        static_cast<Sint32>(SDL_GetTicks()-launcherSettingsSaveDue)<0)return;
-    (void)saveLauncherSettings();
+    if(!saveLauncherSettings()) {
+        // Preserve a pending appearance change through a transient SD write
+        // failure; retry slowly so a full/remounted card does not stall input.
+        launcherSettingsSavePending=true;
+        launcherSettingsSaveDue=SDL_GetTicks()+5000;
+    }
 }
 
 void loadGameNameOverrides() {
