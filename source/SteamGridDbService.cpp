@@ -19,9 +19,23 @@ bool SteamGridDbService::ensureWorker(){
 }
 int SDLCALL SteamGridDbService::workerEntry(void* p){return static_cast<SteamGridDbService*>(p)->workerLoop();}
 bool SteamGridDbService::enqueue(Job job){
- if(!mutex_)return false;SDL_LockMutex(mutex_);
- if(stopWorker_||jobs_.size()>=MaxQueuedJobs){SDL_UnlockMutex(mutex_);return false;}
- jobs_.push_back(std::move(job));SDL_CondSignal(condition_);SDL_UnlockMutex(mutex_);return true;
+ if(!mutex_)return false;
+ SDL_LockMutex(mutex_);
+ if(stopWorker_){SDL_UnlockMutex(mutex_);return false;}
+ // Rapid controller/touch movement should preview only the latest highlighted
+ // image; stale queued preview requests add latency without user value.
+ if(job.type==JobType::Preview) {
+  for(auto it=jobs_.begin();it!=jobs_.end();) {
+   if(it->type==JobType::Preview&&it->revision==job.revision)
+    it=jobs_.erase(it);
+   else ++it;
+  }
+ }
+ if(jobs_.size()>=MaxQueuedJobs){SDL_UnlockMutex(mutex_);return false;}
+ jobs_.push_back(std::move(job));
+ SDL_CondSignal(condition_);
+ SDL_UnlockMutex(mutex_);
+ return true;
 }
 bool SteamGridDbService::search(std::uint64_t id,const std::string& title,
         const std::string& key,bool useSavedMapping){
