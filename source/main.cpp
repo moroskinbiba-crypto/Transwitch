@@ -34,6 +34,7 @@
 #include "UiComponents.hpp"
 #include "../include/desknx/UiMotion.hpp"
 #include "../include/desknx/ModalLayer.hpp"
+#include "../include/desknx/SurfaceManager.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -143,6 +144,7 @@ SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 desknx::visual::VisualEngine gVisualEngine;
 desknx::ui::UiComponents gUiComponents;
+desknx::ui::SurfaceManager gSurfaceManager;
 desknx::ui::ModalLayer gModalLayer;
 bool rendererVsync=false;
 std::vector<Workspace> desks;
@@ -4140,6 +4142,38 @@ Tile* selectedWidgetTile();
 std::string widgetEditorStyleLabel(Kind kind,int style);
 std::string widgetEditorDataLabel(unsigned bit);
 
+bool currentWorkspaceIsEmpty() {
+    return !desks.empty()&&deskIndex>=0&&deskIndex<static_cast<int>(desks.size())&&
+        desks[static_cast<size_t>(deskIndex)].tiles.empty();
+}
+
+void refreshSurfaceManager() {
+    using desknx::ui::SurfaceId;
+    gSurfaceManager.beginFrame();
+    if(currentWorkspaceIsEmpty())
+        (void)gSurfaceManager.push(SurfaceId::EmptyDesktop,false,true,174);
+
+    // Register from back to front. This matches keyInput's dispatch priority:
+    // only the last modal surface is allowed to consume the current input.
+    if(listOpen)(void)gSurfaceManager.push(SurfaceId::Library,true,true,174);
+    if(deletePrompt)(void)gSurfaceManager.push(SurfaceId::DeleteConfirmation,true,true,174);
+    if(powerMenu)(void)gSurfaceManager.push(SurfaceId::PowerMenu,true,true,174);
+    if(recentOpen)(void)gSurfaceManager.push(SurfaceId::RecentGames,true,true,174);
+    if(workspaceMenu)(void)gSurfaceManager.push(SurfaceId::WorkspaceMenu,true,true,174);
+    if(workspacePicker)(void)gSurfaceManager.push(SurfaceId::WorkspacePicker,true,true,174);
+    if(systemMenu)(void)gSurfaceManager.push(SurfaceId::SystemMenu,true,true,174);
+    if(workspaceSettingsMenu)(void)gSurfaceManager.push(SurfaceId::WorkspaceSettings,true,true,174);
+    if(diagnosticsOpen)(void)gSurfaceManager.push(SurfaceId::Diagnostics,true,true,174);
+    if(appSettingsMenu)(void)gSurfaceManager.push(SurfaceId::LauncherSettings,true,true,174);
+    if(mediaPickerOpen)(void)gSurfaceManager.push(SurfaceId::MediaPicker,true,true,174);
+    if(userPickerOpen)(void)gSurfaceManager.push(SurfaceId::UserPicker,true,true,174);
+    if(nextendoOpen)(void)gSurfaceManager.push(SurfaceId::Nextendo,true,true,174);
+    if(steamGridDbPickerOpen)(void)gSurfaceManager.push(SurfaceId::SteamGridDb,true,true,174);
+    if(favoritesOpen)(void)gSurfaceManager.push(SurfaceId::Favorites,true,true,174);
+    if(widgetEditorOpen)(void)gSurfaceManager.push(SurfaceId::WidgetEditor,true,true,174);
+    if(quickSettingsOpen)(void)gSurfaceManager.push(SurfaceId::QuickSettings,true,true,174);
+}
+
 void drawScreen() {
     gVisualEngine.beginFrame();
     gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
@@ -4161,14 +4195,9 @@ void drawScreen() {
         lastUiScreenState=screenState;
         uiTransitionStart=motionEffects?SDL_GetTicks():0;
     }
-    const bool emptyDesktopSurface=!desks.empty()&&deskIndex>=0&&
-        deskIndex<static_cast<int>(desks.size())&&
-        desks[static_cast<size_t>(deskIndex)].tiles.empty();
-    const bool modalContentActive=listOpen||recentOpen||systemMenu||appSettingsMenu||
-        diagnosticsOpen||workspaceMenu||workspaceSettingsMenu||workspacePicker||
-        deletePrompt||userPickerOpen||mediaPickerOpen||powerMenu||favoritesOpen||
-        widgetEditorOpen||nextendoOpen||steamGridDbPickerOpen||quickSettingsOpen;
-    const bool modalSurfaceActive=emptyDesktopSurface||modalContentActive;
+    const bool emptyDesktopSurface=currentWorkspaceIsEmpty();
+    refreshSurfaceManager();
+    const bool modalSurfaceActive=gSurfaceManager.backdropActive();
     gWorkspaceBackgroundCache.beginFrame();
     gIconCache.beginFrame();
     gFontRenderer.beginFrame();
@@ -4435,7 +4464,7 @@ void drawScreen() {
         Color{144,189,244,110},editing);
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
-    gModalLayer.compose(174);
+    gModalLayer.compose(gSurfaceManager.dimAlpha());
     if(emptyDesktopSurface&&!modalContentActive) {
         softCard(350,248,580,204,Color{19,29,43,250},Color{255,255,255,38});
         roundRect(386,276,50,50,15,Color{38,76,119,255});
