@@ -1335,10 +1335,12 @@ void steamGridDbClosePicker() {
     steamGridDbOfflineFallback=false;
     steamGridDbTouchTracking=false;
     steamGridDbTouchDragged=false;
-    // An apply is a background transaction. Closing the modal must not drop
-    // completion handling or leave the in-memory tile texture stale.
+    // A confirmed apply must finish after the modal closes. Uncommitted search,
+    // asset-list and preview requests are cancelled instead of wasting network
+    // time or publishing late state into the next picker session.
     steamGridDbApplyPending=
         gSteamGridDbService.snapshot().status==desknx::steamgriddb::ServiceStatus::Applying;
+    if(!steamGridDbApplyPending)gSteamGridDbService.cancelBrowsing();
     steamGridDbDestroyPreview();
 }
 void steamGridDbEditApiKey() {
