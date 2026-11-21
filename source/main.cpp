@@ -5343,14 +5343,12 @@ void drawScreen() {
         }
         const std::string catalogStatus=nextendoCatalogStatusText();
         text("CATALOG  /  "+catalogStatus,270,574,1,MUTED,990);
-        text(languageRussian?
-            "Y  CLIENT ID     A / B  CLOSE     UP / DOWN  SELECT":
-            "Y  CLIENT ID     A / B  CLOSE     UP / DOWN  SELECT",
-            270,600,1,BLUE,990);
+        text("Y  CLIENT ID     A / B  CLOSE     UP / DOWN  SELECT",
+            270,590,1,BLUE,990);
         // The friends endpoint is account-scoped; never show a fabricated
         // zero or an anonymous list until OAuth PKCE + friends scope is granted.
         text("FRIENDS ONLINE  /  OAUTH FRIENDS SCOPE REQUIRED",
-            270,616,1,MUTED,990);
+            270,608,1,MUTED,990);
     }
     if(gSurfaceManager.isTop(SurfaceId::SystemMenu)) {
 
@@ -5552,6 +5550,16 @@ void drawScreen() {
             layoutSaveThread?"RUNNING":"IDLE");
         text(workerText,176,530,1,MUTED,580);
 #endif
+        const auto joyconText=[](const JoyconBatteryState& state,const char* side) {
+            if(!state.connected)return std::string(side)+" --";
+            return std::string(side)+" "+
+                std::to_string(std::max(0,std::min(100,state.level*25)))+"%"+
+                (state.charging?" CHG":"");
+        };
+        const std::string powerText="BATTERY "+(battery>=0?
+            std::to_string(battery)+"%":std::string("N/A"))+"  /  "+
+            joyconText(joyconLeft,"L")+"  /  "+joyconText(joyconRight,"R");
+        text(powerText,176,550,1,MUTED,580);
 
         softCard(628,430,452,132,Color{23,34,49,255},Color{255,255,255,18});
         text("FRAME PERFORMANCE",652,450,2,WHITE,1050);
@@ -6647,24 +6655,22 @@ void activateWidget(const Tile& t) {
                 "NEXTENDO POPULAR GAMES");
             break;
         case Kind::Battery:
-            setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":
-                "BATTERY STATUS UNAVAILABLE");
+            refreshJoyconBattery();
+            diagnosticsOpen=true;
+            refreshDiagnosticsSnapshot(true);
             break;
         case Kind::Storage:
-            setStatus("SD STORAGE WIDGET");
+            diagnosticsOpen=true;
+            refreshDiagnosticsSnapshot(true);
             break;
         case Kind::Calendar:
             if(widgetConfig(t).style==1)editCalendarNote();
             else setStatus(clockText(true),3000);
             break;
-        case Kind::System: {
-            const u32 firmware=hosversionGet();
-            char detail[64]{};
-            std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
-                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
-            setStatus(detail,3500);
+        case Kind::System:
+            diagnosticsOpen=true;
+            refreshDiagnosticsSnapshot(true);
             break;
-        }
         case Kind::Clock:
             setStatus("CLOCK WIDGET");
             break;
@@ -7394,6 +7400,8 @@ void touchInput(const SDL_Event&e) {
             const int y=static_cast<int>(e.tfinger.y*SH);
             if(x>=920&&x<=1020&&y>=100&&y<=152) {
                 nextendoOpen=false;
+            } else if(x>=270&&x<=490&&y>=582&&y<=620) {
+                editNextendoClientId();
             } else if(y>=180&&y<540) {
                 const int row=(y-180)/36;
                 const auto popular=nextendoPopularSnapshot();
