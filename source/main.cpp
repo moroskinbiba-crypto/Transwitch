@@ -44,6 +44,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cmath>
 #include <ctime>
 #include <dirent.h>
@@ -83,6 +84,9 @@ size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
+constexpr const char* CALENDAR_NOTES_FILE = "sdmc:/switch/DeskNX/calendar-notes.tsv";
+constexpr const char* CALENDAR_NOTES_TMP = "sdmc:/switch/DeskNX/calendar-notes.tmp";
+constexpr const char* CALENDAR_NOTES_BAK = "sdmc:/switch/DeskNX/calendar-notes.bak";
 constexpr const char* FAVORITES_FILE = "sdmc:/switch/DeskNX/favorites.tsv";
 constexpr const char* FAVORITES_TMP = "sdmc:/switch/DeskNX/favorites.tmp";
 constexpr const char* FAVORITES_BAK = "sdmc:/switch/DeskNX/favorites.bak";
@@ -242,6 +246,7 @@ SteamGridDbPickerView steamGridDbPickerView=SteamGridDbPickerView::Matches;
 VectorIconCache gVectorIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
+std::map<std::string,std::string> calendarNotes;
 std::vector<std::string> favoriteTitleIds;
 std::vector<Tile> favoritesView;
 bool favoritesOpen=false, recentGamesOnly=false, gameLibraryMode=false;
@@ -2258,6 +2263,117 @@ void recordRecentLaunch(const Tile& tile) {
     lastLaunched=tile.title;saveHistory();
 }
 
+std::string calendarDateKey(std::time_t stamp) {
+    std::tm date{};
+    const std::tm* local=std::localtime(&stamp);
+    if(!local)return {};
+    date=*local;
+    char value[16]{};
+    std::snprintf(value,sizeof(value),"%04d-%02d-%02d",
+        date.tm_year+1900,date.tm_mon+1,date.tm_mday);
+    return value;
+}
+bool validCalendarDateKey(const std::string& key) {
+    if(key.size()!=10||key[4]!='-'||key[7]!='-')return false;
+    for(std::size_t i=0;i<key.size();++i)
+        if(i!=4&&i!=7&&(key[i]<'0'||key[i]>'9'))return false;
+    return true;
+}
+void loadCalendarNotes() {
+    if(!sdMounted)return;
+    const char* paths[]={CALENDAR_NOTES_FILE,CALENDAR_NOTES_BAK};
+    for(const char* path:paths) {
+        struct stat st{};
+        if(stat(path,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
+           static_cast<std::uint64_t>(st.st_size)>512u*1024u)continue;
+        std::ifstream input(path,std::ios::binary);
+        std::string header,line;
+        if(!input||!std::getline(input,header)||header!="DESKNXC1")continue;
+        std::map<std::string,std::string> parsed;
+        while(std::getline(input,line)&&parsed.size()<512) {
+            const std::size_t split=line.find('\t');
+            if(split!=10||line.size()-split-1>512)continue;
+            const std::string key=line.substr(0,split);
+            if(validCalendarDateKey(key))parsed[key]=line.substr(split+1);
+        }
+        if(input.bad())continue;
+        calendarNotes=std::move(parsed);
+        if(path!=CALENDAR_NOTES_FILE)
+            setStatus("CALENDAR NOTES RESTORED FROM BACKUP",3000);
+        return;
+    }
+}
+bool saveCalendarNotes() {
+    if(!sdMounted)return false;
+    mkdir("sdmc:/switch",0777);
+    mkdir(CFG_DIR,0777);
+    std::ofstream out(CALENDAR_NOTES_TMP,std::ios::binary|std::ios::trunc);
+    if(!out){setStatus("CALENDAR NOTES SAVE FAILED",3000);return false;}
+    out<<"DESKNXC1\n";
+    for(const auto& entry:calendarNotes) {
+        if(validCalendarDateKey(entry.first)&&entry.second.size()<=512)
+            out<<entry.first<<'\t'<<safeField(entry.second)<<'\n';
+    }
+    out.flush();
+    const bool good=out.good();
+    out.close();
+    if(!good||!commitSdCard("calendar-notes-temp")) {
+        std::remove(CALENDAR_NOTES_TMP);
+        setStatus("CALENDAR NOTES WRITE FAILED",3000);
+        return false;
+    }
+    const auto result=desknx::safeio::replaceFilePreservingOnFailure(
+        CALENDAR_NOTES_TMP,CALENDAR_NOTES_FILE,CALENDAR_NOTES_BAK,true);
+    if(result!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(CALENDAR_NOTES_TMP);
+        setStatus("CALENDAR NOTES REPLACE FAILED",3000);
+        return false;
+    }
+    if(!commitSdCard("calendar-notes-publish")) {
+        setStatus("CALENDAR NOTES COMMIT FAILED; BACKUP KEPT",3500);
+        return false;
+    }
+    return true;
+}
+std::string currentCalendarNote() {
+    const std::string key=calendarDateKey(std::time(nullptr));
+    const auto found=calendarNotes.find(key);
+    return found==calendarNotes.end()?std::string{}:found->second;
+}
+void editCalendarNote() {
+    if(!sdMounted) {
+        setStatus("CALENDAR NOTES NEED AN SD CARD",3000);
+        return;
+    }
+    const std::string key=calendarDateKey(std::time(nullptr));
+    const auto found=calendarNotes.find(key);
+    const std::string current=found==calendarNotes.end()?std::string{}:found->second;
+    SwkbdConfig config{};
+    const Result createRc=swkbdCreate(&config,0);
+    if(R_FAILED(createRc)){setStatus("KEYBOARD UNAVAILABLE",2500);return;}
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,languageRussian?
+        "Заметка на сегодня":"Note for today");
+    swkbdConfigSetInitialText(&config,current.c_str());
+    char value[513]{};
+    std::snprintf(value,sizeof(value),"%s",current.c_str());
+    const Result rc=showKeyboard(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_FAILED(rc))return;
+    const std::size_t length=std::min<std::size_t>(
+        std::strlen(value),sizeof(value)-1);
+    std::string note(value,length);
+    const std::size_t first=note.find_first_not_of(" \t\r\n");
+    if(first==std::string::npos)note.clear();
+    else {
+        const std::size_t last=note.find_last_not_of(" \t\r\n");
+        note=note.substr(first,last-first+1);
+    }
+    if(note.empty())calendarNotes.erase(key);
+    else calendarNotes[key]=std::move(note);
+    if(saveCalendarNotes())setStatus(languageRussian?"ЗАМЕТКА СОХРАНЕНА":"DAY NOTE SAVED",2500);
+}
+
 bool readFavoritesFile(const char* path,std::vector<std::string>& output) {
     struct stat st{};
     constexpr std::uint64_t MaxFavoritesBytes=32u*1024u;
@@ -3940,6 +4056,11 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                      left,r.y+(compactCalendar?68:100),compactCalendar?1:2,BLUE,right);
                 if(dataA&&!compact)label(weekday,r.y+(wide?94:142));
                 if(dataB&&!compact)label(clockText(),r.y+(wide?104:169));
+                const std::string note=currentCalendarNote();
+                if(dataB)label(note.empty()?
+                    (languageRussian?"НАЖМИТЕ, ЧТОБЫ ДОБАВИТЬ ЗАМЕТКУ":"TAP TO ADD A NOTE"):
+                    utf8Prefix(note,compactCalendar?28:56),
+                    r.y+(compactCalendar?96:198));
             } else if(config.style==2) {
                 label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
                 const bool compactCalendar=wide||compact;
@@ -6256,7 +6377,8 @@ void activateWidget(const Tile& t) {
             setStatus("SD STORAGE WIDGET");
             break;
         case Kind::Calendar:
-            setStatus("CALENDAR WIDGET");
+            if(widgetConfig(t).style==1)editCalendarNote();
+            else setStatus(clockText(true),3000);
             break;
         case Kind::System: {
             const u32 firmware=hosversionGet();
@@ -7806,6 +7928,7 @@ int main(int,char**) {
         nameCacheExists?static_cast<long long>(nameCacheStat.st_size):0LL);
     loadHistory();
     loadFavorites();
+    loadCalendarNotes();
     struct stat layoutStat{}, backupStat{};
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
