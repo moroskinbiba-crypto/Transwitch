@@ -499,8 +499,9 @@ private:
         result.priority=request.priority;
         const std::string defaultPath=desknx::model::iconCachePath(request.kind,request.data);
         if(defaultPath.empty())return result;
-        // A one-off user-selected cover must be authoritative. Keep it separate
-        // from the shared pack so SteamGridDB cannot silently override it.
+        // SteamGridDB selection is the active artwork for this title. Legacy
+        // per-game overrides remain a fallback, so a stale old icon cannot
+        // shadow a cover that the user just downloaded and selected.
         const std::string gameOverridePath=customPathFor(request.kind,request.data,
             std::string{},request.gameOverrideDirectory);
         const std::string customPath=customPathFor(request.kind,request.data,
@@ -574,12 +575,13 @@ private:
             }
             SDL_FreeSurface(rgba);result.success=true;return true;
         };
-        // A selected SteamGridDB image takes precedence; a corrupt override
-        // gracefully falls back to custom pack art and then the system icon.
-        if(tryLoad(gameOverridePath,true))return result;
-        // SteamGridDB files are cache-owned, not user originals: remove a
-        // corrupt download once so every future frame does not retry it.
+        // The explicitly selected SteamGridDB artwork is authoritative.
+        // If it is missing/corrupt, fall back to a legacy per-game override,
+        // then the shared icon pack and the original system icon.
+        // SteamGridDB files are cache-owned, so a corrupt download is removed
+        // once rather than being retried on every frame.
         if(tryLoad(steamGridPath,false))return result;
+        if(tryLoad(gameOverridePath,true))return result;
         if(tryLoad(customPath,true))return result;
         (void)tryLoad(defaultPath,false);
         return result;
