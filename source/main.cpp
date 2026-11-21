@@ -1105,7 +1105,7 @@ void pumpSteamGridDbCacheCleanup() {
     if(steamGridDbStartupPruned||!sdMounted||!catalogueMutex)return;
     bool ready=false,complete=false,truncated=false;
     readCatalogueState(ready,complete,truncated);
-    if(!complete)return;
+    if(!complete||truncated)return;
     std::vector<std::uint64_t> installed;
     SDL_LockMutex(catalogueMutex);
     for(const auto& entry:catalogue) {
@@ -1161,7 +1161,7 @@ void pumpSteamGridDbPicker() {
         if(steamGridDbGetSelectedGame(tile,id))gIconCache.invalidate(Kind::Game,tile.data);
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
-        if(complete) {
+        if(complete&&!truncated) {
             std::vector<std::uint64_t> installed;
             if(catalogueMutex)SDL_LockMutex(catalogueMutex);
             for(const auto& entry:catalogue)if(entry.kind==Kind::Game&&
