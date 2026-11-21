@@ -22,6 +22,7 @@
 #include "desknx/WidgetConfig.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <cctype>
 #include <cstdint>
@@ -204,7 +205,7 @@ std::vector<HistoryEntry> recentLaunches;
 std::vector<std::string> favoriteTitleIds;
 std::vector<Tile> favoritesView;
 bool favoritesOpen=false, recentGamesOnly=false, gameLibraryMode=false;
-int favoritesIndex=0;
+int favoritesIndex=0, favoritesOffset=0;
 bool widgetEditorOpen=false;
 int widgetEditorRow=0;
 Kind widgetEditorKind=Kind::Clock;
@@ -1780,6 +1781,7 @@ std::vector<Tile> favoriteTiles() {
 void openFavorites() {
     favoritesView=favoriteTiles();
     favoritesIndex=0;
+    favoritesOffset=0;
     if(favoritesView.empty()) {
         setStatus(favoriteTitleIds.empty()?"NO FAVORITE GAMES YET":"FAVORITE GAMES ARE NOT IN THE CURRENT CATALOGUE");
         return;
@@ -3707,13 +3709,16 @@ void drawScreen() {
             roundRect(924,108,88,30,9,Color{10,132,255,255});
             text("LAUNCH",936,118,1,WHITE,1006);
             text("A  LAUNCH     MINUS  REMOVE FROM FAVORITES",282,153,1,MUTED,850);
-            const int visible=std::min(10,static_cast<int>(favoritesView.size()));
+            if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+            if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
+            const int visible=std::min(10,static_cast<int>(favoritesView.size())-favoritesOffset);
             for(int row=0;row<visible;++row) {
-                const auto& game=favoritesView[static_cast<std::size_t>(row)];
+                const int index=favoritesOffset+row;
+                const auto& game=favoritesView[static_cast<std::size_t>(index)];
                 const int yy=190+row*39;
-                if(row==favoritesIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                if(index==favoritesIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
                 drawTileIcon(game,290,yy+4,27);
-                text(game.title,330,yy+8,2,row==favoritesIndex?WHITE:MUTED,950);
+                text(game.title,330,yy+8,2,index==favoritesIndex?WHITE:MUTED,950);
                 text("★",970,yy+8,2,GREEN,996);
             }
             text(std::to_string(favoritesView.size())+" FAVORITES SAVED",
@@ -4897,11 +4902,15 @@ void keyInput(u64 keys, bool fromRepeat) {
         favoritesIndex=std::max(0,std::min(favoritesIndex,count-1));
         if(keys&HidNpadButton_Up)favoritesIndex=(favoritesIndex-1+count)%count;
         if(keys&HidNpadButton_Down)favoritesIndex=(favoritesIndex+1)%count;
+        if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+        if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
         if(keys&HidNpadButton_Minus) {
             const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
             (void)toggleFavorite(selected);
             favoritesView=favoriteTiles();
             favoritesIndex=std::min(favoritesIndex,std::max(0,static_cast<int>(favoritesView.size())-1));
+            if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+            if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
             return;
         }
         if(keys&HidNpadButton_A&&favoritesIndex<count) {
