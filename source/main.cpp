@@ -7398,7 +7398,7 @@ void touchInput(const SDL_Event&e) {
                         if(index>=0) {
                             const Candidate& candidate=available[static_cast<size_t>(index)];
                             const bool starTapped=candidate.kind==Kind::Game&&
-                                x>=cardX+cardW-38&&x<cardX+cardW-4&&
+                                x>=cardX+232-38&&x<cardX+232-4&&
                                 y>=cardY+6&&y<cardY+40;
                             if(starTapped) {
                                 (void)toggleFavorite(Tile{candidate.kind,candidate.title,
