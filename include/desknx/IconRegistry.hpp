@@ -73,7 +73,8 @@ constexpr const IconInfo& iconInfo(IconId id) noexcept {
 // Transitional adapter for older toolbar descriptors that still store a
 // compact numeric icon index. New call sites should use IconId directly.
 constexpr IconId iconIdFromLegacyIndex(int index) noexcept {
-    return index >= 0 && static_cast<std::size_t>(index) < IconManifest.size()
+    constexpr int LegacyIconCount = static_cast<int>(IconId::Sliders) + 1;
+    return index >= 0 && index < LegacyIconCount
         ? static_cast<IconId>(index) : IconId::Count;
 }
 
