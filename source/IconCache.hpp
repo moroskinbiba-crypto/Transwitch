@@ -187,6 +187,15 @@ void setGameIconOverridesDir(const std::string& path) {
             if (requestRetryAt_.size() > 512)
                 requestRetryAt_.erase(requestRetryAt_.begin());
         }
+        if (priorityRetryAt_.size() > 512) {
+            for (auto it = priorityRetryAt_.begin(); it != priorityRetryAt_.end();) {
+                if (static_cast<Sint32>(now - it->second) >= 0)
+                    it = priorityRetryAt_.erase(it);
+                else ++it;
+            }
+            if (priorityRetryAt_.size() > 512)
+                priorityRetryAt_.erase(priorityRetryAt_.begin());
+        }
         return nullptr;
     }
 
