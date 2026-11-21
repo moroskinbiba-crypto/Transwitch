@@ -1802,9 +1802,12 @@ struct NextendoWidgetSnapshot {
     std::string topGame;
 };
 NextendoWidgetSnapshot nextendoWidgetSnapshot() {
+    static NextendoWidgetSnapshot cached;
+    static std::uint64_t cachedAt=0;
+    const std::uint64_t now=SDL_GetTicks64();
+    if(cachedAt!=0&&now-cachedAt<5000)return cached;
     NextendoWidgetSnapshot result;
     const auto games=catalogueSnapshot();
-    const std::uint64_t now=SDL_GetTicks64();
     if(nextendoMutex)SDL_LockMutex(nextendoMutex);
     result.fresh=nextendoFeed.hasFreshSnapshot(now);
     if(result.fresh) {
@@ -1821,6 +1824,8 @@ NextendoWidgetSnapshot nextendoWidgetSnapshot() {
         }
     }
     if(nextendoMutex)SDL_UnlockMutex(nextendoMutex);
+    cached=result;
+    cachedAt=now;
     return result;
 }
 std::vector<HistoryEntry> recentEntriesForModal() {
@@ -3063,17 +3068,17 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7];
             if(config.style==1) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
-                text(std::to_string(current.tm_mday),left,r.y+30,5,WHITE,right);
+                text(std::to_string(current.tm_mday),left,r.y+(wide?25:30),wide?4:5,WHITE,right);
                 text(monthName+"  "+std::to_string(current.tm_year+1900),
-                     left,r.y+100,2,BLUE,right);
-                if(dataA)label(weekday,r.y+142);
-                if(dataB)label(clockText(),r.y+169);
+                     left,r.y+(wide?77:100),wide?1:2,BLUE,right);
+                if(dataA)label(weekday,r.y+(wide?99:142));
+                if(dataB)label(clockText(),r.y+(wide?116:169));
             } else if(config.style==2) {
                 label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
-                text(weekday,left,r.y+42,2,BLUE,right);
-                text(std::to_string(current.tm_mday)+" "+monthName,left,r.y+77,3,WHITE,right);
-                if(dataA)text(std::to_string(current.tm_year+1900),left,r.y+122,2,MUTED,right);
-                if(dataB)text(clockText(),left,r.y+158,2,WHITE,right);
+                text(weekday,left,r.y+40,wide?1:2,BLUE,right);
+                text(std::to_string(current.tm_mday)+" "+monthName,left,r.y+68,wide?2:3,WHITE,right);
+                if(dataA)text(std::to_string(current.tm_year+1900),left,r.y+(wide?95:122),1,MUTED,right);
+                if(dataB)text(clockText(),left,r.y+(wide?112:158),wide?1:2,WHITE,right);
             } else if(compact) {
                 text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
                 text(monthName,left,r.y+78,1,BLUE,right);
