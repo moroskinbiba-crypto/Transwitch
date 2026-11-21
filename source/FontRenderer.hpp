@@ -39,7 +39,10 @@ public:
         customFontPath_ = path;
         if (path.empty() || !ttfReady_) return true;
         fonts_[0] = TTF_OpenFont(path.c_str(), fontPixelSize(0));
-        if (fonts_[0]) return true;
+        if (fonts_[0]) {
+            TTF_SetFontStyle(fonts_[0], TTF_STYLE_NORMAL);
+            return true;
+        }
         customFontPath_.clear();
         return false;
     }
@@ -120,14 +123,19 @@ private:
         const int index = std::max(0, std::min(7, scale - 1));
         if (fonts_[index]) return fonts_[index];
         const int pixelSize = fontPixelSize(index);
+        const int fontStyle = index >= 2 ? TTF_STYLE_BOLD : TTF_STYLE_NORMAL;
         if (!customFontPath_.empty()) {
             fonts_[index] = TTF_OpenFont(customFontPath_.c_str(), pixelSize);
-            if (fonts_[index]) return fonts_[index];
+            if (fonts_[index]) {
+                TTF_SetFontStyle(fonts_[index], fontStyle);
+                return fonts_[index];
+            }
         }
         if (!sharedFont_.address || sharedFont_.size > static_cast<u32>(INT_MAX)) return nullptr;
         SDL_RWops* rw = SDL_RWFromConstMem(sharedFont_.address, static_cast<int>(sharedFont_.size));
         if (!rw) return nullptr;
         fonts_[index] = TTF_OpenFontRW(rw, 1, pixelSize);
+        if (fonts_[index]) TTF_SetFontStyle(fonts_[index], fontStyle);
         return fonts_[index];
     }
 

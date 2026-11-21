@@ -18,6 +18,7 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "SvgIconCache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,9 +82,16 @@ std::array<Color,12> COLORS{{
     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255},
     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}
 }};
-int themeIndex=1;
+int themeIndex=1; // 0-7 are the original v0.1 palettes; 8 is SOCOMA.
 bool languageRussian=true;
-int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
+int iconStyle=0; // 0 clean SVG, 1 soft SVG, 2 SVG badge
+int headerStyle=0; // 0 glass bar, 1 tactical rail, 2 minimal floating
+int dockStyle=0;   // 0 glass dock, 1 segmented rail, 2 floating dock
+int surfaceOpacity=255; // 0..255; scales all soft surfaces and widget cards
+int selectionStyle=0;   // 0 outline, 1 accent rail, 2 pulse, 3 corner brackets
+bool motionEffects=false; // optional low-cost screen fade and selection pulse
+Uint32 uiTransitionStart=0;
+std::uint32_t lastUiScreenState=UINT32_MAX;
 std::string wallpaperPath, fontPath, iconPackPath;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
@@ -182,6 +190,7 @@ std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+VectorIconCache gVectorIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
 struct PdmQuerySnapshot {
@@ -352,6 +361,14 @@ void applyThemePalette() {
                      {210,116,144,255},{85,187,220,255},{144,185,129,255},{122,150,171,255},
                      {244,110,128,255},{55,207,204,255},{183,142,236,255},{231,204,130,255}}};
             break;
+        case 8: // SOCOMA — deep slate, signal blue and restrained amber.
+            BG={7,13,20,255}; THEME_TOP={16,29,42,255}; THEME_BOTTOM={7,16,25,255};
+            MUTED={160,177,191,255}; BLUE={101,184,225,255};
+            GREEN={125,194,159,255}; RED={232,123,104,255};
+            COLORS={{{77,132,160,255},{74,164,151,255},{113,145,170,255},{204,158,92,255},
+                     {163,122,100,255},{79,156,192,255},{123,151,117,255},{112,128,145,255},
+                     {219,113,94,255},{75,183,174,255},{191,145,109,255},{222,183,111,255}}};
+            break;
         default: // Ocean
             themeIndex=0;
             BG={10,14,22,255}; THEME_TOP={16,27,44,255}; THEME_BOTTOM={9,17,31,255};
@@ -362,6 +379,37 @@ void applyThemePalette() {
                      {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}}};
             break;
     }
+}
+
+const char* themeName(int index) {
+    static const char* const namesEn[]={
+        "Ocean","v0.1 / Frosted Glass","Graphite","Violet","Sunset",
+        "Emerald","Rose","Arctic","SOCOMA"
+    };
+    static const char* const namesRu[]={
+        "Океан","v0.1 / Матовый","Графит","Фиолетовая","Закат",
+        "Изумрудная","Розовая","Арктика","SOCOMA"
+    };
+    const int safeIndex=index>=0&&index<9?index:0;
+    return languageRussian?namesRu[safeIndex]:namesEn[safeIndex];
+}
+const char* headerStyleName(int value) {
+    static const char* const namesEn[]={"Glass","Tactical rail","Minimal"};
+    static const char* const namesRu[]={"Стекло","Тактическая","Минимальная"};
+    const int index=std::max(0,std::min(2,value));
+    return languageRussian?namesRu[index]:namesEn[index];
+}
+const char* dockStyleName(int value) {
+    static const char* const namesEn[]={"Glass dock","Segmented rail","Floating"};
+    static const char* const namesRu[]={"Стеклянный","Сегментный","Плавающий"};
+    const int index=std::max(0,std::min(2,value));
+    return languageRussian?namesRu[index]:namesEn[index];
+}
+const char* selectionStyleName(int value) {
+    static const char* const namesEn[]={"Outline","Accent rail","Pulse","Corner brackets"};
+    static const char* const namesRu[]={"Контур","Акцент","Пульс","Углы"};
+    const int index=std::max(0,std::min(3,value));
+    return languageRussian?namesRu[index]:namesEn[index];
 }
 
 bool hasExtension(const std::string& path,const char* const* extensions,size_t count) {
@@ -392,6 +440,11 @@ void loadLauncherSettings() {
     if(!sdMounted){applyThemePalette();return;}
     languageRussian=true;
     iconStyle=0;
+    headerStyle=0;
+    dockStyle=0;
+    surfaceOpacity=255;
+    selectionStyle=0;
+    motionEffects=false;
     std::string selectedPath;
     const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
     for(const char* candidate:candidates) {
@@ -426,7 +479,7 @@ void loadLauncherSettings() {
         if(key=="theme") {
             char* end=nullptr;
             const long valueLong=std::strtol(value.c_str(),&end,10);
-            if(end&&*end=='\0'&&valueLong>=0&&valueLong<=7)
+            if(end&&*end=='\0'&&valueLong>=0&&valueLong<=8)
                 themeIndex=static_cast<int>(valueLong);
         } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
             wallpaperPath=value;
@@ -438,6 +491,24 @@ void loadLauncherSettings() {
             char* end=nullptr;
             const long parsed=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
+        } else if(key=="headerstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=2)headerStyle=static_cast<int>(parsed);
+        } else if(key=="dockstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=2)dockStyle=static_cast<int>(parsed);
+        } else if(key=="surfaceopacity") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=255)surfaceOpacity=static_cast<int>(parsed);
+        } else if(key=="selectionstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=3)selectionStyle=static_cast<int>(parsed);
+        } else if(key=="effects") {
+            motionEffects=(value=="1"||value=="true"||value=="on");
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -460,7 +531,12 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n"
+       <<"headerstyle="<<headerStyle<<"\n"
+       <<"dockstyle="<<dockStyle<<"\n"
+       <<"surfaceopacity="<<surfaceOpacity<<"\n"
+       <<"selectionstyle="<<selectionStyle<<"\n"
+       <<"effects="<<(motionEffects?1:0)<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -740,7 +816,11 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
     }
 }
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
-    roundRect(x,y+5,w,h,UiCornerRadius,Color{0,0,0,54});
+    const int opacity=std::max(0,std::min(255,surfaceOpacity));
+    fill.a=static_cast<Uint8>((static_cast<unsigned int>(fill.a)*opacity)/255u);
+    edge.a=static_cast<Uint8>((static_cast<unsigned int>(edge.a)*opacity)/255u);
+    roundRect(x,y+5,w,h,UiCornerRadius,
+              Color{0,0,0,static_cast<Uint8>((54u*static_cast<unsigned int>(opacity))/255u)});
     roundRect(x,y,w,h,UiCornerRadius,fill);
     roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
 }
@@ -1867,9 +1947,14 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
         roundRect(x-3,y-3,size+6,size+6,std::max(7,size/4),
                   Color{static_cast<Uint8>(c.r/5),static_cast<Uint8>(c.g/5),
                         static_cast<Uint8>(c.b/5),220});
-        c=WHITE; // material-like filled treatment with a high-contrast glyph
+        c=WHITE;
+    } else if(iconStyle==1) {
+        roundRect(x-3,y-3,size+6,size+6,std::max(7,size/4),
+                  Color{static_cast<Uint8>(c.r/8),static_cast<Uint8>(c.g/8),
+                        static_cast<Uint8>(c.b/8),54});
     }
-    color(c);
+    if(gVectorIconCache.draw(kind,x,y,size,SDL_Color{c.r,c.g,c.b,c.a}))return;
+    // Geometric fallback is retained only for a broken/missing SVG asset.
     const int cx=x+size/2,cy=y+size/2;
     auto line=[&](int x1,int y1,int x2,int y2) {
         SDL_RenderDrawLine(renderer,x1,y1,x2,y2);
@@ -1941,6 +2026,36 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
         }
     }
 }
+void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
+    const Uint32 phase=SDL_GetTicks()%1000u;
+    const Uint32 ramp=phase<500u?phase:1000u-phase;
+    const int pulse=motionEffects?150+static_cast<int>(ramp*95u/500u):220;
+    accent.a=static_cast<Uint8>(pulse);
+    switch(selectionStyle) {
+        case 1:
+            rect(x,y,4,h,accent);
+            outline(x,y,w,h,Color{accent.r,accent.g,accent.b,static_cast<Uint8>(pulse/2)});
+            break;
+        case 2:
+            outline(x-2,y-2,w+4,h+4,Color{accent.r,accent.g,accent.b,static_cast<Uint8>(pulse/2)});
+            outline(x,y,w,h,accent);
+            break;
+        case 3: {
+            const int length=std::max(10,std::min(28,std::min(w,h)/4));
+            const Color bright{accent.r,accent.g,accent.b,255};
+            rect(x,y,length,3,bright);rect(x,y,3,length,bright);
+            rect(x+w-length,y,length,3,bright);rect(x+w-3,y,3,length,bright);
+            rect(x,y+h-3,length,3,bright);rect(x,y+h-length,3,length,bright);
+            rect(x+w-length,y+h-3,length,3,bright);rect(x+w-3,y+h-length,3,length,bright);
+            break;
+        }
+        default:
+            outline(x,y,w,h,accent);
+            outline(x+1,y+1,w-2,h-2,Color{255,255,255,90});
+            break;
+    }
+}
+
 void drawTileIcon(const Tile&t,int x,int y,int size) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     roundRect(x,y,size,size,std::max(8,size/5),Color{255,255,255,12});
@@ -2166,15 +2281,18 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
-    softCard(r.x,r.y,r.w,r.h,fill,
+    softCard(r.x,r.y,r.w,r.h,
+             themeIndex==8&&t.kind!=Kind::Game&&t.kind!=Kind::Nro
+                ?Color{13,29,41,236}:fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
+    if(themeIndex==8&&t.kind!=Kind::Game&&t.kind!=Kind::Nro)
+        rect(r.x+4,r.y+18,3,std::max(12,r.h-36),
+             workspace.accentColor>=0
+                ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
+                :COLORS[static_cast<size_t>(t.color)%COLORS.size()]);
 
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,workspace,r,fill);
-        if(selected) {
-            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
-            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
-        }
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
         const bool compact=t.w==1&&t.h==1;
@@ -2395,7 +2513,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                  r.x+14,r.y+52,2,MUTED,right);
         }
     }
-    if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
+    if(selected)drawSelectionFrame(r.x,r.y,r.w,r.h,
+        themeIndex==8?Color{103,184,225,255}:BLUE);
 }
 void drawDotted(int x,int y,int w,int h) {
     for(int xx=x;xx<x+w;xx+=12){rect(xx,y,6,2,Color{67,79,98,180});rect(xx,y+h-2,6,2,Color{67,79,98,180});}
@@ -2406,6 +2525,20 @@ int visibleStart() {
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
 void drawScreen() {
+    const std::uint32_t screenState=
+        (static_cast<std::uint32_t>(std::max(0,deskIndex))&0x0Fu) |
+        (listOpen?1u<<4:0u) | (recentOpen?1u<<5:0u) |
+        (systemMenu?1u<<6:0u) | (appSettingsMenu?1u<<7:0u) |
+        (workspaceMenu?1u<<8:0u) | (workspaceSettingsMenu?1u<<9:0u) |
+        (workspacePicker?1u<<10:0u) | (mediaPickerOpen?1u<<11:0u) |
+        (powerMenu?1u<<12:0u) | (userPickerOpen?1u<<13:0u) |
+        (deletePrompt?1u<<14:0u);
+    if(lastUiScreenState==UINT32_MAX) {
+        lastUiScreenState=screenState;
+    } else if(screenState!=lastUiScreenState) {
+        lastUiScreenState=screenState;
+        uiTransitionStart=motionEffects?SDL_GetTicks():0;
+    }
     gIconCache.beginFrame();
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
@@ -2433,9 +2566,21 @@ void drawScreen() {
     else
         drawWallpaper();
 
-    // Compact, labelled system toolbar. Each control has a generous touch
-    // target and a visible name; the same tools are available from the gamepad.
-    softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
+    // Three interchangeable header compositions. The same hit targets and
+    // controller mappings are retained; only the visual treatment changes.
+    const Color headerSurface=themeIndex==8
+        ?Color{12,24,36,232}:Color{24,32,45,224};
+    const Color headerRailSurface=themeIndex==8
+        ?Color{12,24,36,static_cast<Uint8>(
+            (static_cast<unsigned int>(surfaceOpacity)*232u)/255u)}
+        :Color{24,32,45,static_cast<Uint8>(
+            (static_cast<unsigned int>(surfaceOpacity)*224u)/255u)};
+    if(headerStyle==0) {
+        softCard(56,16,1168,64,headerSurface,Color{255,255,255,28});
+    } else if(headerStyle==1) {
+        rect(0,0,SW,82,headerRailSurface);
+        rect(0,79,SW,2,themeIndex==8?COLORS[3]:BLUE);
+    }
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
         {2,false,"GALLERY"},{0,appSettingsMenu,"SETTINGS"},
@@ -2444,21 +2589,50 @@ void drawScreen() {
     for(int i=0;i<ToolbarButtonCount;++i) {
         const auto& item=headerTools[i];
         const int x=toolbarButtonX(i);
-        roundRect(x,24,ToolbarButtonWidth,48,13,
-            item.active?Color{48,82,124,255}:Color{37,47,62,230});
-        if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
+        const Color activeColor=themeIndex==8?Color{35,75,94,255}:Color{48,82,124,255};
+        if(headerStyle==0) {
+            roundRect(x,24,ToolbarButtonWidth,48,13,
+                item.active?activeColor:Color{37,47,62,230});
+            if(item.active)outline(x,24,ToolbarButtonWidth,48,
+                Color{120,174,235,150});
+        } else if(headerStyle==1) {
+            if(item.active)rect(x,76,ToolbarButtonWidth,3,
+                themeIndex==8?COLORS[3]:BLUE);
+            if(item.active)roundRect(x,22,ToolbarButtonWidth,46,9,
+                Color{static_cast<Uint8>(activeColor.r/2),
+                      static_cast<Uint8>(activeColor.g/2),
+                      static_cast<Uint8>(activeColor.b/2),180});
+        } else {
+            if(item.active)roundRect(x,22,ToolbarButtonWidth,46,14,
+                Color{static_cast<Uint8>(activeColor.r/2),
+                      static_cast<Uint8>(activeColor.g/2),
+                      static_cast<Uint8>(activeColor.b/2),130});
+            if(item.active)rect(x+18,72,ToolbarButtonWidth-36,2,
+                themeIndex==8?COLORS[3]:BLUE);
+        }
         drawSystemIcon(item.icon,x+12,31,24,item.active?WHITE:Color{204,214,228,255});
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
         text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),56,1,
              item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
     }
-    softCard(470,24,392,48,Color{32,43,59,235},Color{255,255,255,24});
+    if(headerStyle==0)
+        softCard(470,24,392,48,Color{32,43,59,235},Color{255,255,255,24});
+    else if(headerStyle==1)
+        rect(470,24,392,48,Color{255,255,255,10});
+    else
+        outline(470,24,392,48,Color{255,255,255,35});
     drawSystemIcon(7,486,34,27,Color{215,228,246,255});
     text(selectedUserLabel,526,41,2,WHITE,760);
     text("CHANGE",780,43,1,BLUE,850);
-    roundRect(870,24,142,48,18,Color{32,43,59,235});
+    if(headerStyle==0) {
+        roundRect(870,24,142,48,18,Color{32,43,59,235});
+        roundRect(1022,24,180,48,18,Color{32,43,59,235});
+    } else {
+        rect(862,32,1,32,Color{255,255,255,35});
+        text("ONLINE",876,29,1,MUTED,1003);
+        rect(1014,32,1,32,Color{255,255,255,35});
+    }
     text(nextendoTotalLabel(),882,43,1,GREEN,1003);
-    roundRect(1022,24,180,48,18,Color{32,43,59,235});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,30});
     text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
@@ -2515,17 +2689,38 @@ void drawScreen() {
             text(hints[i].action,hx+56,581,1,MUTED,hx+144);
         }
     }
-    // Workspace switcher anchors the lower edge, matching a familiar
-    // console desktop rather than duplicating navigation in a second dock.
-    softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    // Three dock treatments share the same geometry so touch hit targets and
+    // workspace switching never depend on the selected visual style.
+    if(dockStyle==0) {
+        softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    } else if(dockStyle==1) {
+        rect(0,620,SW,100,Color{10,20,31,static_cast<Uint8>(
+            (static_cast<unsigned int>(surfaceOpacity)*220u)/255u)});
+        rect(0,620,SW,2,themeIndex==8?COLORS[3]:BLUE);
+    } else {
+        softCard(28,630,1224,70,Color{13,24,36,226},Color{255,255,255,34});
+    }
     const int deskStart=visibleStart();
     for(int i=0;i<VisibleDeskTabs&&deskStart+i<static_cast<int>(desks.size());++i) {
         const int index=deskStart+i;
         const int x=DeskTabX+i*DeskTabStep;
         const bool active=index==deskIndex;
-        roundRect(x,641,DeskTabWidth,48,14,
-            active?Color{53,91,139,255}:Color{34,43,58,235});
-        if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
+        if(dockStyle==1) {
+            if(active)roundRect(x,642,DeskTabWidth,42,6,
+                themeIndex==8?Color{27,53,68,255}:Color{35,53,78,255});
+            if(active)rect(x+12,685,DeskTabWidth-24,2,
+                themeIndex==8?COLORS[3]:BLUE);
+        } else if(dockStyle==2) {
+            roundRect(x,641,DeskTabWidth,45,22,
+                active?Color{51,89,112,210}:Color{255,255,255,12});
+            if(active)outline(x,641,DeskTabWidth,45,
+                Color{103,184,225,130});
+        } else {
+            roundRect(x,641,DeskTabWidth,48,14,
+                active?Color{53,91,139,255}:Color{34,43,58,235});
+            if(active)outline(x,641,DeskTabWidth,48,
+                Color{144,189,244,110});
+        }
         text(desks[static_cast<size_t>(index)].name,x+12,658,1,
              active?WHITE:MUTED,x+DeskTabWidth-8);
     }
@@ -2543,18 +2738,33 @@ void drawScreen() {
     if(listOpen) {
         rect(0,0,SW,SH,Color{3,7,14,194});
         const int mx=110,my=70,mw=1060,mh=570;
-        softCard(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
-        text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
-        text("Installed games, homebrew and system widgets",
-             mx+30,my+43,1,MUTED,mx+mw-24);
+        softCard(mx,my,mw,mh,
+            themeIndex==8?Color{10,20,30,252}:Color{17,24,36,255},
+            themeIndex==8?Color{89,144,169,110}:Color{255,255,255,25});
+        if(themeIndex==8) {
+            softCard(mx+18,my+14,mw-36,88,Color{15,32,46,246},
+                     Color{100,157,181,68});
+            rect(mx+18,my+14,4,88,COLORS[3]);
+            text("SOCOMA  /  APPLICATION CONTROL",mx+36,my+20,1,COLORS[3],mx+mw-30);
+            text("APP LIBRARY",mx+36,my+39,3,WHITE,mx+mw-24);
+        } else {
+            text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
+            text("Installed games, homebrew and system widgets",
+                 mx+30,my+43,1,MUTED,mx+mw-24);
+        }
         struct DrawerChip { int x; int w; const char* label; };
         const DrawerChip chips[]={{mx+28,96,"Y  SEARCH"},{mx+132,82,"X  SORT"},
             {mx+222,112,"L/R  FILTER"},{mx+342,82,"-  CLEAR"},
             {mx+432,126,"R STICK RESCAN"},{mx+566,72,"B  CLOSE"},
             {mx+646,72,"A  ADD"}};
+        const int chipY=my+(themeIndex==8?64:52);
         for(const auto& chip:chips) {
-            roundRect(chip.x,my+52,chip.w,25,9,Color{31,43,61,255});
-            text(chip.label,chip.x+7,my+61,1,WHITE,chip.x+chip.w-5);
+            roundRect(chip.x,chipY,chip.w,25,
+                themeIndex==8?7:9,
+                themeIndex==8?Color{22,43,56,255}:Color{31,43,61,255});
+            if(themeIndex==8)outline(chip.x,chipY,chip.w,25,
+                Color{93,143,166,90});
+            text(chip.label,chip.x+7,chipY+8,1,WHITE,chip.x+chip.w-5);
         }
         std::string viewLabel=std::string("FILTER  ")+
             desknx::catalog_view::FilterName(catalogueFilter)+"     SORT  "+
@@ -2567,8 +2777,10 @@ void drawScreen() {
                 static_cast<unsigned int>(catalogueNsErrorNow));
             viewLabel+=nsError;
         }
-        text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-22);
-        text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
+        text(viewLabel,mx+28,my+(themeIndex==8?96:82),1,
+             themeIndex==8?COLORS[3]:BLUE,mx+mw-22);
+        if(themeIndex!=8)
+            text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
         constexpr int vis=10;
         if(available.empty()) {
             listIndex=0;
@@ -2604,7 +2816,11 @@ void drawScreen() {
                 if(i>=static_cast<int>(available.size()))break;
                 const int yy=my+110+row*40;
                 const Candidate& candidate=available[static_cast<size_t>(i)];
-                if(i==listIndex)roundRect(mx+27,yy,730,35,10,Color{35,58,88,255});
+                if(i==listIndex) {
+                    roundRect(mx+27,yy,730,35,themeIndex==8?6:10,
+                        themeIndex==8?Color{23,52,67,255}:Color{35,58,88,255});
+                    if(themeIndex==8)rect(mx+27,yy,3,35,COLORS[3]);
+                }
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                 drawTileIcon(iconTile,mx+38,yy+4,27);
                 text(candidate.title,mx+78,yy+8,2,
@@ -2619,7 +2835,9 @@ void drawScreen() {
                     (i==listIndex?BLUE:MUTED),mx+750);
             }
         }
-        roundRect(mx+780,my+110,252,410,16,Color{22,31,45,255});
+        roundRect(mx+780,my+110,252,410,themeIndex==8?10:16,
+            themeIndex==8?Color{14,29,42,255}:Color{22,31,45,255});
+        if(themeIndex==8)rect(mx+780,my+110,252,3,COLORS[3]);
         if(!available.empty()) {
             const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
@@ -2841,43 +3059,106 @@ void drawScreen() {
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(appSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
-        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
-        text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
-        text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
-        roundRect(842,132,92,32,10,Color{54,57,66,255});
-        text("B  BACK",856,143,1,WHITE,926);
-        text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
-        const size_t fontSlash=fontPath.find_last_of('/');
-        const std::string fontLabel=fontPath.empty()?std::string("SYSTEM"):
-            (fontSlash==std::string::npos?fontPath:fontPath.substr(fontSlash+1));
-        text("FONT  "+fontLabel,646,190,1,fontPath.empty()?MUTED:BLUE,930);
-        text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
-        const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
-            "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
-            "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
-        const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
-            const int yy=214+i*31;
-            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
-            text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
-            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
-            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
+        rect(0,0,SW,SH,Color{3,7,14,202});
+        const Color panel=themeIndex==8?Color{9,19,28,252}:Color{17,24,36,250};
+        const Color edge=themeIndex==8?Color{83,143,168,115}:Color{255,255,255,28};
+        softCard(140,36,1000,648,panel,edge);
+        if(themeIndex==8) {
+            rect(140,36,5,648,COLORS[3]);
+            text("SOCOMA  /  CONTROL CENTER",176,56,1,COLORS[3],920);
         }
-        char nsInfo[80]{};
+        text(languageRussian?"НАСТРОЙКИ ЛАУНЧЕРА":"LAUNCHER SETTINGS",
+             176,78,3,WHITE,1000);
+        text(languageRussian?"Внешний вид, рабочий стол и поведение интерфейса":
+             "Appearance, workspace and interface behaviour",
+             178,120,1,MUTED,1000);
+        roundRect(1020,57,92,34,10,Color{38,55,70,255});
+        text("B  BACK",1034,69,1,WHITE,1102);
+
+        const size_t fontSlash=fontPath.find_last_of('/');
+        const std::string fontLabel=fontPath.empty()?std::string("Noto Sans / SYSTEM"):
+            (fontSlash==std::string::npos?fontPath:fontPath.substr(fontSlash+1));
+        const std::string wallpaperLabel=wallpaperPath.empty()?"DEFAULT":"CUSTOM";
+        const std::string iconPackLabel=iconPackPath.empty()?"BUILT-IN SVG":"CUSTOM";
+        text("WALLPAPER  "+wallpaperLabel,178,148,1,
+             wallpaperPath.empty()?MUTED:BLUE,438);
+        text("FONT  "+fontLabel,488,148,1,fontPath.empty()?MUTED:BLUE,800);
+        text("ICONS  "+iconPackLabel,818,148,1,
+             iconPackPath.empty()?MUTED:BLUE,1090);
+
+        const char* actionsEn[]={
+            "BACKGROUND IMAGE","CUSTOM FONT","ICON PACK","COLOR THEME",
+            "HEADER DESIGN","DOCK DESIGN","SURFACE OPACITY","SELECTION EFFECT",
+            "MOTION EFFECTS","ADD WIDGET","RESCAN LIBRARY","WORKSPACE MANAGEMENT",
+            "EDIT / ARRANGE MODE","RESET APPEARANCE","LANGUAGE","SVG ICON TREATMENT"
+        };
+        const char* actionsRu[]={
+            "ФОНОВОЕ ИЗОБРАЖЕНИЕ","ШРИФТ","НАБОР ИКОНОК","ЦВЕТОВАЯ ТЕМА",
+            "ВЕРХНЯЯ ПАНЕЛЬ","DOCK","ПРОЗРАЧНОСТЬ","СТИЛЬ ВЫДЕЛЕНИЯ",
+            "ЭФФЕКТЫ ДВИЖЕНИЯ","ДОБАВИТЬ ВИДЖЕТ","СКАНИРОВАТЬ БИБЛИОТЕКУ",
+            "РАБОЧИЕ СТОЛЫ","РЕЖИМ РЕДАКТИРОВАНИЯ","СБРОСИТЬ ОФОРМЛЕНИЕ",
+            "ЯЗЫК","SVG-ИКОНКИ"
+        };
+        const char* const* actions=languageRussian?actionsRu:actionsEn;
+        const std::string values[]={
+            wallpaperLabel,fontLabel,iconPackLabel,themeName(themeIndex),
+            headerStyleName(headerStyle),dockStyleName(dockStyle),
+            std::to_string(surfaceOpacity*100/255)+"%",
+            selectionStyleName(selectionStyle),motionEffects?"ON":"OFF",
+            languageRussian?"ОТКРЫТЬ ВИДЖЕТЫ":"OPEN WIDGET LIBRARY",
+            languageRussian?"ЗАПУСТИТЬ СКАН":"SCAN NOW",
+            languageRussian?"СПИСОК СТОЛОВ":"MANAGE DESKTOPS",
+            editing?(languageRussian?"ВКЛ":"ON"):(languageRussian?"ВЫКЛ":"OFF"),
+            languageRussian?"ВОЗВРАТ К V0.1":"RESTORE V0.1",
+            languageRussian?"РУССКИЙ / АНГЛИЙСКИЙ":"RUSSIAN / ENGLISH",
+            languageRussian?(iconStyle==0?"ВЕКТОР":iconStyle==1?"ВЕКТОР + ПОДЛОЖКА":"ВЕКТОРНАЯ ПЛАШКА")
+                           :(iconStyle==0?"VECTOR":iconStyle==1?"VECTOR + SOFT PLATE":"VECTOR BADGE")
+        };
+        const int startY=184,stepY=48,rowHeight=42;
+        constexpr int columnX[2]={176,670};
+        constexpr int columnWidth=432;
+        for(int i=0;i<16;++i) {
+            const int column=i/8;
+            const int row=i%8;
+            const int x=columnX[column];
+            const int y=startY+row*stepY;
+            const bool selected=i==appSettingsIndex;
+            const Color cardFill=themeIndex==8
+                ?(selected?Color{27,56,70,255}:Color{15,31,43,238})
+                :(selected?Color{35,61,93,255}:Color{26,37,51,220});
+            roundRect(x,y,columnWidth,rowHeight,8,cardFill);
+            if(selected) {
+                if(themeIndex==8)rect(x,y,3,rowHeight,COLORS[3]);
+                else outline(x,y,columnWidth,rowHeight,Color{104,166,218,155});
+            } else if(themeIndex==8) {
+                outline(x,y,columnWidth,rowHeight,Color{79,125,144,48});
+            }
+            text(actions[i],x+14,y+7,1,selected?WHITE:MUTED,x+244);
+            text(values[i],x+250,y+7,1,
+                 selected?(themeIndex==8?COLORS[3]:BLUE):Color{177,195,207,255},
+                 x+columnWidth-12);
+        }
+
+        char nsInfo[96]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY INITIALIZING");
         else if(!catalogueNsAvailableNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"GAME SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
-        text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
-             346,592,1,MUTED,930);
-        text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
+        text(nsInfo,178,582,1,catalogueNsAvailableNow?GREEN:RED,520);
+        text(languageRussian
+                 ?(motionEffects?"ПЕРЕХОДЫ ВКЛЮЧЕНЫ":"ПЕРЕХОДЫ ОТКЛЮЧЕНЫ")
+                 :(motionEffects?"TRANSITIONS ENABLED":"TRANSITIONS DISABLED"),
+             700,582,1,motionEffects?GREEN:MUTED,1095);
+        text(languageRussian
+                 ?"ВВЕРХ / ВНИЗ — ВЫБОР   ВЛЕВО / ВПРАВО — КОЛОНКА   A — ИЗМЕНИТЬ   B — НАЗАД"
+                 :"UP / DOWN SELECT   LEFT / RIGHT CATEGORY   A CHANGE   B CLOSE",
+             178,620,1,themeIndex==8?COLORS[3]:BLUE,1095);
+        text(languageRussian
+                 ?"SVG ЗНАЧКИ РАСТЕРИЗУЮТСЯ ОДИН РАЗ И ХРАНЯТСЯ В GPU-КЭШЕ"
+                 :"SVG GLYPHS ARE RASTERIZED ONCE, THEN KEPT AS GPU TEXTURES",
+             178,648,1,MUTED,1095);
     }
     if(mediaPickerOpen) {
         rect(0,0,SW,SH,Color{3,7,14,205});
@@ -2964,6 +3245,17 @@ void drawScreen() {
             }
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
+    }
+    if(motionEffects&&uiTransitionStart!=0) {
+        const Uint32 elapsed=SDL_GetTicks()-uiTransitionStart;
+        constexpr Uint32 TransitionDurationMs=150;
+        if(elapsed<TransitionDurationMs) {
+            const Uint8 alpha=static_cast<Uint8>(
+                (TransitionDurationMs-elapsed)*70u/TransitionDurationMs);
+            rect(0,0,SW,SH,Color{0,0,0,alpha});
+        } else {
+            uiTransitionStart=0;
+        }
     }
     SDL_RenderPresent(renderer);
 }
@@ -3447,12 +3739,38 @@ void activateAppSettings(int action) {
         case 1: openMediaPicker(MediaPickerType::Font); break;
         case 2: openMediaPicker(MediaPickerType::IconPack); break;
         case 3:
-            themeIndex=(themeIndex+1)%8;
+            themeIndex=(themeIndex+1)%9;
             applyThemePalette();
             if(saveLauncherSettings())
-                setStatus("THEME "+std::to_string(themeIndex+1)+" APPLIED");
+                setStatus(std::string("THEME: ")+themeName(themeIndex));
             break;
         case 4:
+            headerStyle=(headerStyle+1)%3;
+            if(saveLauncherSettings())setStatus(std::string("TOP BAR: ")+headerStyleName(headerStyle));
+            break;
+        case 5:
+            dockStyle=(dockStyle+1)%3;
+            if(saveLauncherSettings())setStatus(std::string("DOCK: ")+dockStyleName(dockStyle));
+            break;
+        case 6: {
+            static const int opacitySteps[]={128,160,192,224,255};
+            int current=4;
+            for(int i=0;i<5;++i)if(opacitySteps[i]==surfaceOpacity)current=i;
+            surfaceOpacity=opacitySteps[(current+1)%5];
+            if(saveLauncherSettings())setStatus("SURFACE TRANSPARENCY: "+
+                std::to_string(surfaceOpacity*100/255)+"%");
+            break;
+        }
+        case 7:
+            selectionStyle=(selectionStyle+1)%4;
+            if(saveLauncherSettings())setStatus(std::string("SELECTION: ")+selectionStyleName(selectionStyle));
+            break;
+        case 8:
+            motionEffects=!motionEffects;
+            uiTransitionStart=0;
+            if(saveLauncherSettings())setStatus(motionEffects?"MOTION EFFECTS ENABLED":"MOTION EFFECTS DISABLED");
+            break;
+        case 9:
             widgetPickerPreviousFilter=catalogueFilter;
             widgetPickerPreviousSort=catalogueSort;
             widgetPickerPreviousQuery=catalogueQuery;
@@ -3464,31 +3782,33 @@ void activateAppSettings(int action) {
             openList();
             setStatus("CHOOSE A WIDGET TO ADD");
             break;
-        case 5: restartCatalogueScan(); break;
-        case 6:
+        case 10: restartCatalogueScan(); break;
+        case 11:
             workspaceMenu=true;
             workspaceMenuIndex=0;
             break;
-        case 7:
+        case 12:
             editing=!editing;
             if(!editing&&dragging){dragging=false;saveNow();}
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
-        case 8:
-            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;iconStyle=0;
+        case 13:
+            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();
+            themeIndex=1;iconStyle=0;headerStyle=0;dockStyle=0;
+            surfaceOpacity=255;selectionStyle=0;motionEffects=false;
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
             gIconCache.setCustomIconPackDir("");
             applyThemePalette();
-            if(saveLauncherSettings())setStatus("APPEARANCE RESET");
+            if(saveLauncherSettings())setStatus("APPEARANCE RESET TO V0.1");
             break;
-        case 9:
+        case 14:
             languageRussian=!languageRussian;
             if(saveLauncherSettings())setStatus(languageRussian?"ЯЗЫК: РУССКИЙ":"LANGUAGE: ENGLISH");
             break;
-        case 10:
+        case 15:
             iconStyle=(iconStyle+1)%3;
-            if(saveLauncherSettings())setStatus("ICON STYLE");
+            if(saveLauncherSettings())setStatus("SVG ICON TREATMENT");
             break;
         default: break;
     }
@@ -3669,8 +3989,13 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        if(appSettingsIndex<0||appSettingsIndex>=16)appSettingsIndex=0;
+        const int column=appSettingsIndex/8;
+        const int row=appSettingsIndex%8;
+        if(keys&HidNpadButton_Up)appSettingsIndex=column*8+(row+7)%8;
+        if(keys&HidNpadButton_Down)appSettingsIndex=column*8+(row+1)%8;
+        if(keys&HidNpadButton_Left&&appSettingsIndex>=8)appSettingsIndex-=8;
+        if(keys&HidNpadButton_Right&&appSettingsIndex<8)appSettingsIndex+=8;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -3700,7 +4025,7 @@ void keyInput(u64 keys, bool fromRepeat) {
                 editing=!editing;
                 if(!editing&&dragging){dragging=false;saveNow();}
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-            } else if(action==4)activateAppSettings(4);
+            } else if(action==4)activateAppSettings(9);
             else if(action==5)restartCatalogueScan();
         }
         return;
@@ -3987,11 +4312,17 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=842&&x<=934&&y>=132&&y<=164) {
+        if(x>=1020&&x<=1112&&y>=57&&y<=91) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
-            const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+        } else if(y>=184&&y<568) {
+            int column=-1;
+            if(x>=176&&x<608)column=0;
+            else if(x>=670&&x<1102)column=1;
+            if(column>=0) {
+                const int row=(y-184)/48;
+                if(row>=0&&row<8)
+                    activateAppSettings(column*8+row);
+            }
         }
         return;
     }
@@ -4491,6 +4822,9 @@ int main(int,char**) {
 #endif
     IMG_Init(IMG_INIT_JPG|IMG_INIT_PNG);
     gIconCache.setRenderer(renderer);
+    // The nine authored SVG controls are parsed/rasterized once at startup;
+    // thereafter they are ordinary cached SDL textures with no per-frame work.
+    gVectorIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
     if(fontPath.empty()) {
@@ -4657,7 +4991,7 @@ int main(int,char**) {
         accountServiceReady=false;
     }
     if (setsysReady) setsysExit();
-    gIconCache.shutdown();gFontRenderer.shutdown();
+    gIconCache.shutdown();gVectorIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();
     if(psmReady)psmExit();

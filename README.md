@@ -19,15 +19,17 @@ DeskNX — нативный домашний экран и лаунчер для
 - Иконки и обложки из NACP/SD и пользовательского icon pack.
 - Асинхронная очередь декодирования изображений с ограничением памяти и GPU-кэша.
 - Виджеты: часы, батарея, системные инструменты, недавние запуски, SD storage и календарь.
-- Темы, шрифты с кириллицей, русский интерфейс, обои и индивидуальное оформление рабочих столов.
+- Темы, включая отдельную исходную тему v0.1 и SOCOMA, шрифты с кириллицей, русский интерфейс, обои и индивидуальное оформление рабочих столов.
+- Три варианта верхней панели и dock, настройка прозрачности поверхностей и четыре стиля выделения.
+- Необязательные короткие переходы/пульсация; по умолчанию эффекты выключены.
+- Векторные системные значки SVG: растеризация один раз при старте, затем использование кэшированных SDL-текстур; встроенный SVG fallback и пользовательские SVG icon packs.
 - Адаптивные макеты шести виджетов для компактных, широких и высоких плиток.
-- Три встроенных стиля системных значков и пользовательские наборы игровых обложек.
 - Nextendo: реальные онлайн-счётчики по играм; отсутствие данных не показывается как ноль.
 - PDM playtime/launch statistics по выбранной игре.
 - Сенсорное управление и управление Joy-Con/Pro Controller.
 - Атомарное сохранение раскладки и резервные копии настроек.
 
-Подробнее: [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md), [docs/FEATURES.md](docs/FEATURES.md), [docs/HOMENX_PORT_STATUS.md](docs/HOMENX_PORT_STATUS.md).
+Подробнее: [SOCOMA theme](docs/SOCOMA_THEME.md), [customization](docs/CUSTOMIZATION.md), [features](docs/FEATURES.md), [HomeNX port status](docs/HOMENX_PORT_STATUS.md).
 
 ## Сборка самостоятельного NRO
 
@@ -61,7 +63,9 @@ DeskNX — нативный домашний экран и лаунчер для
 
 - `source/main.cpp` — единственная production SDL2 UI entry point для NRO и HOME applet.
 - `source/catalog.cpp` — NS/NACP catalogue, NRO scanning and persistent SD cache. HOS 21+ compressed NACP title blocks are normalized before resolving names.
-- `source/IconCache.hpp` — bounded asynchronous PNG/JPEG icon decoder and render-thread texture cache.
+- `source/IconCache.hpp` — bounded asynchronous PNG/JPEG/SVG decoder and render-thread texture cache.
+- `source/SvgIconCache.hpp` / `include/desknx/SvgRasterizer.hpp` — small vector UI glyphs, rendered once and cached as GPU textures.
+- `assets/icons/` — editable SVG source icons packaged into `media/icons/`.
 - `source/NextendoPlayers.cpp` — Nextendo online presence feed.
 - `projects/DeskNXMenu/` — HOME library applet target, собранный из общего native UI.
 - `projects/sSystem/` — необязательный экспериментальный qlaunch backend.
