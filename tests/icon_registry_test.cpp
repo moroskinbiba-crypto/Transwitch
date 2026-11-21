@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstddef>
 #include <iostream>
+#include <string>
 
 using desknx::ui::IconCategory;
 using desknx::ui::IconId;
