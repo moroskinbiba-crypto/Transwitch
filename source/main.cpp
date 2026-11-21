@@ -7494,6 +7494,13 @@ int main(int,char**) {
                 runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs,
                 runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs,
                 static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
+            const auto& visualStats=gVisualEngine.lastFrameStats();
+            desknx::diag::Write("visual","frame_primitives",
+                "fill_rect=%u rounded_rect=%u rounded_batches=%u outlines=%u gradient_draws=%u gradient_rebuilds=%u failures=%u",
+                visualStats.filledRectCalls,visualStats.roundedRectCalls,
+                visualStats.roundedFillBatches,visualStats.outlineCalls,
+                visualStats.gradientDrawCalls,visualStats.gradientTextureRebuilds,
+                visualStats.failedCalls);
             metricsWindowStart=frameEndCounter;
             metricsFrames=metricsSlowFrames=0;
             metricsFrameSumMs=metricsRenderSumMs=metricsMaximumFrameMs=0.0;
