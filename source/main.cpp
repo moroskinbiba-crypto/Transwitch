@@ -34,6 +34,7 @@
 #include "UiComponents.hpp"
 #include "../include/desknx/UiMotion.hpp"
 #include "../include/desknx/ModalLayer.hpp"
+#include "../include/desknx/ModalLayer.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -144,6 +145,7 @@ SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 desknx::visual::VisualEngine gVisualEngine;
 desknx::ui::UiComponents gUiComponents;
+desknx::ui::ModalLayer gModalLayer;
 bool rendererVsync=false;
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
@@ -217,6 +219,7 @@ struct ConsoleUserProfile { AccountUid uid{}; std::string nickname; };
 std::vector<ConsoleUserProfile> consoleUsers;
 bool consoleUsersLoaded=false, userPickerOpen=false, uiHasSelectedUser=false;
 bool accountServiceReady=false;
+bool setsysServiceReady=false;
 int userPickerIndex=0;
 AccountUid uiSelectedUser{};
 std::string selectedUserLabel="SELECT PLAYER";
@@ -4066,9 +4069,20 @@ void drawScreen() {
         lastUiScreenState=screenState;
         uiTransitionStart=motionEffects?SDL_GetTicks():0;
     }
+    const bool emptyDesktopSurface=!desks.empty()&&deskIndex>=0&&
+        deskIndex<static_cast<int>(desks.size())&&
+        desks[static_cast<size_t>(deskIndex)].tiles.empty();
+    const bool modalContentActive=listOpen||recentOpen||systemMenu||appSettingsMenu||
+        diagnosticsOpen||workspaceMenu||workspaceSettingsMenu||workspacePicker||
+        deletePrompt||userPickerOpen||mediaPickerOpen||powerMenu||favoritesOpen||
+        widgetEditorOpen||nextendoOpen||steamGridDbPickerOpen||quickSettingsOpen;
+    const bool modalSurfaceActive=emptyDesktopSurface||modalContentActive;
     gWorkspaceBackgroundCache.beginFrame();
     gIconCache.beginFrame();
     gFontRenderer.beginFrame();
+    if(quickSettingsOpen||hasWidgetKind(Kind::QuickSettings))
+        refreshQuickSettingsSnapshot();
+    gModalLayer.beginFrame(renderer,modalSurfaceActive,SW,SH);
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     bool catalogueNsAvailableNow=false;
@@ -4210,17 +4224,6 @@ void drawScreen() {
     // Single desktop surface under the tiles and widgets.
     softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
-    if(d.tiles.empty()) {
-        softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
-        roundRect(390,302,46,46,14,Color{38,76,119,255});
-        drawSystemIcon(4,402,314,22,WHITE);
-        text("THIS DESKTOP IS EMPTY",454,302,2,WHITE,880);
-        text("Add games, homebrew and widgets to get started.",454,337,1,MUTED,880);
-        uiButton(454,370,176,38,12,desknx::ui::ButtonVariant::Solid,
-            Color{43,111,190,255},Color{255,255,255,28},true,false,BLUE);
-        text("Y  ADD APPS",493,383,1,WHITE,620);
-        text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
-    }
     if(editing)for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
         int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
         if(x==selectedX&&y==selectedY) {
@@ -4336,8 +4339,23 @@ void drawScreen() {
         Color{144,189,244,110},editing);
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
+    gModalLayer.compose(174);
+    if(emptyDesktopSurface&&!modalContentActive) {
+        softCard(350,248,580,204,Color{19,29,43,250},Color{255,255,255,38});
+        roundRect(386,276,50,50,15,Color{38,76,119,255});
+        drawSystemIcon(4,399,289,24,WHITE);
+        text("THIS DESKTOP IS EMPTY",456,276,3,WHITE,890);
+        text("Add games, homebrew or widgets to build your workspace.",
+             456,319,2,MUTED,890);
+        uiButton(386,376,206,48,13,desknx::ui::ButtonVariant::Solid,
+            Color{43,111,190,255},Color{255,255,255,35},true,false,BLUE);
+        text("Y  ADD APPS",431,391,2,WHITE,570);
+        uiButton(604,376,284,48,13,desknx::ui::ButtonVariant::Chip,
+            Color{32,45,63,255},Color{255,255,255,20});
+        text("+  CREATE ANOTHER DESKTOP",626,391,1,WHITE,872);
+    }
     if(listOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         const int mx=110,my=70,mw=1060,mh=570;
         softCard(mx,my,mw,mh,
             themeIndex==1?Color{10,20,30,252}:Color{17,24,36,255},
@@ -4555,7 +4573,7 @@ void drawScreen() {
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
     if(workspaceMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
+
         softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
         text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
@@ -4574,7 +4592,7 @@ void drawScreen() {
              390,528,1,BLUE,920);
     }
     if(workspaceSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
+
         softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
@@ -4602,7 +4620,7 @@ void drawScreen() {
         text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
     }
     if(workspacePicker) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         softCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
         text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
              360,100,3,WHITE,920);
@@ -4626,7 +4644,7 @@ void drawScreen() {
              360,608,1,MUTED,730);
     }
     if(deletePrompt) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
         softCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
         text("DELETE WORKSPACE?",405,270,3,WHITE,890);
@@ -4643,7 +4661,7 @@ void drawScreen() {
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(recentOpen) {
         const auto entries=recentEntriesForModal();
-        rect(0,0,SW,SH,Color{3,7,14,190});
+
         softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
         text(recentGamesOnly?"RECENT GAMES":"RECENTLY OPENED",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
@@ -4676,7 +4694,7 @@ void drawScreen() {
         else {
             favoritesIndex=std::max(0,std::min(favoritesIndex,
                 static_cast<int>(favoritesView.size())-1));
-            rect(0,0,SW,SH,Color{3,7,14,190});
+    
             softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
             text("FAVORITE GAMES",266,104,3,WHITE,850);
             roundRect(838,108,78,30,9,Color{49,52,61,255});
@@ -4714,7 +4732,7 @@ void drawScreen() {
                 desknx::widgets::enabled(config,1)?"ON":"OFF",
                 refreshValue,itemValue,"DONE"
             };
-            rect(0,0,SW,SH,Color{3,7,14,204});
+    
             softCard(260,82,760,548,Color{17,24,36,255},Color{255,255,255,28});
             text("WIDGET EDITOR",300,110,3,WHITE,970);
             text(typeName(widgetEditorKind)+"  /  CHANGES SAVE AUTOMATICALLY",
@@ -4745,7 +4763,7 @@ void drawScreen() {
     }
     if(nextendoOpen) {
         const auto popular=nextendoPopularSnapshot();
-        rect(0,0,SW,SH,Color{3,7,14,196});
+
         softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,30});
         text(languageRussian?"NEXTENDO  /  ПОПУЛЯРНЫЕ ИГРЫ":
             "NEXTENDO  /  POPULAR GAMES",266,104,3,WHITE,850);
@@ -4779,7 +4797,7 @@ void drawScreen() {
         text("A / B  CLOSE     UP / DOWN  SELECT",270,600,1,BLUE,990);
     }
     if(systemMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
+
         softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
         text("TOOLS",146,130,3,WHITE,1020);
         text("Library, recent apps, widgets and system actions.",
@@ -4811,12 +4829,12 @@ void drawScreen() {
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(appSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
-        softCard(220,50,840,620,Color{17,24,36,255},Color{255,255,255,34});
-        text("LAUNCHER SETTINGS",262,76,3,WHITE,990);
-        text("PERSONALIZE  /  APPEARANCE, WIDGETS AND WORKSPACES",264,116,1,MUTED,990);
-        roundRect(922,76,96,34,11,Color{54,57,66,255});
-        text("B  BACK",938,88,1,WHITE,1008);
+        softCard(200,38,880,644,Color{17,24,36,255},Color{255,255,255,42});
+        text("LAUNCHER SETTINGS",244,68,3,WHITE,920);
+        text("PERSONALIZE  /  APPEARANCE, WIDGETS AND WORKSPACES",
+             246,112,2,MUTED,970);
+        roundRect(948,64,92,38,12,Color{48,59,76,255});
+        text("B BACK",964,77,2,WHITE,1032);
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "COLOR THEME","ACCENT COLOUR","STEAMGRIDDB API KEY",
             "ADD WIDGET TO WORKSPACE","WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE",
@@ -4824,36 +4842,54 @@ void drawScreen() {
             languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH",
             "ICON STYLE","RUNTIME DIAGNOSTICS","HEADER STYLE","DOCK STYLE",
             "SURFACE OPACITY","SELECTION EFFECT","MOTION EFFECTS"};
-        const char* iconStyles[]={"Clean SVG","Soft SVG","SVG badge"};
+        const char* iconStyles[]={"CLEAN SVG","SOFT SVG","SVG BADGE"};
         const char* headerStyles[]={"GLASS BAR","TACTICAL RAIL","MINIMAL FLOAT"};
         const char* dockStyles[]={"GLASS DOCK","SEGMENTED RAIL","FLOATING DOCK"};
         const char* selectionStyles[]={"OUTLINE","ACCENT RAIL","PULSE","CORNER BRACKETS"};
-        for(int i=0;i<19;++i) {
-            const int yy=151+i*22;
-            if(i==appSettingsIndex)roundRect(260,yy,760,21,8,Color{35,61,93,255});
-            text(actions[i],284,yy+6,1,i==appSettingsIndex?WHITE:MUTED,760);
-            if(i==3)text(themeName(themeIndex),792,yy+6,1,BLUE,1000);
-            if(i==4){roundRect(790,yy+3,16,16,8,BLUE);text(accentColorName(accentColorIndex),816,yy+6,1,BLUE,1000);}
+        constexpr int VisibleSettingsRows=8;
+        appSettingsIndex=std::max(0,std::min(18,appSettingsIndex));
+        appSettingsOffset=std::max(0,std::min(11,appSettingsOffset));
+        if(appSettingsIndex<appSettingsOffset)appSettingsOffset=appSettingsIndex;
+        if(appSettingsIndex>=appSettingsOffset+VisibleSettingsRows)
+            appSettingsOffset=appSettingsIndex-VisibleSettingsRows+1;
+        for(int row=0;row<VisibleSettingsRows;++row) {
+            const int i=appSettingsOffset+row;
+            if(i>=19)break;
+            const int yy=170+row*47;
+            const bool selected=i==appSettingsIndex;
+            if(selected)roundRect(242,yy,796,42,11,Color{35,61,93,255});
+            else softCard(242,yy,796,42,Color{23,33,48,190},Color{255,255,255,10});
+            text(actions[i],264,yy+12,2,selected?WHITE:MUTED,765);
+            if(i==3)text(themeName(themeIndex),800,yy+14,1,BLUE,1024);
+            if(i==4)text(accentColorName(accentColorIndex),800,yy+14,1,BLUE,1024);
             if(i==5)text(steamGridDbApiKey.empty()?"NOT CONFIGURED":"CONFIGURED",
-                755,yy+4,1,steamGridDbApiKey.empty()?MUTED:GREEN,920);
-            if(i==12)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+4,1,BLUE,920);
-            if(i==14)text(headerStyles[static_cast<size_t>(headerStyle)],755,yy+4,1,BLUE,920);
-            if(i==15)text(dockStyles[static_cast<size_t>(dockStyle)],755,yy+4,1,BLUE,920);
-            if(i==16)text(std::to_string(surfaceOpacity*100/255)+"%",755,yy+4,1,BLUE,920);
-            if(i==17)text(selectionStyles[static_cast<size_t>(selectionStyle)],755,yy+4,1,BLUE,920);
-            if(i==18)text(motionEffects?"ON":"OFF",755,yy+4,1,motionEffects?GREEN:MUTED,920);
+                800,yy+14,1,steamGridDbApiKey.empty()?MUTED:GREEN,1024);
+            if(i==12)text(iconStyles[static_cast<size_t>(iconStyle)],800,yy+14,1,BLUE,1024);
+            if(i==14)text(headerStyles[static_cast<size_t>(headerStyle)],800,yy+14,1,BLUE,1024);
+            if(i==15)text(dockStyles[static_cast<size_t>(dockStyle)],800,yy+14,1,BLUE,1024);
+            if(i==16)text(std::to_string(surfaceOpacity*100/255)+"%",800,yy+14,1,BLUE,1024);
+            if(i==17)text(selectionStyles[static_cast<size_t>(selectionStyle)],800,yy+14,1,BLUE,1024);
+            if(i==18)text(motionEffects?"ON":"OFF",800,yy+14,1,motionEffects?GREEN:MUTED,1024);
         }
-
-        char nsInfo[96]{};
+        uiButton(1002,170,36,42,9,desknx::ui::ButtonVariant::Chip,
+            Color{34,46,64,255},Color{255,255,255,18});
+        text("UP",1007,184,1,WHITE,1036);
+        uiButton(1002,499,36,42,9,desknx::ui::ButtonVariant::Chip,
+            Color{34,46,64,255},Color{255,255,255,18});
+        text("DN",1007,513,1,WHITE,1036);
+        char nsInfo[112]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY INITIALIZING");
         else if(!catalogueNsAvailableNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"GAME SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
-        text(nsInfo,264,584,1,catalogueNsAvailableNow?GREEN:RED,700);
-        text("MEDIA LIBRARY  /  WALLPAPERS  /  FONTS  /  ICON PACKS  /  STEAMGRIDDB",264,605,1,MUTED,990);
-        text("LEFT / RIGHT CHANGE     A SELECT     B CLOSE",728,605,1,BLUE,1010);
+        text(nsInfo,246,570,1,catalogueNsAvailableNow?GREEN:RED,690);
+        text("ITEMS  "+std::to_string(appSettingsOffset+1)+"–"+
+             std::to_string(std::min(19,appSettingsOffset+VisibleSettingsRows))+" / 19",
+             790,570,1,MUTED,1034);
+        text("UP / DOWN SCROLL     LEFT / RIGHT CHANGE     A SELECT     B CLOSE",
+             246,620,1,BLUE,1036);
     }
     if(diagnosticsOpen) {
         refreshDiagnosticsSnapshot();
@@ -4868,7 +4904,7 @@ void drawScreen() {
         readCatalogueState(ready,complete,truncated,&nsAvailable,&nsError,&games,&nros);
         const int failures=SDL_AtomicGet(&nextendoConsecutiveFailures);
         const bool networkReady=SDL_AtomicGet(&nextendoNetworkReady)!=0;
-        rect(0,0,SW,SH,Color{3,7,14,208});
+
         softCard(120,48,1040,624,Color{17,24,36,255},Color{255,255,255,35});
         text("RUNTIME DIAGNOSTICS",158,72,3,WHITE,920);
         text("B BACK",1010,84,1,BLUE,1140);
@@ -4979,7 +5015,7 @@ void drawScreen() {
              176,628,1,MUTED,1060);
     }
     if(mediaPickerOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,205});
+
         softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
         text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
              mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
@@ -5022,7 +5058,7 @@ void drawScreen() {
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         softCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
         text("POWER",454,238,3,WHITE,820);
         roundRect(780,238,52,30,9,Color{54,57,66,255});
@@ -5037,7 +5073,7 @@ void drawScreen() {
         text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
     }
     if(userPickerOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,210});
+
         softCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
         text("SELECT PLAYER",374,142,3,WHITE,900);
         text("The selected profile is used for games that request a player account.",
@@ -5068,7 +5104,7 @@ void drawScreen() {
 
     if(steamGridDbPickerOpen) {
         const auto sgdb=gSteamGridDbService.snapshot();
-        rect(0,0,SW,SH,Color{2,6,12,224});
+
         softCard(64,34,1152,652,Color{15,23,36,255},Color{255,255,255,38});
         text("STEAMGRIDDB  /  GAME ARTWORK",108,62,3,WHITE,900);
         text(steamGridDbCurrentTitle,110,105,2,MUTED,820);
@@ -5193,6 +5229,48 @@ void drawScreen() {
                 steamGridDbOfflineFallback?886:884,588,1,WHITE,1150);
             text("LEFT / RIGHT  ART TYPE     UP / DOWN  IMAGE",112,635,1,BLUE,700);
         }
+    }
+
+    if(quickSettingsOpen) {
+        refreshQuickSettingsSnapshot();
+        softCard(292,72,696,576,Color{16,26,40,255},Color{135,174,216,74});
+        text("QUICK SETTINGS",332,102,3,WHITE,920);
+        text(quickNetworkStatus,334,148,2,
+            quickInternetConnected?GREEN:(quickAirplaneMode?Color{255,190,96,255}:MUTED),934);
+        roundRect(878,94,84,36,10,Color{48,59,76,255});
+        text("B BACK",891,105,1,WHITE,950);
+        const char* labels[]={"SOUND OUTPUT","AIRPLANE MODE","WI-FI","BLUETOOTH","SCREEN BRIGHTNESS"};
+        const char* values[]={
+            quickSoundAvailable?(quickSoundMuted?"MUTED":"SOUND ON"):"UNAVAILABLE",
+            quickAirplaneAvailable?(quickAirplaneMode?"ON":"OFF"):"UNAVAILABLE",
+            quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"UNAVAILABLE",
+            quickBluetoothAvailable?(quickBluetoothEnabled?"ON":"OFF"):"UNAVAILABLE",
+            quickBrightnessAvailable?std::to_string(static_cast<int>(std::lround(
+                std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%":"UNAVAILABLE"
+        };
+        for(int i=0;i<5;++i) {
+            const int y=194+i*68;
+            const bool selected=i==quickSettingsIndex;
+            roundRect(326,y,628,58,12,selected?Color{40,72,111,255}:Color{24,37,54,255});
+            text(labels[i],348,y+10,1,MUTED,680);
+            text(values[i],348,y+29,2,selected?WHITE:
+                (i==1&&quickAirplaneMode?Color{255,190,96,255}:
+                 (i==0&&!quickSoundMuted?GREEN:BLUE)),748);
+            if(i==4&&quickBrightnessAvailable) {
+                const int percent=static_cast<int>(std::lround(quickBrightness*100.0f));
+                roundRect(770,y+20,150,12,6,Color{8,15,25,255});
+                roundRect(770,y+20,std::max(1,percent*150/100),12,6,BLUE);
+            } else if(i<4) {
+                roundRect(912,y+18,18,18,9,
+                    ((i==0&&!quickSoundMuted)||(i==1&&quickAirplaneMode)||
+                     (i==2&&quickWifiEnabled&&!quickAirplaneMode)||
+                     (i==3&&quickBluetoothEnabled))?GREEN:MUTED);
+            }
+        }
+        text("A TOGGLE    LEFT / RIGHT ADJUST BRIGHTNESS    UP / DOWN SELECT",
+             334,560,1,BLUE,930);
+        text("BLUETOOTH IS KEPT ENABLED WHILE DOCKED TO PROTECT CONTROLLER LINKS",
+             334,592,1,MUTED,952);
     }
 
     if(motionEffects&&uiTransitionStart!=0) {
@@ -6338,6 +6416,9 @@ void keyInput(u64 keys, bool fromRepeat) {
         appSettingsIndex=std::max(0,std::min(18,appSettingsIndex));
         if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+18)%19;
         if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%19;
+        if(appSettingsIndex<appSettingsOffset)appSettingsOffset=appSettingsIndex;
+        if(appSettingsIndex>=appSettingsOffset+8)appSettingsOffset=appSettingsIndex-7;
+        appSettingsOffset=std::max(0,std::min(11,appSettingsOffset));
         auto adjustSettingsRow=[&](int direction) {
             switch(appSettingsIndex) {
                 case 3: cycleTheme(direction); break;
@@ -6917,11 +6998,19 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=1020&&x<=1112&&y>=57&&y<=91) {
+        if(x>=948&&x<=1040&&y>=64&&y<=104) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=190&&y<552) {
-            const int row=(y-190)/19;
-            if(row>=0&&row<19)activateAppSettings(row);
+        } else if(x>=1000&&x<=1040&&y>=170&&y<214) {
+            appSettingsOffset=std::max(0,appSettingsOffset-1);
+        } else if(x>=1000&&x<=1040&&y>=499&&y<543) {
+            appSettingsOffset=std::min(11,appSettingsOffset+1);
+        } else if(x>=242&&x<=1038&&y>=170&&y<546) {
+            const int row=(y-170)/47;
+            const int index=appSettingsOffset+row;
+            if(row>=0&&row<8&&index<19) {
+                appSettingsIndex=index;
+                activateAppSettings(index);
+            }
         }
         return;
     }
@@ -7116,7 +7205,7 @@ void touchInput(const SDL_Event&e) {
                         if(R_FAILED(galleryRc))setStatus("GALLERY UNAVAILABLE",3000);
                         break;
                     }
-                    case 1: appSettingsMenu=true;appSettingsIndex=0; break;
+                    case 1: appSettingsMenu=true;appSettingsIndex=0;appSettingsOffset=0; break;
                     case 2: openControllerSupport(); break;
                     default: break;
                 }
@@ -7386,6 +7475,7 @@ int main(int,char**) {
     // newer than the build SDK.
     const Result setsysRc = setsysInitialize();
     const bool setsysReady = R_SUCCEEDED(setsysRc);
+    setsysServiceReady=setsysReady;
     SetSysFirmwareVersion firmware{};
     const Result firmwareRc = setsysReady ? setsysGetFirmwareVersion(&firmware) : setsysRc;
     const bool firmwareRead = setsysReady && R_SUCCEEDED(firmwareRc);
@@ -7759,7 +7849,7 @@ int main(int,char**) {
         accountExit();
         accountServiceReady=false;
     }
-    if (setsysReady) setsysExit();
+    if (setsysReady) {setsysExit();setsysServiceReady=false;}
     if(tsInternalOpen){tsSessionClose(&tsInternalSession);tsInternalOpen=false;}
     if(tsSocOpen){tsSessionClose(&tsSocSession);tsSocOpen=false;}
     if(tsServiceReady){tsExit();tsServiceReady=false;}
@@ -7768,6 +7858,7 @@ int main(int,char**) {
     if(clkrstServiceReady){clkrstExit();clkrstServiceReady=false;}
     steamGridDbDestroyPreview();
     gWorkspaceBackgroundCache.shutdown();
+    gModalLayer.shutdown();
     gIconCache.shutdown();gVectorIconCache.shutdown();gFontRenderer.shutdown();
     IMG_Quit();
     if(psmReady)psmExit();
