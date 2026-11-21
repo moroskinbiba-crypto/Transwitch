@@ -87,7 +87,7 @@ inline Kind parseKind(const std::string& value) {
     if (value == "R") return Kind::Recent;
     if (value == "V") return Kind::Storage;
     if (value == "A") return Kind::Calendar;
-    if (value == "X") return Kind::Nextendo;
+    if (value == "X" || value == "P") return Kind::Nextendo;
     if (value == "F") return Kind::Favorites;
     if (value == "L") return Kind::GameLibrary;
     return Kind::Unsupported;
