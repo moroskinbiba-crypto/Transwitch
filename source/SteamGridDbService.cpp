@@ -89,7 +89,7 @@ bool SteamGridDbService::selectAsset(int index){
  state_.selectedAsset=index;state_.message="Loading preview...";job.type=JobType::Preview;job.revision=revision_;
  state_.revision=revision_;
  job.titleId=state_.titleId;job.assetIndex=index;job.asset=state_.assets[static_cast<size_t>(index)];
- ++state_.revision;SDL_UnlockMutex(mutex_);return enqueue(std::move(job));
+ SDL_UnlockMutex(mutex_);return enqueue(std::move(job));
 }
 bool SteamGridDbService::pruneCache(std::uint64_t maximumBytes,
         const std::vector<std::uint64_t>& installedTitleIds) {
@@ -104,7 +104,7 @@ bool SteamGridDbService::applySelected(){
  if(!mutex_)return false;Job job;SDL_LockMutex(mutex_);
  if(state_.status!=ServiceStatus::Browsing||state_.selectedAsset<0||
     state_.selectedAsset>=static_cast<int>(state_.assets.size())){SDL_UnlockMutex(mutex_);return false;}
- job.type=JobType::Apply;job.revision=revision_;job.titleId=state_.titleId;job.gameId=state_.gameId;
+ job.type=JobType::Apply;job.titleId=state_.titleId;job.gameId=state_.gameId;
  job.kind=state_.kind;job.assetIndex=state_.selectedAsset;job.asset=state_.assets[static_cast<size_t>(state_.selectedAsset)];
  job.title=state_.title;job.gameName=state_.gameName;++revision_;job.revision=revision_;
  jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
