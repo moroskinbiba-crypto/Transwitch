@@ -4062,7 +4062,7 @@ void drawScreen() {
         (workspaceMenu?1u<<8:0u) | (workspaceSettingsMenu?1u<<9:0u) |
         (workspacePicker?1u<<10:0u) | (mediaPickerOpen?1u<<11:0u) |
         (powerMenu?1u<<12:0u) | (userPickerOpen?1u<<13:0u) |
-        (deletePrompt?1u<<14:0u);
+        (deletePrompt?1u<<14:0u) | (quickSettingsOpen?1u<<15:0u);
     if(lastUiScreenState==UINT32_MAX) {
         lastUiScreenState=screenState;
     } else if(screenState!=lastUiScreenState) {
@@ -4871,12 +4871,12 @@ void drawScreen() {
             if(i==17)text(selectionStyles[static_cast<size_t>(selectionStyle)],800,yy+14,1,BLUE,1024);
             if(i==18)text(motionEffects?"ON":"OFF",800,yy+14,1,motionEffects?GREEN:MUTED,1024);
         }
-        uiButton(1002,170,36,42,9,desknx::ui::ButtonVariant::Chip,
+        uiButton(1040,170,36,42,9,desknx::ui::ButtonVariant::Chip,
             Color{34,46,64,255},Color{255,255,255,18});
-        text("UP",1007,184,1,WHITE,1036);
-        uiButton(1002,499,36,42,9,desknx::ui::ButtonVariant::Chip,
+        text("UP",1045,184,1,WHITE,1074);
+        uiButton(1040,499,36,42,9,desknx::ui::ButtonVariant::Chip,
             Color{34,46,64,255},Color{255,255,255,18});
-        text("DN",1007,513,1,WHITE,1036);
+        text("DN",1045,513,1,WHITE,1074);
         char nsInfo[112]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY INITIALIZING");
@@ -7000,10 +7000,12 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=948&&x<=1040&&y>=64&&y<=104) {
             appSettingsMenu=false;
-        } else if(x>=1000&&x<=1040&&y>=170&&y<214) {
-            appSettingsOffset=std::max(0,appSettingsOffset-1);
-        } else if(x>=1000&&x<=1040&&y>=499&&y<543) {
-            appSettingsOffset=std::min(11,appSettingsOffset+1);
+        } else if(x>=1040&&x<=1076&&y>=170&&y<214) {
+            appSettingsIndex=std::max(0,appSettingsIndex-1);
+            appSettingsOffset=std::max(0,appSettingsIndex-7);
+        } else if(x>=1040&&x<=1076&&y>=499&&y<543) {
+            appSettingsIndex=std::min(18,appSettingsIndex+1);
+            appSettingsOffset=std::min(11,appSettingsIndex-7);
         } else if(x>=242&&x<=1038&&y>=170&&y<546) {
             const int row=(y-170)/47;
             const int index=appSettingsOffset+row;
