@@ -2841,6 +2841,16 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             drawTileIcon(iconTile,left,y,iconSize);
             text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
         };
+        std::vector<HistoryEntry> recentGames;
+        for(const auto& entry:recentLaunches)
+            if(entry.kind==Kind::Game)recentGames.push_back(entry);
+        auto recentGameLine=[&](size_t index,int y,int iconSize) {
+            if(index>=recentGames.size())return;
+            const auto& entry=recentGames[index];
+            Tile iconTile{Kind::Game,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
+            drawTileIcon(iconTile,left,y,iconSize);
+            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
+        };
 
         if(t.kind==Kind::Clock) {
             const std::time_t stamp=std::time(nullptr);
@@ -2901,7 +2911,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                      left,r.y+33,3,WHITE,right-70);
                 if(dataA)progress(r.y+82,battery);
                 drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
-                if(dataB)text(powerLabel,r.y+91,1,powerConnected?GREEN:MUTED,right);
+                if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
                 label("BATTERY STATUS",r.y+14);
                 drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
@@ -2955,62 +2965,63 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 if(!dataA&&!dataB)text("NATIVE LIBNX SERVICES",left,r.y+90,2,MUTED,right);
             }
         } else if(t.kind==Kind::Recent) {
+            const auto& entries=recentGames;
             if(compact) {
-                label("RECENT",r.y+13);
-                if(recentLaunches.empty())
-                    text(languageRussian?"ПУСТО":"EMPTY",left,r.y+50,1,WHITE,right);
-                else recentLine(0,r.y+42,26);
+                label("RECENT GAMES",r.y+13);
+                if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
+                else recentGameLine(0,r.y+42,26);
             } else if(wide) {
-                label("RECENTLY OPENED",r.y+12);
-                if(recentLaunches.empty())
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+48,2,WHITE,right);
+                label("RECENT GAMES",r.y+12);
+                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
-                    recentLine(0,r.y+34,26);
-                    if(t.w>=3)recentLine(1,r.y+67,26);
+                    const size_t count=std::min<std::size_t>(dataA?config.itemCount:1,
+                        std::min<std::size_t>(2,entries.size()));
+                    for(size_t i=0;i<count;++i)
+                        recentGameLine(i,r.y+32+static_cast<int>(i)*35,25);
                 }
             } else {
-                label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
-                if(recentLaunches.empty()) {
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+86,2,WHITE,right);
-                } else {
-                    const size_t count=std::min<size_t>(4,recentLaunches.size());
-                    for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
+                label("RECENT GAMES",r.y+17);
+                if(entries.empty())text("NO GAMES YET",left,r.y+86,2,WHITE,right);
+                else {
+                    const size_t count=std::min<std::size_t>(config.itemCount,entries.size());
+                    for(size_t i=0;i<count;++i)
+                        recentGameLine(i,r.y+50+static_cast<int>(i)*42,32);
                 }
-                text(languageRussian?"ИСТОРИЯ ЭТОЙ КОНСОЛИ":"HISTORY ON THIS CONSOLE",
-                     left,r.y+r.h-24,1,BLUE,right);
+                label("LOCAL PLAY HISTORY",r.y+r.h-24);
             }
         } else if(t.kind==Kind::Storage) {
             const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
             const int percent=storageStatsAvailable
                 ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
                 :-1;
+            char usedText[48]{},totalText[48]{};
+            std::snprintf(usedText,sizeof(usedText),"%.1f GB USED",
+                static_cast<double>(used)/(1024.0*1024.0*1024.0));
+            std::snprintf(totalText,sizeof(totalText),"%.1f GB TOTAL",
+                static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+            const std::string mainValue=!storageStatsAvailable?"N/A":
+                (dataA?std::string(usedText):freeSpaceText()+" FREE");
             if(compact) {
                 label("SD STORAGE",r.y+13);
-                text(storageStatsAvailable?freeSpaceText():"N/A",left,r.y+39,2,WHITE,right);
-                progress(r.y+82,percent);
+                text(mainValue,left,r.y+39,2,WHITE,right);
+                if(dataB)progress(r.y+82,percent);
             } else if(wide) {
                 label("SD CARD STORAGE",r.y+12);
-                text(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
-                     left,r.y+34,t.w>=3?4:3,WHITE,right-78);
-                if(percent>=0)text(std::to_string(percent)+"% USED",
+                text(mainValue,left,r.y+34,2,WHITE,right-78);
+                if(dataB&&percent>=0)text(std::to_string(percent)+"% USED",
                     right-70,r.y+49,1,MUTED,right);
-                progress(r.y+83,percent);
+                if(dataB)progress(r.y+83,percent);
+                else if(dataA)label(totalText,r.y+83);
             } else {
                 label("SD CARD STORAGE",r.y+18);
                 if(storageStatsAvailable) {
-                    text(freeSpaceText()+" GB FREE",left,r.y+50,5,WHITE,right);
-                    if(sdTotalBytes>0) {
-                        char total[64]{};
-                        std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
-                            static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
-                        text(total,left,r.y+112,2,MUTED,right);
+                    text(mainValue,left,r.y+50,4,WHITE,right);
+                    if(dataA)text(totalText,left,r.y+112,2,MUTED,right);
+                    if(dataB) {
+                        progress(r.y+157,percent);
+                        text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
                     }
-                    progress(r.y+157,percent);
-                    text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
-                } else text(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
-                            left,r.y+90,2,RED,right);
+                } else text("SD CARD UNAVAILABLE",left,r.y+90,2,RED,right);
             }
         } else if(t.kind==Kind::Calendar) {
             std::time_t now=std::time(nullptr);
