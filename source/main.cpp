@@ -6766,18 +6766,22 @@ void launch(const Tile& t) {
         u64 launchControlSize=0;
         const Result launchControlRc=desknx::slaunch::ReadControlData(
             id,launchControl,launchControlSize);
-        const bool appManagesPlayers=R_SUCCEEDED(launchControlRc)&&
-            launchControl.nacp.startup_user_account==0;
+        const bool nacpRequestsUser=R_FAILED(launchControlRc)||
+            launchControl.nacp.startup_user_account!=0;
         const bool hasChosenUser=accountUidIsValid(&uid);
-        const u64 flags=appManagesPlayers
-            ?desknx::ipc::LaunchFlagNoPreuser
-            :(hasChosenUser?desknx::ipc::LaunchFlagHasUser:0);
+        // An explicit profile choice must win over NACP's default selector
+        // policy. Otherwise titles with StartupUserAccount=None show their
+        // own player picker even though DeskNX already has a selected UID.
+        const u64 flags=desknx::ipc::rules::LaunchFlagsForSelectedUser(hasChosenUser);
         desknx::diag::Write("launch","player_policy",
             "title_id=%016llX nacp_rc=0x%08X startup_user=%u has_user=%d flags=0x%llX",
             static_cast<unsigned long long>(id),
             static_cast<unsigned int>(launchControlRc),
             R_SUCCEEDED(launchControlRc)?launchControl.nacp.startup_user_account:255,
             hasChosenUser?1:0,static_cast<unsigned long long>(flags));
+        desknx::diag::Write("launch","player_policy_result",
+            "nacp_requests_user=%d selected_user_preselected=%d",
+            nacpRequestsUser?1:0,hasChosenUser?1:0);
         desknx::diag::Write("launch", "game_ipc_begin", "title_id=%016llX",
                             static_cast<unsigned long long>(id));
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id,flags,uid);});
