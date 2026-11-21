@@ -116,10 +116,10 @@ void testResizeStepRestoresPortraitTwoByThree() {
     int selectedX=0,selectedY=0;
     assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
     assert(desk.tiles[0].w==2&&desk.tiles[0].h==3);
-    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
-    assert(desk.tiles[0].w==3&&desk.tiles[0].h==3);
+    // The 2x3 portrait format is supported, but 3x3 is outside the 6x3 tile-size set.
+    assert(!desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
     assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,false));
-    assert(desk.tiles[0].w==2&&desk.tiles[0].h==3);
+    assert(desk.tiles[0].w==2&&desk.tiles[0].h==2);
 }
 
 void testResizeWithoutRoomIsRefused() {
