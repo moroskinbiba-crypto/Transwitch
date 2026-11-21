@@ -47,6 +47,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_geometry_test.cpp -o /tmp/desknx-visual-geometry-test
           /tmp/desknx-visual-geometry-test
 
+      - name: Test UI component visual-state rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_component_rules_test.cpp -o /tmp/desknx-ui-component-rules-test
+          /tmp/desknx-ui-component-rules-test
+
       - name: Validate custom font preflight parser
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/font_file_validation_test.cpp -o /tmp/desknx-font-validation-test
