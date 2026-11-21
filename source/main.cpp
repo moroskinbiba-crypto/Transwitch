@@ -3332,7 +3332,7 @@ void drawSystemIcon(desknx::ui::IconId icon,int x,int y,int size,Color c) {
         }
     }
 }
-void drawSystemIcon(int legacyKind,int x,int y,int size,Color c) {
+[[maybe_unused]] void drawSystemIcon(int legacyKind,int x,int y,int size,Color c) {
     drawSystemIcon(desknx::ui::iconIdFromLegacyIndex(legacyKind),x,y,size,c);
 }
 void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
