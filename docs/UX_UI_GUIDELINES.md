@@ -14,6 +14,7 @@ Use `source/UiComponents.hpp` for repeated surfaces and controls rather than rei
 The active theme supplies accent/focus tokens. The common corner radius remains capped at 10 px to preserve existing launcher geometry. The shared soft-card helper now uses the component surface renderer, so workspace, widget and modal panels share the same shadow, fill and inset-edge treatment. Header controls, desktop tabs, footer action chips and library filter chips use the shared button renderer.
 
 Component adoption must not change layout bounds, touch hit regions, controller mappings, keyboard ownership or game/homebrew launch routing. Keep icon textures and artwork on their existing caches; UI components must not perform file I/O or create textures from worker threads.
+The selection-style setting must be honored by selected game/NRO tiles (outline, accent rail, pulse ring or corner brackets). Motion effects use short, time-based eased transitions and remain optional; the disabled state uses static focus treatment.
 
 ## Widgets
 
