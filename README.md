@@ -27,6 +27,8 @@ DeskNX — нативный домашний экран и лаунчер для
 - Сенсорное управление и управление Joy-Con/Pro Controller.
 - Атомарное сохранение раскладки и резервные копии настроек.
 
+**Выбор игрока:** в экспериментальном HOME-режиме выбранный в DeskNX профиль передаётся игре через системный backend. В обычном standalone NRO используется профиль, заранее выбранный самой Horizon; произвольный UID через публичный API запуска standalone-приложение передать не может.
+
 Подробнее: [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md), [docs/FEATURES.md](docs/FEATURES.md), [docs/HOMENX_PORT_STATUS.md](docs/HOMENX_PORT_STATUS.md).
 
 ## Сборка самостоятельного NRO
