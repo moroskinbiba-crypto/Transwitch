@@ -19,6 +19,7 @@
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
 #include "SteamGridDbService.hpp"
+#include "desknx/WidgetConfig.hpp"
 
 #include <algorithm>
 #include <array>
@@ -65,6 +66,9 @@ size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
+constexpr const char* FAVORITES_FILE = "sdmc:/switch/DeskNX/favorites.tsv";
+constexpr const char* FAVORITES_TMP = "sdmc:/switch/DeskNX/favorites.tmp";
+constexpr const char* FAVORITES_BAK = "sdmc:/switch/DeskNX/favorites.bak";
 constexpr const char* SETTINGS_FILE = "sdmc:/switch/DeskNX/settings.ini";
 constexpr const char* SETTINGS_TMP = "sdmc:/switch/DeskNX/settings.tmp";
 constexpr const char* SETTINGS_BAK = "sdmc:/switch/DeskNX/settings.bak";
@@ -196,6 +200,13 @@ uint64_t steamGridDbPreviewRevision=UINT64_MAX;
 SteamGridDbPickerView steamGridDbPickerView=SteamGridDbPickerView::Matches;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
+std::vector<std::string> favoriteTitleIds;
+std::vector<Tile> favoritesView;
+bool favoritesOpen=false, recentGamesOnly=false, gameLibraryMode=false;
+int favoritesIndex=0;
+bool widgetEditorOpen=false;
+int widgetEditorRow=0;
+Kind widgetEditorKind=Kind::Clock;
 struct PdmQuerySnapshot {
     char titleId[17]{};
     bool available{false};
@@ -213,9 +224,21 @@ std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
+int batteryChargerType=-1;
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
 Uint32 lastStorageUpdate=0;
 bool storageStatsAvailable=false;
+
+bool tsServiceReady=false, tsInternalOpen=false, tsSocOpen=false;
+TsSession tsInternalSession{}, tsSocSession{};
+bool systemPcbTemperatureAvailable=false, systemSocTemperatureAvailable=false;
+float systemPcbTemperature=-1.0f, systemSocTemperature=-1.0f;
+Uint32 lastSystemMonitorUpdate=0;
+bool clkrstServiceReady=false, cpuClockOpen=false, gpuClockOpen=false;
+ClkrstSession cpuClockSession{}, gpuClockSession{};
+bool systemCpuClockAvailable=false, systemGpuClockAvailable=false;
+std::uint32_t systemCpuClockHz=0, systemGpuClockHz=0;
+
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
 bool widgetPickerMode=false;
