@@ -1760,6 +1760,62 @@ void openFavorites() {
     }
     favoritesOpen=true;
 }
+
+std::vector<Tile> gameLibraryTiles(std::size_t limit) {
+    const auto all=catalogueSnapshot();
+    std::vector<Tile> result;
+    result.reserve(std::min<std::size_t>(limit,all.size()));
+    auto appendById=[&](const std::string& id) {
+        if(result.size()>=limit)return;
+        if(std::any_of(result.begin(),result.end(),[&](const Tile& tile){return tile.data==id;}))return;
+        const auto found=std::find_if(all.begin(),all.end(),[&](const Candidate& item) {
+            return item.kind==Kind::Game&&item.data==id;
+        });
+        if(found!=all.end())
+            result.push_back(Tile{Kind::Game,found->title,found->data,0,0,1,1,found->color});
+    };
+    // Recent launches and favourites surface first; the rest stay alphabetical.
+    for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)appendById(entry.data);
+    for(const auto& id:favoriteTitleIds)appendById(id);
+    std::vector<Candidate> games;
+    for(const auto& item:all)if(item.kind==Kind::Game)games.push_back(item);
+    std::sort(games.begin(),games.end(),[](const Candidate& a,const Candidate& b) {
+        return a.title<b.title;
+    });
+    for(const auto& item:games)appendById(item.data);
+    if(result.size()>limit)result.resize(limit);
+    return result;
+}
+
+struct NextendoWidgetSnapshot {
+    bool fresh{false};
+    unsigned total{0};
+    unsigned activeTitles{0};
+    unsigned topPlayers{0};
+    std::string topGame;
+};
+NextendoWidgetSnapshot nextendoWidgetSnapshot() {
+    NextendoWidgetSnapshot result;
+    const auto games=catalogueSnapshot();
+    const std::uint64_t now=SDL_GetTicks64();
+    if(nextendoMutex)SDL_LockMutex(nextendoMutex);
+    result.fresh=nextendoFeed.hasFreshSnapshot(now);
+    if(result.fresh) {
+        result.total=nextendoFeed.total(now);
+        result.activeTitles=nextendoFeed.activeTitleCount(now);
+        for(const auto& game:games) {
+            if(game.kind!=Kind::Game||!desknx::model::isTitleId(game.data))continue;
+            const auto players=nextendoFeed.playersForTitle(
+                static_cast<desknx::nextendo::TitleId>(std::strtoull(game.data.c_str(),nullptr,16)),now);
+            if(players>result.topPlayers) {
+                result.topPlayers=players;
+                result.topGame=game.title;
+            }
+        }
+    }
+    if(nextendoMutex)SDL_UnlockMutex(nextendoMutex);
+    return result;
+}
 std::vector<HistoryEntry> recentEntriesForModal() {
     if(!recentGamesOnly)return recentLaunches;
     std::vector<HistoryEntry> games;
