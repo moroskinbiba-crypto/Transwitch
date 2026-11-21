@@ -56,6 +56,10 @@ int main() {
     assert(cache.mappedGameId(titleA)==sgdbGameId);
     assert(cache.hasHero(titleA));
     assert(cache.hasGrid(titleA));
+    // A hard size limit evicts the least-recently-used title directory while
+    // keeping the cache strictly below the configured bound.
+    assert(cache.prune(1,{titleA})<=1);
+    assert(!fs::exists(Cache::titleDirectory(titleA)));
 
     std::remove(gridSource.c_str());
     std::remove(heroSource.c_str());
