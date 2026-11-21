@@ -3605,15 +3605,19 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     const bool artworkTile=t.kind==Kind::Game||t.kind==Kind::Nro;
     const Color fill=artworkTile&&selected
         ?Color{29,48,73,255}:Color{22,29,42,255};
-    softCard(r.x,r.y,r.w,r.h,
-             themeIndex==1&&t.kind!=Kind::Game&&t.kind!=Kind::Nro
-                ?Color{13,29,41,236}:fill,
-             selected?Color{92,164,255,210}:Color{255,255,255,18});
-    if(themeIndex==1&&t.kind!=Kind::Game&&t.kind!=Kind::Nro)
-        rect(r.x+4,r.y+18,3,std::max(12,r.h-36),
-             workspace.accentColor>=0
-                ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
-                :COLORS[static_cast<size_t>(t.color)%COLORS.size()]);
+    const Color widgetFill=themeIndex==1&&t.kind!=Kind::Game&&t.kind!=Kind::Nro
+        ?Color{13,29,41,236}:fill;
+    const Color widgetEdge=selected?Color{92,164,255,210}:Color{255,255,255,18};
+    if(artworkTile) {
+        softCard(r.x,r.y,r.w,r.h,widgetFill,widgetEdge);
+    } else if(!gUiComponents.widgetSurface(r,
+        SDL_Color{themeSurfaceTint(widgetFill).r,themeSurfaceTint(widgetFill).g,
+                  themeSurfaceTint(widgetFill).b,themeSurfaceTint(widgetFill).a},
+        SDL_Color{themeEdgeTint(widgetEdge).r,themeEdgeTint(widgetEdge).g,
+                  themeEdgeTint(widgetEdge).b,themeEdgeTint(widgetEdge).a},
+        SDL_Color{accent.r,accent.g,accent.b,accent.a},selected,surfaceOpacity)) {
+        softCard(r.x,r.y,r.w,r.h,widgetFill,widgetEdge);
+    }
 
     if(artworkTile) {
         drawTileCover(t,workspace,r,fill,selected);
