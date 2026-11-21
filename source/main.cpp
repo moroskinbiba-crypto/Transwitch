@@ -1117,9 +1117,9 @@ void pumpSteamGridDbCacheCleanup() {
             installed.push_back(static_cast<std::uint64_t>(id));
     }
     SDL_UnlockMutex(catalogueMutex);
-    (void)gSteamGridDbService.cache().prune(
-        desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed);
-    steamGridDbStartupPruned=true;
+    if(gSteamGridDbService.pruneCache(
+        desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed))
+        steamGridDbStartupPruned=true;
 }
 void pumpSteamGridDbPicker() {
     if(!steamGridDbPickerOpen)return;
@@ -1173,7 +1173,7 @@ void pumpSteamGridDbPicker() {
                     installed.push_back(static_cast<std::uint64_t>(parsed));
             }
             if(catalogueMutex)SDL_UnlockMutex(catalogueMutex);
-            (void)gSteamGridDbService.cache().prune(
+            (void)gSteamGridDbService.pruneCache(
                 desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed);
         }
         steamGridDbApplyPending=false;
