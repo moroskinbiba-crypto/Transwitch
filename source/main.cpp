@@ -376,11 +376,11 @@ void refreshQuickSettingsSnapshot(bool force=false) {
         quickBluetoothAvailable=R_SUCCEEDED(setsysGetBluetoothEnableFlag(&quickBluetoothEnabled));
     }
 
+    NifmInternetConnectionType connectionType=NifmInternetConnectionType_WiFi;
     if(R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
         bool wirelessEnabled=true;
         quickAirplaneAvailable=R_SUCCEEDED(nifmIsWirelessCommunicationEnabled(&wirelessEnabled));
         if(quickAirplaneAvailable)quickAirplaneMode=!wirelessEnabled;
-        NifmInternetConnectionType connectionType=NifmInternetConnectionType_WiFi;
         NifmInternetConnectionStatus connectionStatus=NifmInternetConnectionStatus_ConnectingUnknown1;
         u32 strength=0;
         if(R_SUCCEEDED(nifmGetInternetConnectionStatus(&connectionType,&strength,&connectionStatus))) {
