@@ -3130,9 +3130,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                      compactCalendar?4:5,WHITE,right);
                 text(monthName+"  "+std::to_string(current.tm_year+1900),
                      left,r.y+(compactCalendar?68:100),compactCalendar?1:2,BLUE,right);
-                const bool compactCalendar=wide||compact;
-                if(dataA)label(weekday,r.y+(compactCalendar?94:142));
-                if(dataB)label(clockText(),r.y+(compactCalendar?104:169));
+                if(dataA&&!compact)label(weekday,r.y+(wide?94:142));
+                if(dataB&&!compact)label(clockText(),r.y+(wide?104:169));
             } else if(config.style==2) {
                 label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
                 const bool compactCalendar=wide||compact;
