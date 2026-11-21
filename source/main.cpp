@@ -23,6 +23,7 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "WorkspaceBackgroundCache.hpp"
 #include "SteamGridDbService.hpp"
 #include "desknx/WidgetConfig.hpp"
 #include "SvgIconCache.hpp"
@@ -116,8 +117,6 @@ bool launcherSettingsSavePending=false;
 Uint32 launcherSettingsSaveDue=0;
 std::unordered_map<std::string,std::string> gameNameOverrides;
 std::string pendingGameIconTitleId;
-SDL_Texture* wallpaperTexture=nullptr;
-int wallpaperWidth=0, wallpaperHeight=0;
 SDL_Texture* roundedCornerMaskTexture=nullptr;
 int roundedCornerMaskRadius=0;
 
@@ -125,14 +124,6 @@ enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground, Gam
 struct MediaEntry { std::string name, path; bool directory{false}; };
 bool mediaPickerOpen=false;
 MediaPickerType mediaPickerType=MediaPickerType::Wallpaper;
-struct WorkspaceBackgroundTexture {
-    std::string path;
-    SDL_Texture* texture{nullptr};
-    int width{0}, height{0};
-    unsigned long long lastUse{0};
-};
-std::vector<WorkspaceBackgroundTexture> workspaceBackgroundTextures;
-unsigned long long workspaceBackgroundClock=0;
 std::string mediaPickerDirectory;
 std::vector<MediaEntry> mediaPickerEntries;
 int mediaPickerIndex=0, mediaPickerOffset=0;
@@ -220,6 +211,7 @@ std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+WorkspaceBackgroundCache gWorkspaceBackgroundCache;
 desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
 enum class SteamGridDbPickerView { Matches, Assets };
 bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false, steamGridDbStartupPruned=false;
@@ -749,105 +741,37 @@ void applyGameNameOverridesToWorkspaces() {
     }
 }
 
-SDL_Surface* limitBackgroundSurface(SDL_Surface* source) {
-    if(!source)return nullptr;
-    constexpr int MaxBackgroundWidth=1600;
-    constexpr int MaxBackgroundHeight=900;
-    if(source->w<=MaxBackgroundWidth&&source->h<=MaxBackgroundHeight)
-        return source;
-    const double scale=std::min(
-        static_cast<double>(MaxBackgroundWidth)/source->w,
-        static_cast<double>(MaxBackgroundHeight)/source->h);
-    const int width=std::max(1,static_cast<int>(source->w*scale));
-    const int height=std::max(1,static_cast<int>(source->h*scale));
-    SDL_Surface* resized=SDL_CreateRGBSurfaceWithFormat(
-        0,width,height,32,SDL_PIXELFORMAT_RGBA32);
-    if(!resized)return source;
-    // Preserve the original alpha channel while resampling PNG backgrounds.
-    SDL_SetSurfaceBlendMode(source,SDL_BLENDMODE_NONE);
-    if(SDL_BlitScaled(source,nullptr,resized,nullptr)!=0) {
-        SDL_FreeSurface(resized);
-        return source;
-    }
-    SDL_FreeSurface(source);
-    return resized;
-}
-
 bool loadWallpaperTexture(const std::string& path) {
-    if(path.empty()) {
-        if(wallpaperTexture)SDL_DestroyTexture(wallpaperTexture);
-        wallpaperTexture=nullptr;wallpaperWidth=wallpaperHeight=0;
-        return true;
-    }
-    if(!isAllowedMediaPath(path,MediaPickerType::Wallpaper))return false;
+    // Validate the selection without decoding it on the UI thread. The actual
+    // read/decode is queued by drawWallpaper() and processed by a low-priority
+    // worker; the previous wallpaper remains visible until the new one is ready.
+    if(path.empty()) return true;
+    if(!isAllowedMediaPath(path,MediaPickerType::Wallpaper)) return false;
     struct stat st{};
-    if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
-       st.st_size>24LL*1024*1024)return false;
-    SDL_Surface* surface=IMG_Load(path.c_str());
-    if(!surface)return false;
-    const bool sizeOk=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
-        static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
-    if(!sizeOk){SDL_FreeSurface(surface);return false;}
-    surface=limitBackgroundSurface(surface);
-    SDL_Texture* next=SDL_CreateTextureFromSurface(renderer,surface);
-    const int width=surface->w,height=surface->h;
-    SDL_FreeSurface(surface);
-    if(!next)return false;
-    SDL_SetTextureBlendMode(next,SDL_BLENDMODE_NONE);
-    if(wallpaperTexture)SDL_DestroyTexture(wallpaperTexture);
-    wallpaperTexture=next;wallpaperWidth=width;wallpaperHeight=height;
-    return true;
+    return stat(path.c_str(),&st)==0 && S_ISREG(st.st_mode) &&
+        st.st_size>0 && st.st_size<=24LL*1024*1024;
 }
 
 void drawWallpaper() {
-    if(!wallpaperTexture||wallpaperWidth<=0||wallpaperHeight<=0)return;
-    const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,wallpaperWidth,wallpaperHeight);
+    if(wallpaperPath.empty()) return;
+    int width=0,height=0;
+    SDL_Texture* texture=gWorkspaceBackgroundCache.get(wallpaperPath,width,height);
+    if(!texture||width<=0||height<=0) return;
+    const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,width,height);
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
     SDL_RenderSetClipRect(renderer,&viewport);
-    SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
+    SDL_RenderCopy(renderer,texture,nullptr,&dst);
     SDL_RenderSetClipRect(renderer,nullptr);
     SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
 }
 
-SDL_Texture* getWorkspaceBackgroundTexture(const std::string& path,int& width,int& height) {
-    if(path.empty()||!isAllowedMediaPath(path,MediaPickerType::WorkspaceBackground))return nullptr;
-    for(auto& entry:workspaceBackgroundTextures) {
-        if(entry.path==path) {
-            entry.lastUse=++workspaceBackgroundClock;
-            width=entry.width;height=entry.height;return entry.texture;
-        }
-    }
-    struct stat st{};
-    if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
-       st.st_size>24LL*1024*1024)return nullptr;
-    SDL_Surface* surface=IMG_Load(path.c_str());
-    if(!surface)return nullptr;
-    const bool valid=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
-        static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
-    if(!valid){SDL_FreeSurface(surface);return nullptr;}
-    surface=limitBackgroundSurface(surface);
-    SDL_Texture* texture=SDL_CreateTextureFromSurface(renderer,surface);
-    const int imageWidth=surface->w,imageHeight=surface->h;
-    SDL_FreeSurface(surface);
-    if(!texture)return nullptr;
-    SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_NONE);
-    if(workspaceBackgroundTextures.size()>=3) {
-        auto oldest=workspaceBackgroundTextures.begin();
-        for(auto it=workspaceBackgroundTextures.begin();it!=workspaceBackgroundTextures.end();++it)
-            if(it->lastUse<oldest->lastUse)oldest=it;
-        if(oldest->texture)SDL_DestroyTexture(oldest->texture);
-        workspaceBackgroundTextures.erase(oldest);
-    }
-    workspaceBackgroundTextures.push_back({path,texture,imageWidth,imageHeight,++workspaceBackgroundClock});
-    width=imageWidth;height=imageHeight;return texture;
-}
-
 void drawWorkspaceBackground(const Workspace& desk) {
-    if(desk.backgroundPath.empty()){drawWallpaper();return;}
+    if(desk.backgroundPath.empty()) { drawWallpaper(); return; }
     int width=0,height=0;
-    SDL_Texture* texture=getWorkspaceBackgroundTexture(desk.backgroundPath,width,height);
-    if(!texture||width<=0||height<=0){drawWallpaper();return;}
+    SDL_Texture* texture=gWorkspaceBackgroundCache.get(
+        desk.backgroundPath,width,height);
+    if(!texture||width<=0||height<=0) { drawWallpaper(); return; }
     const auto fit=desknx::artwork::destination(0,0,SW,SH,width,height,
         static_cast<desknx::artwork::FitMode>(desk.backgroundFit));
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
@@ -3932,6 +3856,7 @@ void drawScreen() {
         lastUiScreenState=screenState;
         uiTransitionStart=motionEffects?SDL_GetTicks():0;
     }
+    gWorkspaceBackgroundCache.beginFrame();
     gIconCache.beginFrame();
     gFontRenderer.beginFrame();
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -7345,6 +7270,7 @@ int main(int,char**) {
     setStatus("CATALOGUE LOADING - Y ADD  X EDIT",5000);
 #endif
     IMG_Init(IMG_INIT_JPG|IMG_INIT_PNG);
+    gWorkspaceBackgroundCache.setRenderer(renderer);
     gIconCache.setRenderer(renderer);
     // The nine authored SVG controls are parsed/rasterized once at startup;
     // thereafter they are ordinary cached SDL textures with no per-frame work.
@@ -7619,8 +7545,8 @@ int main(int,char**) {
     if(gpuClockOpen){clkrstCloseSession(&gpuClockSession);gpuClockOpen=false;}
     if(clkrstServiceReady){clkrstExit();clkrstServiceReady=false;}
     steamGridDbDestroyPreview();
+    gWorkspaceBackgroundCache.shutdown();
     gIconCache.shutdown();gVectorIconCache.shutdown();gFontRenderer.shutdown();
-    if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();
     if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
