@@ -3901,6 +3901,116 @@ void resizeTile(bool bigger) {
     layoutUserModified=true;
     saveNow();
 }
+
+bool isWidgetKind(Kind kind) {
+    switch(kind) {
+        case Kind::Clock: case Kind::Battery: case Kind::System:
+        case Kind::Recent: case Kind::Storage: case Kind::Calendar:
+        case Kind::Nextendo: case Kind::Favorites: case Kind::GameLibrary:
+            return true;
+        default:return false;
+    }
+}
+Tile* selectedWidgetTile() {
+    if(desks.empty()||deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return nullptr;
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int index=itemAt(desk,selectedX,selectedY);
+    if(index<0||index>=static_cast<int>(desk.tiles.size()))return nullptr;
+    Tile& tile=desk.tiles[static_cast<size_t>(index)];
+    return isWidgetKind(tile.kind)?&tile:nullptr;
+}
+void openWidgetEditor() {
+    Tile* tile=selectedWidgetTile();
+    if(!tile){setStatus("SELECT A WIDGET FIRST",2000);return;}
+    widgetEditorKind=tile->kind;
+    widgetEditorRow=0;
+    widgetEditorOpen=true;
+}
+void closeWidgetEditor() {
+    widgetEditorOpen=false;
+}
+std::string widgetEditorDataLabel(unsigned bit) {
+    switch(widgetEditorKind) {
+        case Kind::Clock: return bit==0?"SECONDS":"SHOW DATE";
+        case Kind::Battery: return bit==0?"CHARGE BAR":"POWER STATE";
+        case Kind::System: return bit==0?"TEMPERATURES":"CPU / GPU CLOCKS";
+        case Kind::Recent: return bit==0?"MORE ENTRIES":"GAME COVERS";
+        case Kind::Storage: return bit==0?"USED / TOTAL":"USAGE BAR";
+        case Kind::Calendar: return bit==0?"WEEKDAY":"FULL CALENDAR";
+        case Kind::Nextendo: return bit==0?"ONLINE TOTAL":"TOP ACTIVITY";
+        case Kind::Favorites: return bit==0?"COVER STRIP":"SAVED COUNT";
+        case Kind::GameLibrary: return bit==0?"RECENT FIRST":"COVER STRIP";
+        default:return bit==0?"DATA A":"DATA B";
+    }
+}
+bool resizeWidgetTo(int width,int height) {
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int index=itemAt(desk,selectedX,selectedY);
+    if(index<0)return false;
+    Tile& tile=desk.tiles[static_cast<size_t>(index)];
+    Tile proposed=tile;
+    proposed.w=width;
+    proposed.h=height;
+    if(!desknx::model::placeable(desk,proposed,tile.x,tile.y,index)) {
+        setStatus("WIDGET SIZE DOES NOT FIT HERE",2200);
+        return false;
+    }
+    tile.w=width;
+    tile.h=height;
+    layoutUserModified=true;
+    saveNow();
+    return true;
+}
+void adjustWidgetEditor(int direction) {
+    Tile* tile=selectedWidgetTile();
+    if(!tile){closeWidgetEditor();return;}
+    auto config=widgetConfig(*tile);
+    if(direction==0)direction=1;
+    switch(widgetEditorRow) {
+        case 0: {
+            static constexpr int sizes[][2]={{1,1},{2,1},{3,1},{2,2},{3,2}};
+            int current=0;
+            for(int i=0;i<5;++i)if(tile->w==sizes[i][0]&&tile->h==sizes[i][1])current=i;
+            for(int step=0;step<5;++step) {
+                current=(current+direction+5)%5;
+                if(resizeWidgetTo(sizes[current][0],sizes[current][1]))return;
+            }
+            break;
+        }
+        case 1:
+            config.style=(config.style+direction+3)%3;
+            break;
+        case 2:
+            desknx::widgets::toggle(config,0);
+            break;
+        case 3:
+            desknx::widgets::toggle(config,1);
+            break;
+        case 4: {
+            static constexpr int rates[]={5,15,30,60,180};
+            int index=0;
+            for(int i=0;i<5;++i)if(rates[i]==config.refreshSeconds)index=i;
+            index=(index+direction+5)%5;
+            config.refreshSeconds=rates[index];
+            break;
+        }
+        case 5: {
+            static constexpr int counts[]={2,3,4,6};
+            int index=0;
+            for(int i=0;i<4;++i)if(counts[i]==config.itemCount)index=i;
+            index=(index+direction+4)%4;
+            config.itemCount=counts[index];
+            break;
+        }
+        case 6:
+            closeWidgetEditor();
+            return;
+        default:return;
+    }
+    tile->data=desknx::widgets::serialize(config);
+    layoutUserModified=true;
+    saveNow();
+}
 void removeTile() {
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     const int i=itemAt(d,selectedX,selectedY);
