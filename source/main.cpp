@@ -4679,7 +4679,11 @@ void drawScreen() {
     softCard(448,24,374,48,Color{32,43,59,235},Color{255,255,255,24});
     drawSystemIcon(desknx::ui::IconId::User,464,34,27,Color{215,228,246,255});
     text(selectedUserLabel,504,41,2,WHITE,710);
+#ifdef DESKNX_SYSTEM_APPLET
     text("CHANGE",732,43,1,BLUE,806);
+#else
+    text("SYSTEM",732,43,1,MUTED,806);
+#endif
     uiButton(832,24,170,48,18,desknx::ui::ButtonVariant::Chip,
         Color{32,43,59,235},Color{255,255,255,18});
     text(nextendoTotalLabel(),846,43,1,GREEN,990);
@@ -6515,6 +6519,15 @@ void selectConsoleUser(int index) {
 }
 
 void openUserProfile() {
+#ifndef DESKNX_SYSTEM_APPLET
+    // The standalone NRO cannot pass an arbitrary AccountUid through the
+    // public application-launch API. Keep the Horizon-preselected profile
+    // visible, but do not offer a selector that would not affect game launch.
+    setStatus(languageRussian?
+        "ПРОФИЛЬ ИГРОКА ВЫБИРАЕТ СИСТЕМА":
+        "PLAYER PROFILE IS CONTROLLED BY HORIZON",3500);
+    return;
+#else
     if(!consoleUsersLoaded||!accountServiceReady) loadConsoleUsers();
     if(consoleUsers.empty()) {
         setStatus("ACCOUNT PROFILES UNAVAILABLE",3500);
@@ -6530,6 +6543,7 @@ void openUserProfile() {
         }
     }
     userPickerOpen=true;
+#endif
 }
 void activateWorkspaceAppearance(int action) {
     if(deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return;
