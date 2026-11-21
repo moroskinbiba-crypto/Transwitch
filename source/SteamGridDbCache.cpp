@@ -106,6 +106,12 @@ bool SteamGridDbCache::saveGameMapping(std::uint64_t id,std::uint64_t gameId,con
  if(!id||!gameId||!ensureDirectories())return false;std::error_code ec;std::filesystem::create_directories(titleDirectory(id),ec);if(ec)return false;
  Meta m;readMeta(metadataPath(id),m);m.titleId=id;m.gameId=gameId;m.gameName=name;m.lastAccess=static_cast<std::uint64_t>(std::time(nullptr));return writeMeta(metadataPath(id),m);
 }
+bool SteamGridDbCache::activateCachedArtwork(std::uint64_t id,ArtworkKind kind){
+ if(!id||!hasArtwork(id,kind))return false;
+ Meta m;readMeta(metadataPath(id),m);m.titleId=id;m.active=kindKey(kind);
+ m.lastAccess=static_cast<std::uint64_t>(std::time(nullptr));
+ return writeMeta(metadataPath(id),m);
+}
 bool SteamGridDbCache::saveArtworkFromFile(std::uint64_t id,ArtworkKind kind,const std::string& source,
  std::uint64_t gameId,std::uint64_t assetId,const std::string& name,bool makeActive){
  if(!id||source.empty()||!ensureDirectories())return false;std::error_code ec;std::filesystem::create_directories(titleDirectory(id),ec);if(ec)return false;
