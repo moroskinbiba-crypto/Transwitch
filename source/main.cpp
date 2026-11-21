@@ -442,6 +442,9 @@ void loadLauncherSettings() {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
             fontPath=value;
+        } else if(key=="steamgriddbkey") {
+            if(value.size()<=160 && value.find_first_of("\r\n\t")==std::string::npos)
+                steamGridDbApiKey=value;
         } else if(key=="language") {
             languageRussian=(value=="ru" || value=="russian");
         } else if(key=="iconstyle") {
@@ -470,7 +473,8 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n"
+       <<"steamgriddbkey="<<safeField(steamGridDbApiKey)<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
