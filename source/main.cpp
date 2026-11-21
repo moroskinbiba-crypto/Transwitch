@@ -1070,7 +1070,13 @@ void steamGridDbRestoreSystem() {
     Tile tile;
     std::uint64_t id=0;
     if(!steamGridDbGetSelectedGame(tile,id))return;
-    if(gSteamGridDbService.cache().restoreSystemArtwork(id)) {
+    auto& cache=gSteamGridDbService.cache();
+    if(!cache.hasHero(id)&&!cache.hasGrid(id)&&!cache.hasLogo(id)&&!cache.hasIcon(id)) {
+        setStatus("NO CUSTOM COVER TO RESTORE",2400);
+        steamGridDbClosePicker();
+        return;
+    }
+    if(cache.restoreSystemArtwork(id)) {
         gIconCache.invalidate(Kind::Game,tile.data);
         setStatus("SYSTEM GAME COVER RESTORED",3000);
     } else setStatus("NO CUSTOM COVER TO RESTORE",2400);
@@ -4464,7 +4470,10 @@ void touchInput(const SDL_Event&e) {
                     const int row=(y-198)/47;
                     const int count=static_cast<int>(gSteamGridDbService.snapshot().games.size());
                     const int index=steamGridDbMatchOffset+row;
-                    if(index>=0&&index<count)steamGridDbMatchIndex=index;
+                    if(index>=0&&index<count) {
+                        steamGridDbMatchIndex=index;
+                        steamGridDbChooseMatch(index);
+                    }
                 } else if(x>=842&&x<=1002&&y>=574&&y<=616) {
                     steamGridDbChooseMatch(steamGridDbMatchIndex);
                 } else if(x>=1016&&x<=1152&&y>=574&&y<=616) {
