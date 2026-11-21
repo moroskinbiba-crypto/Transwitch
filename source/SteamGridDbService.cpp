@@ -12,12 +12,17 @@ bool SteamGridDbService::ensureWorker(){
  if(!mutex_)mutex_=SDL_CreateMutex();
  if(!condition_)condition_=SDL_CreateCond();
  if(!mutex_||!condition_){if(condition_)SDL_DestroyCond(condition_);if(mutex_)SDL_DestroyMutex(mutex_);condition_=nullptr;mutex_=nullptr;return false;}
+ SDL_AtomicSet(&stopRequested_,0);
  stopWorker_=false;
  worker_=SDL_CreateThread(&SteamGridDbService::workerEntry,"DeskNX SteamGridDB",this);
  if(!worker_){SDL_DestroyCond(condition_);SDL_DestroyMutex(mutex_);condition_=nullptr;mutex_=nullptr;return false;}
  return true;
 }
 int SDLCALL SteamGridDbService::workerEntry(void* p){return static_cast<SteamGridDbService*>(p)->workerLoop();}
+bool SteamGridDbService::cancelNetwork(void* context){
+ auto* self=static_cast<SteamGridDbService*>(context);
+ return !self||SDL_AtomicGet(&self->stopRequested_)!=0;
+}
 bool SteamGridDbService::enqueue(Job job){
  if(!mutex_)return false;
  SDL_LockMutex(mutex_);
@@ -138,7 +143,7 @@ int SteamGridDbService::workerLoop(){
     continue;
    }
    std::vector<GameResult> games;
-   if(!searchGames(j.apiKey,j.title,games,error)){publishError(j.revision,error);continue;}
+   if(!searchGames(j.apiKey,j.title,games,error,&SteamGridDbService::cancelNetwork,this)){publishError(j.revision,error);continue;}
    SDL_LockMutex(mutex_);
    if(j.revision==revision_){
     state_.games=std::move(games);
@@ -151,12 +156,12 @@ int SteamGridDbService::workerLoop(){
   }
   if(j.type==JobType::Assets){
    std::vector<ArtworkAsset> assets;
-   if(!fetchAssets(j.apiKey,j.gameId,j.kind,assets,error)) {
+   if(!fetchAssets(j.apiKey,j.gameId,j.kind,assets,error,&SteamGridDbService::cancelNetwork,this)) {
     if(j.mappedLookup) {
      // Saved SGDB mappings can become stale; fall back to a fresh title search.
      std::vector<GameResult> games;
      std::string searchError;
-     if(searchGames(j.apiKey,j.title,games,searchError)) {
+     if(searchGames(j.apiKey,j.title,games,searchError,&SteamGridDbService::cancelNetwork,this)) {
       SDL_LockMutex(mutex_);
       if(j.revision==revision_) {
        state_.games=std::move(games);
@@ -180,18 +185,18 @@ int SteamGridDbService::workerLoop(){
    bool has=current&&!state_.assets.empty();ArtworkAsset first;if(has)first=state_.assets.front();SDL_UnlockMutex(mutex_);
    if(current)cache_.saveGameMapping(j.titleId,j.gameId,j.gameName.empty()?j.title:j.gameName);
    if(has){cache_.ensureDirectories();const std::string path=previewPath(j.titleId);
-    if(downloadImage(first.thumb,path,error))publishPreview(j.revision,0,path);
+    if(downloadImage(first.thumb,path,error,&SteamGridDbService::cancelNetwork,this))publishPreview(j.revision,0,path);
     else{SDL_LockMutex(mutex_);if(j.revision==revision_){state_.message="Preview unavailable; full image can still be applied";++state_.revision;}SDL_UnlockMutex(mutex_);}}
    continue;
   }
   if(j.type==JobType::Preview){
    cache_.ensureDirectories();const std::string path=previewPath(j.titleId);
-   if(!downloadImage(j.asset.thumb,path,error)){publishError(j.revision,error);continue;}
+   if(!downloadImage(j.asset.thumb,path,error,&SteamGridDbService::cancelNetwork,this)){publishError(j.revision,error);continue;}
    publishPreview(j.revision,j.assetIndex,path);continue;
   }
   if(j.type==JobType::Apply){
    cache_.ensureDirectories();const std::string temp=std::string(SteamGridDbCache::kCacheRoot)+"/.download.tmp";
-   if(!downloadImage(j.asset.url,temp,error)){publishError(j.revision,error);continue;}
+   if(!downloadImage(j.asset.url,temp,error,&SteamGridDbService::cancelNetwork,this)){publishError(j.revision,error);continue;}
    bool saved=cache_.saveArtworkFromFile(j.titleId,
     static_cast<SteamGridDbCache::ArtworkKind>(j.kind),temp,
     j.gameId,j.asset.id,j.gameName,true);
@@ -204,6 +209,7 @@ int SteamGridDbService::workerLoop(){
  if(networkReady_){desknx::network::release();networkReady_=false;}return 0;
 }
 void SteamGridDbService::shutdown(){
+ SDL_AtomicSet(&stopRequested_,1);
  if(mutex_){SDL_LockMutex(mutex_);stopWorker_=true;jobs_.clear();SDL_CondBroadcast(condition_);SDL_UnlockMutex(mutex_);}
  if(worker_){SDL_WaitThread(worker_,nullptr);worker_=nullptr;}
  if(condition_){SDL_DestroyCond(condition_);condition_=nullptr;}
