@@ -360,19 +360,35 @@ private:
                 ellipsisWidth > maxWidth) {
                 fitted.clear();
             } else {
-                size_t cut = value.size();
-                fitted.clear();
-                while (cut > 0) {
-                    cut = previousCodePointStart(value, cut);
-                    std::string candidate = value.substr(0, cut) + ellipsis;
-                    if (TTF_SizeUTF8(font, candidate.c_str(),
-                                     &measuredWidth, &measuredHeight) == 0 &&
-                        measuredWidth <= maxWidth) {
-                        fitted = std::move(candidate);
-                        break;
-                    }
+                // Build UTF-8 character boundaries once, then find the longest
+                // fitting prefix in logarithmic measurements. This avoids the
+                // old O(n^2) repeated substring/measure loop for long filenames.
+                std::vector<std::size_t> ends;
+                ends.reserve(value.size());
+                for (std::size_t pos = 0; pos < value.size();) {
+                    std::size_t next = pos + 1;
+                    while (next < value.size() &&
+                           (static_cast<unsigned char>(value[next]) & 0xC0u) == 0x80u)
+                        ++next;
+                    ends.push_back(next);
+                    pos = next;
                 }
-                if (fitted.empty() && ellipsisWidth <= maxWidth) fitted = ellipsis;
+
+                std::size_t low = 0;
+                std::size_t high = ends.size();
+                while (low < high) {
+                    const std::size_t mid = low + (high - low + 1) / 2;
+                    const std::size_t cut = mid == 0 ? 0 : ends[mid - 1];
+                    std::string candidate = value.substr(0, cut) + ellipsis;
+                    const bool fits =
+                        TTF_SizeUTF8(font, candidate.c_str(),
+                                     &measuredWidth, &measuredHeight) == 0 &&
+                        measuredWidth <= maxWidth;
+                    if (fits) low = mid;
+                    else high = mid - 1;
+                }
+                const std::size_t cut = low == 0 ? 0 : ends[low - 1];
+                fitted = value.substr(0, cut) + ellipsis;
             }
         }
 
