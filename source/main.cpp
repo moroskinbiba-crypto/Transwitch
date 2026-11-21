@@ -2316,32 +2316,116 @@ void defaultLayout() {
         if(c.kind==Kind::Game&&gi<12) {desks[0].tiles.push_back(Tile{c.kind,c.title,c.data,gi%COLS,gi/COLS,1,1,c.color});++gi;}
         if(c.kind==Kind::Nro&&hi<12) {desks[1].tiles.push_back(Tile{c.kind,c.title,c.data,hi%COLS,hi/COLS,1,1,c.color});++hi;}
     }
-    desks[2].tiles.push_back(Tile{Kind::Clock,"Clock","",0,0,2,1,1});
-    desks[2].tiles.push_back(Tile{Kind::Battery,"Battery","",2,0,2,1,2});
-    desks[2].tiles.push_back(Tile{Kind::System,"System info","",4,0,2,1,5});
-    desks[2].tiles.push_back(Tile{Kind::Recent,"Recent launches","",0,1,3,1,6});
-    desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
-    desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
+    desks[2].tiles={
+        Tile{Kind::Clock,"Clock","",0,0,2,1,1},
+        Tile{Kind::Battery,"Battery","",2,0,2,1,2},
+        Tile{Kind::Nextendo,"Nextendo","",4,0,2,1,0},
+        Tile{Kind::Recent,"Recent games","",0,1,2,1,6},
+        Tile{Kind::Favorites,"Favorites","",2,1,2,1,8},
+        Tile{Kind::GameLibrary,"Game library","",4,1,2,1,9},
+        Tile{Kind::Storage,"SD storage","",0,2,2,1,3},
+        Tile{Kind::System,"System monitor","",2,2,2,1,5},
+        Tile{Kind::Calendar,"Calendar","",4,2,2,1,4}
+    };
 }
 void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Battery))*1000u;
+    if(lastBatteryTick!=0&&now-lastBatteryTick<interval)return;
+    lastBatteryTick=now;
     if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
+    if(psmReady) {
+        u32 pct=0;
+        if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct))&&pct<=100u)
+            battery=static_cast<int>(pct);
+        PsmChargerType charger=PsmChargerType_Unconnected;
+        if(R_SUCCEEDED(psmGetChargerType(&charger)))
+            batteryChargerType=static_cast<int>(charger);
+        else batteryChargerType=-1;
+    }
 }
 void refreshStorageStats() {
     const Uint32 now=SDL_GetTicks();
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Storage))*1000u;
+    if(lastStorageUpdate!=0&&now-lastStorageUpdate<interval)return;
     lastStorageUpdate=now;
     struct statvfs fs{};
     if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
         const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
         sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
         sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0;
+        storageStatsAvailable=sdTotalBytes>0&&sdFreeBytes<=sdTotalBytes;
     } else {
         sdTotalBytes=0;
         sdFreeBytes=0;
         storageStatsAvailable=false;
+    }
+}
+void refreshSystemMonitor() {
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::System))*1000u;
+    if(lastSystemMonitorUpdate!=0&&now-lastSystemMonitorUpdate<interval)return;
+    lastSystemMonitorUpdate=now;
+    systemPcbTemperatureAvailable=false;
+    systemSocTemperatureAvailable=false;
+    systemCpuClockAvailable=false;
+    systemGpuClockAvailable=false;
+
+    if(hosversionGet()>=MAKEHOSVERSION(10,0,0)) {
+        if(!tsServiceReady&&R_SUCCEEDED(tsInitialize()))tsServiceReady=true;
+        if(tsServiceReady) {
+            if(!tsInternalOpen&&R_SUCCEEDED(tsOpenSession(&tsInternalSession,TsDeviceCode_LocationInternal)))
+                tsInternalOpen=true;
+            if(!tsSocOpen&&R_SUCCEEDED(tsOpenSession(&tsSocSession,TsDeviceCode_LocationExternal)))
+                tsSocOpen=true;
+            float temperature=0.0f;
+            if(tsInternalOpen&&R_SUCCEEDED(tsSessionGetTemperature(&tsInternalSession,&temperature))&&
+               temperature>=-20.0f&&temperature<=120.0f) {
+                systemPcbTemperature=temperature;
+                systemPcbTemperatureAvailable=true;
+            }
+            temperature=0.0f;
+            if(tsSocOpen&&R_SUCCEEDED(tsSessionGetTemperature(&tsSocSession,&temperature))&&
+               temperature>=-20.0f&&temperature<=120.0f) {
+                systemSocTemperature=temperature;
+                systemSocTemperatureAvailable=true;
+            }
+        }
+    } else {
+        s32 temperature=0;
+        if(R_SUCCEEDED(tsGetTemperature(TsLocation_Internal,&temperature))&&
+           temperature>=-20&&temperature<=120) {
+            systemPcbTemperature=static_cast<float>(temperature);
+            systemPcbTemperatureAvailable=true;
+        }
+        temperature=0;
+        if(R_SUCCEEDED(tsGetTemperature(TsLocation_External,&temperature))&&
+           temperature>=-20&&temperature<=120) {
+            systemSocTemperature=static_cast<float>(temperature);
+            systemSocTemperatureAvailable=true;
+        }
+    }
+
+    if(hosversionGet()>=MAKEHOSVERSION(8,0,0)) {
+        if(!clkrstServiceReady&&R_SUCCEEDED(clkrstInitialize()))clkrstServiceReady=true;
+        if(clkrstServiceReady) {
+            if(!cpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
+                &cpuClockSession,PcvModuleId_CpuBus,3)))cpuClockOpen=true;
+            if(!gpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
+                &gpuClockSession,PcvModuleId_GPU,3)))gpuClockOpen=true;
+            std::uint32_t rate=0;
+            if(cpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&cpuClockSession,&rate))&&
+               rate>=1000000u&&rate<=4000000000u) {
+                systemCpuClockHz=rate;
+                systemCpuClockAvailable=true;
+            }
+            rate=0;
+            if(gpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&gpuClockSession,&rate))&&
+               rate>=1000000u&&rate<=4000000000u) {
+                systemGpuClockHz=rate;
+                systemGpuClockAvailable=true;
+            }
+        }
     }
 }
 std::string initials(const std::string& name) {
