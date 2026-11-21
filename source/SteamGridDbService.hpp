@@ -50,6 +50,7 @@ private:
   ArtworkAsset asset;
  };
  bool ensureWorker();
+ static bool cancelNetwork(void* context);
  bool enqueue(Job job);
  static int SDLCALL workerEntry(void* context);
  int workerLoop();
@@ -60,6 +61,7 @@ private:
  SDL_cond* condition_{nullptr};
  SDL_Thread* worker_{nullptr};
  bool stopWorker_{false},networkReady_{false};
+ SDL_atomic_t stopRequested_{};
  std::uint64_t revision_{0};
  std::deque<Job> jobs_;
  ServiceSnapshot state_;
