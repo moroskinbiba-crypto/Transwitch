@@ -5936,6 +5936,8 @@ int main(int,char**) {
                       static_cast<unsigned int>(nsInitError));
         setStatus(message, 6000);
     }
+    SDL_AtomicSet(&nextendoConfiguredRefreshMs,
+        configuredWidgetRefresh(Kind::Nextendo)*1000);
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
     nextendoThread=SDL_CreateThread(nextendoThreadMain,"Nextendo online counts",nullptr);
     if(!nextendoThread)desknx::diag::Write("nextendo","thread_create_failed","online counts disabled");
@@ -6062,6 +6064,12 @@ int main(int,char**) {
         accountServiceReady=false;
     }
     if (setsysReady) setsysExit();
+    if(tsInternalOpen){tsSessionClose(&tsInternalSession);tsInternalOpen=false;}
+    if(tsSocOpen){tsSessionClose(&tsSocSession);tsSocOpen=false;}
+    if(tsServiceReady){tsExit();tsServiceReady=false;}
+    if(cpuClockOpen){clkrstCloseSession(&cpuClockSession);cpuClockOpen=false;}
+    if(gpuClockOpen){clkrstCloseSession(&gpuClockSession);gpuClockOpen=false;}
+    if(clkrstServiceReady){clkrstExit();clkrstServiceReady=false;}
     steamGridDbDestroyPreview();
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
