@@ -30,6 +30,23 @@ on:
       - "Makefile.switch"
       - ".github/workflows/build-system-backend.yml"
 
+  pull_request:
+    paths:
+      - "projects/sSystem/**"
+      - "projects/DeskNXMenu/**"
+      - "projects/hbloader/**"
+      - "projects/common/**"
+      - "scripts/**"
+      - ".gitignore"
+      - "tests/**"
+      - "docs/**"
+      - "THIRD_PARTY.md"
+      - "README.md"
+      - "source/**"
+      - "Makefile"
+      - "Makefile.switch"
+      - ".github/workflows/build-system-backend.yml"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
