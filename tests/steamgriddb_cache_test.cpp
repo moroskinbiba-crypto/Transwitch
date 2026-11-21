@@ -53,7 +53,9 @@ int main() {
 
     assert(cache.restoreSystemArtwork(titleA));
     assert(cache.selectedPath(titleA).empty());
-    assert(cache.mappedGameId(titleA)==0);
+    assert(cache.mappedGameId(titleA)==sgdbGameId);
+    assert(cache.hasHero(titleA));
+    assert(cache.hasGrid(titleA));
 
     std::remove(gridSource.c_str());
     std::remove(heroSource.c_str());
