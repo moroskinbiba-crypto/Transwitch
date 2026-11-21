@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 
@@ -50,6 +51,22 @@ int main() {
         store.widgets().push_back(widget);
 
         assert(store.save());
+
+        // A second successful write must preserve the previous good version.
+        appearance.theme = "New Theme";
+        appearance.brightness = 41;
+        store.setAppearance(appearance);
+        assert(store.save());
+    }
+
+    // Simulate a truncated settings file. Loading must recover the last
+    // successful version from config.json.bak rather than accepting defaults.
+    {
+        std::ofstream broken("sdmc:/01000000/00001000/config.json",
+                             std::ios::binary | std::ios::trunc);
+        assert(broken.is_open());
+        broken << "{ truncated";
+        broken.close();
     }
 
     {

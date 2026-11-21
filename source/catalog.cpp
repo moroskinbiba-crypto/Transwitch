@@ -113,32 +113,11 @@ std::string GetApplicationName(const NacpStruct& nacp) {
     return desknx::slaunch::ResolveTitleName(nacp);
 }
 
-void CollectNros(const std::string& root, int depth, std::vector<NroFile>& out) {
-    if (depth > 3 || out.size() >= MaxItems) return;
-    DIR* dir = opendir(root.c_str());
-    if (!dir) return;
-    dirent* entry = nullptr;
-    while ((entry = readdir(dir)) && out.size() < MaxItems) {
-        std::string name = entry->d_name;
-        if (name == "." || name == ".." || (!name.empty() && name[0] == '.')) continue;
-        const std::string path = root + "/" + name;
-        struct stat st{};
-        if (stat(path.c_str(), &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) {
-            // This directory belongs to DeskNX itself. It contains the persistent
-            // catalogue, hundreds of cached icons and diagnostics, not user NROs.
-            // Walking it on every launch adds avoidable SD-card I/O.
-            if (depth == 0 && name == "DeskNX") continue;
-            CollectNros(path, depth + 1, out);
-        } else if (S_ISREG(st.st_mode) && name.size() > 4) {
-            std::string ext = name.substr(name.size() - 4);
-            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (ext == ".nro" && name != "DeskNX.nro")
-                out.push_back({path, static_cast<u64>(st.st_size), static_cast<u64>(st.st_mtime)});
-        }
-    }
-    closedir(dir);
-}
+// NRO directory inventory is checked from persisted directory/file signatures.
+// Unchanged subtrees are reused without opendir/readdir; known NRO files are
+// stat'ed so in-place updates are still detected. A changed directory is
+// enumerated recursively, while unchanged children are reused independently.
+
 std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) {
     std::vector<GameRecord> records;
     if (!nsReady) {
@@ -215,6 +194,370 @@ bool isHexTitleId(const std::string& value) {
               (c >= 'a' && c <= 'f')))
             return false;
     return true;
+}
+
+bool parseUnsigned(const std::string& value, int base, u64& output) {
+    if (value.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value.c_str(), &end, base);
+    if (errno == ERANGE || end == value.c_str() || !end || *end != '\0')
+        return false;
+    output = static_cast<u64>(parsed);
+    return true;
+}
+
+std::string encodeHex(const std::string& value) {
+    static const char digits[] = "0123456789ABCDEF";
+    std::string result;
+    result.reserve(value.size() * 2);
+    for (unsigned char byte : value) {
+        result.push_back(digits[byte >> 4]);
+        result.push_back(digits[byte & 0x0F]);
+    }
+    return result;
+}
+
+bool decodeHex(const std::string& value, std::string& output) {
+    if ((value.size() & 1u) != 0 || value.size() > 1024)
+        return false;
+    auto digit = [](unsigned char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        return -1;
+    };
+    output.clear();
+    output.reserve(value.size() / 2);
+    for (size_t i = 0; i < value.size(); i += 2) {
+        const int high = digit(static_cast<unsigned char>(value[i]));
+        const int low = digit(static_cast<unsigned char>(value[i + 1]));
+        if (high < 0 || low < 0) return false;
+        output.push_back(static_cast<char>((high << 4) | low));
+    }
+    return true;
+}
+
+// NRO inventory stores the last parsed title and file signature. Rebuilding
+// the catalogue after one install/update therefore reads NACP/icon sections
+// only for the changed NROs. Directory enumeration still runs so removals are
+// detected; unchanged NRO payloads are not reopened.
+struct NroMetadata {
+    u64 size{0};
+    u64 mtime{0};
+    std::string title;
+};
+using NroMetadataCache = std::unordered_map<std::string, NroMetadata>;
+constexpr const char* NroMetadataFile = "sdmc:/switch/DeskNX/cache/nro-metadata.tsv";
+constexpr const char* NroMetadataTemp = "sdmc:/switch/DeskNX/cache/nro-metadata.tmp";
+
+NroMetadataCache ReadNroMetadataCache(bool* validOut = nullptr) {
+    if(validOut)*validOut=false;
+    NroMetadataCache cache;
+    struct stat st{};
+    constexpr size_t MaxBytes = 768 * 1024;
+    if (stat(NroMetadataFile, &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_size <= 0 || static_cast<u64>(st.st_size) > MaxBytes)
+        return cache;
+    std::ifstream input(NroMetadataFile, std::ios::binary);
+    if (!input) return cache;
+    std::string line;
+    if (!std::getline(input, line) || line != "DESKNXNR1") return {};
+    size_t count = 0;
+    while (std::getline(input, line)) {
+        if (line.size() > 2200 || ++count > MaxItems) return {};
+        const auto fields = desknx::model::splitTabs(line);
+        if (fields.size() != 4 || fields[0].empty() || fields[0].size() > 1024 ||
+            fields[3].size() > 1024)
+            return {};
+        std::string path, title;
+        u64 size = 0, mtime = 0;
+        if (!decodeHex(fields[0], path) || path.empty() || path.size() > 512 ||
+            !parseUnsigned(fields[1], 10, size) ||
+            !parseUnsigned(fields[2], 10, mtime) ||
+            !decodeHex(fields[3], title) || title.size() > 512)
+            return {};
+        cache[path] = {size, mtime, std::move(title)};
+    }
+    if (input.bad()) return {};
+    if(validOut)*validOut=true;
+    return cache;
+}
+
+bool WriteNroMetadataCache(const NroMetadataCache& cache) {
+    EnsureCacheDirectories();
+    std::ofstream output(NroMetadataTemp, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output << "DESKNXNR1\n";
+    size_t written = 0;
+    for (const auto& entry : cache) {
+        if (written >= MaxItems || entry.first.empty() || entry.first.size() > 512 ||
+            entry.second.title.size() > 512)
+            continue;
+        output << encodeHex(entry.first) << '\t' << entry.second.size << '\t'
+               << entry.second.mtime << '\t' << encodeHex(entry.second.title) << '\n';
+        ++written;
+    }
+    output.flush();
+    const bool good = output.good();
+    output.close();
+    if (!good) {
+        std::remove(NroMetadataTemp);
+        return false;
+    }
+    const auto status = desknx::safeio::replaceFilePreservingOnFailure(
+        NroMetadataTemp, NroMetadataFile,
+        "sdmc:/switch/DeskNX/cache/nro-metadata.bak", true);
+    if (status != desknx::safeio::ReplaceStatus::Success) {
+        std::remove(NroMetadataTemp);
+        return false;
+    }
+    return true;
+}
+
+using GameTimestampCache = std::unordered_map<u64, u64>;
+constexpr const char* GameTimestampFile = "sdmc:/switch/DeskNX/cache/game-timestamps.tsv";
+constexpr const char* GameTimestampTemp = "sdmc:/switch/DeskNX/cache/game-timestamps.tmp";
+
+GameTimestampCache ReadGameTimestampCache() {
+    GameTimestampCache cache;
+    struct stat st{};
+    constexpr size_t MaxBytes = 128 * 1024;
+    if (stat(GameTimestampFile, &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_size <= 0 || static_cast<u64>(st.st_size) > MaxBytes)
+        return cache;
+    std::ifstream input(GameTimestampFile, std::ios::binary);
+    if (!input) return cache;
+    std::string line;
+    if (!std::getline(input, line) || line != "DESKNXGT1") return {};
+    size_t count = 0;
+    while (std::getline(input, line)) {
+        if (line.size() > 64 || ++count > 4096) return {};
+        const auto fields = desknx::model::splitTabs(line);
+        if (fields.size() != 2 || !isHexTitleId(fields[0])) continue;
+        u64 id = 0, timestamp = 0;
+        if (parseUnsigned(fields[0], 16, id) && id != 0 &&
+            parseUnsigned(fields[1], 10, timestamp))
+            cache[id] = timestamp;
+    }
+    if (input.bad()) return {};
+    return cache;
+}
+
+bool WriteGameTimestampCache(const GameTimestampCache& cache) {
+    EnsureCacheDirectories();
+    std::ofstream output(GameTimestampTemp, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output << "DESKNXGT1\n";
+    for (const auto& entry : cache) {
+        char id[17]{};
+        std::snprintf(id, sizeof(id), "%016llX",
+                      static_cast<unsigned long long>(entry.first));
+        output << id << '\t' << entry.second << '\n';
+    }
+    output.flush();
+    const bool good = output.good();
+    output.close();
+    if (!good) {
+        std::remove(GameTimestampTemp);
+        return false;
+    }
+    const auto status = desknx::safeio::replaceFilePreservingOnFailure(
+        GameTimestampTemp, GameTimestampFile,
+        "sdmc:/switch/DeskNX/cache/game-timestamps.bak", true);
+    if (status != desknx::safeio::ReplaceStatus::Success) {
+        std::remove(GameTimestampTemp);
+        return false;
+    }
+    return true;
+}
+
+struct DirectoryStamp {
+    u64 mtime{0};
+    u64 ctime{0};
+    u64 size{0};
+};
+using DirectoryStampCache = std::unordered_map<std::string, DirectoryStamp>;
+constexpr const char* NroDirectoryCacheFile =
+    "sdmc:/switch/DeskNX/cache/nro-directories.tsv";
+constexpr const char* NroDirectoryCacheTemp =
+    "sdmc:/switch/DeskNX/cache/nro-directories.tmp";
+constexpr size_t MaxCachedDirectories = 2048;
+
+DirectoryStamp directoryStampFromStat(const struct stat& st) {
+    return {static_cast<u64>(st.st_mtime),static_cast<u64>(st.st_ctime),
+            st.st_size>=0?static_cast<u64>(st.st_size):0};
+}
+bool sameDirectoryStamp(const DirectoryStamp& a,const DirectoryStamp& b) {
+    return a.mtime==b.mtime&&a.ctime==b.ctime&&a.size==b.size;
+}
+DirectoryStampCache ReadNroDirectoryStampCache(bool* validOut=nullptr) {
+    if(validOut)*validOut=false;
+    DirectoryStampCache cache;
+    struct stat st{};
+    constexpr size_t MaxBytes=3u*1024u*1024u;
+    if(stat(NroDirectoryCacheFile,&st)!=0||!S_ISREG(st.st_mode)||
+       st.st_size<=0||static_cast<u64>(st.st_size)>MaxBytes)
+        return cache;
+    std::ifstream input(NroDirectoryCacheFile,std::ios::binary);
+    if(!input)return cache;
+    std::string line;
+    if(!std::getline(input,line)||line!="DESKNXDIR1")return {};
+    size_t count=0;
+    while(std::getline(input,line)) {
+        if(line.size()>1200||++count>MaxCachedDirectories)return {};
+        const auto fields=desknx::model::splitTabs(line);
+        if(fields.size()!=4||fields[0].empty()||fields[0].size()>1024)return {};
+        std::string path;
+        DirectoryStamp stamp{};
+        if(!decodeHex(fields[0],path)||path.empty()||path.size()>512||
+           (path!="sdmc:/switch"&&path.compare(0,13,"sdmc:/switch/")!=0)||
+           path.find("..")!=std::string::npos||
+           !parseUnsigned(fields[1],10,stamp.mtime)||
+           !parseUnsigned(fields[2],10,stamp.ctime)||
+           !parseUnsigned(fields[3],10,stamp.size))
+            return {};
+        cache[path]=stamp;
+    }
+    if(input.bad())return {};
+    if(validOut)*validOut=true;
+    return cache;
+}
+bool WriteNroDirectoryStampCache(const DirectoryStampCache& cache) {
+    if(cache.empty()||cache.size()>MaxCachedDirectories)return false;
+    for(const auto& entry:cache)
+        if(entry.first.empty()||entry.first.size()>512)return false;
+    EnsureCacheDirectories();
+    std::ofstream output(NroDirectoryCacheTemp,std::ios::binary|std::ios::trunc);
+    if(!output)return false;
+    output<<"DESKNXDIR1\n";
+    for(const auto& entry:cache) {
+        output<<encodeHex(entry.first)<<'\t'<<entry.second.mtime<<'\t'
+              <<entry.second.ctime<<'\t'<<entry.second.size<<'\n';
+    }
+    output.flush();
+    const bool good=output.good();
+    output.close();
+    if(!good){std::remove(NroDirectoryCacheTemp);return false;}
+    const auto status=desknx::safeio::replaceFilePreservingOnFailure(
+        NroDirectoryCacheTemp,NroDirectoryCacheFile,
+        "sdmc:/switch/DeskNX/cache/nro-directories.bak",true);
+    if(status!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(NroDirectoryCacheTemp);
+        return false;
+    }
+    return true;
+}
+bool SameNroDirectoryStampCache(const DirectoryStampCache& a,
+                                const DirectoryStampCache& b) {
+    if(a.size()!=b.size())return false;
+    for(const auto& entry:a) {
+        const auto found=b.find(entry.first);
+        if(found==b.end()||!sameDirectoryStamp(entry.second,found->second))
+            return false;
+    }
+    return true;
+}
+struct NroDirectoryScanStats {
+    size_t reusedDirectories{0};
+    size_t enumeratedDirectories{0};
+    size_t checkedNroFiles{0};
+    bool complete{true};
+    bool truncated{false};
+};
+
+void CollectNrosIncremental(const std::string& root,int depth,
+    std::vector<NroFile>& out,const DirectoryStampCache& oldDirectories,
+    const NroMetadataCache& oldNros,DirectoryStampCache& freshDirectories,
+    bool allowCache,NroDirectoryScanStats& stats) {
+    if(depth>3)return;
+    if(out.size()>=MaxItems){stats.truncated=true;return;}
+    struct stat rootStat{};
+    if(stat(root.c_str(),&rootStat)!=0||!S_ISDIR(rootStat.st_mode)) {
+        stats.complete=false;
+        return;
+    }
+    const DirectoryStamp currentStamp=directoryStampFromStat(rootStat);
+    const auto oldRoot=oldDirectories.find(root);
+    bool reusable=allowCache&&oldRoot!=oldDirectories.end()&&
+        sameDirectoryStamp(oldRoot->second,currentStamp);
+    const std::string prefix=root+"/";
+    std::vector<std::pair<std::string,DirectoryStamp>> cachedSubdirectories;
+    std::vector<NroFile> cachedFiles;
+    if(reusable) {
+        for(const auto& entry:oldDirectories) {
+            if(entry.first.compare(0,prefix.size(),prefix)!=0)continue;
+            struct stat childStat{};
+            if(stat(entry.first.c_str(),&childStat)!=0||!S_ISDIR(childStat.st_mode)||
+               !sameDirectoryStamp(entry.second,directoryStampFromStat(childStat))) {
+                reusable=false;
+                break;
+            }
+            cachedSubdirectories.push_back(
+                {entry.first,directoryStampFromStat(childStat)});
+        }
+    }
+    if(reusable) {
+        for(const auto& entry:oldNros) {
+            if(entry.first.compare(0,prefix.size(),prefix)!=0)continue;
+            struct stat fileStat{};
+            ++stats.checkedNroFiles;
+            if(stat(entry.first.c_str(),&fileStat)!=0||!S_ISREG(fileStat.st_mode)) {
+                reusable=false;
+                break;
+            }
+            cachedFiles.push_back({entry.first,
+                static_cast<u64>(fileStat.st_size),
+                static_cast<u64>(fileStat.st_mtime)});
+        }
+    }
+    if(reusable) {
+        freshDirectories[root]=currentStamp;
+        for(const auto& entry:cachedSubdirectories)
+            freshDirectories[entry.first]=entry.second;
+        const size_t remaining=MaxItems-out.size();
+        if(cachedFiles.size()>remaining) {
+            stats.truncated=true;
+            cachedFiles.resize(remaining);
+        }
+        out.insert(out.end(),cachedFiles.begin(),cachedFiles.end());
+        stats.reusedDirectories+=cachedSubdirectories.size()+1;
+        return;
+    }
+
+    DIR* dir=opendir(root.c_str());
+    if(!dir) {
+        stats.complete=false;
+        return;
+    }
+    ++stats.enumeratedDirectories;
+    freshDirectories[root]=currentStamp;
+    dirent* entry=nullptr;
+    while((entry=readdir(dir))&&out.size()<MaxItems) {
+        const std::string name=entry->d_name;
+        if(name=="."||name==".."||(!name.empty()&&name[0]=='.'))continue;
+        if(depth==0&&name=="DeskNX")continue;
+        const std::string path=root+"/"+name;
+        struct stat childStat{};
+        if(stat(path.c_str(),&childStat)!=0) {
+            stats.complete=false;
+            continue;
+        }
+        if(S_ISDIR(childStat.st_mode)) {
+            if(depth<3)
+                CollectNrosIncremental(path,depth+1,out,oldDirectories,
+                    oldNros,freshDirectories,allowCache,stats);
+        } else if(S_ISREG(childStat.st_mode)&&name.size()>4) {
+            std::string extension=name.substr(name.size()-4);
+            for(char& c:extension)
+                c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if(extension==".nro"&&name!="DeskNX.nro")
+                out.push_back({path,static_cast<u64>(childStat.st_size),
+                               static_cast<u64>(childStat.st_mtime)});
+        }
+    }
+    if(out.size()>=MaxItems)stats.truncated=true;
+    closedir(dir);
 }
 
 bool isCachedNroPath(const std::string& path) {
@@ -448,11 +791,13 @@ bool CacheIconImage(const std::string& path, const u8* data, size_t length, bool
 }
 
 void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate,
-                               bool forceRefresh = false) {
+                               bool forceRefresh = false,
+                               bool readMetadata = true) {
     const std::string iconPath = desknx::model::iconCachePath(Kind::Nro, nro.path);
     const bool iconValid = IsUsableCachedImage(iconPath);
     if (!iconValid && IsRegularFile(iconPath)) std::remove(iconPath.c_str());
     const bool needIcon = forceRefresh || !iconValid;
+    if (!needIcon && !readMetadata) return;
     std::ifstream file(nro.path, std::ios::binary);
     if (!file) return;
     NroStart start{};
@@ -480,7 +825,8 @@ void CacheNroIconAndMetadata(const NroFile& nro, Candidate& candidate,
         file.read(reinterpret_cast<char*>(image.data()), static_cast<std::streamsize>(image.size()));
         if (file) CacheIconImage(iconPath, image.data(), image.size(), forceRefresh);
     }
-    if (sectionValid(asset.nacp) && asset.nacp.size >= sizeof(NacpStruct)) {
+    if (readMetadata && sectionValid(asset.nacp) &&
+        asset.nacp.size >= sizeof(NacpStruct)) {
         NacpStruct nacp{};
         file.clear();
         file.seekg(static_cast<std::streamoff>(assetPos + asset.nacp.offset), std::ios::beg);
@@ -710,6 +1056,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     // perform up to 90 Horizon IPC calls; the library and widget picker should
     // not remain empty while those calls (or the SD NRO walk) are in progress.
     GameNameCache nameCache = ReadGameNameCache();
+    const GameTimestampCache gameTimestampCache = ReadGameTimestampCache();
     auto usableCachedName = [](const std::string& name) {
         return !name.empty() && !desknx::model::isTitleId(name) &&
             !(name.compare(0, 5, "Game ") == 0 &&
@@ -774,11 +1121,47 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         result.nroCount);
     report(false);
 
+    bool nroMetadataCacheValid=false,directoryCacheValid=false;
+    const NroMetadataCache nroMetadataCache=
+        ReadNroMetadataCache(&nroMetadataCacheValid);
+    const DirectoryStampCache directoryStampCache=
+        ReadNroDirectoryStampCache(&directoryCacheValid);
+    const bool inventoryCacheUsable=!forceRefresh&&warmCacheAvailable&&
+        nroMetadataCacheValid&&directoryCacheValid&&
+        nroMetadataCache.size()==result.nroCount;
     const std::time_t nroScanStarted = std::time(nullptr);
     std::vector<NroFile> nros;
-    CollectNros("sdmc:/switch", 0, nros);
+    DirectoryStampCache freshDirectoryStamps;
+    NroDirectoryScanStats directoryScanStats;
+    CollectNrosIncremental("sdmc:/switch",0,nros,directoryStampCache,
+        nroMetadataCache,freshDirectoryStamps,inventoryCacheUsable,directoryScanStats);
     LogDiagnostic("nro_scan_elapsed seconds=%lld",
         static_cast<long long>(std::time(nullptr) - nroScanStarted));
+    if(!directoryScanStats.complete&&warmCacheAvailable) {
+        // A transient SD I/O failure must not turn the library into an empty
+        // catalogue. Keep the published last-good snapshot and retry next run.
+        result.gameCount=static_cast<size_t>(std::count_if(result.items.begin(),result.items.end(),
+            [](const Candidate& item){return item.kind==Kind::Game;}));
+        result.nroCount=static_cast<size_t>(std::count_if(result.items.begin(),result.items.end(),
+            [](const Candidate& item){return item.kind==Kind::Nro;}));
+        result.complete=true;
+        result.fromCache=true;
+        LogDiagnostic("nro_scan_preserved_cache complete=0 games=%zu nros=%zu",
+            result.gameCount,result.nroCount);
+        report(true);
+        return result;
+    }
+    if(directoryScanStats.complete&&!directoryScanStats.truncated&&
+       (!directoryCacheValid||
+        !SameNroDirectoryStampCache(directoryStampCache,freshDirectoryStamps))) {
+        const bool saved=WriteNroDirectoryStampCache(freshDirectoryStamps);
+        LogDiagnostic("nro_directory_cache_write ok=%d entries=%zu",
+            saved?1:0,freshDirectoryStamps.size());
+    }
+    LogDiagnostic("nro_inventory directories_reused=%zu directories_enumerated=%zu nro_stat_checks=%zu cache_usable=%d truncated=%d",
+        directoryScanStats.reusedDirectories,directoryScanStats.enumeratedDirectories,
+        directoryScanStats.checkedNroFiles,inventoryCacheUsable?1:0,
+        directoryScanStats.truncated?1:0);
     result.nroCount = nros.size();
     LogDiagnostic("nro_scan root=switch depth_limit=3 count=%zu", nros.size());
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
@@ -835,6 +1218,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     static NsApplicationControlData control{};
     GameNameCache freshNameCache;
     freshNameCache.reserve(games.size());
+    GameTimestampCache freshGameTimestampCache;
+    freshGameTimestampCache.reserve(games.size());
     bool fetchedControlData = false;
     size_t controlDataOk = 0, controlDataFailed = 0;
     size_t resolvedGameNames = 0, unresolvedGameNames = 0;
@@ -849,22 +1234,30 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         std::snprintf(hex, sizeof(hex), "%016llX", static_cast<unsigned long long>(id));
 
         const auto cachedName = nameCache.find(id);
+        const auto cachedTimestamp = gameTimestampCache.find(id);
+        const bool timestampUnchanged =
+            cachedTimestamp != gameTimestampCache.end() &&
+            cachedTimestamp->second == games[i].last_updated;
+        if (cachedTimestamp != gameTimestampCache.end())
+            freshGameTimestampCache[id] = cachedTimestamp->second;
         const bool iconCached = HasCachedGameIcon(id);
         const bool cachedNameUsable = cachedName != nameCache.end() &&
             !desknx::model::isTitleId(cachedName->second) &&
             !(cachedName->second.compare(0, 5, "Game ") == 0 &&
               desknx::model::isTitleId(cachedName->second.substr(5)));
+        const bool appUnchanged = timestampUnchanged &&
+            cachedNameUsable && iconCached;
+        const bool skipMetadataRead = !forceRefresh && appUnchanged;
         std::string title;
         Result metadataRc=0;
         bool metadataRead=false;
         bool iconAvailable=iconCached;
-        const char* nameSource=(cachedNameUsable&&iconCached&&!forceRefresh)
-            ?"cache":"nacp";
+        const char* nameSource=skipMetadataRead?"cache":"nacp";
         // Name metadata and artwork are independent cache entries. A valid
         // name must never suppress the one-time NACP read needed to repair a
         // missing icon, and a stale title-id placeholder must not be treated
         // as a resolved game name.
-        if (!forceRefresh && cachedNameUsable && iconCached) {
+        if (skipMetadataRead) {
             title = cachedName->second;
         } else {
             u64 actual = 0;
@@ -880,7 +1273,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                     title = cachedName->second;
                     nameSource="cache_fallback";
                 }
-                if (forceRefresh || !iconCached) {
+                if (forceRefresh || !iconCached || !timestampUnchanged) {
                     if (CacheGameIcon(id, control, actual)) {
                         ++cachedGameIcons;
                         iconAvailable=true;
@@ -890,6 +1283,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
                     }
                 }
                 fetchedControlData = true;
+                freshGameTimestampCache[id] = games[i].last_updated;
             } else {
                 ++controlDataFailed;
                 if (firstControlDataError == 0)
@@ -949,16 +1343,71 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         LogDiagnostic("name_cache_write ok=%d entries=%zu", namesSaved ? 1 : 0,
                       freshNameCache.size());
     }
+    bool timestampCacheChanged =
+        freshGameTimestampCache.size() != gameTimestampCache.size();
+    if (!timestampCacheChanged) {
+        for (const auto& entry : freshGameTimestampCache) {
+            const auto old = gameTimestampCache.find(entry.first);
+            if (old == gameTimestampCache.end() || old->second != entry.second) {
+                timestampCacheChanged = true;
+                break;
+            }
+        }
+    }
+    if (nsReady && result.nsErrorCode == 0 && timestampCacheChanged) {
+        const bool timestampsSaved = WriteGameTimestampCache(freshGameTimestampCache);
+        LogDiagnostic("game_timestamp_cache_write ok=%d entries=%zu",
+                      timestampsSaved ? 1 : 0, freshGameTimestampCache.size());
+    }
     report(false); // expose the installed-game part before scanning NRO assets
 
+    NroMetadataCache refreshedNroMetadata;
+    refreshedNroMetadata.reserve(nros.size());
+    size_t nroMetadataReused = 0, nroMetadataRefreshed = 0;
     for (const auto& nro : nros) {
         if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
         Candidate item{Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
                        static_cast<int>(result.items.size() % 12)};
-        CacheNroIconAndMetadata(nro, item, forceRefresh);
+        const auto cached = nroMetadataCache.find(nro.path);
+        const bool unchanged = !forceRefresh &&
+            cached != nroMetadataCache.end() &&
+            cached->second.size == nro.size &&
+            cached->second.mtime == nro.mtime;
+        if (unchanged) {
+            item.title = cached->second.title;
+            const std::string iconPath =
+                desknx::model::iconCachePath(Kind::Nro, nro.path);
+            if (!IsUsableCachedImage(iconPath))
+                CacheNroIconAndMetadata(nro, item, false, false);
+            ++nroMetadataReused;
+        } else {
+            CacheNroIconAndMetadata(nro, item, forceRefresh || !unchanged, true);
+            ++nroMetadataRefreshed;
+        }
+        refreshedNroMetadata.emplace(nro.path,
+            NroMetadata{nro.size, nro.mtime, item.title});
         result.items.push_back(std::move(item));
         if (result.items.size() % 12 == 0) report(false);
     }
+    bool nroMetadataChanged =
+        refreshedNroMetadata.size() != nroMetadataCache.size();
+    if (!nroMetadataChanged) {
+        for (const auto& entry : refreshedNroMetadata) {
+            const auto old = nroMetadataCache.find(entry.first);
+            if (old == nroMetadataCache.end() ||
+                old->second.size != entry.second.size ||
+                old->second.mtime != entry.second.mtime ||
+                old->second.title != entry.second.title) {
+                nroMetadataChanged = true;
+                break;
+            }
+        }
+    }
+    const bool nroCacheSaved = (!nroMetadataCacheValid || nroMetadataChanged)
+        ? WriteNroMetadataCache(refreshedNroMetadata) : true;
+    LogDiagnostic("nro_metadata_cache reused=%zu refreshed=%zu changed=%d saved=%d entries=%zu",
+        nroMetadataReused, nroMetadataRefreshed, nroMetadataChanged ? 1 : 0,
+        nroCacheSaved ? 1 : 0, refreshedNroMetadata.size());
     if (games.size() > gameLimit || nros.size() >= MaxItems) result.truncated = true;
     (void)EnsureBuiltinWidgets(result.items);
     // Preserve the last known-good catalogue if NS enumeration failed.
