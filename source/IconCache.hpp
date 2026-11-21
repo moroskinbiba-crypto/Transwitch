@@ -156,7 +156,8 @@ void setGameIconOverridesDir(const std::string& path) {
                     return nullptr;
                 const bool promoted=enqueue(tile,key,2);
                 priorityRetryAt_[key]=now+PromotionRetryThrottleMs;
-                if (!promoted) requestRetryAt_[key]=now+QueueRetryThrottleMs;
+                requestRetryAt_[key]=now+(promoted
+                    ?RequestRetryThrottleMs:QueueRetryThrottleMs);
                 return nullptr;
             }
             requestRetryAt_.erase(retry);
