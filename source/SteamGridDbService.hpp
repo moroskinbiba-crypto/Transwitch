@@ -18,6 +18,7 @@ struct ServiceSnapshot {
  std::vector<ArtworkAsset> assets;
  int selectedAsset{0},previewAsset{-1};
  std::string previewPath;
+ bool previewApplied{false},fullResolutionApplied{false};
  std::uint64_t previewRevision{0},revision{0};
 };
 class SteamGridDbService final {
@@ -43,7 +44,7 @@ private:
   std::uint64_t revision{0},titleId{0},gameId{0};
   ArtworkKind kind{ArtworkKind::Grid};
   int assetIndex{0};
-  std::string title,gameName,apiKey;
+  std::string title,gameName,apiKey,previewPath;
   std::vector<std::uint64_t> installedTitleIds;
   std::uint64_t maximumCacheBytes{0};
   bool useSavedMapping{true};
