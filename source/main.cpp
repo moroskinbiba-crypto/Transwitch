@@ -109,6 +109,8 @@ bool motionEffects=false; // optional low-cost screen fade and selection pulse
 Uint32 uiTransitionStart=0;
 std::uint32_t lastUiScreenState=UINT32_MAX;
 std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
+bool launcherSettingsSavePending=false;
+Uint32 launcherSettingsSaveDue=0;
 std::unordered_map<std::string,std::string> gameNameOverrides;
 std::string pendingGameIconTitleId;
 SDL_Texture* wallpaperTexture=nullptr;
@@ -627,6 +629,7 @@ void loadLauncherSettings() {
 }
 
 bool saveLauncherSettings() {
+    launcherSettingsSavePending=false;
     if(!sdMounted){setStatus("SD CARD REQUIRED TO SAVE APPEARANCE",3000);return false;}
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
     std::ofstream out(SETTINGS_TMP,std::ios::binary|std::ios::trunc);
@@ -665,6 +668,16 @@ bool saveLauncherSettings() {
         return false;
     }
     return true;
+}
+
+void scheduleLauncherSettingsSave(Uint32 debounceMs=450) {
+    launcherSettingsSavePending=true;
+    launcherSettingsSaveDue=SDL_GetTicks()+debounceMs;
+}
+void pumpLauncherSettingsSave() {
+    if(!launcherSettingsSavePending ||
+       static_cast<Sint32>(SDL_GetTicks()-launcherSettingsSaveDue)<0)return;
+    (void)saveLauncherSettings();
 }
 
 void loadGameNameOverrides() {
@@ -1206,7 +1219,7 @@ Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize);
 void cycleTheme(int direction) {
     themeIndex=(themeIndex+direction+9)%9;
     applyThemePalette();
-    (void)saveLauncherSettings();
+    scheduleLauncherSettingsSave();
     setStatus(languageRussian?"ТЕМА ОБНОВЛЕНА":"THEME UPDATED",1400);
 }
 
@@ -1216,7 +1229,7 @@ void cycleAccent(int direction) {
     index=(index+direction+count)%count;
     accentColorIndex=index-1;
     applyThemePalette();
-    (void)saveLauncherSettings();
+    scheduleLauncherSettingsSave();
     setStatus(languageRussian?"ЦВЕТ АКЦЕНТА ОБНОВЛЁН":"ACCENT COLOUR UPDATED",1400);
 }
 
@@ -1319,19 +1332,9 @@ void steamGridDbClosePicker() {
     steamGridDbDestroyPreview();
 }
 void steamGridDbEditApiKey() {
-    SwkbdConfig config{};
-    if(R_FAILED(swkbdCreate(&config,0))){setStatus("STEAMGRIDDB KEYBOARD UNAVAILABLE",2500);return;}
-    swkbdConfigMakePresetDefault(&config);
-    swkbdConfigSetHeaderText(&config,"SteamGridDB API key");
-    char value[161]{};
-    std::snprintf(value,sizeof(value),"%s",steamGridDbApiKey.c_str());
-    const Result rc=showKeyboard(&config,value,sizeof(value));
-    swkbdClose(&config);
-    if(R_SUCCEEDED(rc)) {
-        steamGridDbApiKey=value;
-        if(saveLauncherSettings())
-            setStatus(steamGridDbApiKey.empty()?"STEAMGRIDDB KEY CLEARED":"STEAMGRIDDB KEY SAVED");
-    }
+    // Reuse the validated Settings editor so both entry points accept exactly
+    // the same API-key format and persist it through one path.
+    editSteamGridDbApiKey();
 }
 void steamGridDbSearch(const std::string& title,bool useSavedMapping=true) {
     Tile tile;
@@ -5825,6 +5828,7 @@ void launch(const Tile& t) {
         activateWidget(t);
         return;
     }
+    if(launcherSettingsSavePending && !saveLauncherSettings())return;
     if(t.kind==Kind::Game) {
         if(!desknx::model::isTitleId(t.data)){setStatus("INVALID TITLE ID");return;}
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
@@ -6114,7 +6118,7 @@ void keyInput(u64 keys, bool fromRepeat) {
                 default: return;
             }
             applyThemePalette();
-            (void)saveLauncherSettings();
+            scheduleLauncherSettingsSave();
         };
         if(keys&HidNpadButton_Left)adjustSettingsRow(-1);
         if(keys&HidNpadButton_Right)adjustSettingsRow(1);
@@ -7377,6 +7381,7 @@ int main(int,char**) {
             }
         }
         pumpAsyncLayoutSaver();
+        pumpLauncherSettingsSave();
         pumpPlayStatsQuery();
         (void)gFontRenderer.pumpWarmup();
         if(gFontRenderer.consumeLoadFailure()) {
@@ -7444,8 +7449,9 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
-    gSteamGridDbService.shutdown();
     SDL_AtomicSet(&nextendoStop,1);
+    if(launcherSettingsSavePending)(void)saveLauncherSettings();
+    gSteamGridDbService.shutdown();
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     // The storage worker only publishes a small snapshot, but it still owns
     // an SD read path and the shared mutex. Stop/join it before destroying
