@@ -118,6 +118,9 @@ SDL_Thread* catalogueThread = nullptr;
 SDL_Thread* nextendoThread = nullptr;
 SDL_mutex* nextendoMutex = nullptr;
 SDL_atomic_t nextendoStop{};
+SDL_atomic_t nextendoNetworkReady{};
+SDL_atomic_t nextendoConsecutiveFailures{};
+SDL_atomic_t nextendoLastSuccessTick{};
 desknx::nextendo::PresenceFeed nextendoFeed;
 struct CatalogueScanRequest { bool forceRefresh; bool reinitializeNs; };
 const CatalogueScanRequest catalogueRefreshRequest{true, true};
@@ -202,8 +205,12 @@ desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMod
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
-Uint32 lastStorageUpdate=0;
 bool storageStatsAvailable=false;
+SDL_Thread* storageStatsThread=nullptr;
+SDL_mutex* storageStatsMutex=nullptr;
+SDL_atomic_t storageStatsStop{};
+uint64_t backgroundSdFreeBytes=0,backgroundSdTotalBytes=0;
+bool backgroundStorageStatsAvailable=false;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
 bool widgetPickerMode=false;
@@ -218,8 +225,20 @@ int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, diagnosticsOpen=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
 int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
+struct RuntimeFrameMetrics {
+    double fps{0.0};
+    double averageFrameMs{0.0};
+    double averageRenderMs{0.0};
+    double maximumFrameMs{0.0};
+    std::uint64_t slowFrames{0};
+    Uint32 updatedAt{0};
+};
+RuntimeFrameMetrics runtimeFrameMetrics;
+Uint32 lastDiagnosticsRefresh=0;
+std::uint64_t diagnosticsCacheBytes=0;
+std::size_t diagnosticsCacheFiles=0;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -930,12 +949,16 @@ void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
 }
 int nextendoThreadMain(void*) {
     bool networkReady = false;
+    unsigned int consecutiveFailures = 0;
+    SDL_AtomicSet(&nextendoNetworkReady,0);
+    SDL_AtomicSet(&nextendoConsecutiveFailures,0);
     std::uint64_t nextAttempt = SDL_GetTicks64() + 8000;
     while (!SDL_AtomicGet(&nextendoStop)) {
         const std::uint64_t now = SDL_GetTicks64();
         if (now >= nextAttempt) {
             if (!networkReady) {
                 networkReady = desknx::nextendo::initializeNetwork();
+                SDL_AtomicSet(&nextendoNetworkReady,networkReady?1:0);
                 desknx::diag::Write("nextendo", networkReady ? "network_ready" : "network_init_failed",
                     "retry_ms=%u", networkReady ? 0u : 30000u);
                 if (!networkReady) {
@@ -950,17 +973,41 @@ int nextendoThreadMain(void*) {
                 SDL_LockMutex(nextendoMutex);
                 const bool applied = nextendoFeed.apply(snapshot, SDL_GetTicks64());
                 SDL_UnlockMutex(nextendoMutex);
+                consecutiveFailures = 0;
+                SDL_AtomicSet(&nextendoConsecutiveFailures,0);
+                SDL_AtomicSet(&nextendoLastSuccessTick,
+                    static_cast<int>(static_cast<Uint32>(SDL_GetTicks())));
                 desknx::diag::Write("nextendo", applied ? "snapshot_updated" : "snapshot_rejected",
                     "titles=%zu total=%u", snapshot.perTitle.size(), snapshot.total);
             } else {
+                ++consecutiveFailures;
+                SDL_AtomicSet(&nextendoConsecutiveFailures,
+                    static_cast<int>(consecutiveFailures));
                 desknx::diag::Write("nextendo", "snapshot_failed",
-                    "network_ready=%d", networkReady ? 1 : 0);
+                    "network_ready=%d consecutive_failures=%u",
+                    networkReady ? 1 : 0,consecutiveFailures);
+                // curl/socket sessions occasionally become unusable after a
+                // long Wi-Fi outage. Recreate the whole network stack instead
+                // of endlessly polling with the stale session.
+                if(consecutiveFailures>=3) {
+                    desknx::diag::Write("nextendo","network_recovery",
+                        "action=reinitialize failures=%u",consecutiveFailures);
+                    if(networkReady)desknx::nextendo::shutdownNetwork();
+                    networkReady=false;
+                    SDL_AtomicSet(&nextendoNetworkReady,0);
+                    consecutiveFailures=0;
+                    SDL_AtomicSet(&nextendoConsecutiveFailures,0);
+                    nextAttempt=now+8000;
+                    SDL_Delay(250);
+                    continue;
+                }
             }
             nextAttempt = now + desknx::nextendo::RefreshIntervalMs;
         }
         SDL_Delay(250);
     }
     if (networkReady) desknx::nextendo::shutdownNetwork();
+    SDL_AtomicSet(&nextendoNetworkReady,0);
     return 0;
 }
 
@@ -1834,22 +1881,70 @@ void refreshBattery() {
     if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
     if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
 }
+int storageStatsThreadMain(void*) {
+    Uint64 nextUpdate=0;
+    while(!SDL_AtomicGet(&storageStatsStop)) {
+        const Uint64 now=SDL_GetTicks64();
+        if(now>=nextUpdate) {
+            struct statvfs fs{};
+            uint64_t total=0,free=0;
+            const bool available=statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0;
+            if(available) {
+                const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
+                total=static_cast<uint64_t>(fs.f_blocks)*blockSize;
+                free=static_cast<uint64_t>(fs.f_bavail)*blockSize;
+            }
+            if(storageStatsMutex)SDL_LockMutex(storageStatsMutex);
+            backgroundSdTotalBytes=total;
+            backgroundSdFreeBytes=free;
+            backgroundStorageStatsAvailable=available&&total>0;
+            if(storageStatsMutex)SDL_UnlockMutex(storageStatsMutex);
+            desknx::diag::Write("storage","stats_refresh",
+                "available=%d total_bytes=%llu free_bytes=%llu",
+                available?1:0,static_cast<unsigned long long>(total),
+                static_cast<unsigned long long>(free));
+            nextUpdate=now+10000;
+        }
+        SDL_Delay(100);
+    }
+    return 0;
+}
+
 void refreshStorageStats() {
+    // The render thread only copies a small snapshot. statvfs runs on its own
+    // worker and can no longer stall a workspace/library frame.
+    if(storageStatsMutex)SDL_LockMutex(storageStatsMutex);
+    sdTotalBytes=backgroundSdTotalBytes;
+    sdFreeBytes=backgroundSdFreeBytes;
+    storageStatsAvailable=backgroundStorageStatsAvailable;
+    if(storageStatsMutex)SDL_UnlockMutex(storageStatsMutex);
+}
+
+void refreshDiagnosticsSnapshot(bool force=false) {
     const Uint32 now=SDL_GetTicks();
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
-    lastStorageUpdate=now;
-    struct statvfs fs{};
-    if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
-        const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
-        sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
-        sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0;
-    } else {
-        sdTotalBytes=0;
-        sdFreeBytes=0;
-        storageStatsAvailable=false;
+    if(!force&&lastDiagnosticsRefresh!=0&&now-lastDiagnosticsRefresh<5000)return;
+    lastDiagnosticsRefresh=now;
+    static const char* const cacheFiles[]={
+        "sdmc:/switch/DeskNX/cache/catalogue.tsv",
+        "sdmc:/switch/DeskNX/cache/catalogue.bak",
+        "sdmc:/switch/DeskNX/cache/game-names.tsv",
+        "sdmc:/switch/DeskNX/cache/game-timestamps.tsv",
+        "sdmc:/switch/DeskNX/cache/nro-metadata.tsv",
+        "sdmc:/switch/DeskNX/cache/nro-metadata.bak",
+        "sdmc:/switch/DeskNX/cache/nro-directories.tsv",
+        "sdmc:/switch/DeskNX/cache/nro-directories.bak"
+    };
+    diagnosticsCacheBytes=0;
+    diagnosticsCacheFiles=0;
+    for(const char* path:cacheFiles) {
+        struct stat st{};
+        if(stat(path,&st)==0&&S_ISREG(st.st_mode)&&st.st_size>=0) {
+            diagnosticsCacheBytes+=static_cast<std::uint64_t>(st.st_size);
+            ++diagnosticsCacheFiles;
+        }
     }
 }
+
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
     // through, multibyte sequences contribute their lead byte which yields
@@ -2415,6 +2510,30 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
+    // Decode likely-next artwork before the user moves focus. This only queues
+    // low-priority work; file reads and image decoding stay on IconCache's worker.
+    if(listOpen&&!available.empty()) {
+        const int first=std::max(0,listIndex-2);
+        const int last=std::min(static_cast<int>(available.size())-1,listIndex+2);
+        for(int index=first;index<=last;++index) {
+            const Candidate& candidate=available[static_cast<std::size_t>(index)];
+            Tile tile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
+            gIconCache.prefetch(tile);
+        }
+    } else if(!desks.empty()) {
+        const Workspace& activeDesk=desks[static_cast<std::size_t>(
+            std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
+        int queued=0;
+        for(const Tile& tile:activeDesk.tiles) {
+            const int cx=tile.x+tile.w/2;
+            const int cy=tile.y+tile.h/2;
+            const int distance=std::abs(cx-selectedX)+std::abs(cy-selectedY);
+            if(distance<=3&&queued<8) {
+                gIconCache.prefetch(tile);
+                ++queued;
+            }
+        }
+    }
     refreshBattery();
     refreshStorageStats();
     rect(0,0,SW,SH,BG);
@@ -2858,11 +2977,12 @@ void drawScreen() {
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE",
+            "RUNTIME DIAGNOSTICS"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
-            const int yy=214+i*31;
-            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
+        for(int i=0;i<12;++i) {
+            const int yy=210+i*28;
+            if(i==appSettingsIndex)roundRect(340,yy,600,26,8,Color{35,61,93,255});
             text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
             if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
             if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
@@ -2878,6 +2998,129 @@ void drawScreen() {
         text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
              346,592,1,MUTED,930);
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
+    }
+    if(diagnosticsOpen) {
+        refreshDiagnosticsSnapshot();
+        const auto iconStats=gIconCache.stats();
+        const Uint32 lastNetworkSuccess=static_cast<Uint32>(
+            SDL_AtomicGet(&nextendoLastSuccessTick));
+        const Uint32 networkAge=lastNetworkSuccess==0
+            ?0:SDL_GetTicks()-lastNetworkSuccess;
+        bool ready=false,complete=false,truncated=false,nsAvailable=false;
+        std::uint32_t nsError=0;
+        size_t games=0,nros=0;
+        readCatalogueState(ready,complete,truncated,&nsAvailable,&nsError,&games,&nros);
+        const int failures=SDL_AtomicGet(&nextendoConsecutiveFailures);
+        const bool networkReady=SDL_AtomicGet(&nextendoNetworkReady)!=0;
+        rect(0,0,SW,SH,Color{3,7,14,208});
+        softCard(120,48,1040,624,Color{17,24,36,255},Color{255,255,255,35});
+        text("RUNTIME DIAGNOSTICS",158,72,3,WHITE,920);
+        text("B BACK",1010,84,1,BLUE,1140);
+        text("X / A REFRESH",880,84,1,MUTED,1000);
+        const Color okColor=Color{52,211,153,255};
+        const Color warnColor=Color{255,177,74,255};
+        const Color badColor=Color{255,99,112,255};
+        // Storage and catalogue/cache health.
+        softCard(152,126,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("SD CARD",176,146,2,WHITE,580);
+        text(sdMounted?(storageStatsAvailable?"MOUNTED / READABLE":"MOUNTED / SPACE UNKNOWN"):"NOT MOUNTED",
+             176,178,1,sdMounted?okColor:badColor,580);
+        if(storageStatsAvailable) {
+            char storageText[96]{};
+            std::snprintf(storageText,sizeof(storageText),"FREE %.1f GB  /  TOTAL %.1f GB",
+                static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0),
+                static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+            text(storageText,176,202,1,MUTED,580);
+        }
+        char cacheText[96]{};
+        std::snprintf(cacheText,sizeof(cacheText),"CACHE FILES %zu  /  %.2f MB",
+            diagnosticsCacheFiles,
+            static_cast<double>(diagnosticsCacheBytes)/(1024.0*1024.0));
+        text(cacheText,176,226,1,BLUE,580);
+
+        softCard(628,126,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("NETWORK / NEXTENDO",652,146,2,WHITE,1050);
+        text(networkReady?"NETWORK SESSION READY":"NETWORK SESSION OFFLINE",
+             652,178,1,networkReady?okColor:warnColor,1050);
+        char networkText[96]{};
+        if(lastNetworkSuccess!=0)
+            std::snprintf(networkText,sizeof(networkText),
+                "LAST UPDATE %u SEC AGO  /  FAILURES %d",networkAge/1000,failures);
+        else
+            std::snprintf(networkText,sizeof(networkText),
+                "NO SUCCESSFUL UPDATE YET  /  FAILURES %d",failures);
+        text(networkText,652,202,1,MUTED,1050);
+        text(nextendoTotalLabel(),652,226,1,BLUE,1050);
+
+        softCard(152,278,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("APPLICATION CATALOGUE",176,298,2,WHITE,580);
+        char catalogueText[112]{};
+        std::snprintf(catalogueText,sizeof(catalogueText),
+            "%s  /  %s  /  %zu GAMES  /  %zu HOMEBREW",
+            ready?"READY":"SEEDING",complete?"COMPLETE":"SCANNING",games,nros);
+        text(catalogueText,176,330,1,nsAvailable?okColor:warnColor,580);
+        char nsText[64]{};
+        std::snprintf(nsText,sizeof(nsText),"NS %s  /  RC 0X%08X  /  TRUNCATED %s",
+            nsAvailable?"ONLINE":"OFFLINE",static_cast<unsigned int>(nsError),
+            truncated?"YES":"NO");
+        text(nsText,176,356,1,MUTED,580);
+        text("INCREMENTAL METADATA CACHE ACTIVE",176,382,1,BLUE,580);
+
+        softCard(628,278,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("IMAGE / GPU CACHE",652,298,2,WHITE,1050);
+        char gpuText[112]{};
+        std::snprintf(gpuText,sizeof(gpuText),
+            "%zu / 64 TEXTURES  /  %.1f / 32 MB",
+            iconStats.residentTextures,
+            static_cast<double>(iconStats.textureBytes)/(1024.0*1024.0));
+        text(gpuText,652,330,1,okColor,1050);
+        char queueText[112]{};
+        std::snprintf(queueText,sizeof(queueText),
+            "QUEUE %zu  /  DECODED %zu  /  FAILED %zu",
+            iconStats.pendingRequests,iconStats.completedImages,iconStats.failedKeys);
+        text(queueText,652,356,1,MUTED,1050);
+        text(iconStats.workerRunning?"DECODER THREAD RUNNING":"DECODER THREAD STOPPED",
+             652,382,1,iconStats.workerRunning?okColor:warnColor,1050);
+
+        softCard(152,430,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("BACKGROUND TASKS",176,450,2,WHITE,580);
+        char workerText[112]{};
+        std::snprintf(workerText,sizeof(workerText),
+            "CATALOGUE %s  /  NEXTENDO %s",
+            catalogueThread?"STARTED":"OFF",nextendoThread?"RUNNING":"OFF");
+        text(workerText,176,482,1,catalogueThread?okColor:warnColor,580);
+        std::snprintf(workerText,sizeof(workerText),
+            "STORAGE %s  /  PDM %s",
+            storageStatsThread?"RUNNING":"OFF",playStatsThread?"RUNNING":"IDLE");
+        text(workerText,176,506,1,WHITE,580);
+#ifdef DESKNX_SYSTEM_APPLET
+        std::snprintf(workerText,sizeof(workerText),
+            "LAYOUT SAVE %s  /  IPC %s",
+            layoutSaveThread?"RUNNING":"IDLE",heartbeatThread?"ACTIVE":"OFF");
+        text(workerText,176,530,1,heartbeatThread?okColor:warnColor,580);
+#else
+        std::snprintf(workerText,sizeof(workerText),
+            "LAYOUT SAVE %s  /  NATIVE NRO",
+            layoutSaveThread?"RUNNING":"IDLE");
+        text(workerText,176,530,1,MUTED,580);
+#endif
+
+        softCard(628,430,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("FRAME PERFORMANCE",652,450,2,WHITE,1050);
+        char perfText[112]{};
+        std::snprintf(perfText,sizeof(perfText),"FPS %.1f  /  FRAME %.2f MS AVG",
+            runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs);
+        text(perfText,652,482,1,okColor,1050);
+        std::snprintf(perfText,sizeof(perfText),"RENDER %.2f MS AVG  /  PEAK %.2F MS",
+            runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs);
+        text(perfText,652,506,1,MUTED,1050);
+        std::snprintf(perfText,sizeof(perfText),"SLOW FRAMES IN WINDOW %llu",
+            static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
+        text(perfText,652,530,1,warnColor,1050);
+        text("LIVE SNAPSHOT UPDATES EVERY 5 SECONDS  /  A OR X TO REFRESH",
+             176,604,1,MUTED,1060);
+        text("NO ACCOUNT IDS OR PERSONAL FILE CONTENT IS INCLUDED",
+             176,628,1,MUTED,1060);
     }
     if(mediaPickerOpen) {
         rect(0,0,SW,SH,Color{3,7,14,205});
@@ -3490,6 +3733,10 @@ void activateAppSettings(int action) {
             iconStyle=(iconStyle+1)%3;
             if(saveLauncherSettings())setStatus("ICON STYLE");
             break;
+        case 11:
+            diagnosticsOpen=true;
+            refreshDiagnosticsSnapshot(true);
+            break;
         default: break;
     }
 }
@@ -3669,9 +3916,15 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+11)%12;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%12;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
+        return;
+    }
+    if(diagnosticsOpen) {
+        if(keys&HidNpadButton_B){diagnosticsOpen=false;return;}
+        if(keys&(HidNpadButton_A|HidNpadButton_X))
+            refreshDiagnosticsSnapshot(true);
         return;
     }
     if(workspaceSettingsMenu) {
@@ -3968,6 +4221,12 @@ void touchInput(const SDL_Event&e) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
     }
+    if(e.type==SDL_FINGERDOWN && diagnosticsOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=1000&&x<=1145&&y>=72&&y<=112)diagnosticsOpen=false;
+        else if(x>=840&&x<=1000&&y>=72&&y<=112)refreshDiagnosticsSnapshot(true);
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && mediaPickerOpen) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=930&&x<=1022&&y>=86&&y<=120) {
@@ -3989,9 +4248,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
-            const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=210&&y<550) {
+            const int row=(y-210)/28;
+            if(row>=0&&row<12)activateAppSettings(row);
         }
         return;
     }
@@ -4375,6 +4634,7 @@ int main(int,char**) {
     storageCommitMutex=SDL_CreateMutex();
     playStatsMutex=SDL_CreateMutex();
     nextendoMutex=SDL_CreateMutex();
+    storageStatsMutex=SDL_CreateMutex();
     nextendoFeed.setEnabled(true);
 
     // Match SLauncher's startup order: query the real firmware version and
@@ -4534,6 +4794,10 @@ int main(int,char**) {
                       static_cast<unsigned int>(nsInitError));
         setStatus(message, 6000);
     }
+    if(storageStatsMutex)
+        storageStatsThread=SDL_CreateThread(storageStatsThreadMain,"DeskNX storage stats",nullptr);
+    if(!storageStatsThread)
+        desknx::diag::Write("storage","stats_thread_create_failed","storage widget will show unavailable values");
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
     nextendoThread=SDL_CreateThread(nextendoThreadMain,"Nextendo online counts",nullptr);
     if(!nextendoThread)desknx::diag::Write("nextendo","thread_create_failed","online counts disabled");
@@ -4545,7 +4809,12 @@ int main(int,char**) {
     if(!consoleUsersLoaded) loadConsoleUsers();
     Uint32 previousFrameTick = SDL_GetTicks();
     Uint32 lastSlowFrameLog = 0;
+    const Uint64 performanceFrequency=SDL_GetPerformanceFrequency();
+    Uint64 metricsWindowStart=SDL_GetPerformanceCounter();
+    std::uint64_t metricsFrames=0,metricsSlowFrames=0;
+    double metricsFrameSumMs=0.0,metricsRenderSumMs=0.0,metricsMaximumFrameMs=0.0;
     while(running&&appletMainLoop()) {
+        const Uint64 frameStartCounter=SDL_GetPerformanceCounter();
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
         const Uint32 frameNow = SDL_GetTicks();
@@ -4624,12 +4893,49 @@ int main(int,char**) {
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
             (void)flushActiveWorkspaceSave();
         const Uint32 renderStarted=SDL_GetTicks();
+        const Uint64 renderStartCounter=SDL_GetPerformanceCounter();
         drawScreen();
+        const Uint64 renderEndCounter=SDL_GetPerformanceCounter();
+        const double renderMs=performanceFrequency>0
+            ?static_cast<double>(renderEndCounter-renderStartCounter)*1000.0/
+                static_cast<double>(performanceFrequency):0.0;
         // Present already waits for the display when VSync is active. Sleeping
         // another 16ms here capped the accelerated path at roughly 30 FPS.
         if(!rendererVsync) {
             const Uint32 elapsed=SDL_GetTicks()-renderStarted;
             if(elapsed<16)svcSleepThread(static_cast<s64>(16-elapsed)*1'000'000LL);
+        }
+        const Uint64 frameEndCounter=SDL_GetPerformanceCounter();
+        const double frameMs=performanceFrequency>0
+            ?static_cast<double>(frameEndCounter-frameStartCounter)*1000.0/
+                static_cast<double>(performanceFrequency):0.0;
+        ++metricsFrames;
+        metricsFrameSumMs+=frameMs;
+        metricsRenderSumMs+=renderMs;
+        metricsMaximumFrameMs=std::max(metricsMaximumFrameMs,frameMs);
+        if(frameMs>20.0)++metricsSlowFrames;
+        if(performanceFrequency>0&&frameEndCounter-metricsWindowStart>=
+            performanceFrequency*5) {
+            const double windowMs=static_cast<double>(
+                frameEndCounter-metricsWindowStart)*1000.0/
+                static_cast<double>(performanceFrequency);
+            runtimeFrameMetrics.fps=windowMs>0.0
+                ?static_cast<double>(metricsFrames)*1000.0/windowMs:0.0;
+            runtimeFrameMetrics.averageFrameMs=metricsFrames
+                ?metricsFrameSumMs/static_cast<double>(metricsFrames):0.0;
+            runtimeFrameMetrics.averageRenderMs=metricsFrames
+                ?metricsRenderSumMs/static_cast<double>(metricsFrames):0.0;
+            runtimeFrameMetrics.maximumFrameMs=metricsMaximumFrameMs;
+            runtimeFrameMetrics.slowFrames=metricsSlowFrames;
+            runtimeFrameMetrics.updatedAt=SDL_GetTicks();
+            desknx::diag::Write("runtime","frame_metrics",
+                "fps=%.2f avg_frame_ms=%.3f avg_render_ms=%.3f max_frame_ms=%.3f slow_frames=%llu",
+                runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs,
+                runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs,
+                static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
+            metricsWindowStart=frameEndCounter;
+            metricsFrames=metricsSlowFrames=0;
+            metricsFrameSumMs=metricsRenderSumMs=metricsMaximumFrameMs=0.0;
         }
     }
 #ifdef DESKNX_SYSTEM_APPLET
@@ -4637,6 +4943,8 @@ int main(int,char**) {
 #endif
     SDL_AtomicSet(&nextendoStop,1);
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
+    SDL_AtomicSet(&storageStatsStop,1);
+    if(storageStatsThread){SDL_WaitThread(storageStatsThread,nullptr);storageStatsThread=nullptr;}
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
         (void)saveLayout();
     for(auto& entry:workspaceBackgroundTextures)
@@ -4663,6 +4971,7 @@ int main(int,char**) {
     if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (nextendoMutex) SDL_DestroyMutex(nextendoMutex);
+    if (storageStatsMutex) SDL_DestroyMutex(storageStatsMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (storageCommitMutex) SDL_DestroyMutex(storageCommitMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
