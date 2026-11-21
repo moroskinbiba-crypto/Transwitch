@@ -4079,7 +4079,8 @@ void drawScreen() {
         drawSystemIcon(4,402,314,22,WHITE);
         text("THIS DESKTOP IS EMPTY",454,302,2,WHITE,880);
         text("Add games, homebrew and widgets to get started.",454,337,1,MUTED,880);
-        roundRect(454,370,176,38,12,Color{43,111,190,255});
+        uiButton(454,370,176,38,12,desknx::ui::ButtonVariant::Solid,
+            Color{43,111,190,255},Color{255,255,255,28},true,false,BLUE);
         text("Y  ADD APPS",493,383,1,WHITE,620);
         text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
     }
@@ -4172,33 +4173,39 @@ void drawScreen() {
         const int x=DeskTabX+i*DeskTabStep;
         const bool active=index==deskIndex;
         if(dockStyle==1) {
-            if(active)roundRect(x,642,DeskTabWidth,42,6,
-                themeIndex==8?Color{27,53,68,255}:Color{35,53,78,255});
-            if(active)rect(x+12,685,DeskTabWidth-24,2,
-                themeIndex==8?COLORS[3]:BLUE);
+            uiButton(x,642,DeskTabWidth,42,6,desknx::ui::ButtonVariant::Solid,
+                Color{active?35:27,active?53:53,active?78:68,255},
+                Color{0,0,0,0},active,false,themeIndex==8?COLORS[3]:BLUE);
+            if(active)gUiComponents.divider(x+12,685,DeskTabWidth-24,
+                SDL_Color{(themeIndex==8?COLORS[3]:BLUE).r,
+                          (themeIndex==8?COLORS[3]:BLUE).g,
+                          (themeIndex==8?COLORS[3]:BLUE).b,255});
         } else if(dockStyle==2) {
-            roundRect(x,641,DeskTabWidth,45,22,
-                active?Color{51,89,112,210}:Color{255,255,255,12});
-            if(active)outline(x,641,DeskTabWidth,45,
-                Color{103,184,225,130});
+            uiButton(x,641,DeskTabWidth,45,22,desknx::ui::ButtonVariant::Glass,
+                active?Color{51,89,112,210}:Color{255,255,255,12},
+                Color{103,184,225,130},active);
         } else {
-            roundRect(x,641,DeskTabWidth,48,14,
-                active?Color{53,91,139,255}:Color{34,43,58,235});
-            if(active)outline(x,641,DeskTabWidth,48,
-                Color{144,189,244,110});
+            uiButton(x,641,DeskTabWidth,48,14,desknx::ui::ButtonVariant::Glass,
+                active?Color{53,91,139,255}:Color{34,43,58,235},
+                Color{144,189,244,110},active);
         }
         text(desks[static_cast<size_t>(index)].name,x+12,658,1,
              active?WHITE:MUTED,x+DeskTabWidth-8);
     }
-    roundRect(770,641,52,48,14,desks.size()<static_cast<size_t>(MAX_DESKS)?
-        Color{35,70,105,255}:Color{34,43,58,235});
+    uiButton(770,641,52,48,14,desknx::ui::ButtonVariant::Chip,
+        desks.size()<static_cast<size_t>(MAX_DESKS)?
+            Color{35,70,105,255}:Color{34,43,58,235},
+        Color{255,255,255,18},false,false,
+        desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED);
     text("+",787,652,3,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,812);
-    roundRect(832,641,52,48,14,Color{34,43,58,235});
+    uiButton(832,641,52,48,14,desknx::ui::ButtonVariant::Chip,
+        Color{34,43,58,235},Color{255,255,255,18});
     text("...",842,660,2,WHITE,876);
     text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
          916,658,1,MUTED,1040);
-    roundRect(1096,638,128,54,16,
-        editing?Color{53,100,156,255}:Color{34,46,64,255});
+    uiButton(1096,638,128,54,16,desknx::ui::ButtonVariant::Glass,
+        editing?Color{53,100,156,255}:Color{34,46,64,255},
+        Color{144,189,244,110},editing);
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
     if(listOpen) {
