@@ -4555,6 +4555,16 @@ void touchInput(const SDL_Event&e) {
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
     }
+    if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
+       !recentOpen && !powerMenu && !appSettingsMenu) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(y>=566&&y<=614&&x>=642&&x<=832) {
+            Tile tile;
+            std::uint64_t id=0;
+            if(steamGridDbGetSelectedGame(tile,id))steamGridDbOpenPicker();
+            return;
+        }
+    }
     if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=566&&y<=614&&itemAt(
@@ -5122,6 +5132,7 @@ int main(int,char**) {
         pumpAsyncLayoutSaver();
         pumpPlayStatsQuery();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        pumpSteamGridDbPicker();
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
@@ -5138,6 +5149,7 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    gSteamGridDbService.shutdown();
     SDL_AtomicSet(&nextendoStop,1);
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
@@ -5160,6 +5172,7 @@ int main(int,char**) {
         accountServiceReady=false;
     }
     if (setsysReady) setsysExit();
+    steamGridDbDestroyPreview();
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();
