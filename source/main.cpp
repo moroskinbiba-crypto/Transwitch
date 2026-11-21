@@ -6469,10 +6469,15 @@ void loadConsoleUsers() {
            accountUidIsValid(&preselected)) {
             uiSelectedUser=preselected;
             uiHasSelectedUser=true;
-        } else if(!consoleUsers.empty()) {
+        }
+#ifdef DESKNX_SYSTEM_APPLET
+        else if(!consoleUsers.empty()) {
+            // The HOME backend selects a valid account before opening the
+            // menu; the first-user fallback is only for backend recovery.
             uiSelectedUser=consoleUsers.front().uid;
             uiHasSelectedUser=true;
         }
+#endif
     }
 #ifdef DESKNX_SYSTEM_APPLET
     if(!g_backendHasUser&&uiHasSelectedUser) {
@@ -6480,7 +6485,13 @@ void loadConsoleUsers() {
         g_backendHasUser=true;
     }
 #endif
+#ifdef DESKNX_SYSTEM_APPLET
     selectedUserLabel="SELECT PLAYER";
+#else
+    // Do not display an arbitrary first account as selected: standalone
+    // launches only inherit the profile selected by Horizon.
+    selectedUserLabel="SYSTEM PLAYER";
+#endif
     for(const auto& user:consoleUsers) {
         if(uiHasSelectedUser&&sameAccountUid(user.uid,uiSelectedUser)) {
             selectedUserLabel=user.nickname;
