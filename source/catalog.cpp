@@ -1151,13 +1151,6 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         report(true);
         return result;
     }
-    if(directoryScanStats.complete&&!directoryScanStats.truncated&&
-       (!directoryCacheValid||
-        !SameNroDirectoryStampCache(directoryStampCache,freshDirectoryStamps))) {
-        const bool saved=WriteNroDirectoryStampCache(freshDirectoryStamps);
-        LogDiagnostic("nro_directory_cache_write ok=%d entries=%zu",
-            saved?1:0,freshDirectoryStamps.size());
-    }
     LogDiagnostic("nro_inventory directories_reused=%zu directories_enumerated=%zu nro_stat_checks=%zu cache_usable=%d truncated=%d",
         directoryScanStats.reusedDirectories,directoryScanStats.enumeratedDirectories,
         directoryScanStats.checkedNroFiles,inventoryCacheUsable?1:0,
@@ -1185,8 +1178,36 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         return result;
     }
 
-    // Never reuse a cache with mismatched live signatures during a normal scan.
-    if (!forceRefresh && nsReady && result.nsErrorCode == 0 && ReadCache(sig, result)) {
+    // A catalogue hit is safe only when the NRO metadata manifest covers the
+    // complete live inventory. Otherwise we must rebuild the manifests once;
+    // persisting a partial NRO list here would make later incremental scans
+    // silently miss files hidden behind a truncated catalogue.
+    bool nroMetadataMatchesInventory = nroMetadataCacheValid &&
+        nroMetadataCache.size() == nros.size();
+    if (nroMetadataMatchesInventory) {
+        for (const auto& nro : nros) {
+            const auto cached = nroMetadataCache.find(nro.path);
+            if (cached == nroMetadataCache.end() ||
+                cached->second.size != nro.size ||
+                cached->second.mtime != nro.mtime) {
+                nroMetadataMatchesInventory = false;
+                break;
+            }
+        }
+    }
+    // Never reuse a cache with mismatched live signatures or incomplete NRO
+    // metadata during a normal scan.
+    const bool catalogueCacheHit =
+        !forceRefresh && nsReady && result.nsErrorCode == 0 &&
+        ReadCache(sig, result);
+    if (catalogueCacheHit && nroMetadataMatchesInventory) {
+        if (directoryScanStats.complete && !directoryScanStats.truncated &&
+            (!directoryCacheValid ||
+             !SameNroDirectoryStampCache(directoryStampCache,freshDirectoryStamps))) {
+            const bool saved=WriteNroDirectoryStampCache(freshDirectoryStamps);
+            LogDiagnostic("nro_directory_cache_write ok=%d entries=%zu",
+                saved?1:0,freshDirectoryStamps.size());
+        }
         // Volatile play statistics are fetched only for the selected game.
         result.complete = true;
         LogDiagnostic("scan_cache_hit games=%zu nros=%zu items=%zu elapsed=%llds",
@@ -1364,8 +1385,14 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     NroMetadataCache refreshedNroMetadata;
     refreshedNroMetadata.reserve(nros.size());
     size_t nroMetadataReused = 0, nroMetadataRefreshed = 0;
+    bool nroMetadataComplete =
+        directoryScanStats.complete && !directoryScanStats.truncated;
     for (const auto& nro : nros) {
-        if (result.items.size() >= MaxItems - WidgetReserve) { result.truncated = true; break; }
+        if (result.items.size() >= MaxItems - WidgetReserve) {
+            result.truncated = true;
+            nroMetadataComplete = false;
+            break;
+        }
         Candidate item{Kind::Nro, fileTitle(nro.path), nro.path, 1, 1,
                        static_cast<int>(result.items.size() % 12)};
         const auto cached = nroMetadataCache.find(nro.path);
@@ -1403,11 +1430,24 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             }
         }
     }
-    const bool nroCacheSaved = (!nroMetadataCacheValid || nroMetadataChanged)
-        ? WriteNroMetadataCache(refreshedNroMetadata) : true;
-    LogDiagnostic("nro_metadata_cache reused=%zu refreshed=%zu changed=%d saved=%d entries=%zu",
+    const bool nroCacheSaved = nroMetadataComplete
+        ? ((!nroMetadataCacheValid || nroMetadataChanged)
+            ? WriteNroMetadataCache(refreshedNroMetadata) : true)
+        : false;
+    LogDiagnostic("nro_metadata_cache reused=%zu refreshed=%zu changed=%d complete=%d saved=%d entries=%zu",
         nroMetadataReused, nroMetadataRefreshed, nroMetadataChanged ? 1 : 0,
-        nroCacheSaved ? 1 : 0, refreshedNroMetadata.size());
+        nroMetadataComplete ? 1 : 0, nroCacheSaved ? 1 : 0,
+        refreshedNroMetadata.size());
+    // Publish directory signatures only after the matching metadata manifest
+    // is known complete. A truncated catalogue must never pair a full
+    // directory tree with a partial NRO manifest.
+    if (nroMetadataComplete && nroCacheSaved &&
+        (!directoryCacheValid ||
+         !SameNroDirectoryStampCache(directoryStampCache,freshDirectoryStamps))) {
+        const bool saved=WriteNroDirectoryStampCache(freshDirectoryStamps);
+        LogDiagnostic("nro_directory_cache_write ok=%d entries=%zu",
+            saved?1:0,freshDirectoryStamps.size());
+    }
     if (games.size() > gameLimit || nros.size() >= MaxItems) result.truncated = true;
     (void)EnsureBuiltinWidgets(result.items);
     // Preserve the last known-good catalogue if NS enumeration failed.
