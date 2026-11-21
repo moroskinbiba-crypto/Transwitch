@@ -23,16 +23,17 @@ bool SteamGridDbService::enqueue(Job job){
  if(stopWorker_||jobs_.size()>=MaxQueuedJobs){SDL_UnlockMutex(mutex_);return false;}
  jobs_.push_back(std::move(job));SDL_CondSignal(condition_);SDL_UnlockMutex(mutex_);return true;
 }
-bool SteamGridDbService::search(std::uint64_t id,const std::string& title,const std::string& key){
+bool SteamGridDbService::search(std::uint64_t id,const std::string& title,
+        const std::string& key,bool useSavedMapping){
  if(id==0||title.empty()||key.empty()||!ensureWorker())return false;
  Job job;job.type=JobType::Search;job.titleId=id;job.title=title;job.apiKey=key;
+ job.useSavedMapping=useSavedMapping;
  SDL_LockMutex(mutex_);++revision_;job.revision=revision_;
  state_=ServiceSnapshot{};state_.status=ServiceStatus::Searching;state_.message="Searching SteamGridDB...";
  state_.titleId=id;state_.title=title;state_.kind=ArtworkKind::Grid;state_.revision=revision_;jobs_.clear();
- const std::uint64_t mapped=cache_.mappedGameId(id);
- if(mapped){job.type=JobType::Assets;job.gameId=mapped;job.gameName=title;job.mappedLookup=true;}
  SDL_UnlockMutex(mutex_);
- if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB worker could not queue request");return false;}return true;
+ if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB worker could not queue request");return false;}
+ return true;
 }
 bool SteamGridDbService::loadAssets(std::uint64_t id,std::uint64_t gameId,const std::string& title,
  const std::string& gameName,ArtworkKind kind,const std::string& key){
@@ -102,10 +103,37 @@ int SteamGridDbService::workerLoop(){
   if(!networkReady_){publishError(j.revision,"Network service unavailable; check Wi-Fi");continue;}
   std::string error;
   if(j.type==JobType::Search){
-   std::vector<GameResult> games;if(!searchGames(j.apiKey,j.title,games,error)){publishError(j.revision,error);continue;}
-   SDL_LockMutex(mutex_);if(j.revision==revision_){state_.games=std::move(games);state_.status=ServiceStatus::MatchesReady;
-    state_.message=state_.games.empty()?"No SteamGridDB matches found":"Choose the matching SteamGridDB entry";++state_.revision;}
-   SDL_UnlockMutex(mutex_);continue;
+   const std::uint64_t mapped=j.useSavedMapping?cache_.mappedGameId(j.titleId):0;
+   if(mapped) {
+    Job mappedJob=j;
+    mappedJob.type=JobType::Assets;
+    mappedJob.gameId=mapped;
+    mappedJob.gameName=j.title;
+    mappedJob.kind=ArtworkKind::Grid;
+    mappedJob.mappedLookup=true;
+    SDL_LockMutex(mutex_);
+    if(j.revision==revision_) {
+     state_.status=ServiceStatus::LoadingAssets;
+     state_.gameId=mapped;
+     state_.gameName=j.title;
+     state_.message="Loading saved SteamGridDB game mapping...";
+     jobs_.push_front(std::move(mappedJob));
+     ++state_.revision;
+    }
+    SDL_UnlockMutex(mutex_);
+    continue;
+   }
+   std::vector<GameResult> games;
+   if(!searchGames(j.apiKey,j.title,games,error)){publishError(j.revision,error);continue;}
+   SDL_LockMutex(mutex_);
+   if(j.revision==revision_){
+    state_.games=std::move(games);
+    state_.status=ServiceStatus::MatchesReady;
+    state_.message=state_.games.empty()?"No SteamGridDB matches found":"Choose the matching SteamGridDB entry";
+    ++state_.revision;
+   }
+   SDL_UnlockMutex(mutex_);
+   continue;
   }
   if(j.type==JobType::Assets){
    std::vector<ArtworkAsset> assets;
