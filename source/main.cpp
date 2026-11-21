@@ -186,6 +186,8 @@ IconCache gIconCache;
 desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
 enum class SteamGridDbPickerView { Matches, Assets };
 bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false, steamGridDbStartupPruned=false;
+bool steamGridDbTouchTracking=false, steamGridDbTouchDragged=false;
+int steamGridDbTouchStartX=0, steamGridDbTouchStartY=0;
 int steamGridDbMatchIndex=0, steamGridDbMatchOffset=0;
 int steamGridDbKindIndex=1, steamGridDbAssetOffset=0;
 std::string steamGridDbPreviewLoadedPath;
@@ -937,6 +939,8 @@ void steamGridDbDestroyPreview() {
 void steamGridDbClosePicker() {
     steamGridDbPickerOpen=false;
     steamGridDbOfflineFallback=false;
+    steamGridDbTouchTracking=false;
+    steamGridDbTouchDragged=false;
     // An apply is a background transaction. Closing the modal must not drop
     // completion handling or leave the in-memory tile texture stale.
     steamGridDbApplyPending=
@@ -1060,7 +1064,7 @@ void steamGridDbMoveAsset(int direction) {
     const auto state=gSteamGridDbService.snapshot();
     if(state.assets.empty())return;
     const int count=static_cast<int>(state.assets.size());
-    const int next=(state.selectedAsset+direction+count)%count;
+    const int next=((state.selectedAsset+direction)%count+count)%count;
     if(gSteamGridDbService.selectAsset(next)) {
         if(next<steamGridDbAssetOffset)steamGridDbAssetOffset=next;
         if(next>=steamGridDbAssetOffset+7)steamGridDbAssetOffset=next-6;
@@ -4465,8 +4469,53 @@ void touchInput(const SDL_Event&e) {
     }
     if(steamGridDbPickerOpen) {
         if(e.type==SDL_FINGERDOWN) {
+            steamGridDbTouchTracking=true;
+            steamGridDbTouchDragged=false;
+            steamGridDbTouchStartX=static_cast<int>(e.tfinger.x*SW);
+            steamGridDbTouchStartY=static_cast<int>(e.tfinger.y*SH);
+            return;
+        }
+        if(e.type==SDL_FINGERMOTION&&steamGridDbTouchTracking) {
             const int x=static_cast<int>(e.tfinger.x*SW);
             const int y=static_cast<int>(e.tfinger.y*SH);
+            const int delta=steamGridDbTouchStartY-y;
+            if(steamGridDbPickerView==SteamGridDbPickerView::Matches&&
+               steamGridDbTouchStartX>=126&&steamGridDbTouchStartX<=1154&&
+               steamGridDbTouchStartY>=198&&steamGridDbTouchStartY<574) {
+                if(std::abs(delta)>=18)steamGridDbTouchDragged=true;
+                const int steps=delta/47;
+                if(steps!=0) {
+                    const int count=static_cast<int>(gSteamGridDbService.snapshot().games.size());
+                    if(count>0) {
+                        steamGridDbMatchIndex=((steamGridDbMatchIndex+steps)%count+count)%count;
+                        if(steamGridDbMatchIndex<steamGridDbMatchOffset)
+                            steamGridDbMatchOffset=steamGridDbMatchIndex;
+                        if(steamGridDbMatchIndex>=steamGridDbMatchOffset+8)
+                            steamGridDbMatchOffset=steamGridDbMatchIndex-7;
+                    }
+                    steamGridDbTouchStartY-=steps*47;
+                }
+            } else if(steamGridDbPickerView==SteamGridDbPickerView::Assets&&
+                      !steamGridDbOfflineFallback&&
+                      steamGridDbTouchStartX>=124&&steamGridDbTouchStartX<=474&&
+                      steamGridDbTouchStartY>=289&&steamGridDbTouchStartY<541) {
+                if(std::abs(delta)>=18)steamGridDbTouchDragged=true;
+                const int steps=delta/36;
+                if(steps!=0) {
+                    steamGridDbMoveAsset(steps);
+                    steamGridDbTouchStartY-=steps*36;
+                }
+            }
+            return;
+        }
+        if(e.type==SDL_FINGERUP&&steamGridDbTouchTracking) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            const bool tap=!steamGridDbTouchDragged;
+            steamGridDbTouchTracking=false;
+            steamGridDbTouchDragged=false;
+            if(!tap)return;
+
             if(x>=1082&&x<=1178&&y>=62&&y<=102) {
                 steamGridDbClosePicker();
             } else if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
@@ -4514,6 +4563,11 @@ void touchInput(const SDL_Event&e) {
                     else steamGridDbApplyPending=gSteamGridDbService.applySelected();
                 }
             }
+            return;
+        }
+        if(e.type==SDL_FINGERUP) {
+            steamGridDbTouchTracking=false;
+            steamGridDbTouchDragged=false;
         }
         return;
     }
