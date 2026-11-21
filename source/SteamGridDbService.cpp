@@ -2,7 +2,9 @@
 #include "NetworkRuntime.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <utility>
 namespace desknx::steamgriddb {
 namespace { constexpr std::size_t MaxQueuedJobs=8; }
