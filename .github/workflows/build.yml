@@ -31,8 +31,13 @@ jobs:
       - name: Validate SOCOMA SVG assets
         run: python3 scripts/check-svg-assets.py assets/icons
 
-      - name: Verify Switch curl dependency
-        run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
+      - name: Install Nextendo signature verification library
+        run: dkp-pacman -S --needed --noconfirm switch-libsodium
+
+      - name: Verify Switch network dependencies
+        run: |
+          test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
+          test -s /opt/devkitpro/portlibs/switch/lib/libsodium.a
 
       - name: Validate shell scripts
         run: bash -n scripts/install-system.sh scripts/uninstall-system.sh scripts/package-runtime-assets.sh tests/test-recovery.sh
@@ -75,7 +80,7 @@ jobs:
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev pkg-config
+          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev libsodium-dev pkg-config
 
       - name: Test compressed NACP title normalization
         run: |
@@ -113,6 +118,11 @@ jobs:
           /tmp/desknx-steamgriddb-client-test
           c++ -std=c++17 -Isource tests/steamgriddb_cache_test.cpp source/SteamGridDbCache.cpp -o /tmp/desknx-steamgriddb-cache-test
           /tmp/desknx-steamgriddb-cache-test
+
+      - name: Test signed Nextendo game catalog verification
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_game_catalog_test.cpp source/NextendoGameCatalog.cpp $(pkg-config --cflags --libs libsodium libcurl) -o /tmp/desknx-nextendo-game-catalog-test
+          /tmp/desknx-nextendo-game-catalog-test
 
       - name: Test IPC protocol validation boundaries
         run: |
