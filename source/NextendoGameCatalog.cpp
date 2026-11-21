@@ -2,7 +2,6 @@
 
 #include <curl/curl.h>
 #include <sodium.h>
-#include "NetworkRuntime.hpp"
 
 #include <algorithm>
 #include <array>
