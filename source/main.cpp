@@ -1293,6 +1293,7 @@ std::string typeName(Kind k) {
         case Kind::Nextendo:return "WIDGET / NEXTENDO";
         case Kind::Favorites:return "WIDGET / FAVORITES";
         case Kind::GameLibrary:return "WIDGET / GAME LIBRARY";
+        case Kind::QuickSettings:return "WIDGET / QUICK SETTINGS";
         case Kind::Unsupported:return "UNSUPPORTED";
     }
     return "ITEM";
@@ -3984,6 +3985,43 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             if(!compact&&!banner)
                 text(languageRussian?"ИГРЫ С МАКСИМАЛЬНЫМ ОНЛАЙНОМ":
                     "MOST PLAYED RIGHT NOW",left,metrics.clampY(bottom-11,8),1,MUTED,right);
+        } else if(t.kind==Kind::QuickSettings) {
+            if(quickSettingsSnapshotTick==0 ||
+               SDL_GetTicks()-quickSettingsSnapshotTick>=3500)
+                refreshQuickSettingsSnapshot();
+            label("QUICK SETTINGS",metrics.headerY);
+            const int gap=7;
+            const int cellW=std::max(1,(right-left-gap)/2);
+            const int cellH=std::max(30,std::min(52,(metrics.bodyBottom-metrics.bodyTop-gap)/2));
+            const int gridY=metrics.bodyTop+2;
+            struct QuickCell { const char* name; const char* value; bool enabled; };
+            const QuickCell cells[]={
+                {"SOUND",quickSoundAvailable?(quickSoundMuted?"MUTED":"ON"):"N/A",
+                    quickSoundAvailable&&!quickSoundMuted},
+                {"AIRPLANE",quickAirplaneAvailable?(quickAirplaneMode?"ON":"OFF"):"N/A",
+                    quickAirplaneAvailable&&quickAirplaneMode},
+                {"WI-FI",quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"N/A",
+                    quickWifiAvailable&&quickWifiEnabled&&!quickAirplaneMode},
+                {"BLUETOOTH",quickBluetoothAvailable?(quickBluetoothEnabled?"ON":"OFF"):"N/A",
+                    quickBluetoothAvailable&&quickBluetoothEnabled}
+            };
+            for(int i=0;i<4;++i) {
+                const int col=i%2,row=i/2;
+                const int x=left+col*(cellW+gap),y=gridY+row*(cellH+gap);
+                const Color stateColor=cells[i].enabled?GREEN:
+                    (std::string(cells[i].value)=="N/A"?MUTED:Color{190,153,112,255});
+                roundRect(x,y,cellW,cellH,9,Color{31,43,59,245});
+                roundRect(x+7,y+8,4,std::max(12,cellH-16),2,stateColor);
+                text(cells[i].name,x+17,y+7,1,MUTED,right);
+                text(cells[i].value,x+17,y+23,1,stateColor,right);
+            }
+            if(desknx::widgets::enabled(config,0)&&quickBrightnessAvailable) {
+                const int percent=static_cast<int>(std::lround(
+                    std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f));
+                label("BRIGHTNESS  "+std::to_string(percent)+"%",metrics.clampY(metrics.bodyBottom-10,8));
+            } else if(desknx::widgets::enabled(config,1)) {
+                label(quickNetworkStatus,metrics.clampY(metrics.bodyBottom-10,8));
+            }
         } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,std::max(1,r.w-6),std::max(1,r.h-6),14,
                       Color{39,46,58,255});
@@ -4217,18 +4255,12 @@ void drawScreen() {
         text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
-        const Tile& selectedGame=d.tiles[static_cast<size_t>(selectedTileIndex)];
-        uiButton(642,571,96,28,8,desknx::ui::ButtonVariant::Chip,
-            isFavorite(selectedGame.data)?Color{69,83,48,255}:Color{35,57,76,255},
-            Color{255,255,255,12},isFavorite(selectedGame.data));
-        text(isFavorite(selectedGame.data)?"SAVED  /  ZL":"FAV  /  ZL",
-             650,581,1,isFavorite(selectedGame.data)?GREEN:WHITE,734);
-        for(int i=0;i<3;++i) {
-            const int hx=744+i*126;
-            uiButton(hx,571,43,28,8,desknx::ui::ButtonVariant::Chip,
+        for(int i=0;i<4;++i) {
+            const int hx=642+i*146;
+            uiButton(hx,571,48,28,8,desknx::ui::ButtonVariant::Chip,
                 Color{34,45,63,255},Color{255,255,255,12});
-            text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
-            text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
+            text(normalHints[i].key,hx+5,581,1,BLUE,hx+43);
+            text(normalHints[i].action,hx+56,581,1,MUTED,hx+144);
         }
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               isWidgetKind(d.tiles[static_cast<size_t>(selectedTileIndex)].kind)) {
@@ -4500,12 +4532,12 @@ void drawScreen() {
             text("A  ADD TO WORKSPACE",mx+823,my+475,1,WHITE,mx+mw-30);
             const int actionY=my+508;
             if(selected.kind==Kind::Game&&editing) {
-                uiButton(mx+790,actionY,68,32,9,desknx::ui::ButtonVariant::Chip,Color{43,61,85,255},Color{255,255,255,18});
-                text("NAME",mx+811,actionY+11,1,WHITE,mx+858);
-                uiButton(mx+864,actionY,70,32,9,desknx::ui::ButtonVariant::Chip,Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
-                text("COVER",mx+884,actionY+11,1,WHITE,mx+932);
-                uiButton(mx+940,actionY,82,32,9,desknx::ui::ButtonVariant::Chip,Color{43,61,85,255},Color{255,255,255,18});
-                text("FROM FILE",mx+947,actionY+11,1,WHITE,mx+1018);
+                uiButton(mx+824,actionY,88,32,9,desknx::ui::ButtonVariant::Chip,
+                    Color{43,61,85,255},Color{255,255,255,18});
+                text("NAME",mx+850,actionY+11,1,WHITE,mx+908);
+                uiButton(mx+918,actionY,100,32,9,desknx::ui::ButtonVariant::Chip,
+                    Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
+                text("COVER",mx+946,actionY+11,1,WHITE,mx+1010);
             } else if(selected.kind==Kind::Game) {
                 uiButton(mx+864,actionY,154,32,9,
                     desknx::ui::ButtonVariant::Chip,
@@ -4759,7 +4791,7 @@ void drawScreen() {
             {836,218,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
             {156,382,5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
             {496,382,0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
-            {836,382,4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
+            {836,382,4,"NETWORK QUICK SETTINGS","WI-FI / AIRPLANE / BLUETOOTH"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
@@ -5263,6 +5295,7 @@ bool isWidgetKind(Kind kind) {
         case Kind::Clock: case Kind::Battery: case Kind::System:
         case Kind::Recent: case Kind::Storage: case Kind::Calendar:
         case Kind::Nextendo: case Kind::Favorites: case Kind::GameLibrary:
+        case Kind::QuickSettings:
             return true;
         default:return false;
     }
@@ -5298,6 +5331,7 @@ std::string widgetEditorStyleLabel(Kind kind,int style) {
         case Kind::Nextendo:return style==0?"ONLINE SUMMARY":style==1?"ACTIVITY FIRST":"NETWORK STATUS";
         case Kind::Favorites:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
         case Kind::GameLibrary:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
+        case Kind::QuickSettings:return style==0?"TOGGLE GRID":style==1?"COMPACT GRID":"STATUS GRID";
         default:return generic[std::max(0,std::min(2,style))];
     }
 }
@@ -5312,6 +5346,7 @@ std::string widgetEditorDataLabel(unsigned bit) {
         case Kind::Nextendo: return bit==0?"ONLINE TOTAL":"TOP ACTIVITY";
         case Kind::Favorites: return bit==0?"SHOW COVER ICONS":"SAVED COUNT";
         case Kind::GameLibrary: return bit==0?"RECENT FIRST":"SHOW COVER ICONS";
+        case Kind::QuickSettings: return bit==0?"SHOW BRIGHTNESS":"SHOW NETWORK STATE";
         default:return bit==0?"DATA A":"DATA B";
     }
 }
@@ -5612,15 +5647,6 @@ void renameSelectedGame() {
     setStatus("GAME RENAMED",2200);
 }
 
-void chooseSelectedGameIcon() {
-    if(!editing){setStatus("ENTER EDIT MODE TO CHANGE GAME COVERS",2400);return;}
-    const auto& available=visibleCatalogueSnapshot();
-    if(available.empty()||listIndex<0||static_cast<size_t>(listIndex)>=available.size())return;
-    const Candidate& selected=available[static_cast<size_t>(listIndex)];
-    if(selected.kind!=Kind::Game){setStatus("SELECT A GAME TO CHANGE ITS ICON",2200);return;}
-    pendingGameIconTitleId=selected.data;
-    openMediaPicker(MediaPickerType::GameIcon);
-}
 
 void newDesk() {
     if(dragging || touchDragging) {
@@ -6001,6 +6027,9 @@ void activateWidget(const Tile& t) {
         case Kind::Clock:
             setStatus("CLOCK WIDGET");
             break;
+        case Kind::QuickSettings:
+            openQuickSettings();
+            break;
         case Kind::Recent:
             if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
             else {recentIndex=0;recentOpen=true;}
@@ -6174,6 +6203,17 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(quickSettingsOpen) {
+        if(keys&HidNpadButton_B){closeQuickSettings();return;}
+        if(keys&HidNpadButton_Up)quickSettingsIndex=(quickSettingsIndex+4)%5;
+        if(keys&HidNpadButton_Down)quickSettingsIndex=(quickSettingsIndex+1)%5;
+        if(quickSettingsIndex==4) {
+            if(keys&HidNpadButton_Left)adjustQuickBrightness(-1);
+            if(keys&HidNpadButton_Right)adjustQuickBrightness(1);
+            if(keys&HidNpadButton_A)adjustQuickBrightness(1);
+        } else if(keys&HidNpadButton_A)toggleQuickSetting(quickSettingsIndex);
+        return;
+    }
     if(widgetEditorOpen) {
         if(keys&HidNpadButton_B){closeWidgetEditor();return;}
         if(keys&HidNpadButton_Up)widgetEditorRow=(widgetEditorRow+6)%7;
@@ -6356,7 +6396,7 @@ void keyInput(u64 keys, bool fromRepeat) {
                 if(!editing&&dragging){dragging=false;saveNow();}
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             } else if(action==4)activateAppSettings(6);
-            else if(action==5)restartCatalogueScan();
+            else if(action==5)openQuickSettings();
         }
         return;
     }
@@ -6547,14 +6587,6 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
     if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
     if(keys&HidNpadButton_Down){if(dragging)moveTile(0,1);else updateCursor(0,1);}
-    if(!editing&&!dragging&&(keys&HidNpadButton_ZL)) {
-        Workspace& desk=desks[static_cast<size_t>(deskIndex)];
-        const int index=itemAt(desk,selectedX,selectedY);
-        if(index>=0&&desk.tiles[static_cast<size_t>(index)].kind==Kind::Game)
-            (void)toggleFavorite(desk.tiles[static_cast<size_t>(index)]);
-        else setStatus("SELECT A GAME TO ADD TO FAVORITES",1800);
-        return;
-    }
     if(!editing&&!dragging&&(keys&HidNpadButton_ZR)) {
         Tile* widget=selectedWidgetTile();
         if(widget)openWidgetEditor();
@@ -6842,6 +6874,24 @@ void touchInput(const SDL_Event&e) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
     }
+    if(e.type==SDL_FINGERDOWN && quickSettingsOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=922&&x<=1024&&y>=92&&y<=132)closeQuickSettings();
+        else if(x>=330&&x<=950&&y>=178&&y<518) {
+            const int row=(y-178)/68;
+            quickSettingsIndex=std::max(0,std::min(4,row));
+            if(quickSettingsIndex==4) {
+                const float ratio=std::max(0.0f,std::min(1.0f,
+                    static_cast<float>(x-360)/520.0f));
+                if(quickBrightnessAvailable) {
+                    const int target=static_cast<int>(std::lround(10.0f+ratio*90.0f));
+                    const int current=static_cast<int>(std::lround(quickBrightness*100.0f));
+                    adjustQuickBrightness(target>current?1:(target<current?-1:0));
+                }
+            } else toggleQuickSetting(quickSettingsIndex);
+        }
+        return;
+    }
     if(e.type==SDL_FINGERDOWN && diagnosticsOpen) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=1000&&x<=1145&&y>=72&&y<=112)diagnosticsOpen=false;
@@ -6933,18 +6983,14 @@ void touchInput(const SDL_Event&e) {
         return;
     }
     if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
-       !recentOpen && !favoritesOpen && !widgetEditorOpen && !powerMenu && !appSettingsMenu) {
+       !recentOpen && !favoritesOpen && !widgetEditorOpen && !powerMenu && !appSettingsMenu &&
+       !quickSettingsOpen) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        // Normal mode keeps only the favourite shortcut. Cover editing is
-        // available exclusively through the library while Edit mode is active.
-        if(y>=566&&y<=614&&x>=642&&x<740) {
+        if(y>=566&&y<=614&&x>=642&&x<832) {
             Workspace& desk=desks[static_cast<std::size_t>(deskIndex)];
             const int index=itemAt(desk,selectedX,selectedY);
-            if(index>=0) {
-                const Tile& selected=desk.tiles[static_cast<std::size_t>(index)];
-                if(selected.kind==Kind::Game)(void)toggleFavorite(selected);
-                else if(isWidgetKind(selected.kind))openWidgetEditor();
-            }
+            if(index>=0&&isWidgetKind(desk.tiles[static_cast<std::size_t>(index)].kind))
+                openWidgetEditor();
             return;
         }
     }
@@ -7014,9 +7060,8 @@ void touchInput(const SDL_Event&e) {
                 setStatus("EDIT MODE ENABLED — COVER OPTIONS READY",2200);
                 return;
             }
-            if(editing&&y>=578&&y<=612&&x>=900&&x<968){renameSelectedGame();return;}
-            if(editing&&y>=578&&y<=612&&x>=974&&x<1044){steamGridDbOpenPicker();return;}
-            if(editing&&y>=578&&y<=612&&x>=1050&&x<=1130){chooseSelectedGameIcon();return;}
+            if(editing&&y>=578&&y<=612&&x>=930&&x<1018){renameSelectedGame();return;}
+            if(editing&&y>=578&&y<=612&&x>=1020&&x<1128){steamGridDbOpenPicker();return;}
             if(y>=180&&y<570&&x>=138&&x<858) {
                 const int row=(y-180)/130,column=(x-138)/242;
                 if(row>=0&&row<3&&column>=0&&column<3) {
