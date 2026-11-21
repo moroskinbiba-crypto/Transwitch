@@ -953,7 +953,7 @@ void applyMediaPickerSelection(int index) {
         if(replaceRc!=desknx::safeio::ReplaceStatus::Success) {
             std::remove(temporary.c_str());setStatus("GAME ICON SAVE FAILED",3000);return;
         }
-        for(const char* ext:{".jpg",".jpeg",".png"}) {
+        for(const char* ext:{".svg",".jpg",".jpeg",".png"}) {
             const std::string obsolete=std::string(GAME_ICON_OVERRIDES_DIR)+"/"+
                 pendingGameIconTitleId+ext;
             if(obsolete!=target)std::remove(obsolete.c_str());
@@ -1628,6 +1628,9 @@ void readCatalogueState(bool& ready,bool& complete,bool& truncated,
 void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
     publishCatalogue(snapshot);
 }
+bool nextendoCancelRequested(void*) {
+    return SDL_AtomicGet(&nextendoStop) != 0;
+}
 int nextendoThreadMain(void*) {
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     bool networkReady = false;
@@ -1650,7 +1653,8 @@ int nextendoThreadMain(void*) {
                 }
             }
             desknx::nextendo::PlayerSnapshot snapshot;
-            const bool ok = desknx::nextendo::fetchSnapshot(snapshot);
+            const bool ok = desknx::nextendo::fetchSnapshot(
+                snapshot,nextendoCancelRequested,nullptr);
             if (ok && nextendoMutex) {
                 SDL_LockMutex(nextendoMutex);
                 const bool applied = nextendoFeed.apply(snapshot, SDL_GetTicks64());
