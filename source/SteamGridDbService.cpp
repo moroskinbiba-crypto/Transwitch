@@ -247,6 +247,19 @@ int SteamGridDbService::workerLoop(){
   }
   if(j.type==JobType::Apply){
    cache_.ensureDirectories();
+   // If the picker has not finished its preview request yet, fetch the
+   // thumbnail directly as the first stage. A failed thumbnail must never
+   // prevent the full-resolution fallback from being attempted.
+   if(j.previewPath.empty()&&!j.asset.thumb.empty()){
+    const std::string candidatePreview=previewPath(j.titleId,j.asset.id);
+    std::string previewError;
+    if(downloadImage(j.asset.thumb,candidatePreview,previewError,
+       &SteamGridDbService::cancelNetwork,&cancelContext)) {
+     j.previewPath=candidatePreview;
+    } else {
+     std::remove(candidatePreview.c_str());
+    }
+   }
    bool previewSaved=false;
    if(!j.previewPath.empty()){
     previewSaved=cache_.saveArtworkFromFile(j.titleId,
