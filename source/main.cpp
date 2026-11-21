@@ -34,7 +34,6 @@
 #include "UiComponents.hpp"
 #include "../include/desknx/UiMotion.hpp"
 #include "../include/desknx/ModalLayer.hpp"
-#include "../include/desknx/ModalLayer.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -316,7 +315,6 @@ bool nextendoOpen=false;
 int nextendoSelected=0;
 bool quickSettingsOpen=false;
 int quickSettingsIndex=0;
-bool setsysServiceReady=false;
 bool quickSettingsSnapshotLoaded=false;
 Uint32 quickSettingsSnapshotTick=0;
 bool quickAirplaneMode=false,quickWifiEnabled=false,quickBluetoothEnabled=false,quickSoundMuted=false;
@@ -367,7 +365,7 @@ void refreshQuickSettingsSnapshot(bool force=false) {
     const Uint32 now=SDL_GetTicks();
     if(!force&&quickSettingsSnapshotLoaded&&now-quickSettingsSnapshotTick<3500)return;
     quickSettingsSnapshotTick=now;
-    quickNetworkStatus="NETWORK STATUS UNAVAILABLE";
+    quickNetworkStatus=languageRussian?"СТАТУС СЕТИ НЕДОСТУПЕН":"NETWORK STATUS UNAVAILABLE";
     quickInternetConnected=false;
     quickWifiStrength=0;
     quickAirplaneAvailable=quickWifiAvailable=quickBluetoothAvailable=false;
@@ -407,15 +405,15 @@ void refreshQuickSettingsSnapshot(bool force=false) {
         lblExit();
     }
     if(quickAirplaneAvailable&&quickAirplaneMode)
-        quickNetworkStatus="AIRPLANE MODE ON";
+        quickNetworkStatus=languageRussian?"АВИАРЕЖИМ ВКЛЮЧЁН":"AIRPLANE MODE ON";
     else if(quickInternetConnected)
         quickNetworkStatus=connectionType==NifmInternetConnectionType_Ethernet
-            ?"ETHERNET CONNECTED"
-            :"WI-FI CONNECTED  /  SIGNAL "+std::to_string(quickWifiStrength)+"/3";
+            ?(languageRussian?"ПРОВОДНАЯ СЕТЬ ПОДКЛЮЧЕНА":"ETHERNET CONNECTED")
+            :(languageRussian?"WI-FI ПОДКЛЮЧЁН  /  СИГНАЛ ":"WI-FI CONNECTED  /  SIGNAL ")+std::to_string(quickWifiStrength)+"/3";
     else if(quickWifiAvailable&&quickWifiEnabled)
-        quickNetworkStatus="WI-FI ENABLED  /  NO INTERNET";
+        quickNetworkStatus=languageRussian?"WI-FI ВКЛЮЧЁН  /  НЕТ ИНТЕРНЕТА":"WI-FI ENABLED  /  NO INTERNET";
     else if(quickWifiAvailable)
-        quickNetworkStatus="WI-FI DISABLED";
+        quickNetworkStatus=languageRussian?"WI-FI ВЫКЛЮЧЕН":"WI-FI DISABLED";
     quickSettingsSnapshotLoaded=true;
 }
 
@@ -4006,32 +4004,33 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     "MOST PLAYED RIGHT NOW",left,metrics.clampY(bottom-11,8),1,MUTED,right);
         } else if(t.kind==Kind::QuickSettings) {
             if(!quickSettingsSnapshotLoaded)refreshQuickSettingsSnapshot(true);
-            label("QUICK SETTINGS",metrics.headerY);
+            label(languageRussian?"БЫСТРЫЕ НАСТРОЙКИ":"QUICK SETTINGS",metrics.headerY);
             const std::string brightnessValue=quickBrightnessAvailable
                 ?std::to_string(static_cast<int>(std::lround(
                     std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%"
                 :"N/A";
-            const char* networkValue=quickInternetConnected?"ONLINE":
-                (quickAirplaneMode?"AIRPLANE":
-                    (quickWifiEnabled?"CONNECTING":"OFFLINE"));
+            const std::string networkValue=quickInternetConnected?(languageRussian?"ОНЛАЙН":"ONLINE"):
+                (quickAirplaneMode?(languageRussian?"АВИАРЕЖИМ":"AIRPLANE"):
+                    (quickWifiEnabled?(languageRussian?"ПОДКЛЮЧЕНИЕ":"CONNECTING"):
+                        (languageRussian?"ОФЛАЙН":"OFFLINE")));
             struct QuickCell {
-                const char* name;
+                std::string name;
                 std::string value;
                 bool available;
                 bool active;
             };
             const QuickCell cells[]={
-                {"SOUND",quickSoundAvailable?(quickSoundMuted?"MUTED":"ON"):"N/A",
+                {languageRussian?"ЗВУК":"SOUND",quickSoundAvailable?(quickSoundMuted?(languageRussian?"ВЫКЛ.":"MUTED"):(languageRussian?"ВКЛ.":"ON")):(languageRussian?"Н/Д":"N/A"),
                     quickSoundAvailable,quickSoundAvailable&&!quickSoundMuted},
-                {"AIRPLANE",quickAirplaneAvailable?(quickAirplaneMode?"ON":"OFF"):"N/A",
+                {languageRussian?"АВИАРЕЖИМ":"AIRPLANE",quickAirplaneAvailable?(quickAirplaneMode?(languageRussian?"ВКЛ.":"ON"):(languageRussian?"ВЫКЛ.":"OFF")):(languageRussian?"Н/Д":"N/A"),
                     quickAirplaneAvailable,quickAirplaneMode},
-                {"WI-FI",quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"N/A",
+                {"WI-FI",quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?(languageRussian?"ВКЛ.":"ON"):(languageRussian?"ВЫКЛ.":"OFF")):(languageRussian?"Н/Д":"N/A"),
                     quickWifiAvailable,quickWifiEnabled&&!quickAirplaneMode},
-                {"BLUETOOTH",quickBluetoothAvailable?(quickBluetoothEnabled?"ON":"OFF"):"N/A",
+                {"BLUETOOTH",quickBluetoothAvailable?(quickBluetoothEnabled?(languageRussian?"ВКЛ.":"ON"):(languageRussian?"ВЫКЛ.":"OFF")):(languageRussian?"Н/Д":"N/A"),
                     quickBluetoothAvailable,quickBluetoothEnabled},
-                {"BRIGHTNESS",brightnessValue,quickBrightnessAvailable,
+                {languageRussian?"ЯРКОСТЬ":"BRIGHTNESS",brightnessValue,quickBrightnessAvailable,
                     quickBrightnessAvailable&&quickBrightness>=0.5f},
-                {"NETWORK",networkValue,quickAirplaneAvailable||quickWifiAvailable,
+                {languageRussian?"СЕТЬ":"NETWORK",networkValue,quickAirplaneAvailable||quickWifiAvailable,
                     quickInternetConnected}
             };
             if(t.h<=1||t.w<=1) {
@@ -4067,7 +4066,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     text(cell.value,x+15,y+cellH/2,1,stateColor,right);
                 }
             }
-        }        } else if(t.kind==Kind::Unsupported) {
+        } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,std::max(1,r.w-6),std::max(1,r.h-6),14,
                       Color{39,46,58,255});
             textCentered("UNSUPPORTED ITEM",center,metrics.clampY(r.y+18,14),
@@ -5275,19 +5274,21 @@ void drawScreen() {
     if(quickSettingsOpen) {
         refreshQuickSettingsSnapshot();
         softCard(292,72,696,576,Color{16,26,40,255},Color{135,174,216,74});
-        text("QUICK SETTINGS",332,102,3,WHITE,920);
+        text(languageRussian?"БЫСТРЫЕ НАСТРОЙКИ":"QUICK SETTINGS",332,102,3,WHITE,920);
         text(quickNetworkStatus,334,148,2,
             quickInternetConnected?GREEN:(quickAirplaneMode?Color{255,190,96,255}:MUTED),934);
         roundRect(878,94,84,36,10,Color{48,59,76,255});
-        text("B BACK",891,105,1,WHITE,950);
-        const char* labels[]={"SOUND OUTPUT","AIRPLANE MODE","WI-FI","BLUETOOTH","SCREEN BRIGHTNESS"};
-        const char* values[]={
-            quickSoundAvailable?(quickSoundMuted?"MUTED":"SOUND ON"):"UNAVAILABLE",
-            quickAirplaneAvailable?(quickAirplaneMode?"ON":"OFF"):"UNAVAILABLE",
-            quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"UNAVAILABLE",
-            quickBluetoothAvailable?(quickBluetoothEnabled?"ON":"OFF"):"UNAVAILABLE",
+        text(languageRussian?"B НАЗАД":"B BACK",891,105,1,WHITE,950);
+        const std::string labels[]={languageRussian?"ВЫХОД ЗВУКА":"SOUND OUTPUT",
+            languageRussian?"АВИАРЕЖИМ":"AIRPLANE MODE","WI-FI","BLUETOOTH",
+            languageRussian?"ЯРКОСТЬ ЭКРАНА":"SCREEN BRIGHTNESS"};
+        const std::string values[]={
+            quickSoundAvailable?(quickSoundMuted?(languageRussian?"ВЫКЛ.":"MUTED"):(languageRussian?"ВКЛ.":"SOUND ON")):(languageRussian?"НЕДОСТУПНО":"UNAVAILABLE"),
+            quickAirplaneAvailable?(quickAirplaneMode?(languageRussian?"ВКЛ.":"ON"):(languageRussian?"ВЫКЛ.":"OFF")):(languageRussian?"НЕДОСТУПНО":"UNAVAILABLE"),
+            quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?(languageRussian?"ВКЛ.":"ON"):(languageRussian?"ВЫКЛ.":"OFF")):(languageRussian?"НЕДОСТУПНО":"UNAVAILABLE"),
+            quickBluetoothAvailable?(quickBluetoothEnabled?(languageRussian?"ВКЛ.":"ON"):(languageRussian?"ВЫКЛ.":"OFF")):(languageRussian?"НЕДОСТУПНО":"UNAVAILABLE"),
             quickBrightnessAvailable?std::to_string(static_cast<int>(std::lround(
-                std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%":"UNAVAILABLE"
+                std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%":(languageRussian?"НЕДОСТУПНО":"UNAVAILABLE")
         };
         for(int i=0;i<5;++i) {
             const int y=194+i*68;
