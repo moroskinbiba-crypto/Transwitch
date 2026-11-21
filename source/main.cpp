@@ -4034,6 +4034,40 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(steamGridDbPickerOpen) {
+        if(keys&HidNpadButton_B){steamGridDbClosePicker();return;}
+        if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            const auto state=gSteamGridDbService.snapshot();
+            const int count=static_cast<int>(state.games.size());
+            if(count>0&&(keys&HidNpadButton_Up)) {
+                steamGridDbMatchIndex=(steamGridDbMatchIndex-1+count)%count;
+                if(steamGridDbMatchIndex<steamGridDbMatchOffset)
+                    steamGridDbMatchOffset=steamGridDbMatchIndex;
+            }
+            if(count>0&&(keys&HidNpadButton_Down)) {
+                steamGridDbMatchIndex=(steamGridDbMatchIndex+1)%count;
+                if(steamGridDbMatchIndex>=steamGridDbMatchOffset+8)
+                    steamGridDbMatchOffset=steamGridDbMatchIndex-7;
+            }
+            if(keys&HidNpadButton_A)steamGridDbChooseMatch(steamGridDbMatchIndex);
+            if(keys&HidNpadButton_Y)steamGridDbEditSearchTitle();
+            if(keys&HidNpadButton_X)steamGridDbSearch(steamGridDbCurrentTitle);
+        } else {
+            if(keys&HidNpadButton_Left)steamGridDbChangeKind(-1);
+            if(keys&HidNpadButton_Right)steamGridDbChangeKind(1);
+            if(steamGridDbOfflineFallback) {
+                if(keys&HidNpadButton_A)steamGridDbApplyCurrentCached();
+            } else {
+                if(keys&HidNpadButton_Up)steamGridDbMoveAsset(-1);
+                if(keys&HidNpadButton_Down)steamGridDbMoveAsset(1);
+                if(keys&HidNpadButton_A)
+                    steamGridDbApplyPending=gSteamGridDbService.applySelected();
+            }
+            if(keys&HidNpadButton_Y)steamGridDbRestoreSystem();
+            if(keys&HidNpadButton_X)steamGridDbEditSearchTitle();
+        }
+        return;
+    }
     if(userPickerOpen) {
         if(keys&HidNpadButton_B){userPickerOpen=false;return;}
         if(!consoleUsers.empty()) {
