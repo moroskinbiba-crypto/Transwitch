@@ -2989,10 +2989,10 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                         text("CPU "+std::string(cpuText),left,r.y+35,2,WHITE,right);
                         text("GPU "+std::string(gpuText),left+150,r.y+35,2,BLUE,right);
                     }
-                    if(dataA)label("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),left,r.y+72);
+                    if(dataA)text("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),left,r.y+72,1,BLUE,right);
                 } else {
                     if(dataA)text("SOC "+std::string(socText),left,r.y+35,2,WHITE,right);
-                    if(dataA)label("PCB "+std::string(pcbText),left,r.y+65);
+                    if(dataA)text("PCB "+std::string(pcbText),left,r.y+65,1,BLUE,right);
                     if(dataB) {
                         text("CPU "+std::string(cpuText),left+150,r.y+35,1,BLUE,right);
                         text("GPU "+std::string(gpuText),left+150,r.y+65,1,BLUE,right);
@@ -3029,8 +3029,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 label("RECENT GAMES",r.y+13);
                 if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
                 else recentGameLine(0,r.y+42,26);
-            } else if(wide&&config.style==1&&
-                      (favoritesWidget?dataA:dataB)) {
+            } else if(wide&&config.style==1&&dataB) {
                 label("RECENT GAMES",r.y+12);
                 if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
@@ -3128,7 +3127,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 const bool compactCalendar=wide||compact;
                 text(std::to_string(current.tm_mday),left,r.y+(compactCalendar?22:30),
                      compactCalendar?4:5,WHITE,right);
-                text(monthName+"  "+std::to_string(current.tm_year+1900),
+                text(std::string(monthName)+"  "+std::to_string(current.tm_year+1900),
                      left,r.y+(compactCalendar?68:100),compactCalendar?1:2,BLUE,right);
                 if(dataA&&!compact)label(weekday,r.y+(wide?94:142));
                 if(dataB&&!compact)label(clockText(),r.y+(wide?104:169));
@@ -3259,6 +3258,11 @@ int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+bool isWidgetKind(Kind kind);
+Tile* selectedWidgetTile();
+std::string widgetEditorStyleLabel(Kind kind,int style);
+std::string widgetEditorDataLabel(unsigned bit);
+
 void drawScreen() {
     gIconCache.beginFrame();
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -5352,7 +5356,6 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(e.type==SDL_FINGERMOTION&&steamGridDbTouchTracking) {
-            const int x=static_cast<int>(e.tfinger.x*SW);
             const int y=static_cast<int>(e.tfinger.y*SH);
             const int delta=steamGridDbTouchStartY-y;
             if(steamGridDbPickerView==SteamGridDbPickerView::Matches&&
