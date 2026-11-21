@@ -22,8 +22,15 @@ bool SteamGridDbService::ensureWorker(){
 }
 int SDLCALL SteamGridDbService::workerEntry(void* p){return static_cast<SteamGridDbService*>(p)->workerLoop();}
 bool SteamGridDbService::cancelNetwork(void* context){
- auto* self=static_cast<SteamGridDbService*>(context);
- return !self||SDL_AtomicGet(&self->stopRequested_)!=0;
+ auto* request=static_cast<NetworkCancelContext*>(context);
+ if(!request||!request->service)return true;
+ auto* self=request->service;
+ if(SDL_AtomicGet(&self->stopRequested_)!=0)return true;
+ if(!self->mutex_)return false;
+ SDL_LockMutex(self->mutex_);
+ const bool stale=request->revision!=self->revision_;
+ SDL_UnlockMutex(self->mutex_);
+ return stale;
 }
 bool SteamGridDbService::enqueue(Job job){
  if(!mutex_)return false;
@@ -76,7 +83,9 @@ bool SteamGridDbService::selectAsset(int index){
  if(state_.status!=ServiceStatus::Browsing||index<0||index>=static_cast<int>(state_.assets.size())){
   SDL_UnlockMutex(mutex_);return false;}
  if(state_.selectedAsset==index&&state_.previewAsset==index){SDL_UnlockMutex(mutex_);return true;}
+ ++revision_;
  state_.selectedAsset=index;state_.message="Loading preview...";job.type=JobType::Preview;job.revision=revision_;
+ state_.revision=revision_;
  job.titleId=state_.titleId;job.assetIndex=index;job.asset=state_.assets[static_cast<size_t>(index)];
  ++state_.revision;SDL_UnlockMutex(mutex_);return enqueue(std::move(job));
 }
@@ -95,8 +104,9 @@ bool SteamGridDbService::applySelected(){
     state_.selectedAsset>=static_cast<int>(state_.assets.size())){SDL_UnlockMutex(mutex_);return false;}
  job.type=JobType::Apply;job.revision=revision_;job.titleId=state_.titleId;job.gameId=state_.gameId;
  job.kind=state_.kind;job.assetIndex=state_.selectedAsset;job.asset=state_.assets[static_cast<size_t>(state_.selectedAsset)];
- job.title=state_.title;job.gameName=state_.gameName;state_.status=ServiceStatus::Applying;
- state_.message="Downloading selected artwork...";++state_.revision;SDL_UnlockMutex(mutex_);
+ job.title=state_.title;job.gameName=state_.gameName;++revision_;job.revision=revision_;
+ state_.status=ServiceStatus::Applying;
+ state_.message="Downloading selected artwork...";state_.revision=revision_;SDL_UnlockMutex(mutex_);
  if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB apply queue is busy");return false;}return true;
 }
 ServiceSnapshot SteamGridDbService::snapshot()const{
@@ -127,6 +137,7 @@ int SteamGridDbService::workerLoop(){
   }
   if(!networkReady_)networkReady_=desknx::network::acquire();
   if(!networkReady_){publishError(j.revision,"Network service unavailable; check Wi-Fi");continue;}
+  NetworkCancelContext cancelContext{this,j.revision};
   std::string error;
   if(j.type==JobType::Search){
    const std::uint64_t mapped=j.useSavedMapping?cache_.mappedGameId(j.titleId):0;
@@ -150,7 +161,7 @@ int SteamGridDbService::workerLoop(){
     continue;
    }
    std::vector<GameResult> games;
-   if(!searchGames(j.apiKey,j.title,games,error,&SteamGridDbService::cancelNetwork,this)){publishError(j.revision,error);continue;}
+   if(!searchGames(j.apiKey,j.title,games,error,&SteamGridDbService::cancelNetwork,&cancelContext)){publishError(j.revision,error);continue;}
    SDL_LockMutex(mutex_);
    if(j.revision==revision_){
     state_.games=std::move(games);
@@ -163,12 +174,12 @@ int SteamGridDbService::workerLoop(){
   }
   if(j.type==JobType::Assets){
    std::vector<ArtworkAsset> assets;
-   if(!fetchAssets(j.apiKey,j.gameId,j.kind,assets,error,&SteamGridDbService::cancelNetwork,this)) {
+   if(!fetchAssets(j.apiKey,j.gameId,j.kind,assets,error,&SteamGridDbService::cancelNetwork,&cancelContext)) {
     if(j.mappedLookup) {
      // Saved SGDB mappings can become stale; fall back to a fresh title search.
      std::vector<GameResult> games;
      std::string searchError;
-     if(searchGames(j.apiKey,j.title,games,searchError,&SteamGridDbService::cancelNetwork,this)) {
+     if(searchGames(j.apiKey,j.title,games,searchError,&SteamGridDbService::cancelNetwork,&cancelContext)) {
       SDL_LockMutex(mutex_);
       if(j.revision==revision_) {
        state_.games=std::move(games);
@@ -192,18 +203,18 @@ int SteamGridDbService::workerLoop(){
    bool has=current&&!state_.assets.empty();ArtworkAsset first;if(has)first=state_.assets.front();SDL_UnlockMutex(mutex_);
    if(current)cache_.saveGameMapping(j.titleId,j.gameId,j.gameName.empty()?j.title:j.gameName);
    if(has){cache_.ensureDirectories();const std::string path=previewPath(j.titleId,first.id);
-    if(downloadImage(first.thumb,path,error,&SteamGridDbService::cancelNetwork,this))publishPreview(j.revision,0,path);
+    if(downloadImage(first.thumb,path,error,&SteamGridDbService::cancelNetwork,&cancelContext))publishPreview(j.revision,0,path);
     else{SDL_LockMutex(mutex_);if(j.revision==revision_){state_.message="Preview unavailable; full image can still be applied";++state_.revision;}SDL_UnlockMutex(mutex_);}}
    continue;
   }
   if(j.type==JobType::Preview){
    cache_.ensureDirectories();const std::string path=previewPath(j.titleId,j.asset.id);
-   if(!downloadImage(j.asset.thumb,path,error,&SteamGridDbService::cancelNetwork,this)){publishError(j.revision,error);continue;}
+   if(!downloadImage(j.asset.thumb,path,error,&SteamGridDbService::cancelNetwork,&cancelContext)){publishError(j.revision,error);continue;}
    publishPreview(j.revision,j.assetIndex,path);continue;
   }
   if(j.type==JobType::Apply){
    cache_.ensureDirectories();const std::string temp=std::string(SteamGridDbCache::kCacheRoot)+"/.download.tmp";
-   if(!downloadImage(j.asset.url,temp,error,&SteamGridDbService::cancelNetwork,this)){publishError(j.revision,error);continue;}
+   if(!downloadImage(j.asset.url,temp,error,&SteamGridDbService::cancelNetwork,&cancelContext)){publishError(j.revision,error);continue;}
    bool saved=cache_.saveArtworkFromFile(j.titleId,
     static_cast<SteamGridDbCache::ArtworkKind>(j.kind),temp,
     j.gameId,j.asset.id,j.gameName,true);
