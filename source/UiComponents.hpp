@@ -19,7 +19,7 @@ struct ThemeTokens {
 
 class UiComponents {
 public:
-    void bind(VisualEngine* engine, SDL_Renderer* renderer) {
+    void bind(desknx::visual::VisualEngine* engine, SDL_Renderer* renderer) {
         engine_ = engine;
         renderer_ = renderer;
     }
@@ -180,7 +180,7 @@ private:
         return ok;
     }
 
-    VisualEngine* engine_{nullptr};
+    desknx::visual::VisualEngine* engine_{nullptr};
     SDL_Renderer* renderer_{nullptr};
     ThemeTokens tokens_{};
 };
