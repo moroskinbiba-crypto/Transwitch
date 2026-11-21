@@ -36,6 +36,8 @@ struct Report {
 // to turn every startup into an unbounded SD traversal.
 constexpr int MaxDepth = 8;
 constexpr std::size_t MaxFiles = 512;
+constexpr std::size_t MaxEntries = 8192;
+constexpr std::size_t MaxDirectories = 2048;
 
 inline bool hasNroExtension(const std::string& name) {
     if (name.size() <= 4) return false;
@@ -68,7 +70,8 @@ inline void rememberError(Report& report, int error) {
 
 inline void scanDirectory(const std::string& root, int depth, bool isRoot,
                           std::vector<File>& output, Report& report) {
-    if (output.size() >= MaxFiles) {
+    if (output.size() >= MaxFiles ||
+        report.directoriesVisited >= MaxDirectories) {
         report.complete = false;
         report.limitReached = true;
         return;
@@ -88,6 +91,11 @@ inline void scanDirectory(const std::string& root, int depth, bool isRoot,
         dirent* entry = readdir(directory);
         if (!entry) {
             if (errno != 0) rememberError(report, errno);
+            break;
+        }
+        if (report.entriesVisited >= MaxEntries) {
+            report.complete = false;
+            report.limitReached = true;
             break;
         }
         ++report.entriesVisited;
