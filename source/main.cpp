@@ -26,6 +26,7 @@
 #include "SteamGridDbService.hpp"
 #include "desknx/WidgetConfig.hpp"
 #include "SvgIconCache.hpp"
+#include "VisualEngine.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -136,6 +137,7 @@ int mediaPickerIndex=0, mediaPickerOffset=0;
 
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
+desknx::visual::VisualEngine gVisualEngine;
 bool rendererVsync=false;
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
@@ -357,12 +359,21 @@ bool commitSdCard(const char* operation) {
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
 void rect(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
+    if(gVisualEngine.ready()) {
+        (void)gVisualEngine.fillRect(x,y,w,h,SDL_Color{c.r,c.g,c.b,c.a});
+        return;
+    }
     color(c);
     SDL_Rect r{x,y,w,h};
     SDL_RenderFillRect(renderer,&r);
 }
 void outline(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
+    if(gVisualEngine.ready()) {
+        (void)gVisualEngine.drawRoundedOutline(
+            x,y,w,h,UiCornerRadius,SDL_Color{c.r,c.g,c.b,c.a});
+        return;
+    }
     const int r=std::max(0,std::min(UiCornerRadius,std::min(w,h)/2));
     color(c);
     if(r==0) {
@@ -1017,6 +1028,11 @@ void applyMediaPickerSelection(int index) {
 
 void roundRect(int x,int y,int w,int h,int radius,Color c) {
     if(w<=0||h<=0) return;
+    if(gVisualEngine.ready()) {
+        (void)gVisualEngine.fillRoundedRect(
+            x,y,w,h,radius,SDL_Color{c.r,c.g,c.b,c.a});
+        return;
+    }
     // One consistent 10 px corner radius across cards, tiles, controls and modals.
     const int r=std::max(0,std::min(UiCornerRadius,std::min(radius,std::min(w,h)/2)));
     color(c);
@@ -3883,6 +3899,7 @@ std::string widgetEditorStyleLabel(Kind kind,int style);
 std::string widgetEditorDataLabel(unsigned bit);
 
 void drawScreen() {
+    gVisualEngine.beginFrame();
     const std::uint32_t screenState=
         (static_cast<std::uint32_t>(std::max(0,deskIndex))&0x0Fu) |
         (listOpen?1u<<4:0u) | (recentOpen?1u<<5:0u) |
@@ -3935,14 +3952,21 @@ void drawScreen() {
     refreshStorageStats();
     refreshSystemMonitor();
     rect(0,0,SW,SH,BG);
-    for(int band=0;band<24;++band) {
-        const double t=static_cast<double>(band)/23.0;
-        const auto blend=[&](Uint8 a,Uint8 b) {
-            return static_cast<Uint8>(static_cast<double>(a)+
-                (static_cast<double>(b)-static_cast<double>(a))*t);
-        };
-        rect(0,band*30,SW,31,Color{blend(THEME_TOP.r,THEME_BOTTOM.r),
-            blend(THEME_TOP.g,THEME_BOTTOM.g),blend(THEME_TOP.b,THEME_BOTTOM.b),255});
+    const SDL_Color gradientTop{
+        THEME_TOP.r,THEME_TOP.g,THEME_TOP.b,THEME_TOP.a};
+    const SDL_Color gradientBottom{
+        THEME_BOTTOM.r,THEME_BOTTOM.g,THEME_BOTTOM.b,THEME_BOTTOM.a};
+    if(!gVisualEngine.drawVerticalGradient(gradientTop,gradientBottom)) {
+        // Keep a resilient fallback if surface/texture allocation fails.
+        for(int band=0;band<24;++band) {
+            const double t=static_cast<double>(band)/23.0;
+            const auto blend=[&](Uint8 a,Uint8 b) {
+                return static_cast<Uint8>(static_cast<double>(a)+
+                    (static_cast<double>(b)-static_cast<double>(a))*t);
+            };
+            rect(0,band*30,SW,31,Color{blend(THEME_TOP.r,THEME_BOTTOM.r),
+                blend(THEME_TOP.g,THEME_BOTTOM.g),blend(THEME_TOP.b,THEME_BOTTOM.b),255});
+        }
     }
     if(!desks.empty())
         drawWorkspaceBackground(desks[static_cast<size_t>(std::max(0,
@@ -4999,6 +5023,7 @@ void drawScreen() {
             uiTransitionStart=0;
         }
     }
+    gVisualEngine.endFrame();
     SDL_RenderPresent(renderer);
 }
 bool saveNow(){return enqueueLayoutSave(false);}
@@ -7135,6 +7160,15 @@ int main(int,char**) {
         rendererInfo.name ? rendererInfo.name : "unknown", rendererInfoRc,
         static_cast<unsigned int>(rendererInfo.flags),rendererVsync?1:0);
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+    if(!gVisualEngine.initialize(renderer,SW,SH))
+        desknx::diag::Write("visual","engine_init_failed","fallback=direct_sdl_primitives");
+    const auto& visualProfile=gVisualEngine.rendererProfile();
+    desknx::diag::Write("visual","renderer_profile",
+        "name=%s flags=0x%08X accelerated=%d software=%d vsync=%d target_textures=%d max_texture=%dx%d",
+        visualProfile.name.c_str(),static_cast<unsigned int>(visualProfile.flags),
+        visualProfile.accelerated?1:0,visualProfile.software?1:0,
+        visualProfile.presentVsync?1:0,visualProfile.targetTextures?1:0,
+        visualProfile.maxTextureWidth,visualProfile.maxTextureHeight);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
     storageCommitMutex=SDL_CreateMutex();
     playStatsMutex=SDL_CreateMutex();
@@ -7535,6 +7569,7 @@ int main(int,char**) {
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (storageCommitMutex) SDL_DestroyMutex(storageCommitMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
+    gVisualEngine.shutdown();
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
     SDL_Quit();
