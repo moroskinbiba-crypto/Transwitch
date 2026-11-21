@@ -266,6 +266,7 @@ uint64_t sdFreeBytes=0, sdTotalBytes=0;
 uint64_t processRamUsed=0,processRamTotal=0;
 size_t installedGameCount=0,installedHomebrewCount=0;
 bool storageStatsAvailable=false,processRamStatsAvailable=false;
+Uint32 lastStorageUpdate=0;
 SDL_Thread* storageStatsThread=nullptr;
 SDL_mutex* storageStatsMutex=nullptr;
 SDL_atomic_t storageStatsStop{};
