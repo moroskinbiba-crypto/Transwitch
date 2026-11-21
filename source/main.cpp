@@ -5157,6 +5157,61 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(widgetEditorOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=900&&x<=990&&y>=108&&y<=144) {
+                closeWidgetEditor();
+                return;
+            }
+            if(y>=188&&y<552) {
+                const int row=(y-188)/52;
+                if(row>=0&&row<7) {
+                    widgetEditorRow=row;
+                    if(row==6)closeWidgetEditor();
+                    else if(x>=896&&x<=934)adjustWidgetEditor(-1);
+                    else if(x>=940&&x<=978)adjustWidgetEditor(1);
+                }
+            }
+        }
+        return;
+    }
+    if(favoritesOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            favoritesView=favoriteTiles();
+            if(x>=838&&x<=916&&y>=104&&y<=150) {
+                favoritesOpen=false;
+                return;
+            }
+            if(x>=924&&x<=1012&&y>=104&&y<=150) {
+                if(!favoritesView.empty()) {
+                    favoritesIndex=std::max(0,std::min(favoritesIndex,
+                        static_cast<int>(favoritesView.size())-1));
+                    const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+                    favoritesOpen=false;
+                    launch(selected);
+                }
+                return;
+            }
+            if(y>=190&&y<580&&x>=278&&x<=1002) {
+                const int row=(y-190)/39;
+                if(row>=0&&static_cast<std::size_t>(row)<favoritesView.size()) {
+                    favoritesIndex=row;
+                    if(x>=940) {
+                        const Tile selected=favoritesView[static_cast<std::size_t>(row)];
+                        (void)toggleFavorite(selected);
+                        favoritesView=favoriteTiles();
+                        favoritesIndex=std::min(favoritesIndex,
+                            std::max(0,static_cast<int>(favoritesView.size())-1));
+                    }
+                }
+            }
+        }
+        return;
+    }
     if(steamGridDbPickerOpen) {
         if(e.type==SDL_FINGERDOWN) {
             steamGridDbTouchTracking=true;
@@ -5359,12 +5414,20 @@ void touchInput(const SDL_Event&e) {
         return;
     }
     if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
-       !recentOpen && !powerMenu && !appSettingsMenu) {
+       !recentOpen && !favoritesOpen && !widgetEditorOpen && !powerMenu && !appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=566&&y<=614&&x>=642&&x<=832) {
-            Tile tile;
-            std::uint64_t id=0;
-            if(steamGridDbGetSelectedGame(tile,id))steamGridDbOpenPicker();
+        if(y>=566&&y<=614&&x>=642&&x<=840) {
+            Workspace& desk=desks[static_cast<std::size_t>(deskIndex)];
+            const int index=itemAt(desk,selectedX,selectedY);
+            if(index>=0) {
+                const Tile& selected=desk.tiles[static_cast<std::size_t>(index)];
+                if(selected.kind==Kind::Game) {
+                    if(x<740)(void)toggleFavorite(selected);
+                    else steamGridDbOpenPicker();
+                } else if(isWidgetKind(selected.kind)) {
+                    openWidgetEditor();
+                }
+            }
             return;
         }
     }
@@ -5392,18 +5455,21 @@ void touchInput(const SDL_Event&e) {
     if(recentOpen) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+            const auto entries=recentEntriesForModal();
             if(x>=838&&x<=916&&y>=104&&y<=150) {
                 recentOpen=false;
+                recentGamesOnly=false;
             } else if(x>=924&&x<=1012&&y>=104&&y<=150) {
-                if(!recentLaunches.empty()) {
-                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-                    const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
+                if(!entries.empty()) {
+                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
+                    const HistoryEntry entry=entries[static_cast<size_t>(recentIndex)];
                     recentOpen=false;
+                    recentGamesOnly=false;
                     launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
                 }
-            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
+            } else if(y>=190&&y<580&&!entries.empty()) {
                 const int index=(y-190)/39;
-                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size())
+                if(index>=0&&static_cast<size_t>(index)<entries.size())
                     recentIndex=index;
             }
         }
