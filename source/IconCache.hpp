@@ -533,7 +533,23 @@ private:
                    width <= MaxIconDimension && height <= MaxIconDimension &&
                    width * height <= MaxDecodedPixels;
         }
+        if(header[0]==0&&header[1]==0&&header[2]==1)
+            return icoDimensionsWithinLimit(path);
         return jpegDimensionsWithinLimit(path);
+    }
+
+    static bool icoDimensionsWithinLimit(const std::string& path) {
+        std::ifstream input(path,std::ios::binary);
+        unsigned char header[22]{};
+        if(!input.read(reinterpret_cast<char*>(header),sizeof(header)))return false;
+        if(header[0]!=0||header[1]!=0||header[2]!=1||header[3]!=0)return false;
+        const unsigned count=static_cast<unsigned>(header[4])|
+            (static_cast<unsigned>(header[5])<<8);
+        if(count==0||count>64)return false;
+        const std::uint32_t width=header[6]?header[6]:256u;
+        const std::uint32_t height=header[7]?header[7]:256u;
+        return width>0&&height>0&&width<=MaxIconDimension&&
+            height<=MaxIconDimension&&width*height<=MaxDecodedPixels;
     }
 
     static bool jpegDimensionsWithinLimit(const std::string& path) {
