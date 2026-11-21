@@ -855,6 +855,12 @@ std::string clockText(bool date=false) {
 desknx::widgets::Config widgetConfig(const Tile& tile) {
     return desknx::widgets::parse(tile.kind,tile.data);
 }
+bool hasWidgetKind(Kind kind) {
+    for(const auto& workspace:desks)
+        for(const auto& tile:workspace.tiles)
+            if(tile.kind==kind)return true;
+    return false;
+}
 int configuredWidgetRefresh(Kind kind) {
     int seconds=180;
     bool found=false;
@@ -2402,6 +2408,7 @@ void defaultLayout() {
     };
 }
 void refreshBattery() {
+    if(!hasWidgetKind(Kind::Battery))return;
     const Uint32 now=SDL_GetTicks();
     const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Battery))*1000u;
     if(lastBatteryTick!=0&&now-lastBatteryTick<interval)return;
@@ -2418,6 +2425,7 @@ void refreshBattery() {
     }
 }
 void refreshStorageStats() {
+    if(!hasWidgetKind(Kind::Storage))return;
     const Uint32 now=SDL_GetTicks();
     const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Storage))*1000u;
     if(lastStorageUpdate!=0&&now-lastStorageUpdate<interval)return;
@@ -2435,6 +2443,7 @@ void refreshStorageStats() {
     }
 }
 void refreshSystemMonitor() {
+    if(!hasWidgetKind(Kind::System))return;
     const Uint32 now=SDL_GetTicks();
     const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::System))*1000u;
     if(lastSystemMonitorUpdate!=0&&now-lastSystemMonitorUpdate<interval)return;
@@ -2921,7 +2930,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+33,3,WHITE,right-70);
-                if(dataA&&config.style!=1)progress(r.y+82,battery);
+                if(dataA)progress(r.y+82,battery);
                 drawSystemIcon(3,r.x+r.w-62,r.y+28,38,
                     config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
                 if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
@@ -2930,7 +2939,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+50,6,WHITE,right-70);
-                if(dataA&&config.style!=1)progress(r.y+145,battery);
+                if(dataA)progress(r.y+145,battery);
                 text(battery<0?"UNAVAILABLE":
                      battery>=80?"HIGH CHARGE":
                      battery>=20?"NORMAL":"LOW BATTERY",
@@ -3061,9 +3070,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             if(config.style==1&&storageStatsAvailable&&!compact) {
                 label("SD CAPACITY",r.y+13);
                 text(std::to_string(percent)+"%",left,r.y+34,4,WHITE,right);
-                if(dataA)text(usedText,left,r.y+92,1,MUTED,right);
-                else text(freeSpaceText()+" FREE",left,r.y+92,1,MUTED,right);
-                if(dataB)progress(r.y+122,percent);
+                if(dataA)text(usedText,left,r.y+(wide?78:92),1,MUTED,right);
+                else text(freeSpaceText()+" FREE",left,r.y+(wide?78:92),1,MUTED,right);
+                if(dataB)progress(r.y+(wide?100:122),percent);
             } else if(compact) {
                 label("SD STORAGE",r.y+13);
                 text(mainValue,left,r.y+39,2,WHITE,right);
@@ -3106,14 +3115,14 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(std::to_string(current.tm_mday),left,r.y+(wide?25:30),wide?4:5,WHITE,right);
                 text(monthName+"  "+std::to_string(current.tm_year+1900),
                      left,r.y+(wide?77:100),wide?1:2,BLUE,right);
-                if(dataA)label(weekday,r.y+(wide?99:142));
-                if(dataB)label(clockText(),r.y+(wide?116:169));
+                if(dataA)label(weekday,r.y+(wide?94:142));
+                if(dataB)label(clockText(),r.y+(wide?104:169));
             } else if(config.style==2) {
                 label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
                 text(weekday,left,r.y+40,wide?1:2,BLUE,right);
                 text(std::to_string(current.tm_mday)+" "+monthName,left,r.y+68,wide?2:3,WHITE,right);
                 if(dataA)text(std::to_string(current.tm_year+1900),left,r.y+(wide?95:122),1,MUTED,right);
-                if(dataB)text(clockText(),left,r.y+(wide?112:158),wide?1:2,WHITE,right);
+                if(dataB)text(clockText(),left,r.y+(wide?104:158),wide?1:2,WHITE,right);
             } else if(compact) {
                 text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
                 text(monthName,left,r.y+78,1,BLUE,right);
