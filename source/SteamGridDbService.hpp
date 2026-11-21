@@ -24,7 +24,8 @@ class SteamGridDbService final {
 public:
  SteamGridDbService()=default;
  ~SteamGridDbService();
- bool search(std::uint64_t titleId,const std::string& title,const std::string& apiKey);
+ bool search(std::uint64_t titleId,const std::string& title,const std::string& apiKey,
+             bool useSavedMapping=true);
  bool loadAssets(std::uint64_t titleId,std::uint64_t gameId,const std::string& title,
                  const std::string& gameName,ArtworkKind kind,const std::string& apiKey);
  bool selectAsset(int index);
@@ -44,6 +45,7 @@ private:
   std::string title,gameName,apiKey;
   std::vector<std::uint64_t> installedTitleIds;
   std::uint64_t maximumCacheBytes{0};
+  bool useSavedMapping{true};
   bool mappedLookup{false};
   ArtworkAsset asset;
  };
