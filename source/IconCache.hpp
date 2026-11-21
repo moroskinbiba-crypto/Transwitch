@@ -385,8 +385,12 @@ private:
         result.generation=request.generation;
         const std::string defaultPath=desknx::model::iconCachePath(request.kind,request.data);
         if(defaultPath.empty())return result;
+        // A one-off user-selected cover must be authoritative. Keep it separate
+        // from the shared pack so SteamGridDB cannot silently override it.
+        const std::string gameOverridePath=customPathFor(request.kind,request.data,
+            std::string{},request.gameOverrideDirectory);
         const std::string customPath=customPathFor(request.kind,request.data,
-            request.customDirectory,request.gameOverrideDirectory);
+            request.customDirectory,std::string{});
 
         std::string steamGridPath;
         if(request.kind==desknx::model::Kind::Game&&desknx::model::isTitleId(request.data)){
@@ -433,6 +437,7 @@ private:
         };
         // A selected SteamGridDB image takes precedence; a corrupt override
         // gracefully falls back to custom pack art and then the system icon.
+        if(tryLoad(gameOverridePath,true))return result;
         if(tryLoad(steamGridPath,true))return result;
         if(tryLoad(customPath,true))return result;
         (void)tryLoad(defaultPath,false);
