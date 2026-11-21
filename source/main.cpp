@@ -1768,7 +1768,7 @@ void openFavorites() {
     favoritesOpen=true;
 }
 
-std::vector<Tile> gameLibraryTiles(std::size_t limit) {
+std::vector<Tile> gameLibraryTiles(std::size_t limit,bool recentFirst=true) {
     const auto all=catalogueSnapshot();
     std::vector<Tile> result;
     result.reserve(std::min<std::size_t>(limit,all.size()));
@@ -1781,15 +1781,20 @@ std::vector<Tile> gameLibraryTiles(std::size_t limit) {
         if(found!=all.end())
             result.push_back(Tile{Kind::Game,found->title,found->data,0,0,1,1,found->color});
     };
-    // Recent launches and favourites surface first; the rest stay alphabetical.
-    for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)appendById(entry.data);
-    for(const auto& id:favoriteTitleIds)appendById(id);
+    // Recent launches and favourites can be surfaced first; users may switch
+    // to a strictly alphabetical catalogue from the widget editor.
+    if(recentFirst) {
+        for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)appendById(entry.data);
+        for(const auto& id:favoriteTitleIds)appendById(id);
+    }
     std::vector<Candidate> games;
     for(const auto& item:all)if(item.kind==Kind::Game)games.push_back(item);
     std::sort(games.begin(),games.end(),[](const Candidate& a,const Candidate& b) {
         return a.title<b.title;
     });
     for(const auto& item:games)appendById(item.data);
+    if(!recentFirst)
+        for(const auto& id:favoriteTitleIds)appendById(id);
     if(result.size()>limit)result.resize(limit);
     return result;
 }
@@ -2853,8 +2858,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             if(index>=recentGames.size())return;
             const auto& entry=recentGames[index];
             Tile iconTile{Kind::Game,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
-            drawTileIcon(iconTile,left,y,iconSize);
-            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
+            if(dataB)drawTileIcon(iconTile,left,y,iconSize);
+            text(entry.title,left+(dataB?iconSize+8:0),y+(iconSize>28?6:4),1,WHITE,right);
         };
 
         if(t.kind==Kind::Clock) {
@@ -3002,7 +3007,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 label("RECENT GAMES",r.y+13);
                 if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
                 else recentGameLine(0,r.y+42,26);
-            } else if(wide&&config.style==1) {
+            } else if(wide&&config.style==1&&
+                      (favoritesWidget?dataA:dataB)) {
                 label("RECENT GAMES",r.y+12);
                 if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
@@ -3175,7 +3181,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             }
         } else if(t.kind==Kind::Favorites || t.kind==Kind::GameLibrary) {
             const std::vector<Tile> games=t.kind==Kind::Favorites?
-                favoriteTiles():gameLibraryTiles(static_cast<std::size_t>(config.itemCount));
+                favoriteTiles():gameLibraryTiles(static_cast<std::size_t>(config.itemCount),dataA);
             const bool favoritesWidget=t.kind==Kind::Favorites;
             label(favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+12);
             if(games.empty()) {
@@ -3200,8 +3206,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 for(int i=0;i<count;++i) {
                     const Tile& game=games[static_cast<std::size_t>(i)];
                     const int y=r.y+(wide?34:48)+i*rowStep;
-                    drawTileIcon(game,left,y,iconSize);
-                    text(game.title,left+iconSize+8,y+std::max(3,(iconSize-8)/2),
+                    const bool showCover=favoritesWidget?dataA:dataB;
+                    if(showCover)drawTileIcon(game,left,y,iconSize);
+                    text(game.title,left+(showCover?iconSize+8:0),y+std::max(3,(iconSize-8)/2),
                          1,WHITE,right);
                 }
             }
@@ -4117,10 +4124,10 @@ std::string widgetEditorDataLabel(unsigned bit) {
         case Kind::System: return bit==0?"TEMPERATURES":"CPU / GPU CLOCKS";
         case Kind::Recent: return bit==0?"MORE ENTRIES":"GAME COVERS";
         case Kind::Storage: return bit==0?"USED OR FREE":"USAGE BAR";
-        case Kind::Calendar: return bit==0?"WEEKDAY":"FULL CALENDAR";
+        case Kind::Calendar: return bit==0?"SHOW WEEKDAY":"SHOW TIME";
         case Kind::Nextendo: return bit==0?"ONLINE TOTAL":"TOP ACTIVITY";
-        case Kind::Favorites: return bit==0?"COVER STRIP":"SAVED COUNT";
-        case Kind::GameLibrary: return bit==0?"RECENT FIRST":"COVER STRIP";
+        case Kind::Favorites: return bit==0?"SHOW COVER ICONS":"SAVED COUNT";
+        case Kind::GameLibrary: return bit==0?"RECENT FIRST":"SHOW COVER ICONS";
         default:return bit==0?"DATA A":"DATA B";
     }
 }
