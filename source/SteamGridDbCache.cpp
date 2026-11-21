@@ -112,13 +112,9 @@ std::string SteamGridDbCache::selectedPath(std::uint64_t id)const{
  if(haveMetadata&&metadata.active=="system")return {};
  const auto p=pathFor(id,selectedKind(id));
  if(!regular(p))return {};
- if(haveMetadata) {
-  const auto now=static_cast<std::uint64_t>(std::time(nullptr));
-  if(now>metadata.lastAccess+60u) {
-   metadata.lastAccess=now;
-   (void)writeMeta(metadataPath(id),metadata);
-  }
- }
+ // This lookup is called by the icon-decoder worker while cache maintenance
+ // and downloads may run on another worker. Keep it read-only: mutating the
+ // metadata file from a render-triggered lookup races atomic cache commits.
  return p;
 }
 std::uint64_t SteamGridDbCache::mappedGameId(std::uint64_t id)const{Meta m;return readMeta(metadataPath(id),m)?m.gameId:0;}
