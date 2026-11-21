@@ -6897,7 +6897,9 @@ void openControllerSupport() {
 }
 
 void touchInput(const SDL_Event&e) {
-    if(nextendoOpen) {
+    using desknx::ui::SurfaceId;
+    refreshSurfaceManager();
+    if(gSurfaceManager.isTop(SurfaceId::Nextendo)) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW);
             const int y=static_cast<int>(e.tfinger.y*SH);
@@ -6912,7 +6914,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(userPickerOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::UserPicker)) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
             if(x>=844&&x<=920&&y>=136&&y<=170) {
@@ -6926,7 +6928,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(widgetEditorOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::WidgetEditor)) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW);
             const int y=static_cast<int>(e.tfinger.y*SH);
@@ -6946,7 +6948,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(favoritesOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::Favorites)) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW);
             const int y=static_cast<int>(e.tfinger.y*SH);
@@ -6981,7 +6983,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(steamGridDbPickerOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::SteamGridDb)) {
         if(e.type==SDL_FINGERDOWN) {
             steamGridDbTouchTracking=true;
             steamGridDbTouchDragged=false;
@@ -7097,7 +7099,7 @@ void touchInput(const SDL_Event&e) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
     }
-    if(e.type==SDL_FINGERDOWN && quickSettingsOpen) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::QuickSettings)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=878&&x<=962&&y>=94&&y<=130)closeQuickSettings();
         else if(x>=326&&x<=954&&y>=194&&y<524) {
@@ -7119,13 +7121,13 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && diagnosticsOpen) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::Diagnostics)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=1000&&x<=1145&&y>=72&&y<=112)diagnosticsOpen=false;
         else if(x>=840&&x<=1000&&y>=72&&y<=112)refreshDiagnosticsSnapshot(true);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && mediaPickerOpen) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::MediaPicker)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=930&&x<=1022&&y>=86&&y<=120) {
             mediaPickerBack();
@@ -7142,7 +7144,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::LauncherSettings)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=948&&x<=1040&&y>=64&&y<=104) {
             appSettingsMenu=false;
@@ -7162,7 +7164,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && workspaceSettingsMenu) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::WorkspaceSettings)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164)workspaceSettingsMenu=false;
         else if(x>=340&&x<=940&&y>=216&&y<552) {
@@ -7171,7 +7173,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && systemMenu) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::SystemMenu)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=1058&&x<=1140&&y>=136&&y<=170){systemMenu=false;return;}
         if(y>=218&&y<354) {
@@ -7188,7 +7190,7 @@ void touchInput(const SDL_Event&e) {
         keyInput(HidNpadButton_A,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && workspacePicker) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::WorkspacePicker)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=744&&x<=920&&y>=590&&y<=628) {
             workspacePicker=false;
@@ -7198,7 +7200,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && workspaceMenu) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::WorkspaceMenu)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=390&&x<=890&&y>=238&&y<502) {
             const int row=(y-238)/44;
@@ -7213,7 +7215,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && deletePrompt) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::DeleteConfirmation)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
@@ -7241,7 +7243,7 @@ void touchInput(const SDL_Event&e) {
             return;
         }
     }
-    if(e.type==SDL_FINGERDOWN && powerMenu) {
+    if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::PowerMenu)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=780&&x<=832&&y>=238&&y<=270) {
             keyInput(HidNpadButton_B,false);
@@ -7252,7 +7254,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(recentOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::RecentGames)) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
             const auto entries=recentEntriesForModal();
@@ -7281,7 +7283,8 @@ void touchInput(const SDL_Event&e) {
             deskIndex<static_cast<int>(desks.size())&&
             desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
             !systemMenu&&!appSettingsMenu&&!workspaceMenu&&
-            !workspaceSettingsMenu&&!workspacePicker&&!powerMenu&&!diagnosticsOpen;
+            !workspaceSettingsMenu&&!workspacePicker&&!powerMenu&&!diagnosticsOpen&&
+            !gSurfaceManager.hasBlockingSurface();
         if(emptyDeskVisible&&y>=376&&y<=424) {
             if(x>=386&&x<592) {
                 openList();
@@ -7292,7 +7295,7 @@ void touchInput(const SDL_Event&e) {
                 return;
             }
         }
-        if(listOpen) {
+        if(gSurfaceManager.isTop(SurfaceId::Library)) {
             if(y>=122&&y<=151) {
                 if(x>=138&&x<234) searchCatalogue();
                 else if(x>=242&&x<324) cycleCatalogueSort();
@@ -7342,7 +7345,7 @@ void touchInput(const SDL_Event&e) {
             }
             return;
         }
-        if(deletePrompt)return;
+        if(gSurfaceManager.hasBlockingSurface())return;
         // Three permanent header shortcuts; quick tools stay accessible via L3.
         if(y>=16&&y<=82) {
             if(x>=392&&x<436) {
