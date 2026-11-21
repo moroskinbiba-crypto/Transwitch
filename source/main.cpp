@@ -5157,6 +5157,7 @@ int main(int,char**) {
         pumpPlayStatsQuery();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         pumpSteamGridDbPicker();
+        pumpSteamGridDbCacheCleanup();
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
