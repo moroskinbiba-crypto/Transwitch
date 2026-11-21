@@ -991,6 +991,8 @@ void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20
 void uiButton(int x,int y,int w,int h,int radius,
               desknx::ui::ButtonVariant variant,Color fill,Color edge,
               bool active=false,bool focused=false,Color accent=BLUE) {
+    fill=themeSurfaceTint(fill);
+    edge=themeEdgeTint(edge);
     const SDL_Rect bounds{x,y,w,h};
     (void)gUiComponents.button(bounds,variant,
         desknx::ui::ButtonState{active,focused,false},
@@ -4142,8 +4144,8 @@ void drawScreen() {
         if(themeIndex==1) {
             softCard(mx+18,my+14,mw-36,88,Color{15,32,46,246},
                      Color{100,157,181,68});
-            rect(mx+18,my+14,4,88,COLORS[3]);
-            text("SOCOMA  /  APPLICATION CONTROL",mx+36,my+20,1,COLORS[3],mx+mw-30);
+            rect(mx+18,my+14,4,88,BLUE);
+            text("SOCOMA  /  APPLICATION CONTROL",mx+36,my+20,1,BLUE,mx+mw-30);
             text("APP LIBRARY",mx+36,my+39,3,WHITE,mx+mw-24);
         } else {
             text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
@@ -4178,7 +4180,7 @@ void drawScreen() {
         }
         text(viewLabel,mx+28,my+(themeIndex==1?96:82),1,
              BLUE,mx+mw-22);
-        if(themeIndex!=8)
+        if(themeIndex!=1)
             text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
         if(available.empty()) { listIndex=0; listOffset=0; }
         else {
@@ -4336,7 +4338,10 @@ void drawScreen() {
                 uiButton(mx+940,actionY,82,32,9,desknx::ui::ButtonVariant::Chip,Color{43,61,85,255},Color{255,255,255,18});
                 text("FROM FILE",mx+947,actionY+11,1,WHITE,mx+1018);
             } else if(selected.kind==Kind::Game) {
-                text("ENABLE EDIT MODE TO CHANGE COVER",mx+798,my+526,1,MUTED,mx+mw-22);
+                uiButton(mx+864,actionY,154,32,9,
+                    desknx::ui::ButtonVariant::Chip,
+                    Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
+                text("EDIT MODE",mx+908,actionY+11,1,WHITE,mx+1016);
             }
         }
         const std::string counts=languageRussian
@@ -6833,6 +6838,11 @@ void touchInput(const SDL_Event&e) {
             }
             if(y>=532&&y<572&&x>=900&&x<=1150) {
                 addSelected();
+                return;
+            }
+            if(y>=578&&y<=612&&!editing&&x>=974&&x<1128) {
+                editing=true;
+                setStatus("EDIT MODE ENABLED — COVER OPTIONS READY",2200);
                 return;
             }
             if(editing&&y>=578&&y<=612&&x>=900&&x<968){renameSelectedGame();return;}
