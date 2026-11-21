@@ -19,8 +19,10 @@
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
 #include "SteamGridDbService.hpp"
+#include "desknx/WidgetConfig.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <cctype>
 #include <cstdint>
@@ -65,6 +67,9 @@ size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
+constexpr const char* FAVORITES_FILE = "sdmc:/switch/DeskNX/favorites.tsv";
+constexpr const char* FAVORITES_TMP = "sdmc:/switch/DeskNX/favorites.tmp";
+constexpr const char* FAVORITES_BAK = "sdmc:/switch/DeskNX/favorites.bak";
 constexpr const char* SETTINGS_FILE = "sdmc:/switch/DeskNX/settings.ini";
 constexpr const char* SETTINGS_TMP = "sdmc:/switch/DeskNX/settings.tmp";
 constexpr const char* SETTINGS_BAK = "sdmc:/switch/DeskNX/settings.bak";
@@ -119,6 +124,7 @@ SDL_Thread* catalogueThread = nullptr;
 SDL_Thread* nextendoThread = nullptr;
 SDL_mutex* nextendoMutex = nullptr;
 SDL_atomic_t nextendoStop{};
+SDL_atomic_t nextendoConfiguredRefreshMs{};
 desknx::nextendo::PresenceFeed nextendoFeed;
 struct CatalogueScanRequest { bool forceRefresh; bool reinitializeNs; };
 const CatalogueScanRequest catalogueRefreshRequest{true, true};
@@ -196,6 +202,13 @@ uint64_t steamGridDbPreviewRevision=UINT64_MAX;
 SteamGridDbPickerView steamGridDbPickerView=SteamGridDbPickerView::Matches;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
+std::vector<std::string> favoriteTitleIds;
+std::vector<Tile> favoritesView;
+bool favoritesOpen=false, recentGamesOnly=false, gameLibraryMode=false;
+int favoritesIndex=0, favoritesOffset=0;
+bool widgetEditorOpen=false;
+int widgetEditorRow=0;
+Kind widgetEditorKind=Kind::Clock;
 struct PdmQuerySnapshot {
     char titleId[17]{};
     bool available{false};
@@ -213,9 +226,21 @@ std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
+int batteryChargerType=-1;
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
 Uint32 lastStorageUpdate=0;
 bool storageStatsAvailable=false;
+
+bool tsServiceReady=false, tsInternalOpen=false, tsSocOpen=false;
+TsSession tsInternalSession{}, tsSocSession{};
+bool systemPcbTemperatureAvailable=false, systemSocTemperatureAvailable=false;
+float systemPcbTemperature=-1.0f, systemSocTemperature=-1.0f;
+Uint32 lastSystemMonitorUpdate=0;
+bool clkrstServiceReady=false, cpuClockOpen=false, gpuClockOpen=false;
+ClkrstSession cpuClockSession{}, gpuClockSession{};
+bool systemCpuClockAvailable=false, systemGpuClockAvailable=false;
+std::uint32_t systemCpuClockHz=0, systemGpuClockHz=0;
+
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
 bool widgetPickerMode=false;
@@ -828,11 +853,43 @@ std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
 }
+desknx::widgets::Config widgetConfig(const Tile& tile) {
+    return desknx::widgets::parse(tile.kind,tile.data);
+}
+bool hasWidgetKind(Kind kind) {
+    for(const auto& workspace:desks)
+        for(const auto& tile:workspace.tiles)
+            if(tile.kind==kind)return true;
+    return false;
+}
+int configuredWidgetRefresh(Kind kind) {
+    int seconds=180;
+    bool found=false;
+    for(const auto& workspace:desks)for(const auto& tile:workspace.tiles) {
+        if(tile.kind!=kind)continue;
+        seconds=found?std::min(seconds,widgetConfig(tile).refreshSeconds):
+                       widgetConfig(tile).refreshSeconds;
+        found=true;
+    }
+    seconds=found?seconds:desknx::widgets::defaults(kind).refreshSeconds;
+    // Keep a modest minimum polling interval for the remote Nextendo endpoint.
+    return kind==Kind::Nextendo?std::max(30,seconds):seconds;
+}
 std::string typeName(Kind k) {
-    switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
-        case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT";
-        case Kind::Storage:return "WIDGET / STORAGE"; case Kind::Calendar:return "WIDGET / CALENDAR";
-        case Kind::Unsupported:return "UNSUPPORTED"; }
+    switch(k) {
+        case Kind::Game:return "GAME";
+        case Kind::Nro:return "HOMEBREW";
+        case Kind::Clock:return "WIDGET / CLOCK";
+        case Kind::Battery:return "WIDGET / BATTERY";
+        case Kind::System:return "WIDGET / SYSTEM MONITOR";
+        case Kind::Recent:return "WIDGET / RECENT GAMES";
+        case Kind::Storage:return "WIDGET / STORAGE";
+        case Kind::Calendar:return "WIDGET / CALENDAR";
+        case Kind::Nextendo:return "WIDGET / NEXTENDO";
+        case Kind::Favorites:return "WIDGET / FAVORITES";
+        case Kind::GameLibrary:return "WIDGET / GAME LIBRARY";
+        case Kind::Unsupported:return "UNSUPPORTED";
+    }
     return "ITEM";
 }
 
@@ -1285,7 +1342,11 @@ int nextendoThreadMain(void*) {
                 desknx::diag::Write("nextendo", "snapshot_failed",
                     "network_ready=%d", networkReady ? 1 : 0);
             }
-            nextAttempt = now + desknx::nextendo::RefreshIntervalMs;
+            const int configuredMs=SDL_AtomicGet(&nextendoConfiguredRefreshMs);
+            const std::uint32_t refreshMs=configuredMs>=30000?
+                static_cast<std::uint32_t>(configuredMs):
+                static_cast<std::uint32_t>(desknx::nextendo::RefreshIntervalMs);
+            nextAttempt = now + refreshMs;
         }
         SDL_Delay(250);
     }
@@ -1610,6 +1671,204 @@ void recordRecentLaunch(const Tile& tile) {
     ++recentLaunchRevision;
     if(recentLaunches.size()>10)recentLaunches.resize(10);
     lastLaunched=tile.title;saveHistory();
+}
+
+bool readFavoritesFile(const char* path,std::vector<std::string>& output) {
+    struct stat st{};
+    constexpr std::uint64_t MaxFavoritesBytes=32u*1024u;
+    if(!path||stat(path,&st)!=0||!S_ISREG(st.st_mode)||
+       st.st_size<=0||static_cast<std::uint64_t>(st.st_size)>MaxFavoritesBytes)return false;
+    std::ifstream input(path,std::ios::binary);
+    std::string line;
+    if(!input||!std::getline(input,line)||line!="DESKNXF1")return false;
+    std::vector<std::string> parsed;
+    while(std::getline(input,line)&&parsed.size()<256) {
+        if(line.size()!=16||!desknx::model::isTitleId(line))continue;
+        if(std::find(parsed.begin(),parsed.end(),line)==parsed.end())
+            parsed.push_back(line);
+    }
+    if(input.bad())return false;
+    output=std::move(parsed);
+    return true;
+}
+void loadFavorites() {
+    if(!sdMounted)return;
+    std::vector<std::string> loaded;
+    if(readFavoritesFile(FAVORITES_FILE,loaded)) {
+        favoriteTitleIds=std::move(loaded);
+    } else if(readFavoritesFile(FAVORITES_BAK,loaded)) {
+        favoriteTitleIds=std::move(loaded);
+        setStatus("FAVORITES RESTORED FROM BACKUP",3500);
+    }
+}
+bool saveFavorites() {
+    if(!sdMounted)return false;
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
+    std::ofstream out(FAVORITES_TMP,std::ios::binary|std::ios::trunc);
+    if(!out){setStatus("FAVORITES SAVE FAILED",3000);return false;}
+    out<<"DESKNXF1\n";
+    for(const auto& id:favoriteTitleIds)
+        if(desknx::model::isTitleId(id))out<<id<<"\n";
+    out.flush();
+    bool good=out.good();
+    out.close();
+    if(!good){std::remove(FAVORITES_TMP);setStatus("FAVORITES WRITE FAILED",3000);return false;}
+    if(!commitSdCard("favorites-temp")) {
+        std::remove(FAVORITES_TMP);
+        setStatus("FAVORITES SD COMMIT FAILED",3000);
+        return false;
+    }
+    const auto result=desknx::safeio::replaceFilePreservingOnFailure(
+        FAVORITES_TMP,FAVORITES_FILE,FAVORITES_BAK,true);
+    if(result!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(FAVORITES_TMP);
+        setStatus("FAVORITES RENAME FAILED; BACKUP KEPT",3500);
+        return false;
+    }
+    if(!commitSdCard("favorites-publish")) {
+        setStatus("FAVORITES COMMIT FAILED; BACKUP KEPT",3500);
+        return false;
+    }
+    return true;
+}
+bool isFavorite(const std::string& titleId) {
+    return std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),titleId)!=favoriteTitleIds.end();
+}
+bool toggleFavorite(const Tile& tile) {
+    if(tile.kind!=Kind::Game||!desknx::model::isTitleId(tile.data)) {
+        setStatus("FAVORITES SUPPORT INSTALLED GAMES",2200);
+        return false;
+    }
+    const auto found=std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),tile.data);
+    if(found!=favoriteTitleIds.end()) {
+        const std::size_t oldIndex=static_cast<std::size_t>(
+            std::distance(favoriteTitleIds.begin(),found));
+        favoriteTitleIds.erase(found);
+        if(saveFavorites()) {
+            setStatus("REMOVED FROM FAVORITES: "+tile.title);
+        } else {
+            favoriteTitleIds.insert(favoriteTitleIds.begin()+
+                static_cast<std::ptrdiff_t>(std::min(oldIndex,favoriteTitleIds.size())),tile.data);
+            return false;
+        }
+        return true;
+    }
+    if(favoriteTitleIds.size()>=256) {
+        setStatus("FAVORITES LIMIT REACHED",2500);
+        return false;
+    }
+    favoriteTitleIds.insert(favoriteTitleIds.begin(),tile.data);
+    if(saveFavorites()) {
+        setStatus("ADDED TO FAVORITES: "+tile.title);
+        return true;
+    }
+    favoriteTitleIds.erase(std::remove(favoriteTitleIds.begin(),
+        favoriteTitleIds.end(),tile.data),favoriteTitleIds.end());
+    return false;
+}
+std::vector<Tile> favoriteTiles() {
+    const auto all=catalogueSnapshot();
+    std::vector<Tile> result;
+    result.reserve(favoriteTitleIds.size());
+    for(const auto& id:favoriteTitleIds) {
+        const auto it=std::find_if(all.begin(),all.end(),[&](const Candidate& entry) {
+            return entry.kind==Kind::Game&&entry.data==id;
+        });
+        if(it!=all.end())result.push_back(Tile{Kind::Game,it->title,it->data,0,0,1,1,it->color});
+    }
+    return result;
+}
+void openFavorites() {
+    favoritesView=favoriteTiles();
+    favoritesIndex=0;
+    favoritesOffset=0;
+    if(favoritesView.empty()) {
+        setStatus(favoriteTitleIds.empty()?"NO FAVORITE GAMES YET":"FAVORITE GAMES ARE NOT IN THE CURRENT CATALOGUE");
+        return;
+    }
+    favoritesOpen=true;
+}
+
+std::vector<Tile> gameLibraryTiles(std::size_t limit,bool recentFirst=true) {
+    const auto all=catalogueSnapshot();
+    std::vector<Tile> result;
+    result.reserve(std::min<std::size_t>(limit,all.size()));
+    auto appendById=[&](const std::string& id) {
+        if(result.size()>=limit)return;
+        if(std::any_of(result.begin(),result.end(),[&](const Tile& tile){return tile.data==id;}))return;
+        const auto found=std::find_if(all.begin(),all.end(),[&](const Candidate& item) {
+            return item.kind==Kind::Game&&item.data==id;
+        });
+        if(found!=all.end())
+            result.push_back(Tile{Kind::Game,found->title,found->data,0,0,1,1,found->color});
+    };
+    // Recent launches and favourites can be surfaced first; users may switch
+    // to a strictly alphabetical catalogue from the widget editor.
+    if(recentFirst) {
+        for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)appendById(entry.data);
+        for(const auto& id:favoriteTitleIds)appendById(id);
+    }
+    std::vector<Candidate> games;
+    for(const auto& item:all)if(item.kind==Kind::Game)games.push_back(item);
+    std::sort(games.begin(),games.end(),[](const Candidate& a,const Candidate& b) {
+        return a.title<b.title;
+    });
+    for(const auto& item:games)appendById(item.data);
+    if(!recentFirst)
+        for(const auto& id:favoriteTitleIds)appendById(id);
+    if(result.size()>limit)result.resize(limit);
+    return result;
+}
+
+struct NextendoWidgetSnapshot {
+    bool fresh{false};
+    unsigned total{0};
+    unsigned activeTitles{0};
+    unsigned topPlayers{0};
+    std::string topGame;
+};
+NextendoWidgetSnapshot nextendoWidgetSnapshot() {
+    static NextendoWidgetSnapshot cached;
+    static std::uint64_t cachedAt=0;
+    const std::uint64_t now=SDL_GetTicks64();
+    if(cachedAt!=0&&now-cachedAt<5000)return cached;
+    NextendoWidgetSnapshot result;
+    const auto games=catalogueSnapshot();
+    if(nextendoMutex)SDL_LockMutex(nextendoMutex);
+    result.fresh=nextendoFeed.hasFreshSnapshot(now);
+    if(result.fresh) {
+        result.total=nextendoFeed.total(now);
+        result.activeTitles=nextendoFeed.activeTitleCount(now);
+        for(const auto& game:games) {
+            if(game.kind!=Kind::Game||!desknx::model::isTitleId(game.data))continue;
+            const auto players=nextendoFeed.playersFor(
+                static_cast<desknx::nextendo::TitleId>(std::strtoull(game.data.c_str(),nullptr,16)),now);
+            if(players>result.topPlayers) {
+                result.topPlayers=players;
+                result.topGame=game.title;
+            }
+        }
+    }
+    if(nextendoMutex)SDL_UnlockMutex(nextendoMutex);
+    cached=result;
+    cachedAt=now;
+    return result;
+}
+std::vector<HistoryEntry> recentEntriesForModal() {
+    if(!recentGamesOnly)return recentLaunches;
+    std::vector<HistoryEntry> games;
+    for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)games.push_back(entry);
+    return games;
+}
+void openRecentGames() {
+    recentGamesOnly=true;
+    recentIndex=0;
+    recentOpen=true;
+}
+void openRecentAll() {
+    recentGamesOnly=false;
+    recentIndex=0;
+    recentOpen=true;
 }
 bool backupBrokenLayout() {
     struct stat st{};
@@ -2151,32 +2410,119 @@ void defaultLayout() {
         if(c.kind==Kind::Game&&gi<12) {desks[0].tiles.push_back(Tile{c.kind,c.title,c.data,gi%COLS,gi/COLS,1,1,c.color});++gi;}
         if(c.kind==Kind::Nro&&hi<12) {desks[1].tiles.push_back(Tile{c.kind,c.title,c.data,hi%COLS,hi/COLS,1,1,c.color});++hi;}
     }
-    desks[2].tiles.push_back(Tile{Kind::Clock,"Clock","",0,0,2,1,1});
-    desks[2].tiles.push_back(Tile{Kind::Battery,"Battery","",2,0,2,1,2});
-    desks[2].tiles.push_back(Tile{Kind::System,"System info","",4,0,2,1,5});
-    desks[2].tiles.push_back(Tile{Kind::Recent,"Recent launches","",0,1,3,1,6});
-    desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
-    desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
+    desks[2].tiles={
+        Tile{Kind::Clock,"Clock","",0,0,2,1,1},
+        Tile{Kind::Battery,"Battery","",2,0,2,1,2},
+        Tile{Kind::Nextendo,"Nextendo","",4,0,2,1,0},
+        Tile{Kind::Recent,"Recent games","",0,1,2,1,6},
+        Tile{Kind::Favorites,"Favorites","",2,1,2,1,8},
+        Tile{Kind::GameLibrary,"Game library","",4,1,2,1,9},
+        Tile{Kind::Storage,"SD storage","",0,2,2,1,3},
+        Tile{Kind::System,"System monitor","",2,2,2,1,5},
+        Tile{Kind::Calendar,"Calendar","",4,2,2,1,4}
+    };
 }
 void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
+    if(!hasWidgetKind(Kind::Battery))return;
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Battery))*1000u;
+    if(lastBatteryTick!=0&&now-lastBatteryTick<interval)return;
+    lastBatteryTick=now;
     if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
+    if(psmReady) {
+        u32 pct=0;
+        if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct))&&pct<=100u)
+            battery=static_cast<int>(pct);
+        PsmChargerType charger=PsmChargerType_Unconnected;
+        if(R_SUCCEEDED(psmGetChargerType(&charger)))
+            batteryChargerType=static_cast<int>(charger);
+        else batteryChargerType=-1;
+    }
 }
 void refreshStorageStats() {
+    if(!hasWidgetKind(Kind::Storage))return;
     const Uint32 now=SDL_GetTicks();
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Storage))*1000u;
+    if(lastStorageUpdate!=0&&now-lastStorageUpdate<interval)return;
     lastStorageUpdate=now;
     struct statvfs fs{};
     if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
         const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
         sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
         sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0;
+        storageStatsAvailable=sdTotalBytes>0&&sdFreeBytes<=sdTotalBytes;
     } else {
         sdTotalBytes=0;
         sdFreeBytes=0;
         storageStatsAvailable=false;
+    }
+}
+void refreshSystemMonitor() {
+    if(!hasWidgetKind(Kind::System))return;
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::System))*1000u;
+    if(lastSystemMonitorUpdate!=0&&now-lastSystemMonitorUpdate<interval)return;
+    lastSystemMonitorUpdate=now;
+    systemPcbTemperatureAvailable=false;
+    systemSocTemperatureAvailable=false;
+    systemCpuClockAvailable=false;
+    systemGpuClockAvailable=false;
+
+    if(!tsServiceReady&&R_SUCCEEDED(tsInitialize()))tsServiceReady=true;
+    if(tsServiceReady) {
+        if(hosversionGet()>=MAKEHOSVERSION(10,0,0)) {
+            if(!tsInternalOpen&&R_SUCCEEDED(tsOpenSession(
+                &tsInternalSession,TsDeviceCode_LocationInternal)))tsInternalOpen=true;
+            if(!tsSocOpen&&R_SUCCEEDED(tsOpenSession(
+                &tsSocSession,TsDeviceCode_LocationExternal)))tsSocOpen=true;
+            float temperature=0.0f;
+            if(tsInternalOpen&&R_SUCCEEDED(tsSessionGetTemperature(
+                &tsInternalSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
+                systemPcbTemperature=temperature;
+                systemPcbTemperatureAvailable=true;
+            }
+            temperature=0.0f;
+            if(tsSocOpen&&R_SUCCEEDED(tsSessionGetTemperature(
+                &tsSocSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
+                systemSocTemperature=temperature;
+                systemSocTemperatureAvailable=true;
+            }
+        } else {
+            s32 temperature=0;
+            if(R_SUCCEEDED(tsGetTemperature(TsLocation_Internal,&temperature))&&
+               temperature>=-20&&temperature<=120) {
+                systemPcbTemperature=static_cast<float>(temperature);
+                systemPcbTemperatureAvailable=true;
+            }
+            temperature=0;
+            if(R_SUCCEEDED(tsGetTemperature(TsLocation_External,&temperature))&&
+               temperature>=-20&&temperature<=120) {
+                systemSocTemperature=static_cast<float>(temperature);
+                systemSocTemperatureAvailable=true;
+            }
+        }
+    }
+
+    if(hosversionGet()>=MAKEHOSVERSION(8,0,0)) {
+        if(!clkrstServiceReady&&R_SUCCEEDED(clkrstInitialize()))clkrstServiceReady=true;
+        if(clkrstServiceReady) {
+            if(!cpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
+                &cpuClockSession,PcvModuleId_CpuBus,3)))cpuClockOpen=true;
+            if(!gpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
+                &gpuClockSession,PcvModuleId_GPU,3)))gpuClockOpen=true;
+            std::uint32_t rate=0;
+            if(cpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&cpuClockSession,&rate))&&
+               rate>=1000000u&&rate<=4000000000u) {
+                systemCpuClockHz=rate;
+                systemCpuClockAvailable=true;
+            }
+            rate=0;
+            if(gpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&gpuClockSession,&rate))&&
+               rate>=1000000u&&rate<=4000000000u) {
+                systemGpuClockHz=rate;
+                systemGpuClockAvailable=true;
+            }
+        }
     }
 }
 std::string initials(const std::string& name) {
@@ -2508,6 +2854,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
         const bool compact=t.w==1&&t.h==1;
         const bool wide=t.h==1&&t.w>=2;
+        const auto config=widgetConfig(t);
+        const bool dataA=desknx::widgets::enabled(config,0);
+        const bool dataB=desknx::widgets::enabled(config,1);
         const int left=r.x+18, right=r.x+r.w-14;
         const int innerWidth=std::max(1,r.w-36);
         auto label=[&](const std::string& value,int y) {
@@ -2526,143 +2875,239 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
             return std::string(value);
         };
-        auto recentLine=[&](size_t index,int y,int iconSize) {
-            if(index>=recentLaunches.size())return;
-            const auto& entry=recentLaunches[index];
-            Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
-            drawTileIcon(iconTile,left,y,iconSize);
-            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
+        std::vector<HistoryEntry> recentGames;
+        for(const auto& entry:recentLaunches)
+            if(entry.kind==Kind::Game)recentGames.push_back(entry);
+        auto recentGameLine=[&](size_t index,int y,int iconSize) {
+            if(index>=recentGames.size())return;
+            const auto& entry=recentGames[index];
+            Tile iconTile{Kind::Game,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
+            if(dataB)drawTileIcon(iconTile,left,y,iconSize);
+            text(entry.title,left+(dataB?iconSize+8:0),y+(iconSize>28?6:4),1,WHITE,right);
         };
 
         if(t.kind==Kind::Clock) {
-            const std::string time=clockText();
-            const std::string date=clockText(true).substr(6);
-            if(compact) {
-                text(time,r.x+10,r.y+20,3,WHITE,right);
-                label(date,r.y+66);
-                text("CLOCK",left,r.y+r.h-18,1,BLUE,right);
-            } else if(wide) {
-                text(time,left,r.y+23,5,WHITE,right);
-                label(date,r.y+78);
-                if(t.w>=3) {
-                    drawSystemIcon(6,r.x+r.w-68,r.y+28,38,accent);
-                    text("LOCAL TIME",r.x+r.w-118,r.y+78,1,BLUE,right);
+            const std::time_t stamp=std::time(nullptr);
+            std::tm current{};
+            if(const std::tm* value=std::localtime(&stamp))current=*value;
+            char timeValue[40]{},dateValue[40]{};
+            const char* format=config.style==1?"%I:%M %p":(dataA?"%H:%M:%S":"%H:%M");
+            if(!std::strftime(timeValue,sizeof(timeValue),format,&current))
+                std::snprintf(timeValue,sizeof(timeValue),"--:--");
+            std::strftime(dateValue,sizeof(dateValue),"%d.%m.%Y",&current);
+            if(config.style==2) {
+                const int radius=std::min(39,std::max(23,(wide?r.h:r.w)/3));
+                const int cx=left+radius+4,cy=r.y+r.h/2;
+                color(Color{91,112,139,255});
+                for(int tick=0;tick<60;++tick) {
+                    const double angle=(static_cast<double>(tick)/60.0)*6.283185307179586-1.5707963267948966;
+                    const int outer=radius-1,inner=radius-(tick%5==0?8:4);
+                    SDL_RenderDrawLine(renderer,
+                        cx+static_cast<int>(std::cos(angle)*inner),
+                        cy+static_cast<int>(std::sin(angle)*inner),
+                        cx+static_cast<int>(std::cos(angle)*outer),
+                        cy+static_cast<int>(std::sin(angle)*outer));
                 }
+                auto hand=[&](double angle,int length,Color shade) {
+                    color(shade);
+                    SDL_RenderDrawLine(renderer,cx,cy,
+                        cx+static_cast<int>(std::cos(angle)*length),
+                        cy+static_cast<int>(std::sin(angle)*length));
+                };
+                const double minute=(current.tm_min+current.tm_sec/60.0)/60.0*6.283185307179586-1.5707963267948966;
+                const double hour=((current.tm_hour%12)+current.tm_min/60.0)/12.0*6.283185307179586-1.5707963267948966;
+                hand(hour,radius*5/10,WHITE);
+                hand(minute,radius*8/10,BLUE);
+                roundRect(cx-3,cy-3,6,6,3,WHITE);
+                text(timeValue,cx+radius+12,r.y+29,config.style==2?2:3,WHITE,right);
+                if(dataB)label(dateValue,r.y+65);
+                label("LOCAL TIME",r.y+r.h-18);
             } else {
-                text(time,left,r.y+24,6,WHITE,right);
-                text(date,left,r.y+105,2,MUTED,right);
-                text(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",left,r.y+160,1,BLUE,right);
-                drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
+                const int scale=wide?4:6;
+                text(timeValue,left,r.y+(wide?23:24),scale,WHITE,right);
+                if(dataB)label(dateValue,r.y+(wide?78:105));
+                label(config.style==1?"12-HOUR CLOCK":"24-HOUR CLOCK",r.y+r.h-18);
             }
         } else if(t.kind==Kind::Battery) {
+            const bool powerConnected=batteryChargerType>=0&&
+                batteryChargerType!=PsmChargerType_Unconnected;
+            const std::string powerLabel=batteryChargerType<0?"POWER UNKNOWN":
+                (powerConnected?"POWER CONNECTED":"ON BATTERY");
+            const std::string batteryHeading=config.style==1?"CHARGE":
+                (config.style==2?"BATTERY / POWER":"BATTERY");
             if(compact) {
-                label("BATTERY",r.y+13);
+                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+34,3,WHITE,right);
-                progress(r.y+82,battery);
+                if(dataA)progress(r.y+82,battery);
+                if(dataB)label(powerLabel,r.y+92);
             } else if(wide) {
-                label("BATTERY",r.y+13);
+                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
-                     left,r.y+33,t.w>=3?4:3,WHITE,right-70);
-                progress(r.y+82,battery);
-                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
-                if(t.w>=3)text(languageRussian?"ЗАРЯД":"CHARGE",
-                    r.x+r.w-112,r.y+75,1,MUTED,right);
+                     left,r.y+33,3,WHITE,right-70);
+                if(dataA)progress(r.y+82,battery);
+                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,
+                    config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
+                if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
-                label("BATTERY STATUS",r.y+14);
+                label(batteryHeading+" STATUS",r.y+14);
                 drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+50,6,WHITE,right-70);
-                progress(r.y+145,battery);
-                text(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
-                     battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
-                     battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
-                                 (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
+                if(dataA)progress(r.y+145,battery);
+                text(battery<0?"UNAVAILABLE":
+                     battery>=80?"HIGH CHARGE":
+                     battery>=20?"NORMAL":"LOW BATTERY",
                      left,r.y+172,2,battery>=20?GREEN:RED,right);
+                if(dataB)label(powerLabel,r.y+208);
             }
         } else if(t.kind==Kind::System) {
             const u32 firmware=hosversionGet();
             char firmwareText[48]{};
             std::snprintf(firmwareText,sizeof(firmwareText),"%u.%u.%u",
                 HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            char socText[32]{},pcbText[32]{},cpuText[32]{},gpuText[32]{};
+            if(systemSocTemperatureAvailable)std::snprintf(socText,sizeof(socText),"%.1f C",systemSocTemperature);
+            else std::snprintf(socText,sizeof(socText),"N/A");
+            if(systemPcbTemperatureAvailable)std::snprintf(pcbText,sizeof(pcbText),"%.1f C",systemPcbTemperature);
+            else std::snprintf(pcbText,sizeof(pcbText),"N/A");
+            if(systemCpuClockAvailable)std::snprintf(cpuText,sizeof(cpuText),"%u MHz",systemCpuClockHz/1000000u);
+            else std::snprintf(cpuText,sizeof(cpuText),"N/A");
+            if(systemGpuClockAvailable)std::snprintf(gpuText,sizeof(gpuText),"%u MHz",systemGpuClockHz/1000000u);
+            else std::snprintf(gpuText,sizeof(gpuText),"N/A");
             if(compact) {
-                drawSystemIcon(0,left,r.y+24,40,accent);
-                label("SYSTEM",r.y+13);
-                text("HOS "+std::string(firmwareText),left,r.y+70,1,WHITE,right);
+                label(config.style==1?"THERMAL MONITOR":
+                    (config.style==2?"CLOCK MONITOR":"SYSTEM MONITOR"),r.y+13);
+                if(config.style==2&&dataB)
+                    text(cpuText,left,r.y+38,2,WHITE,right);
+                else text(dataA?socText:"HOS "+std::string(firmwareText),left,r.y+38,2,WHITE,right);
+                if(dataB)label("GPU "+std::string(gpuText),r.y+78);
+                else if(dataA)label("PCB "+std::string(pcbText),r.y+78);
             } else if(wide) {
-                drawSystemIcon(0,left,r.y+31,48,accent);
-                label("SYSTEM INFO",r.y+13);
-                text("HOS "+std::string(firmwareText),left+62,r.y+34,2,WHITE,right);
-                text(languageRussian?"DESKNX • NATIVE":"DESKNX • NATIVE",
-                     left+62,r.y+67,1,BLUE,right);
+                label(config.style==1?"THERMAL / SYSTEM":
+                    (config.style==2?"CLOCK / SYSTEM":"SYSTEM MONITOR"),r.y+12);
+                if(config.style==2) {
+                    if(dataB) {
+                        text("CPU "+std::string(cpuText),left,r.y+35,2,WHITE,right);
+                        text("GPU "+std::string(gpuText),left+150,r.y+35,2,BLUE,right);
+                    }
+                    if(dataA)text("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),left,r.y+72,1,BLUE,right);
+                } else {
+                    if(dataA)text("SOC "+std::string(socText),left,r.y+35,2,WHITE,right);
+                    if(dataA)text("PCB "+std::string(pcbText),left,r.y+65,1,BLUE,right);
+                    if(dataB) {
+                        text("CPU "+std::string(cpuText),left+150,r.y+35,1,BLUE,right);
+                        text("GPU "+std::string(gpuText),left+150,r.y+65,1,BLUE,right);
+                    }
+                }
+                if(!dataA&&!dataB)text("HOS "+std::string(firmwareText),left,r.y+43,2,WHITE,right);
             } else {
-                roundRect(left,r.y+34,66,66,18,Color{37,61,91,255});
-                drawSystemIcon(0,left+12,r.y+46,42,WHITE);
-                label("SYSTEM INFORMATION",r.y+20);
-                text("HOS "+std::string(firmwareText),left+82,r.y+54,2,WHITE,right);
-                text(languageRussian?"НАТИВНЫЙ ЛАУНЧЕР":"NATIVE LAUNCHER",
-                     left+82,r.y+86,1,BLUE,right);
-                text(languageRussian?"12 РАБОЧИХ СТОЛОВ":"12 WORKSPACES",
-                     left,r.y+132,2,MUTED,right);
-                text("SDL2 / LIBNX",left,r.y+168,1,MUTED,right);
+                label(config.style==1?"THERMAL  /  HOS "+std::string(firmwareText):
+                    (config.style==2?"FREQUENCIES  /  HOS "+std::string(firmwareText):
+                     "SYSTEM MONITOR  /  HOS "+std::string(firmwareText)),r.y+14);
+                if(config.style==2) {
+                    if(dataB) {
+                        text("CPU  "+std::string(cpuText),left,r.y+48,3,WHITE,right);
+                        text("GPU  "+std::string(gpuText),left,r.y+100,3,BLUE,right);
+                    }
+                    if(dataA)text("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),
+                        left,r.y+161,1,MUTED,right);
+                } else {
+                    if(dataA) {
+                        text("SOC",left,r.y+48,1,MUTED,right);
+                        text(socText,left,r.y+66,3,WHITE,right);
+                        text("PCB  "+std::string(pcbText),left,r.y+111,1,MUTED,right);
+                    }
+                    if(dataB) {
+                        text("CPU  "+std::string(cpuText),left,r.y+151,2,BLUE,right);
+                        text("GPU  "+std::string(gpuText),left,r.y+184,2,BLUE,right);
+                    }
+                }
+                if(!dataA&&!dataB)text("NATIVE LIBNX SERVICES",left,r.y+90,2,MUTED,right);
             }
         } else if(t.kind==Kind::Recent) {
+            const auto& entries=recentGames;
             if(compact) {
-                label("RECENT",r.y+13);
-                if(recentLaunches.empty())
-                    text(languageRussian?"ПУСТО":"EMPTY",left,r.y+50,1,WHITE,right);
-                else recentLine(0,r.y+42,26);
-            } else if(wide) {
-                label("RECENTLY OPENED",r.y+12);
-                if(recentLaunches.empty())
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+48,2,WHITE,right);
+                label("RECENT GAMES",r.y+13);
+                if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
+                else recentGameLine(0,r.y+42,26);
+            } else if(wide&&config.style==1&&dataB) {
+                label("RECENT GAMES",r.y+12);
+                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
-                    recentLine(0,r.y+34,26);
-                    if(t.w>=3)recentLine(1,r.y+67,26);
+                    const int count=std::min<int>(
+                        std::min<int>(config.itemCount,t.w>=3?4:2),
+                        static_cast<int>(entries.size()));
+                    const int cellWidth=std::max(1,innerWidth/std::max(1,count));
+                    for(int i=0;i<count;++i) {
+                        const int x=left+i*cellWidth;
+                        const auto& entry=entries[static_cast<std::size_t>(i)];
+                        Tile game{Kind::Game,entry.title,entry.data,0,0,1,1,i};
+                        drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+30,42);
+                        text(entry.title,x+2,r.y+78,1,WHITE,x+cellWidth-2);
+                    }
+                }
+            } else if(wide) {
+                label("RECENT GAMES",r.y+12);
+                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
+                else {
+                    const size_t count=std::min<std::size_t>(
+                        config.style==2?1:(dataA?config.itemCount:1),
+                        std::min<std::size_t>(2,entries.size()));
+                    for(size_t i=0;i<count;++i)
+                        recentGameLine(i,r.y+32+static_cast<int>(i)*(config.style==2?0:35),
+                            config.style==2?32:25);
                 }
             } else {
-                label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
-                if(recentLaunches.empty()) {
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+86,2,WHITE,right);
-                } else {
-                    const size_t count=std::min<size_t>(4,recentLaunches.size());
-                    for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
+                label("RECENT GAMES",r.y+17);
+                if(entries.empty())text("NO GAMES YET",left,r.y+86,2,WHITE,right);
+                else {
+                    const size_t count=std::min<std::size_t>(config.itemCount,entries.size());
+                    for(size_t i=0;i<count;++i)
+                        recentGameLine(i,r.y+50+static_cast<int>(i)*42,32);
                 }
-                text(languageRussian?"ИСТОРИЯ ЭТОЙ КОНСОЛИ":"HISTORY ON THIS CONSOLE",
-                     left,r.y+r.h-24,1,BLUE,right);
+                label("LOCAL PLAY HISTORY",r.y+r.h-24);
             }
         } else if(t.kind==Kind::Storage) {
             const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
             const int percent=storageStatsAvailable
                 ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
                 :-1;
-            if(compact) {
+            char usedText[48]{},totalText[48]{};
+            std::snprintf(usedText,sizeof(usedText),"%.1f GB USED",
+                static_cast<double>(used)/(1024.0*1024.0*1024.0));
+            std::snprintf(totalText,sizeof(totalText),"%.1f GB TOTAL",
+                static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+            const std::string mainValue=!storageStatsAvailable?"N/A":
+                (config.style==2?freeSpaceText()+" / "+std::string(totalText):
+                 (dataA?std::string(usedText):freeSpaceText()+" FREE"));
+            if(config.style==1&&storageStatsAvailable&&!compact) {
+                label("SD CAPACITY",r.y+13);
+                text(std::to_string(percent)+"%",left,r.y+34,4,WHITE,right);
+                if(dataA)text(usedText,left,r.y+(wide?78:92),1,MUTED,right);
+                else text(freeSpaceText()+" FREE",left,r.y+(wide?78:92),1,MUTED,right);
+                if(dataB)progress(r.y+(wide?100:122),percent);
+            } else if(compact) {
                 label("SD STORAGE",r.y+13);
-                text(storageStatsAvailable?freeSpaceText():"N/A",left,r.y+39,2,WHITE,right);
-                progress(r.y+82,percent);
+                text(mainValue,left,r.y+39,2,WHITE,right);
+                if(dataB)progress(r.y+82,percent);
             } else if(wide) {
                 label("SD CARD STORAGE",r.y+12);
-                text(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
-                     left,r.y+34,t.w>=3?4:3,WHITE,right-78);
-                if(percent>=0)text(std::to_string(percent)+"% USED",
+                text(mainValue,left,r.y+34,2,WHITE,right-78);
+                if(dataB&&percent>=0)text(std::to_string(percent)+"% USED",
                     right-70,r.y+49,1,MUTED,right);
-                progress(r.y+83,percent);
+                if(dataB)progress(r.y+83,percent);
+                else if(dataA)label(totalText,r.y+83);
             } else {
                 label("SD CARD STORAGE",r.y+18);
                 if(storageStatsAvailable) {
-                    text(freeSpaceText()+" GB FREE",left,r.y+50,5,WHITE,right);
-                    if(sdTotalBytes>0) {
-                        char total[64]{};
-                        std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
-                            static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
-                        text(total,left,r.y+112,2,MUTED,right);
+                    text(mainValue,left,r.y+50,4,WHITE,right);
+                    if(dataA)text(totalText,left,r.y+112,2,MUTED,right);
+                    if(dataB) {
+                        progress(r.y+157,percent);
+                        text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
                     }
-                    progress(r.y+157,percent);
-                    text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
-                } else text(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
-                            left,r.y+90,2,RED,right);
+                } else text("SD CARD UNAVAILABLE",left,r.y+90,2,RED,right);
             }
         } else if(t.kind==Kind::Calendar) {
             std::time_t now=std::time(nullptr);
@@ -2677,15 +3122,35 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             static const char* ruWeek[]={"Пн","Вт","Ср","Чт","Пт","Сб","Вс"};
             const int month=std::max(0,std::min(11,current.tm_mon));
             const char* monthName=languageRussian?ruMonths[month]:enMonths[month];
-            if(compact) {
+            const std::string weekday=languageRussian?
+                ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7];
+            if(config.style==1) {
+                label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
+                const bool compactCalendar=wide||compact;
+                text(std::to_string(current.tm_mday),left,r.y+(compactCalendar?22:30),
+                     compactCalendar?4:5,WHITE,right);
+                text(std::string(monthName)+"  "+std::to_string(current.tm_year+1900),
+                     left,r.y+(compactCalendar?68:100),compactCalendar?1:2,BLUE,right);
+                if(dataA&&!compact)label(weekday,r.y+(wide?94:142));
+                if(dataB&&!compact)label(clockText(),r.y+(wide?104:169));
+            } else if(config.style==2) {
+                label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
+                const bool compactCalendar=wide||compact;
+                text(weekday,left,r.y+(compactCalendar?34:40),compactCalendar?1:2,BLUE,right);
+                text(std::to_string(current.tm_mday)+" "+monthName,left,
+                    r.y+(compactCalendar?58:68),compactCalendar?1:2,WHITE,right);
+                if(dataA)text(std::to_string(current.tm_year+1900),left,
+                    r.y+(compactCalendar?82:122),1,MUTED,right);
+                if(dataB)text(clockText(),left,r.y+(compactCalendar?96:158),
+                    compactCalendar?1:2,WHITE,right);
+            } else if(compact) {
                 text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
                 text(monthName,left,r.y+78,1,BLUE,right);
             } else if(wide) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
                 text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
                      left,r.y+42,3,WHITE,right);
-                text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
-                     left,r.y+83,1,BLUE,right);
+                if(dataB)text(weekday,left,r.y+83,1,BLUE,right);
                 drawSystemIcon(6,right-34,r.y+38,26,accent);
             } else {
                 std::tm first=current;
@@ -2717,6 +3182,67 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(languageRussian?"ТЕКУЩАЯ ДАТА":"CURRENT DATE",
                      left,r.y+r.h-22,1,accent,right);
             }
+        } else if(t.kind==Kind::Nextendo) {
+            const auto online=nextendoWidgetSnapshot();
+            label(config.style==2?"NEXTENDO  /  NETWORK":"NEXTENDO  /  ACTIVITY",r.y+12);
+            if(!online.fresh) {
+                text("WAITING FOR SYNC",left,r.y+39,2,WHITE,right);
+                label("STATUS UNKNOWN",r.y+78);
+            } else if(config.style==1&&wide) {
+                if(dataB&&!online.topGame.empty()) {
+                    text(online.topGame,left,r.y+34,2,WHITE,right);
+                    label(std::to_string(online.topPlayers)+" PLAYERS ACTIVE",r.y+68);
+                } else {
+                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
+                }
+                if(dataA)label(std::to_string(online.activeTitles)+" ACTIVE TITLES",r.y+95);
+            } else {
+                if(dataA) {
+                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
+                    label(std::to_string(online.activeTitles)+" ACTIVE GAMES",r.y+76);
+                } else text("SERVICE SYNCED",left,r.y+40,2,GREEN,right);
+                if(dataB) {
+                    if(!online.topGame.empty())
+                        text(online.topGame+"  /  "+std::to_string(online.topPlayers),
+                             left,r.y+93,1,BLUE,right);
+                    else label("NO ACTIVE TITLE DATA",r.y+93);
+                }
+            }
+        } else if(t.kind==Kind::Favorites || t.kind==Kind::GameLibrary) {
+            const std::vector<Tile> games=t.kind==Kind::Favorites?
+                favoriteTiles():gameLibraryTiles(static_cast<std::size_t>(config.itemCount),dataA);
+            const bool favoritesWidget=t.kind==Kind::Favorites;
+            label(favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+12);
+            if(games.empty()) {
+                text(favoritesWidget?"ADD FAVORITES WITH ZL":"NO INSTALLED GAMES",
+                     left,r.y+48,1,MUTED,right);
+            } else if(wide&&config.style==1) {
+                const int count=std::min<int>(
+                    std::min<int>(config.itemCount,4),static_cast<int>(games.size()));
+                const int cellWidth=std::max(1,innerWidth/std::max(1,count));
+                for(int i=0;i<count;++i) {
+                    const int x=left+i*cellWidth;
+                    const Tile& game=games[static_cast<std::size_t>(i)];
+                    drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+31,42);
+                    text(game.title,x+2,r.y+81,1,WHITE,x+cellWidth-3);
+                }
+            } else {
+                const int iconSize=wide?(config.style==2?18:24):(config.style==2?24:32);
+                const int rowStep=wide?(config.style==2?22:27):(config.style==2?32:42);
+                const int maxRows=wide?(config.style==2?3:2):std::min<int>(4,config.itemCount);
+                const int count=std::min<int>(
+                    std::min<int>(config.itemCount,maxRows),static_cast<int>(games.size()));
+                for(int i=0;i<count;++i) {
+                    const Tile& game=games[static_cast<std::size_t>(i)];
+                    const int y=r.y+(wide?34:48)+i*rowStep;
+                    const bool showCover=favoritesWidget?dataA:dataB;
+                    if(showCover)drawTileIcon(game,left,y,iconSize);
+                    text(game.title,left+(showCover?iconSize+8:0),y+std::max(3,(iconSize-8)/2),
+                         1,WHITE,right);
+                }
+            }
+            if(!wide&&favoritesWidget&&dataB)
+                label(std::to_string(favoriteTitleIds.size())+" SAVED",r.y+r.h-22);
         } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
             text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
@@ -2734,6 +3260,11 @@ int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+bool isWidgetKind(Kind kind);
+Tile* selectedWidgetTile();
+std::string widgetEditorStyleLabel(Kind kind,int style);
+std::string widgetEditorDataLabel(unsigned bit);
+
 void drawScreen() {
     gIconCache.beginFrame();
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -2746,6 +3277,7 @@ void drawScreen() {
         &catalogueGameCountNow,&catalogueNroCountNow);
     refreshBattery();
     refreshStorageStats();
+    refreshSystemMonitor();
     rect(0,0,SW,SH,BG);
     for(int band=0;band<24;++band) {
         const double t=static_cast<double>(band)/23.0;
@@ -2837,8 +3369,23 @@ void drawScreen() {
         text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
+        const Tile& selectedGame=d.tiles[static_cast<size_t>(selectedTileIndex)];
+        roundRect(642,571,96,28,8,isFavorite(selectedGame.data)?
+            Color{69,83,48,255}:Color{35,57,76,255});
+        text(isFavorite(selectedGame.data)?"SAVED  /  ZL":"FAV  /  ZL",
+             650,581,1,isFavorite(selectedGame.data)?GREEN:WHITE,734);
+        roundRect(744,571,96,28,8,Color{35,68,101,255});
+        text("ART  /  ZR",756,581,1,WHITE,832);
+        for(int i=0;i<3;++i) {
+            const int hx=850+i*126;
+            roundRect(hx,571,43,28,8,Color{34,45,63,255});
+            text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
+            text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
+        }
+    } else if(!editing&&!dragging&&selectedTileIndex>=0&&
+              isWidgetKind(d.tiles[static_cast<size_t>(selectedTileIndex)].kind)) {
         roundRect(642,571,190,28,8,Color{35,68,101,255});
-        text("ARTWORK  /  ZR",660,581,1,WHITE,822);
+        text("WIDGET SETTINGS / ZR",654,581,1,WHITE,828);
         for(int i=0;i<3;++i) {
             const int hx=850+i*126;
             roundRect(hx,571,43,28,8,Color{34,45,63,255});
@@ -3120,22 +3667,23 @@ void drawScreen() {
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(recentOpen) {
+        const auto entries=recentEntriesForModal();
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
-        text("RECENTLY OPENED",266,104,3,WHITE,850);
+        text(recentGamesOnly?"RECENT GAMES":"RECENTLY OPENED",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
         text("B BACK",850,118,1,WHITE,912);
         roundRect(924,108,88,30,9,Color{10,132,255,255});
         text("LAUNCH",936,118,1,WHITE,1006);
         text("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,1,MUTED,850);
-        if(recentLaunches.empty()) {
-            text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
-            text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
+        if(entries.empty()) {
+            text(recentGamesOnly?"NO RECENT GAMES YET":"NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
+            text("LAUNCH AN APP TO SEE IT HERE",310,280,1,MUTED,970);
         } else {
-            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-            const int visible=std::min(10,static_cast<int>(recentLaunches.size()));
+            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
+            const int visible=std::min(10,static_cast<int>(entries.size()));
             for(int row=0;row<visible;++row) {
-                const auto& entry=recentLaunches[static_cast<size_t>(row)];
+                const auto& entry=entries[static_cast<size_t>(row)];
                 const int yy=190+row*39;
                 if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
                 Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
@@ -3146,6 +3694,79 @@ void drawScreen() {
             }
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
+    }
+    if(favoritesOpen) {
+        favoritesView=favoriteTiles();
+        if(favoritesView.empty())favoritesOpen=false;
+        else {
+            favoritesIndex=std::max(0,std::min(favoritesIndex,
+                static_cast<int>(favoritesView.size())-1));
+            rect(0,0,SW,SH,Color{3,7,14,190});
+            softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+            text("FAVORITE GAMES",266,104,3,WHITE,850);
+            roundRect(838,108,78,30,9,Color{49,52,61,255});
+            text("B BACK",850,118,1,WHITE,912);
+            roundRect(924,108,88,30,9,Color{10,132,255,255});
+            text("LAUNCH",936,118,1,WHITE,1006);
+            text("A  LAUNCH     MINUS  REMOVE FROM FAVORITES",282,153,1,MUTED,850);
+            if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+            if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
+            const int visible=std::min(10,static_cast<int>(favoritesView.size())-favoritesOffset);
+            for(int row=0;row<visible;++row) {
+                const int index=favoritesOffset+row;
+                const auto& game=favoritesView[static_cast<std::size_t>(index)];
+                const int yy=190+row*39;
+                if(index==favoritesIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                drawTileIcon(game,290,yy+4,27);
+                text(game.title,330,yy+8,2,index==favoritesIndex?WHITE:MUTED,950);
+                text("★",970,yy+8,2,GREEN,996);
+            }
+            text(std::to_string(favoritesView.size())+" FAVORITES SAVED",
+                 282,594,1,BLUE,850);
+        }
+    }
+    if(widgetEditorOpen) {
+        Tile* tile=selectedWidgetTile();
+        if(!tile)widgetEditorOpen=false;
+        else {
+            const auto config=widgetConfig(*tile);
+            const std::string sizeValue=std::to_string(tile->w)+" x "+std::to_string(tile->h);
+            const std::string refreshValue=std::to_string(config.refreshSeconds)+" SEC";
+            const std::string itemValue=std::to_string(config.itemCount)+" ITEMS";
+            const std::string values[]={
+                sizeValue,widgetEditorStyleLabel(tile->kind,config.style),
+                desknx::widgets::enabled(config,0)?"ON":"OFF",
+                desknx::widgets::enabled(config,1)?"ON":"OFF",
+                refreshValue,itemValue,"DONE"
+            };
+            rect(0,0,SW,SH,Color{3,7,14,204});
+            softCard(260,82,760,548,Color{17,24,36,255},Color{255,255,255,28});
+            text("WIDGET EDITOR",300,110,3,WHITE,970);
+            text(typeName(widgetEditorKind)+"  /  CHANGES SAVE AUTOMATICALLY",
+                 302,150,1,MUTED,970);
+            roundRect(900,108,88,34,10,Color{52,61,74,255});
+            text("B BACK",916,119,1,WHITE,980);
+            for(int row=0;row<7;++row) {
+                const int y=188+row*52;
+                const bool selected=row==widgetEditorRow;
+                roundRect(294,y,692,44,10,selected?
+                    Color{39,69,103,255}:Color{24,34,49,255});
+                const std::string label=row==0?"SIZE":
+                    row==1?"STYLE":row==2?widgetEditorDataLabel(0):
+                    row==3?widgetEditorDataLabel(1):row==4?"REFRESH RATE":
+                    row==5?"ITEM COUNT":"FINISH";
+                text(label,316,y+15,1,selected?WHITE:MUTED,660);
+                text(values[row],700,y+14,1,selected?GREEN:BLUE,876);
+                if(row<6) {
+                    roundRect(896,y+6,38,32,8,Color{46,58,75,255});
+                    text("−",908,y+13,2,WHITE,932);
+                    roundRect(940,y+6,38,32,8,Color{46,58,75,255});
+                    text("+",952,y+13,2,WHITE,976);
+                }
+            }
+            text("UP / DOWN  ROW     LEFT / RIGHT  CHANGE     A  APPLY",
+                 302,600,1,BLUE,970);
+        }
     }
     if(systemMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
@@ -3488,6 +4109,134 @@ void resizeTile(bool bigger) {
     layoutUserModified=true;
     saveNow();
 }
+
+bool isWidgetKind(Kind kind) {
+    switch(kind) {
+        case Kind::Clock: case Kind::Battery: case Kind::System:
+        case Kind::Recent: case Kind::Storage: case Kind::Calendar:
+        case Kind::Nextendo: case Kind::Favorites: case Kind::GameLibrary:
+            return true;
+        default:return false;
+    }
+}
+Tile* selectedWidgetTile() {
+    if(desks.empty()||deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return nullptr;
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int index=itemAt(desk,selectedX,selectedY);
+    if(index<0||index>=static_cast<int>(desk.tiles.size()))return nullptr;
+    Tile& tile=desk.tiles[static_cast<size_t>(index)];
+    return isWidgetKind(tile.kind)?&tile:nullptr;
+}
+void openWidgetEditor() {
+    Tile* tile=selectedWidgetTile();
+    if(!tile){setStatus("SELECT A WIDGET FIRST",2000);return;}
+    widgetEditorKind=tile->kind;
+    widgetEditorRow=0;
+    widgetEditorOpen=true;
+}
+void closeWidgetEditor() {
+    widgetEditorOpen=false;
+}
+std::string widgetEditorStyleLabel(Kind kind,int style) {
+    static const char* clock[]={"DIGITAL 24H","DIGITAL 12H","ANALOG"};
+    static const char* generic[]={"STANDARD","MINIMAL","DETAILED"};
+    switch(kind) {
+        case Kind::Clock:return clock[std::max(0,std::min(2,style))];
+        case Kind::Battery:return generic[std::max(0,std::min(2,style))];
+        case Kind::System:return style==0?"OVERVIEW":style==1?"THERMAL":"FREQUENCIES";
+        case Kind::Recent:return style==0?"LIST":style==1?"COVERS":"COMPACT";
+        case Kind::Storage:return style==0?"FREE SPACE":style==1?"USED SPACE":"CAPACITY";
+        case Kind::Calendar:return style==0?"MONTH":style==1?"DAY CARD":"AGENDA";
+        case Kind::Nextendo:return style==0?"ONLINE SUMMARY":style==1?"ACTIVITY FIRST":"NETWORK STATUS";
+        case Kind::Favorites:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
+        case Kind::GameLibrary:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
+        default:return generic[std::max(0,std::min(2,style))];
+    }
+}
+std::string widgetEditorDataLabel(unsigned bit) {
+    switch(widgetEditorKind) {
+        case Kind::Clock: return bit==0?"SECONDS":"SHOW DATE";
+        case Kind::Battery: return bit==0?"CHARGE BAR":"POWER STATE";
+        case Kind::System: return bit==0?"TEMPERATURES":"CPU / GPU CLOCKS";
+        case Kind::Recent: return bit==0?"MORE ENTRIES":"GAME COVERS";
+        case Kind::Storage: return bit==0?"USED OR FREE":"USAGE BAR";
+        case Kind::Calendar: return bit==0?"SHOW WEEKDAY":"SHOW TIME";
+        case Kind::Nextendo: return bit==0?"ONLINE TOTAL":"TOP ACTIVITY";
+        case Kind::Favorites: return bit==0?"SHOW COVER ICONS":"SAVED COUNT";
+        case Kind::GameLibrary: return bit==0?"RECENT FIRST":"SHOW COVER ICONS";
+        default:return bit==0?"DATA A":"DATA B";
+    }
+}
+bool resizeWidgetTo(int width,int height) {
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int index=itemAt(desk,selectedX,selectedY);
+    if(index<0)return false;
+    Tile& tile=desk.tiles[static_cast<size_t>(index)];
+    Tile proposed=tile;
+    proposed.w=width;
+    proposed.h=height;
+    if(!desknx::model::placeable(desk,proposed,tile.x,tile.y,index)) {
+        setStatus("WIDGET SIZE DOES NOT FIT HERE",2200);
+        return false;
+    }
+    tile.w=width;
+    tile.h=height;
+    layoutUserModified=true;
+    saveNow();
+    return true;
+}
+void adjustWidgetEditor(int direction) {
+    Tile* tile=selectedWidgetTile();
+    if(!tile){closeWidgetEditor();return;}
+    auto config=widgetConfig(*tile);
+    if(direction==0)direction=1;
+    switch(widgetEditorRow) {
+        case 0: {
+            static constexpr int sizes[][2]={{1,1},{2,1},{3,1},{2,2},{3,2}};
+            int current=0;
+            for(int i=0;i<5;++i)if(tile->w==sizes[i][0]&&tile->h==sizes[i][1])current=i;
+            for(int step=0;step<5;++step) {
+                current=(current+direction+5)%5;
+                if(resizeWidgetTo(sizes[current][0],sizes[current][1]))return;
+            }
+            break;
+        }
+        case 1:
+            config.style=(config.style+direction+3)%3;
+            break;
+        case 2:
+            desknx::widgets::toggle(config,0);
+            break;
+        case 3:
+            desknx::widgets::toggle(config,1);
+            break;
+        case 4: {
+            static constexpr int rates[]={5,15,30,60,180};
+            int index=0;
+            for(int i=0;i<5;++i)if(rates[i]==config.refreshSeconds)index=i;
+            index=(index+direction+5)%5;
+            config.refreshSeconds=rates[index];
+            break;
+        }
+        case 5: {
+            static constexpr int counts[]={2,3,4,6};
+            int index=0;
+            for(int i=0;i<4;++i)if(counts[i]==config.itemCount)index=i;
+            index=(index+direction+4)%4;
+            config.itemCount=counts[index];
+            break;
+        }
+        case 6:
+            closeWidgetEditor();
+            return;
+        default:return;
+    }
+    tile->data=desknx::widgets::serialize(config);
+    if(tile->kind==Kind::Nextendo)
+        SDL_AtomicSet(&nextendoConfiguredRefreshMs,configuredWidgetRefresh(Kind::Nextendo)*1000);
+    layoutUserModified=true;
+    saveNow();
+}
 void removeTile() {
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     const int i=itemAt(d,selectedX,selectedY);
@@ -3640,15 +4389,30 @@ void closeList() {
     catalogueTouchActive=false;
     catalogueTouchMoved=false;
     catalogueTouchFingerId=0;
-    if(widgetPickerMode) {
+    if(widgetPickerMode||gameLibraryMode) {
         catalogueFilter=widgetPickerPreviousFilter;
         catalogueSort=widgetPickerPreviousSort;
         catalogueQuery=widgetPickerPreviousQuery;
         widgetPickerMode=false;
+        gameLibraryMode=false;
         ++catalogueViewRevision;
         listIndex=0;
         listOffset=0;
     }
+}
+void openGameLibraryCatalogue() {
+    widgetPickerPreviousFilter=catalogueFilter;
+    widgetPickerPreviousSort=catalogueSort;
+    widgetPickerPreviousQuery=catalogueQuery;
+    gameLibraryMode=true;
+    catalogueFilter=desknx::catalog_view::FilterMode::Games;
+    catalogueSort=desknx::catalog_view::SortMode::Name;
+    catalogueQuery.clear();
+    ++catalogueViewRevision;
+    listIndex=0;
+    listOffset=0;
+    openList();
+    setStatus("GAME LIBRARY",1800);
 }
 void newDesk() {
     if(dragging || touchDragging) {
@@ -4083,20 +4847,37 @@ void launch(const Tile& t) {
 #endif
         return;
     }
-    if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
-    else if(t.kind==Kind::Storage)setStatus("SD STORAGE WIDGET");
-    else if(t.kind==Kind::Calendar)setStatus("CALENDAR WIDGET");
-    else if(t.kind==Kind::System) {
+    if(t.kind==Kind::Battery) {
+        setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
+    } else if(t.kind==Kind::Storage) {
+        setStatus(storageStatsAvailable?"SD STORAGE: "+std::to_string(sdFreeBytes/(1024u*1024u))+" MB FREE":"SD STORAGE UNAVAILABLE");
+    } else if(t.kind==Kind::Calendar) {
+        setStatus(clockText(true),3000);
+    } else if(t.kind==Kind::System) {
         const u32 firmware=hosversionGet();
-        char detail[64]{};
-        std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
-            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+        char detail[128]{};
+        std::snprintf(detail,sizeof(detail),"SYSTEM %.1f C  CPU %u MHz  GPU %u MHz",
+            systemSocTemperatureAvailable?systemSocTemperature:0.0f,
+            systemCpuClockAvailable?systemCpuClockHz/1000000u:0u,
+            systemGpuClockAvailable?systemGpuClockHz/1000000u:0u);
+        if(!systemSocTemperatureAvailable&& !systemCpuClockAvailable && !systemGpuClockAvailable)
+            std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
+                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
         setStatus(detail,3500);
-    }
-    else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
-    else if(t.kind==Kind::Recent) {
-        if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
-        else {recentIndex=0;recentOpen=true;}
+    } else if(t.kind==Kind::Clock) {
+        setStatus("LOCAL TIME: "+clockText(),2500);
+    } else if(t.kind==Kind::Recent) {
+        if(recentEntriesForModal().empty())setStatus("NO RECENT GAMES YET");
+        else openRecentGames();
+    } else if(t.kind==Kind::Favorites) {
+        openFavorites();
+    } else if(t.kind==Kind::GameLibrary) {
+        openGameLibraryCatalogue();
+    } else if(t.kind==Kind::Nextendo) {
+        const auto snapshot=nextendoWidgetSnapshot();
+        setStatus(snapshot.fresh?"NEXTENDO: "+std::to_string(snapshot.total)+
+            " ONLINE / "+std::to_string(snapshot.activeTitles)+" ACTIVE GAMES":
+            "NEXTENDO STATUS UNKNOWN",3000);
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
@@ -4104,6 +4885,41 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(widgetEditorOpen) {
+        if(keys&HidNpadButton_B){closeWidgetEditor();return;}
+        if(keys&HidNpadButton_Up)widgetEditorRow=(widgetEditorRow+6)%7;
+        if(keys&HidNpadButton_Down)widgetEditorRow=(widgetEditorRow+1)%7;
+        if(keys&HidNpadButton_Left)adjustWidgetEditor(-1);
+        if(keys&HidNpadButton_Right)adjustWidgetEditor(1);
+        if(keys&HidNpadButton_A)adjustWidgetEditor(1);
+        return;
+    }
+    if(favoritesOpen) {
+        if(keys&HidNpadButton_B){favoritesOpen=false;return;}
+        favoritesView=favoriteTiles();
+        const int count=static_cast<int>(favoritesView.size());
+        if(count<=0){favoritesOpen=false;return;}
+        favoritesIndex=std::max(0,std::min(favoritesIndex,count-1));
+        if(keys&HidNpadButton_Up)favoritesIndex=(favoritesIndex-1+count)%count;
+        if(keys&HidNpadButton_Down)favoritesIndex=(favoritesIndex+1)%count;
+        if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+        if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
+        if(keys&HidNpadButton_Minus) {
+            const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+            (void)toggleFavorite(selected);
+            favoritesView=favoriteTiles();
+            favoritesIndex=std::min(favoritesIndex,std::max(0,static_cast<int>(favoritesView.size())-1));
+            if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+            if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
+            return;
+        }
+        if(keys&HidNpadButton_A&&favoritesIndex<count) {
+            const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+            favoritesOpen=false;
+            launch(selected);
+        }
+        return;
+    }
     if(steamGridDbPickerOpen) {
         if(keys&HidNpadButton_B){steamGridDbClosePicker();return;}
         if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
@@ -4202,7 +5018,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             const int action=systemMenuIndex;
             systemMenu=false;
             if(action==0)openList();
-            else if(action==1){recentIndex=0;recentOpen=true;}
+            else if(action==1)openRecentAll();
             else if(action==2){powerMenu=true;powerIndex=0;}
             else if(action==3) {
                 editing=!editing;
@@ -4241,16 +5057,18 @@ void keyInput(u64 keys, bool fromRepeat) {
         return;
     }
     if(recentOpen) {
-        if(keys&HidNpadButton_B){recentOpen=false;return;}
-        if(recentLaunches.empty())return;
-        recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+        if(keys&HidNpadButton_B){recentOpen=false;recentGamesOnly=false;return;}
+        const auto entries=recentEntriesForModal();
+        if(entries.empty()){recentOpen=false;recentGamesOnly=false;return;}
+        recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
         if(keys&HidNpadButton_Up)
-            recentIndex=(recentIndex-1+static_cast<int>(recentLaunches.size()))%static_cast<int>(recentLaunches.size());
+            recentIndex=(recentIndex-1+static_cast<int>(entries.size()))%static_cast<int>(entries.size());
         if(keys&HidNpadButton_Down)
-            recentIndex=(recentIndex+1)%static_cast<int>(recentLaunches.size());
+            recentIndex=(recentIndex+1)%static_cast<int>(entries.size());
         if(keys&HidNpadButton_A) {
-            const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
+            const HistoryEntry entry=entries[static_cast<size_t>(recentIndex)];
             recentOpen=false;
+            recentGamesOnly=false;
             launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
         }
         return;
@@ -4389,8 +5207,24 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
     if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
     if(keys&HidNpadButton_Down){if(dragging)moveTile(0,1);else updateCursor(0,1);}
+    if(!editing&&!dragging&&(keys&HidNpadButton_ZL)) {
+        Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+        const int index=itemAt(desk,selectedX,selectedY);
+        if(index>=0&&desk.tiles[static_cast<size_t>(index)].kind==Kind::Game)
+            (void)toggleFavorite(desk.tiles[static_cast<size_t>(index)]);
+        else setStatus("SELECT A GAME TO ADD TO FAVORITES",1800);
+        return;
+    }
     if(!editing&&!dragging&&(keys&HidNpadButton_ZR)) {
-        steamGridDbOpenPicker();
+        Tile* widget=selectedWidgetTile();
+        if(widget)openWidgetEditor();
+        else {
+            Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+            const int index=itemAt(desk,selectedX,selectedY);
+            if(index>=0&&desk.tiles[static_cast<size_t>(index)].kind==Kind::Game)
+                steamGridDbOpenPicker();
+            else setStatus("SELECT A GAME OR WIDGET",1800);
+        }
         return;
     }
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
@@ -4467,6 +5301,61 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(widgetEditorOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=900&&x<=990&&y>=108&&y<=144) {
+                closeWidgetEditor();
+                return;
+            }
+            if(y>=188&&y<552) {
+                const int row=(y-188)/52;
+                if(row>=0&&row<7) {
+                    widgetEditorRow=row;
+                    if(row==6)closeWidgetEditor();
+                    else if(x>=896&&x<=934)adjustWidgetEditor(-1);
+                    else if(x>=940&&x<=978)adjustWidgetEditor(1);
+                }
+            }
+        }
+        return;
+    }
+    if(favoritesOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            favoritesView=favoriteTiles();
+            if(x>=838&&x<=916&&y>=104&&y<=150) {
+                favoritesOpen=false;
+                return;
+            }
+            if(x>=924&&x<=1012&&y>=104&&y<=150) {
+                if(!favoritesView.empty()) {
+                    favoritesIndex=std::max(0,std::min(favoritesIndex,
+                        static_cast<int>(favoritesView.size())-1));
+                    const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+                    favoritesOpen=false;
+                    launch(selected);
+                }
+                return;
+            }
+            if(y>=190&&y<580&&x>=278&&x<=1002) {
+                const int row=(y-190)/39;
+                if(row>=0&&static_cast<std::size_t>(row)<favoritesView.size()) {
+                    favoritesIndex=row;
+                    if(x>=940) {
+                        const Tile selected=favoritesView[static_cast<std::size_t>(row)];
+                        (void)toggleFavorite(selected);
+                        favoritesView=favoriteTiles();
+                        favoritesIndex=std::min(favoritesIndex,
+                            std::max(0,static_cast<int>(favoritesView.size())-1));
+                    }
+                }
+            }
+        }
+        return;
+    }
     if(steamGridDbPickerOpen) {
         if(e.type==SDL_FINGERDOWN) {
             steamGridDbTouchTracking=true;
@@ -4476,7 +5365,6 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(e.type==SDL_FINGERMOTION&&steamGridDbTouchTracking) {
-            const int x=static_cast<int>(e.tfinger.x*SW);
             const int y=static_cast<int>(e.tfinger.y*SH);
             const int delta=steamGridDbTouchStartY-y;
             if(steamGridDbPickerView==SteamGridDbPickerView::Matches&&
@@ -4669,12 +5557,20 @@ void touchInput(const SDL_Event&e) {
         return;
     }
     if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
-       !recentOpen && !powerMenu && !appSettingsMenu) {
+       !recentOpen && !favoritesOpen && !widgetEditorOpen && !powerMenu && !appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=566&&y<=614&&x>=642&&x<=832) {
-            Tile tile;
-            std::uint64_t id=0;
-            if(steamGridDbGetSelectedGame(tile,id))steamGridDbOpenPicker();
+        if(y>=566&&y<=614&&x>=642&&x<=840) {
+            Workspace& desk=desks[static_cast<std::size_t>(deskIndex)];
+            const int index=itemAt(desk,selectedX,selectedY);
+            if(index>=0) {
+                const Tile& selected=desk.tiles[static_cast<std::size_t>(index)];
+                if(selected.kind==Kind::Game) {
+                    if(x<740)(void)toggleFavorite(selected);
+                    else steamGridDbOpenPicker();
+                } else if(isWidgetKind(selected.kind)) {
+                    openWidgetEditor();
+                }
+            }
             return;
         }
     }
@@ -4702,18 +5598,21 @@ void touchInput(const SDL_Event&e) {
     if(recentOpen) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+            const auto entries=recentEntriesForModal();
             if(x>=838&&x<=916&&y>=104&&y<=150) {
                 recentOpen=false;
+                recentGamesOnly=false;
             } else if(x>=924&&x<=1012&&y>=104&&y<=150) {
-                if(!recentLaunches.empty()) {
-                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-                    const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
+                if(!entries.empty()) {
+                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
+                    const HistoryEntry entry=entries[static_cast<size_t>(recentIndex)];
                     recentOpen=false;
+                    recentGamesOnly=false;
                     launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
                 }
-            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
+            } else if(y>=190&&y<580&&!entries.empty()) {
                 const int index=(y-190)/39;
-                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size())
+                if(index>=0&&static_cast<size_t>(index)<entries.size())
                     recentIndex=index;
             }
         }
@@ -5051,6 +5950,7 @@ int main(int,char**) {
         nameCacheExists?1:0,
         nameCacheExists?static_cast<long long>(nameCacheStat.st_size):0LL);
     loadHistory();
+    loadFavorites();
     struct stat layoutStat{}, backupStat{};
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
@@ -5160,6 +6060,8 @@ int main(int,char**) {
                       static_cast<unsigned int>(nsInitError));
         setStatus(message, 6000);
     }
+    SDL_AtomicSet(&nextendoConfiguredRefreshMs,
+        configuredWidgetRefresh(Kind::Nextendo)*1000);
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
     nextendoThread=SDL_CreateThread(nextendoThreadMain,"Nextendo online counts",nullptr);
     if(!nextendoThread)desknx::diag::Write("nextendo","thread_create_failed","online counts disabled");
@@ -5286,6 +6188,12 @@ int main(int,char**) {
         accountServiceReady=false;
     }
     if (setsysReady) setsysExit();
+    if(tsInternalOpen){tsSessionClose(&tsInternalSession);tsInternalOpen=false;}
+    if(tsSocOpen){tsSessionClose(&tsSocSession);tsSocOpen=false;}
+    if(tsServiceReady){tsExit();tsServiceReady=false;}
+    if(cpuClockOpen){clkrstCloseSession(&cpuClockSession);cpuClockOpen=false;}
+    if(gpuClockOpen){clkrstCloseSession(&gpuClockSession);gpuClockOpen=false;}
+    if(clkrstServiceReady){clkrstExit();clkrstServiceReady=false;}
     steamGridDbDestroyPreview();
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}

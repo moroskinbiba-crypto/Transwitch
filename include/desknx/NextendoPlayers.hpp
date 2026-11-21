@@ -104,6 +104,14 @@ public:
         return hasFreshSnapshot(nowMs) ? m_snapshot.total : 0u;
     }
 
+    unsigned activeTitleCount(std::uint64_t nowMs) const {
+        if (!hasFreshSnapshot(nowMs)) return 0u;
+        unsigned count = 0;
+        for (const auto& entry : m_snapshot.perTitle)
+            if (entry.second > 0u) ++count;
+        return count;
+    }
+
     unsigned playersFor(TitleId titleId, std::uint64_t nowMs) const {
         if (!hasFreshSnapshot(nowMs)) return 0u;
         const auto found = m_snapshot.perTitle.find(titleId);

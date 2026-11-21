@@ -23,6 +23,9 @@ enum class EntryKind : std::uint8_t {
     RecentWidget,
     StorageWidget,
     CalendarWidget,
+    NextendoWidget,
+    FavoritesWidget,
+    GameLibraryWidget,
     Unsupported
 };
 
@@ -128,6 +131,9 @@ inline EntryKind projectedKind(model::Kind kind) {
         case model::Kind::Recent: return EntryKind::RecentWidget;
         case model::Kind::Storage: return EntryKind::StorageWidget;
         case model::Kind::Calendar: return EntryKind::CalendarWidget;
+        case model::Kind::Nextendo: return EntryKind::NextendoWidget;
+        case model::Kind::Favorites: return EntryKind::FavoritesWidget;
+        case model::Kind::GameLibrary: return EntryKind::GameLibraryWidget;
         case model::Kind::Unsupported: return EntryKind::Unsupported;
     }
     return EntryKind::Unsupported;

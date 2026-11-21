@@ -49,6 +49,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror tests/nacp_title_block_test.cpp -lz -o /tmp/desknx-nacp-test
           /tmp/desknx-nacp-test
 
+      - name: Test widget configuration persistence and validation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_config_test.cpp -o /tmp/desknx-widget-config-test
+          /tmp/desknx-widget-config-test
+
       - name: Test SteamGridDB title matching and cache behavior
         run: |
           c++ -std=c++17 -Iinclude tests/steamgriddb_client_test.cpp source/SteamGridDbClient.cpp $(pkg-config --cflags --libs libcurl) -o /tmp/desknx-steamgriddb-client-test
