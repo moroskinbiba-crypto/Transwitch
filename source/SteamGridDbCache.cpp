@@ -151,6 +151,9 @@ bool SteamGridDbCache::saveArtworkFromFile(std::uint64_t id,ArtworkKind kind,con
  if(!id||source.empty()||!ensureDirectories())return false;std::error_code ec;std::filesystem::create_directories(titleDirectory(id),ec);if(ec)return false;
  const std::string dest=pathFor(id,kind),tmp=dest+".tmp";if(!copyToTemp(source,tmp))return false;
  if(std::rename(tmp.c_str(),dest.c_str())!=0){std::remove(tmp.c_str());return false;}
+ // Keep the read-modify-write transaction atomic with UI actions that can
+ // activate or restore artwork for the same title while this worker is saving.
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  Meta m;readMeta(metadataPath(id),m);m.titleId=id;if(gameId)m.gameId=gameId;if(!name.empty())m.gameName=name;
  if(kind==ArtworkKind::Hero){m.hero=true;m.heroId=assetId;}else if(kind==ArtworkKind::Grid){m.grid=true;m.gridId=assetId;}
  else if(kind==ArtworkKind::Logo){m.logo=true;m.logoId=assetId;}else{m.icon=true;m.iconId=assetId;}
