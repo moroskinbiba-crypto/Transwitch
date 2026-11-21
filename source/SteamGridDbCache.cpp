@@ -102,13 +102,15 @@ SteamGridDbCache::ArtworkKind SteamGridDbCache::selectedKind(std::uint64_t id)co
 }
 std::string SteamGridDbCache::selectedPath(std::uint64_t id)const{
  if(!id)return {};
+ Meta metadata;
+ const bool haveMetadata=readMeta(metadataPath(id),metadata);
+ // "system" is an explicit choice: cached alternatives stay on disk, but the
+ // launcher returns to the original Nintendo/system icon until another type is activated.
+ if(haveMetadata&&metadata.active=="system")return {};
  const auto p=pathFor(id,selectedKind(id));
  if(!regular(p))return {};
- Meta metadata;
- if(readMeta(metadataPath(id),metadata)) {
+ if(haveMetadata) {
   const auto now=static_cast<std::uint64_t>(std::time(nullptr));
-  // Avoid writing to the SD card more than once per minute during icon-cache
-  // refreshes, but retain a true last-used timestamp for LRU pruning.
   if(now>metadata.lastAccess+60u) {
    metadata.lastAccess=now;
    (void)writeMeta(metadataPath(id),metadata);
@@ -145,7 +147,18 @@ bool SteamGridDbCache::clearArtwork(std::uint64_t id,ArtworkKind kind){
  if(m.active==kindKey(kind)){m.active.clear();if(m.grid)m.active="grid";else if(m.hero)m.active="hero";else if(m.icon)m.active="icon";else if(m.logo)m.active="logo";}
  if(m.hero||m.grid||m.logo||m.icon)writeMeta(metadataPath(id),m);else std::remove(metadataPath(id).c_str());return removed;
 }
-bool SteamGridDbCache::restoreSystemArtwork(std::uint64_t id){if(!id)return false;std::error_code ec;auto n=std::filesystem::remove_all(titleDirectory(id),ec);return !ec&&n>0;}
+bool SteamGridDbCache::restoreSystemArtwork(std::uint64_t id){
+ if(!id||!ensureDirectories())return false;
+ std::error_code ec;
+ std::filesystem::create_directories(titleDirectory(id),ec);
+ if(ec)return false;
+ Meta metadata;
+ readMeta(metadataPath(id),metadata);
+ metadata.titleId=id;
+ metadata.active="system";
+ metadata.lastAccess=static_cast<std::uint64_t>(std::time(nullptr));
+ return writeMeta(metadataPath(id),metadata);
+}
 std::uint64_t SteamGridDbCache::cacheBytes()const{std::error_code ec;if(!std::filesystem::exists(kCacheRoot,ec)||ec)return 0;return bytesIn(kCacheRoot);}
 std::uint64_t SteamGridDbCache::prune(std::uint64_t max,const std::vector<std::uint64_t>& installed){
  if(!ensureDirectories())return cacheBytes();std::unordered_set<std::uint64_t> keep(installed.begin(),installed.end());
