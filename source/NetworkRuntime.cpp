@@ -1,17 +1,17 @@
 #include "NetworkRuntime.hpp"
 #include <switch.h>
 #include <curl/curl.h>
-#include <mutex>
+#include <SDL2/SDL.h>
 #include <cstddef>
 namespace desknx::network {
 namespace {
-std::mutex gMutex;
+SDL_SpinLock gLock = 0;
 std::size_t gLeases=0;
 bool gSocketReady=false;
 bool gCurlReady=false;
 }
 bool acquire() {
-    std::lock_guard<std::mutex> lock(gMutex);
+    SDL_AtomicLock(&gLock);
     if(gLeases>0){++gLeases;return true;}
     const Result rc=socketInitializeDefault();
     if(R_FAILED(rc))return false;
