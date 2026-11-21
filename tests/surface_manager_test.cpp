@@ -34,7 +34,7 @@ int main() {
     assert(surfaces.isTop(SurfaceId::QuickSettings));
     assert(surfaces.dimAlpha() == 190);
 
-    // A non-input surface may be placed above a modal without stealing focus.
+    // Updating an existing non-input surface does not duplicate it or steal focus.
     assert(surfaces.push(SurfaceId::EmptyDesktop, false, true, 174));
     assert(surfaces.size() == 3);
     assert(surfaces.isTop(SurfaceId::QuickSettings));
