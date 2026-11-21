@@ -123,6 +123,21 @@ bool SteamGridDbService::applySelected(){
  if(!enqueue(std::move(job))){publishError(requestRevision,"SteamGridDB apply queue is busy");return false;}
  return true;
 }
+void SteamGridDbService::cancelBrowsing(){
+ if(!mutex_)return;
+ SDL_LockMutex(mutex_);
+ if(state_.status==ServiceStatus::Applying){
+  SDL_UnlockMutex(mutex_);
+  return;
+ }
+ ++revision_;
+ jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
+     [](const Job& job){return job.type!=JobType::Cleanup;}),jobs_.end());
+ state_=ServiceSnapshot{};
+ state_.revision=revision_;
+ SDL_UnlockMutex(mutex_);
+ if(condition_)SDL_CondBroadcast(condition_);
+}
 ServiceSnapshot SteamGridDbService::snapshot()const{
  if(!mutex_)return state_;SDL_LockMutex(mutex_);ServiceSnapshot s=state_;SDL_UnlockMutex(mutex_);return s;
 }
