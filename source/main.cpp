@@ -6482,6 +6482,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(gSurfaceManager.isTop(SurfaceId::SteamGridDb)) {
         if(keys&HidNpadButton_B){steamGridDbClosePicker();return;}
+        if(steamGridDbApplyPending)return;
         if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
             const auto state=gSteamGridDbService.snapshot();
             const int count=static_cast<int>(state.games.size());
@@ -6506,8 +6507,13 @@ void keyInput(u64 keys, bool fromRepeat) {
             } else {
                 if(keys&HidNpadButton_Up)steamGridDbMoveAsset(-1);
                 if(keys&HidNpadButton_Down)steamGridDbMoveAsset(1);
-                if(keys&HidNpadButton_A)
-                    steamGridDbApplyPending=gSteamGridDbService.applySelected();
+                if(keys&HidNpadButton_A) {
+                    const bool started=gSteamGridDbService.applySelected();
+                    steamGridDbApplyPending=started;
+                    if(!started)setStatus(languageRussian
+                        ?"НЕ УДАЛОСЬ НАЧАТЬ ПРИМЕНЕНИЕ ОБЛОЖКИ"
+                        :"COULD NOT START ARTWORK APPLY",2600);
+                }
             }
             if(keys&HidNpadButton_Y)steamGridDbRestoreSystem();
             if(keys&HidNpadButton_X)steamGridDbEditSearchTitle();
@@ -7044,6 +7050,8 @@ void touchInput(const SDL_Event&e) {
 
             if(x>=1082&&x<=1178&&y>=62&&y<=102) {
                 steamGridDbClosePicker();
+            } else if(steamGridDbApplyPending) {
+                return;
             } else if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
                 if(y>=198&&y<574&&x>=126&&x<=1154) {
                     const int row=(y-198)/47;
@@ -7085,8 +7093,15 @@ void touchInput(const SDL_Event&e) {
                 } else if(x>=358&&x<=536&&y>=574&&y<=616) {
                     steamGridDbEditSearchTitle();
                 } else if(x>=854&&x<=1172&&y>=574&&y<=616) {
-                    if(steamGridDbOfflineFallback)steamGridDbApplyCurrentCached();
-                    else steamGridDbApplyPending=gSteamGridDbService.applySelected();
+                    if(steamGridDbOfflineFallback) {
+                        steamGridDbApplyCurrentCached();
+                    } else {
+                        const bool started=gSteamGridDbService.applySelected();
+                        steamGridDbApplyPending=started;
+                        if(!started)setStatus(languageRussian
+                            ?"НЕ УДАЛОСЬ НАЧАТЬ ПРИМЕНЕНИЕ ОБЛОЖКИ"
+                            :"COULD NOT START ARTWORK APPLY",2600);
+                    }
                 }
             }
             return;
