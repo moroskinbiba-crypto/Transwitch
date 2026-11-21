@@ -2,6 +2,9 @@
 #include <switch/applets/hid_la.h>
 #include <switch/applets/album_la.h>
 #include <switch/applets/friends_la.h>
+#include <switch/services/audctl.h>
+#include <switch/services/nifm.h>
+#include <switch/services/lbl.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
@@ -30,6 +33,7 @@
 #include "VisualEngine.hpp"
 #include "UiComponents.hpp"
 #include "../include/desknx/UiMotion.hpp"
+#include "../include/desknx/ModalLayer.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -111,6 +115,7 @@ int surfaceOpacity=255; // 0..255; scales all soft surfaces and widget cards
 int selectionStyle=0;   // 0 outline, 1 accent rail, 2 pulse, 3 corner brackets
 bool motionEffects=false; // optional low-cost screen fade and selection pulse
 Uint32 uiTransitionStart=0;
+desknx::ui::ModalLayer gModalLayer;
 std::uint32_t lastUiScreenState=UINT32_MAX;
 std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
 bool launcherSettingsSavePending=false;
@@ -304,9 +309,21 @@ int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
 bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, diagnosticsOpen=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
-int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
+int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, appSettingsOffset=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
 bool nextendoOpen=false;
 int nextendoSelected=0;
+bool quickSettingsOpen=false;
+int quickSettingsIndex=0;
+bool setsysServiceReady=false;
+bool quickSettingsSnapshotLoaded=false;
+Uint32 quickSettingsSnapshotTick=0;
+bool quickAirplaneMode=false,quickWifiEnabled=false,quickBluetoothEnabled=false,quickSoundMuted=false;
+bool quickAirplaneAvailable=false,quickWifiAvailable=false,quickBluetoothAvailable=false,
+     quickSoundAvailable=false,quickBrightnessAvailable=false,quickInternetConnected=false;
+float quickBrightness=0.5f;
+unsigned quickWifiStrength=0;
+AudioTarget quickAudioTarget=AudioTarget_Speaker;
+std::string quickNetworkStatus="NETWORK STATUS UNAVAILABLE";
 struct RuntimeFrameMetrics {
     double fps{0.0};
     double averageFrameMs{0.0};
@@ -341,6 +358,157 @@ desknx::ipc::InitialState g_initialState{};
 void setStatus(const std::string& s, Uint32 duration=2500) {
     statusText=s; statusUntil=SDL_GetTicks()+duration;
     desknx::diag::Write("ui","status","message=%s",s.c_str());
+}
+
+
+void refreshQuickSettingsSnapshot(bool force=false) {
+    const Uint32 now=SDL_GetTicks();
+    if(!force&&quickSettingsSnapshotLoaded&&now-quickSettingsSnapshotTick<3500)return;
+    quickSettingsSnapshotTick=now;
+    quickNetworkStatus="NETWORK STATUS UNAVAILABLE";
+    quickInternetConnected=false;
+    quickWifiStrength=0;
+    quickAirplaneAvailable=quickWifiAvailable=quickBluetoothAvailable=false;
+    quickSoundAvailable=quickBrightnessAvailable=false;
+
+    if(setsysServiceReady) {
+        quickWifiAvailable=R_SUCCEEDED(setsysGetWirelessLanEnableFlag(&quickWifiEnabled));
+        quickBluetoothAvailable=R_SUCCEEDED(setsysGetBluetoothEnableFlag(&quickBluetoothEnabled));
+    }
+
+    if(R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
+        bool wirelessEnabled=true;
+        quickAirplaneAvailable=R_SUCCEEDED(nifmIsWirelessCommunicationEnabled(&wirelessEnabled));
+        if(quickAirplaneAvailable)quickAirplaneMode=!wirelessEnabled;
+        NifmInternetConnectionType connectionType=NifmInternetConnectionType_WiFi;
+        NifmInternetConnectionStatus connectionStatus=NifmInternetConnectionStatus_ConnectingUnknown1;
+        u32 strength=0;
+        if(R_SUCCEEDED(nifmGetInternetConnectionStatus(&connectionType,&strength,&connectionStatus))) {
+            quickInternetConnected=connectionStatus==NifmInternetConnectionStatus_Connected;
+            quickWifiStrength=std::min<u32>(strength,3);
+        }
+        nifmExit();
+    }
+
+    if(R_SUCCEEDED(audctlInitialize())) {
+        AudioTarget target=AudioTarget_Invalid;
+        if(R_FAILED(audctlGetActiveOutputTarget(&target))||target==AudioTarget_Invalid)
+            (void)audctlGetDefaultTarget(&target);
+        if(target==AudioTarget_Invalid)target=AudioTarget_Speaker;
+        quickAudioTarget=target;
+        quickSoundAvailable=R_SUCCEEDED(audctlIsTargetMute(&quickSoundMuted,target));
+        audctlExit();
+    }
+
+    if(R_SUCCEEDED(lblInitialize())) {
+        quickBrightnessAvailable=R_SUCCEEDED(lblGetCurrentBrightnessSetting(&quickBrightness));
+        lblExit();
+    }
+    if(quickAirplaneAvailable&&quickAirplaneMode)
+        quickNetworkStatus="AIRPLANE MODE ON";
+    else if(quickInternetConnected)
+        quickNetworkStatus=connectionType==NifmInternetConnectionType_Ethernet
+            ?"ETHERNET CONNECTED"
+            :"WI-FI CONNECTED  /  SIGNAL "+std::to_string(quickWifiStrength)+"/3";
+    else if(quickWifiAvailable&&quickWifiEnabled)
+        quickNetworkStatus="WI-FI ENABLED  /  NO INTERNET";
+    else if(quickWifiAvailable)
+        quickNetworkStatus="WI-FI DISABLED";
+    quickSettingsSnapshotLoaded=true;
+}
+
+void openQuickSettings() {
+    quickSettingsIndex=0;
+    quickSettingsOpen=true;
+    refreshQuickSettingsSnapshot(true);
+}
+
+void closeQuickSettings() {
+    quickSettingsOpen=false;
+}
+
+void adjustQuickBrightness(int direction) {
+    if(!quickBrightnessAvailable) {
+        setStatus("BRIGHTNESS CONTROL UNAVAILABLE",2200);
+        return;
+    }
+    if(R_FAILED(lblInitialize())) {
+        setStatus("BRIGHTNESS SERVICE UNAVAILABLE",2200);
+        return;
+    }
+    const float next=std::max(0.10f,std::min(1.0f,
+        quickBrightness+static_cast<float>(direction)*0.05f));
+    Result rc=lblSetCurrentBrightnessSetting(next);
+    if(R_SUCCEEDED(rc))rc=lblApplyCurrentBrightnessSettingToBacklight();
+    if(R_SUCCEEDED(rc))(void)lblSaveCurrentSetting();
+    lblExit();
+    if(R_FAILED(rc))setStatus("BRIGHTNESS CHANGE FAILED",2500);
+    else {
+        quickBrightness=next;
+        quickSettingsSnapshotLoaded=false;
+        refreshQuickSettingsSnapshot(true);
+        setStatus("BRIGHTNESS  "+std::to_string(static_cast<int>(std::lround(next*100.0f)))+"%",1600);
+    }
+}
+
+void toggleQuickSetting(int index) {
+    refreshQuickSettingsSnapshot(true);
+    Result rc=0;
+    if(index==0) {
+        if(!quickSoundAvailable) {
+            setStatus("SYSTEM SOUND CONTROL UNAVAILABLE",2500);
+            return;
+        }
+        if(R_FAILED(audctlInitialize())) {
+            setStatus("AUDIO SERVICE UNAVAILABLE",2500);
+            return;
+        }
+        rc=audctlSetTargetMute(quickAudioTarget,!quickSoundMuted);
+        audctlExit();
+        if(R_SUCCEEDED(rc))setStatus(quickSoundMuted?"SOUND ENABLED":"SOUND MUTED",1800);
+    } else if(index==1) {
+        if(R_FAILED(nifmInitialize(NifmServiceType_System))) {
+            setStatus("NETWORK SERVICE UNAVAILABLE",2500);
+            return;
+        }
+        // NIFM's system wireless flag is the console-wide airplane/radio gate.
+        rc=nifmSetWirelessCommunicationEnabled(quickAirplaneMode);
+        nifmExit();
+        if(R_SUCCEEDED(rc))setStatus(quickAirplaneMode?"AIRPLANE MODE DISABLED":"AIRPLANE MODE ENABLED",2000);
+    } else if(index==2) {
+        if(!setsysServiceReady||!quickWifiAvailable) {
+            setStatus("WI-FI CONTROL UNAVAILABLE",2500);
+            return;
+        }
+        if(!quickWifiEnabled&&quickAirplaneMode) {
+            if(R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
+                rc=nifmSetWirelessCommunicationEnabled(true);
+                nifmExit();
+            } else rc=MAKERESULT(Module_Libnx,LibnxError_NotInitialized);
+        }
+        if(R_SUCCEEDED(rc))rc=setsysSetWirelessLanEnableFlag(!quickWifiEnabled);
+        if(R_SUCCEEDED(rc))setStatus(quickWifiEnabled?"WI-FI DISABLED":"WI-FI ENABLED",1800);
+    } else if(index==3) {
+        if(!setsysServiceReady||!quickBluetoothAvailable) {
+            setStatus("BLUETOOTH CONTROL UNAVAILABLE",2500);
+            return;
+        }
+        if(quickBluetoothEnabled&&appletGetOperationMode()!=AppletOperationMode_Handheld) {
+            setStatus("BLUETOOTH IS KEPT ON WHILE DOCKED",2600);
+            return;
+        }
+        rc=setsysSetBluetoothEnableFlag(!quickBluetoothEnabled);
+        if(R_SUCCEEDED(rc))setStatus(quickBluetoothEnabled?"BLUETOOTH DISABLED":"BLUETOOTH ENABLED",1800);
+    } else if(index==4) {
+        adjustQuickBrightness(1);
+        return;
+    }
+    if(R_FAILED(rc))setStatus("QUICK SETTING CHANGE FAILED  0X"+
+        [] (Result value) { char buffer[9]{};std::snprintf(buffer,sizeof(buffer),"%08X",static_cast<unsigned int>(value));return std::string(buffer); }(rc),2800);
+    else {
+        quickSettingsSnapshotLoaded=false;
+        refreshQuickSettingsSnapshot(true);
+    }
 }
 
 bool commitSdCard(const char* operation) {
