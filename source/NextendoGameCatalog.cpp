@@ -1,6 +1,5 @@
 #include <desknx/NextendoGameCatalog.hpp>
 
-#include <switch.h>
 #include <curl/curl.h>
 #include <sodium.h>
 #include "NetworkRuntime.hpp"
@@ -422,7 +421,6 @@ bool parseSignedGameCatalog(const std::string& envelope,std::int64_t nowUnix,
     if(envelope.empty()||envelope.size()>MaxEnvelopeBytes){
         error="Nextendo catalogue response is empty or too large";return false;
     }
-    try{
         JsonValue outer;
         if(!JsonParser(envelope).parse(outer)||outer.type!=JsonValue::Type::Object){
             error="Invalid Nextendo signed catalogue envelope";return false;
@@ -517,11 +515,6 @@ bool parseSignedGameCatalog(const std::string& envelope,std::int64_t nowUnix,
         }
         output=std::move(parsed);
         return true;
-    }catch(...){
-        error="Unexpected error while parsing Nextendo catalogue";
-        output=GameCatalog{};
-        return false;
-    }
 }
 
 bool fetchGameCatalog(const std::string& clientId,std::string& envelope,
