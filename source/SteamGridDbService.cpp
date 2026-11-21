@@ -61,8 +61,9 @@ bool SteamGridDbService::search(std::uint64_t id,const std::string& title,
  state_.titleId=id;state_.title=title;state_.kind=ArtworkKind::Grid;state_.revision=revision_;
  jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
      [](const Job& queued){return queued.type!=JobType::Cleanup;}),jobs_.end());
+ const auto requestRevision=job.revision;
  SDL_UnlockMutex(mutex_);
- if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB worker could not queue request");return false;}
+ if(!enqueue(std::move(job))){publishError(requestRevision,"SteamGridDB worker could not queue request");return false;}
  return true;
 }
 bool SteamGridDbService::loadAssets(std::uint64_t id,std::uint64_t gameId,const std::string& title,
@@ -75,8 +76,10 @@ bool SteamGridDbService::loadAssets(std::uint64_t id,std::uint64_t gameId,const 
  state_.games.clear();state_.assets.clear();state_.selectedAsset=0;state_.previewAsset=-1;state_.previewPath.clear();
  state_.previewRevision=0;state_.revision=revision_;
  jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
-     [](const Job& queued){return queued.type!=JobType::Cleanup;}),jobs_.end());SDL_UnlockMutex(mutex_);
- if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB could not queue artwork request");return false;}return true;
+     [](const Job& queued){return queued.type!=JobType::Cleanup;}),jobs_.end());
+ const auto requestRevision=job.revision;
+ SDL_UnlockMutex(mutex_);
+ if(!enqueue(std::move(job))){publishError(requestRevision,"SteamGridDB could not queue artwork request");return false;}return true;
 }
 bool SteamGridDbService::selectAsset(int index){
  if(!mutex_)return false;Job job;SDL_LockMutex(mutex_);
@@ -89,7 +92,11 @@ bool SteamGridDbService::selectAsset(int index){
  state_.selectedAsset=index;state_.message="Loading preview...";job.type=JobType::Preview;job.revision=revision_;
  state_.revision=revision_;
  job.titleId=state_.titleId;job.assetIndex=index;job.asset=state_.assets[static_cast<size_t>(index)];
- SDL_UnlockMutex(mutex_);return enqueue(std::move(job));
+ const auto requestRevision=job.revision;
+ SDL_UnlockMutex(mutex_);
+ if(enqueue(std::move(job)))return true;
+ publishError(requestRevision,"SteamGridDB preview queue is busy");
+ return false;
 }
 bool SteamGridDbService::pruneCache(std::uint64_t maximumBytes,
         const std::vector<std::uint64_t>& installedTitleIds) {
@@ -110,8 +117,11 @@ bool SteamGridDbService::applySelected(){
  jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
      [](const Job& queued){return queued.type==JobType::Preview;}),jobs_.end());
  state_.status=ServiceStatus::Applying;
- state_.message="Downloading selected artwork...";state_.revision=revision_;SDL_UnlockMutex(mutex_);
- if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB apply queue is busy");return false;}return true;
+ state_.message="Downloading selected artwork...";state_.revision=revision_;
+ const auto requestRevision=job.revision;
+ SDL_UnlockMutex(mutex_);
+ if(!enqueue(std::move(job))){publishError(requestRevision,"SteamGridDB apply queue is busy");return false;}
+ return true;
 }
 ServiceSnapshot SteamGridDbService::snapshot()const{
  if(!mutex_)return state_;SDL_LockMutex(mutex_);ServiceSnapshot s=state_;SDL_UnlockMutex(mutex_);return s;
