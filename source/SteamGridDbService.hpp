@@ -49,6 +49,10 @@ private:
   bool mappedLookup{false};
   ArtworkAsset asset;
  };
+ struct NetworkCancelContext {
+  SteamGridDbService* service{nullptr};
+  std::uint64_t revision{0};
+ };
  bool ensureWorker();
  static bool cancelNetwork(void* context);
  bool enqueue(Job job);
