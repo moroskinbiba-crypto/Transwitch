@@ -510,8 +510,22 @@ void toggleQuickSetting(int index) {
     if(R_FAILED(rc))setStatus("QUICK SETTING CHANGE FAILED  0X"+
         [] (Result value) { char buffer[9]{};std::snprintf(buffer,sizeof(buffer),"%08X",static_cast<unsigned int>(value));return std::string(buffer); }(rc),2800);
     else {
-        quickSettingsSnapshotLoaded=false;
-        refreshQuickSettingsSnapshot(true);
+        // Reflect the confirmed toggle immediately. The full service snapshot is
+        // refreshed on the normal 3.5s cadence, not synchronously after every tap.
+        if(index==0)quickSoundMuted=!quickSoundMuted;
+        else if(index==1) {
+            quickAirplaneMode=!quickAirplaneMode;
+            quickInternetConnected=false;
+            quickNetworkStatus=quickAirplaneMode?"AIRPLANE MODE ON":
+                (quickWifiEnabled?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED");
+        } else if(index==2) {
+            quickWifiEnabled=!quickWifiEnabled;
+            quickInternetConnected=false;
+            quickNetworkStatus=quickWifiEnabled&&!quickAirplaneMode
+                ?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED";
+        } else if(index==3)quickBluetoothEnabled=!quickBluetoothEnabled;
+        quickSettingsSnapshotLoaded=true;
+        quickSettingsSnapshotTick=SDL_GetTicks();
     }
 }
 
