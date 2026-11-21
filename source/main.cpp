@@ -1748,6 +1748,13 @@ void pumpSteamGridDbPicker() {
     if(steamGridDbApplyPending&&state.status==desknx::steamgriddb::ServiceStatus::Applying&&
        state.previewApplied&&!steamGridDbPreviewAppliedNotified) {
         steamGridDbPreviewAppliedNotified=true;
+        // Flush the cache-owned thumbnail to SD before asking IconCache's
+        // worker to reopen it. This keeps the visible tile in sync with the
+        // image that the picker just confirmed.
+        const bool previewCommitted=commitSdCard("steamgriddb-preview");
+        desknx::diag::Write("steamgriddb","preview_commit",
+            "success=%d title=%016llX",previewCommitted?1:0,
+            static_cast<unsigned long long>(steamGridDbCurrentTitleId));
         if(!steamGridDbCurrentGameData.empty())
             gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
         setStatus(languageRussian?"МИНИАТЮРА ПРИМЕНЕНА — ЗАГРУЖАЕТСЯ ОРИГИНАЛ":
@@ -1763,6 +1770,15 @@ void pumpSteamGridDbPicker() {
     }
 
     if(state.status==desknx::steamgriddb::ServiceStatus::Applied&&steamGridDbApplyPending) {
+        // SteamGridDbCache writes with stdio on its worker. Explicitly commit
+        // the mounted FAT volume before the icon worker reopens the active file.
+        const bool artworkCommitted=commitSdCard("steamgriddb-artwork");
+        const std::string activePath=gSteamGridDbService.cache().selectedPath(
+            steamGridDbCurrentTitleId);
+        desknx::diag::Write("steamgriddb","artwork_committed",
+            "success=%d active_path=%s title=%016llX",
+            artworkCommitted?1:0,activePath.c_str(),
+            static_cast<unsigned long long>(steamGridDbCurrentTitleId));
         if(!steamGridDbCurrentGameData.empty())
             gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
 
