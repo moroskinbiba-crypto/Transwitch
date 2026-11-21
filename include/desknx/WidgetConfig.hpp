@@ -40,7 +40,7 @@ inline Config defaults(model::Kind kind) {
         case model::Kind::System:      return {0, 5, 3u, 4};
         case model::Kind::Recent:      return {1, 15, 3u, 4};
         case model::Kind::Storage:     return {0, 30, 3u, 4};
-        case model::Kind::Calendar:    return {1, 60, 3u, 4};
+        case model::Kind::Calendar:    return {0, 60, 3u, 4};
         case model::Kind::Nextendo:    return {0, 180, 3u, 4};
         case model::Kind::Favorites:   return {1, 30, 3u, 4};
         case model::Kind::GameLibrary: return {1, 30, 3u, 4};
@@ -72,7 +72,7 @@ inline Config parse(model::Kind kind, const std::string& value) {
                 switch (field[0]) {
                     case 'S': config.style = std::max(0, std::min(2, number)); break;
                     case 'R': config.refreshSeconds = clampRefresh(number); break;
-                    case 'F': config.flags = static_cast<std::uint32_t>(number) & 3u; break;
+                    case 'F': config.flags = static_cast<std::uint32_t>(number) & 7u; break;
                     case 'N': config.itemCount = clampItemCount(number); break;
                     default: break;
                 }
@@ -87,15 +87,15 @@ inline Config parse(model::Kind kind, const std::string& value) {
 inline std::string serialize(const Config& config) {
     return "W1;S=" + std::to_string(std::max(0, std::min(2, config.style))) +
         ";R=" + std::to_string(clampRefresh(config.refreshSeconds)) +
-        ";F=" + std::to_string(config.flags & 3u) +
+        ";F=" + std::to_string(config.flags & 7u) +
         ";N=" + std::to_string(clampItemCount(config.itemCount));
 }
 
 inline bool enabled(const Config& config, unsigned bit) {
-    return bit < 2u && (config.flags & (1u << bit)) != 0;
+    return bit < 3u && (config.flags & (1u << bit)) != 0;
 }
 inline void toggle(Config& config, unsigned bit) {
-    if (bit < 2u) config.flags ^= (1u << bit);
+    if (bit < 3u) config.flags ^= (1u << bit);
 }
 
 } // namespace desknx::widgets
