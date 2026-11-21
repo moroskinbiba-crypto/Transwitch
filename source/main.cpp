@@ -2813,6 +2813,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
         const bool compact=t.w==1&&t.h==1;
         const bool wide=t.h==1&&t.w>=2;
+        const auto config=widgetConfig(t);
+        const bool dataA=desknx::widgets::enabled(config,0);
+        const bool dataB=desknx::widgets::enabled(config,1);
         const int left=r.x+18, right=r.x+r.w-14;
         const int innerWidth=std::max(1,r.w-36);
         auto label=[&](const std::string& value,int y) {
@@ -2840,76 +2843,116 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         };
 
         if(t.kind==Kind::Clock) {
-            const std::string time=clockText();
-            const std::string date=clockText(true).substr(6);
-            if(compact) {
-                text(time,r.x+10,r.y+20,3,WHITE,right);
-                label(date,r.y+66);
-                text("CLOCK",left,r.y+r.h-18,1,BLUE,right);
-            } else if(wide) {
-                text(time,left,r.y+23,5,WHITE,right);
-                label(date,r.y+78);
-                if(t.w>=3) {
-                    drawSystemIcon(6,r.x+r.w-68,r.y+28,38,accent);
-                    text("LOCAL TIME",r.x+r.w-118,r.y+78,1,BLUE,right);
+            const std::time_t stamp=std::time(nullptr);
+            std::tm current{};
+            if(const std::tm* value=std::localtime(&stamp))current=*value;
+            char timeValue[40]{},dateValue[40]{};
+            const char* format=config.style==1?"%I:%M %p":(dataA?"%H:%M:%S":"%H:%M");
+            if(!std::strftime(timeValue,sizeof(timeValue),format,&current))
+                std::snprintf(timeValue,sizeof(timeValue),"--:--");
+            std::strftime(dateValue,sizeof(dateValue),"%d.%m.%Y",&current);
+            if(config.style==2) {
+                const int radius=std::min(39,std::max(23,(wide?r.h:r.w)/3));
+                const int cx=left+radius+4,cy=r.y+r.h/2;
+                color(Color{91,112,139,255});
+                for(int tick=0;tick<60;++tick) {
+                    const double angle=(static_cast<double>(tick)/60.0)*6.283185307179586-1.5707963267948966;
+                    const int outer=radius-1,inner=radius-(tick%5==0?8:4);
+                    SDL_RenderDrawLine(renderer,
+                        cx+static_cast<int>(std::cos(angle)*inner),
+                        cy+static_cast<int>(std::sin(angle)*inner),
+                        cx+static_cast<int>(std::cos(angle)*outer),
+                        cy+static_cast<int>(std::sin(angle)*outer));
                 }
+                auto hand=[&](double angle,int length,Color shade) {
+                    color(shade);
+                    SDL_RenderDrawLine(renderer,cx,cy,
+                        cx+static_cast<int>(std::cos(angle)*length),
+                        cy+static_cast<int>(std::sin(angle)*length));
+                };
+                const double minute=(current.tm_min+current.tm_sec/60.0)/60.0*6.283185307179586-1.5707963267948966;
+                const double hour=((current.tm_hour%12)+current.tm_min/60.0)/12.0*6.283185307179586-1.5707963267948966;
+                hand(hour,radius*5/10,WHITE);
+                hand(minute,radius*8/10,BLUE);
+                roundRect(cx-3,cy-3,6,6,3,WHITE);
+                text(timeValue,cx+radius+12,r.y+29,config.style==2?2:3,WHITE,right);
+                if(dataB)label(dateValue,r.y+65);
+                label("LOCAL TIME",r.y+r.h-18);
             } else {
-                text(time,left,r.y+24,6,WHITE,right);
-                text(date,left,r.y+105,2,MUTED,right);
-                text(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",left,r.y+160,1,BLUE,right);
-                drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
+                const int scale=wide?4:6;
+                text(timeValue,left,r.y+(wide?23:24),scale,WHITE,right);
+                if(dataB)label(dateValue,r.y+(wide?78:105));
+                label(config.style==1?"12-HOUR CLOCK":"24-HOUR CLOCK",r.y+r.h-18);
             }
         } else if(t.kind==Kind::Battery) {
+            const bool powerConnected=batteryChargerType>=0&&
+                batteryChargerType!=PsmChargerType_Unconnected;
+            const std::string powerLabel=batteryChargerType<0?"POWER UNKNOWN":
+                (powerConnected?"POWER CONNECTED":"ON BATTERY");
             if(compact) {
                 label("BATTERY",r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+34,3,WHITE,right);
-                progress(r.y+82,battery);
+                if(dataA)progress(r.y+82,battery);
+                if(dataB)label(powerLabel,r.y+92);
             } else if(wide) {
                 label("BATTERY",r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
-                     left,r.y+33,t.w>=3?4:3,WHITE,right-70);
-                progress(r.y+82,battery);
+                     left,r.y+33,3,WHITE,right-70);
+                if(dataA)progress(r.y+82,battery);
                 drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
-                if(t.w>=3)text(languageRussian?"ЗАРЯД":"CHARGE",
-                    r.x+r.w-112,r.y+75,1,MUTED,right);
+                if(dataB)text(powerLabel,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
                 label("BATTERY STATUS",r.y+14);
                 drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+50,6,WHITE,right-70);
-                progress(r.y+145,battery);
-                text(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
-                     battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
-                     battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
-                                 (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
+                if(dataA)progress(r.y+145,battery);
+                text(battery<0?"UNAVAILABLE":
+                     battery>=80?"HIGH CHARGE":
+                     battery>=20?"NORMAL":"LOW BATTERY",
                      left,r.y+172,2,battery>=20?GREEN:RED,right);
+                if(dataB)label(powerLabel,r.y+208);
             }
         } else if(t.kind==Kind::System) {
             const u32 firmware=hosversionGet();
             char firmwareText[48]{};
             std::snprintf(firmwareText,sizeof(firmwareText),"%u.%u.%u",
                 HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            char socText[32]{},pcbText[32]{},cpuText[32]{},gpuText[32]{};
+            if(systemSocTemperatureAvailable)std::snprintf(socText,sizeof(socText),"%.1f C",systemSocTemperature);
+            else std::snprintf(socText,sizeof(socText),"N/A");
+            if(systemPcbTemperatureAvailable)std::snprintf(pcbText,sizeof(pcbText),"%.1f C",systemPcbTemperature);
+            else std::snprintf(pcbText,sizeof(pcbText),"N/A");
+            if(systemCpuClockAvailable)std::snprintf(cpuText,sizeof(cpuText),"%u MHz",systemCpuClockHz/1000000u);
+            else std::snprintf(cpuText,sizeof(cpuText),"N/A");
+            if(systemGpuClockAvailable)std::snprintf(gpuText,sizeof(gpuText),"%u MHz",systemGpuClockHz/1000000u);
+            else std::snprintf(gpuText,sizeof(gpuText),"N/A");
             if(compact) {
-                drawSystemIcon(0,left,r.y+24,40,accent);
-                label("SYSTEM",r.y+13);
-                text("HOS "+std::string(firmwareText),left,r.y+70,1,WHITE,right);
+                label("SYSTEM MONITOR",r.y+13);
+                text(dataA?socText:"HOS "+std::string(firmwareText),left,r.y+38,2,WHITE,right);
+                if(dataB)label("CPU "+std::string(cpuText),r.y+78);
             } else if(wide) {
-                drawSystemIcon(0,left,r.y+31,48,accent);
-                label("SYSTEM INFO",r.y+13);
-                text("HOS "+std::string(firmwareText),left+62,r.y+34,2,WHITE,right);
-                text(languageRussian?"DESKNX • NATIVE":"DESKNX • NATIVE",
-                     left+62,r.y+67,1,BLUE,right);
+                label("SYSTEM MONITOR",r.y+12);
+                if(dataA)text("SOC "+std::string(socText),left,r.y+35,2,WHITE,right);
+                if(dataA)label("PCB "+std::string(pcbText),left,r.y+65);
+                if(dataB) {
+                    text("CPU "+std::string(cpuText),left+150,r.y+35,1,BLUE,right);
+                    text("GPU "+std::string(gpuText),left+150,r.y+65,1,BLUE,right);
+                }
+                if(!dataA&&!dataB)text("HOS "+std::string(firmwareText),left,r.y+43,2,WHITE,right);
             } else {
-                roundRect(left,r.y+34,66,66,18,Color{37,61,91,255});
-                drawSystemIcon(0,left+12,r.y+46,42,WHITE);
-                label("SYSTEM INFORMATION",r.y+20);
-                text("HOS "+std::string(firmwareText),left+82,r.y+54,2,WHITE,right);
-                text(languageRussian?"НАТИВНЫЙ ЛАУНЧЕР":"NATIVE LAUNCHER",
-                     left+82,r.y+86,1,BLUE,right);
-                text(languageRussian?"12 РАБОЧИХ СТОЛОВ":"12 WORKSPACES",
-                     left,r.y+132,2,MUTED,right);
-                text("SDL2 / LIBNX",left,r.y+168,1,MUTED,right);
+                label("SYSTEM MONITOR  /  HOS "+std::string(firmwareText),r.y+14);
+                if(dataA) {
+                    text("SOC",left,r.y+48,1,MUTED,right);
+                    text(socText,left,r.y+66,3,WHITE,right);
+                    text("PCB  "+std::string(pcbText),left,r.y+111,1,MUTED,right);
+                }
+                if(dataB) {
+                    text("CPU  "+std::string(cpuText),left,r.y+151,2,BLUE,right);
+                    text("GPU  "+std::string(gpuText),left,r.y+184,2,BLUE,right);
+                }
+                if(!dataA&&!dataB)text("NATIVE LIBNX SERVICES",left,r.y+90,2,MUTED,right);
             }
         } else if(t.kind==Kind::Recent) {
             if(compact) {
