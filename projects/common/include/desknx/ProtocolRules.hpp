@@ -9,6 +9,26 @@ constexpr std::uint16_t CurrentVersion = 2;
 constexpr std::uint32_t MaxPayloadSize = 0x3F00;
 constexpr std::uint32_t MaxBusySeconds = 120;
 
+// LaunchTitle v2 user-policy bits. A valid user chosen in DeskNX takes
+// precedence over NACP's StartupUserAccount hint; NoPreuser is only used
+// when the menu has no valid profile to pass.
+constexpr std::uint64_t LaunchFlagHasUser   = 1ULL << 0;
+constexpr std::uint64_t LaunchFlagNoPreuser = 1ULL << 1;
+
+constexpr std::uint64_t LaunchFlagsForSelectedUser(bool has_valid_user) {
+    return has_valid_user ? LaunchFlagHasUser : LaunchFlagNoPreuser;
+}
+
+constexpr bool ShouldPushPreselectedUser(std::uint64_t flags,
+                                         bool nacp_wants_user,
+                                         bool has_valid_user) {
+    if (!has_valid_user) return false;
+    if ((flags & LaunchFlagNoPreuser) != 0) return false;
+    if ((flags & LaunchFlagHasUser) != 0) return true;
+    // Legacy/no-override requests retain the NACP-driven behavior.
+    return nacp_wants_user;
+}
+
 constexpr bool IsSupportedVersion(std::uint16_t version) {
     return version == LegacyVersion || version == CurrentVersion;
 }
