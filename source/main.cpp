@@ -901,6 +901,7 @@ using SteamGridArtworkKind = desknx::steamgriddb::ArtworkKind;
 using SteamGridCacheKind = desknx::steamgriddb::SteamGridDbCache::ArtworkKind;
 std::uint64_t steamGridDbCurrentTitleId=0;
 std::string steamGridDbCurrentTitle;
+std::string steamGridDbCurrentGameData;
 
 SteamGridArtworkKind steamGridDbKindFromIndex(int index) {
     static const SteamGridArtworkKind kinds[]={SteamGridArtworkKind::Hero,
@@ -936,7 +937,10 @@ void steamGridDbDestroyPreview() {
 void steamGridDbClosePicker() {
     steamGridDbPickerOpen=false;
     steamGridDbOfflineFallback=false;
-    steamGridDbApplyPending=false;
+    // An apply is a background transaction. Closing the modal must not drop
+    // completion handling or leave the in-memory tile texture stale.
+    steamGridDbApplyPending=
+        gSteamGridDbService.snapshot().status==desknx::steamgriddb::ServiceStatus::Applying;
     steamGridDbDestroyPreview();
 }
 void steamGridDbEditApiKey() {
@@ -990,6 +994,7 @@ void steamGridDbOpenPicker() {
     if(!sdMounted){setStatus("STEAMGRIDDB ARTWORK NEEDS AN SD CARD",2800);return;}
     steamGridDbCurrentTitleId=id;
     steamGridDbCurrentTitle=tile.title;
+    steamGridDbCurrentGameData=tile.data;
     steamGridDbPickerOpen=true;
     steamGridDbApplyPending=false;
     steamGridDbOfflineFallback=false;
@@ -1122,51 +1127,61 @@ void pumpSteamGridDbCacheCleanup() {
         steamGridDbStartupPruned=true;
 }
 void pumpSteamGridDbPicker() {
-    if(!steamGridDbPickerOpen)return;
+    if(!steamGridDbPickerOpen&&!steamGridDbApplyPending)return;
     const auto state=gSteamGridDbService.snapshot();
-    if(state.status==desknx::steamgriddb::ServiceStatus::MatchesReady&&
-       steamGridDbPickerView==SteamGridDbPickerView::Matches) {
-        if(!state.games.empty()) {
-            const float first=state.games[0].matchScore;
-            const float second=state.games.size()>1?state.games[1].matchScore:0.0f;
-            if(first>=0.92f&&(state.games.size()==1||first-second>=0.08f))
-                steamGridDbChooseMatch(0);
-            else if(first>=0.86f&&state.games.size()==1)steamGridDbChooseMatch(0);
-        }
-    } else if(state.status==desknx::steamgriddb::ServiceStatus::LoadingAssets&&
-              state.gameId!=0&&steamGridDbPickerView==SteamGridDbPickerView::Matches) {
-        steamGridDbPickerView=SteamGridDbPickerView::Assets;
-    } else if(state.status==desknx::steamgriddb::ServiceStatus::Browsing&&
-              steamGridDbPickerView==SteamGridDbPickerView::Matches) {
-        // A stored Nintendo Title ID -> SteamGridDB game ID mapping was reused.
-        steamGridDbPickerView=SteamGridDbPickerView::Assets;
-    } else if(state.status==desknx::steamgriddb::ServiceStatus::Error&&
-              !steamGridDbOfflineFallback) {
-        const std::string cached=gSteamGridDbService.cache().selectedPath(state.titleId);
-        if(!cached.empty()) {
-            steamGridDbOfflineFallback=true;
+
+    if(steamGridDbPickerOpen) {
+        if(state.status==desknx::steamgriddb::ServiceStatus::MatchesReady&&
+           steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            if(!state.games.empty()) {
+                const float first=state.games[0].matchScore;
+                const float second=state.games.size()>1?state.games[1].matchScore:0.0f;
+                if(first>=0.92f&&(state.games.size()==1||first-second>=0.08f))
+                    steamGridDbChooseMatch(0);
+                else if(first>=0.86f&&state.games.size()==1)
+                    steamGridDbChooseMatch(0);
+            }
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::LoadingAssets&&
+                  state.gameId!=0&&steamGridDbPickerView==SteamGridDbPickerView::Matches) {
             steamGridDbPickerView=SteamGridDbPickerView::Assets;
-            steamGridDbKindIndex=static_cast<int>(gSteamGridDbService.cache().selectedKind(state.titleId));
-            steamGridDbPreviewLoadedPath=cached;
-            setStatus("OFFLINE - USING CACHED STEAMGRIDDB ARTWORK",3500);
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::Browsing&&
+                  steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::Error&&
+                  !steamGridDbOfflineFallback) {
+            const std::string cached=gSteamGridDbService.cache().selectedPath(state.titleId);
+            if(!cached.empty()) {
+                steamGridDbOfflineFallback=true;
+                steamGridDbPickerView=SteamGridDbPickerView::Assets;
+                steamGridDbKindIndex=static_cast<int>(
+                    gSteamGridDbService.cache().selectedKind(state.titleId));
+                steamGridDbPreviewLoadedPath=cached;
+                setStatus("OFFLINE - USING CACHED STEAMGRIDDB ARTWORK",3500);
+            }
         }
+
+        if(state.previewRevision>0&&!state.previewPath.empty()&&!steamGridDbOfflineFallback)
+            steamGridDbUpdatePreview(state.previewPath,state.previewRevision);
+        else if(!steamGridDbPreviewLoadedPath.empty()&&!steamGridDbPreviewTexture)
+            steamGridDbUpdatePreview(steamGridDbPreviewLoadedPath,0);
     }
-    if(state.previewRevision>0&&!state.previewPath.empty()&&!steamGridDbOfflineFallback)
-        steamGridDbUpdatePreview(state.previewPath,state.previewRevision);
-    else if(!steamGridDbPreviewLoadedPath.empty()&&!steamGridDbPreviewTexture)
-        steamGridDbUpdatePreview(steamGridDbPreviewLoadedPath,0);
+
+    if(steamGridDbApplyPending&&state.status==desknx::steamgriddb::ServiceStatus::Error) {
+        steamGridDbApplyPending=false;
+        setStatus("STEAMGRIDDB DOWNLOAD FAILED",3500);
+    }
 
     if(state.status==desknx::steamgriddb::ServiceStatus::Applied&&steamGridDbApplyPending) {
-        Tile tile;
-        std::uint64_t id=0;
-        if(steamGridDbGetSelectedGame(tile,id))gIconCache.invalidate(Kind::Game,tile.data);
+        if(!steamGridDbCurrentGameData.empty())
+            gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
+
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
         if(complete&&!truncated) {
             std::vector<std::uint64_t> installed;
             if(catalogueMutex)SDL_LockMutex(catalogueMutex);
-            for(const auto& entry:catalogue)if(entry.kind==Kind::Game&&
-                desknx::model::isTitleId(entry.data)) {
+            for(const auto& entry:catalogue) {
+                if(entry.kind!=Kind::Game||!desknx::model::isTitleId(entry.data))continue;
                 char* end=nullptr;
                 const auto parsed=std::strtoull(entry.data.c_str(),&end,16);
                 if(parsed&&end==entry.data.c_str()+entry.data.size())
@@ -1178,7 +1193,7 @@ void pumpSteamGridDbPicker() {
         }
         steamGridDbApplyPending=false;
         setStatus("STEAMGRIDDB ARTWORK SAVED OFFLINE",3500);
-        steamGridDbClosePicker();
+        if(steamGridDbPickerOpen)steamGridDbClosePicker();
     }
 }
 
