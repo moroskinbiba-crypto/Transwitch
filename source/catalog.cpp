@@ -32,7 +32,7 @@ using desknx::model::Candidate;
 using desknx::model::Kind;
 constexpr size_t MaxItems = static_cast<size_t>(desknx::model::MaxItems);
 constexpr size_t GameReserve = 32;
-constexpr size_t WidgetReserve = 6;
+constexpr size_t WidgetReserve = 7;
 constexpr const char* CacheDir = "sdmc:/switch/DeskNX/cache";
 constexpr const char* IconsDir = "sdmc:/switch/DeskNX/cache/icons";
 constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
@@ -640,6 +640,7 @@ bool EnsureBuiltinWidgets(std::vector<Candidate>& items) {
         {Kind::Recent, "Recent launch widget", 3, 1, 6},
         {Kind::Storage, "SD storage widget", 3, 1, 3},
         {Kind::Calendar, "Calendar widget", 3, 1, 4},
+        {Kind::QuickSettings, "Quick settings", 2, 2, 10},
     };
     bool changed = false;
     for (const auto& spec : widgets) {
