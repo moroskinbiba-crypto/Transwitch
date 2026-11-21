@@ -3239,7 +3239,8 @@ SDL_Rect tileRect(const Tile&t) {
     return SDL_Rect{LEFT+t.x*(CW+GX),TOP+t.y*(CH+GY),t.w*CW+(t.w-1)*GX,t.h*CH+(t.h-1)*GY};
 }
 
-void drawSystemIcon(int kind,int x,int y,int size,Color c) {
+void drawSystemIcon(desknx::ui::IconId icon,int x,int y,int size,Color c) {
+    const int kind=static_cast<int>(icon);
     if(iconStyle==2) {
         roundRect(x-3,y-3,size+6,size+6,std::max(7,size/4),
                   Color{static_cast<Uint8>(c.r/5),static_cast<Uint8>(c.g/5),
@@ -3250,7 +3251,7 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
                   Color{static_cast<Uint8>(c.r/8),static_cast<Uint8>(c.g/8),
                         static_cast<Uint8>(c.b/8),54});
     }
-    if(gVectorIconCache.draw(kind,x,y,size,SDL_Color{c.r,c.g,c.b,c.a}))return;
+    if(gVectorIconCache.draw(icon,x,y,size,SDL_Color{c.r,c.g,c.b,c.a}))return;
     // Geometric fallback is retained only for a broken/missing SVG asset.
     const int cx=x+size/2,cy=y+size/2;
     auto line=[&](int x1,int y1,int x2,int y2) {
@@ -3322,6 +3323,9 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
             roundRect(knobX-3,yy-4,7,8,3,c);
         }
     }
+}
+void drawSystemIcon(int legacyKind,int x,int y,int size,Color c) {
+    drawSystemIcon(desknx::ui::iconIdFromLegacyIndex(legacyKind),x,y,size,c);
 }
 void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
     const float pulse=motionEffects
@@ -3729,12 +3733,12 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+33,3,WHITE,right-70);
                 if(dataA)progress(r.y+82,battery);
-                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,
+                drawSystemIcon(desknx::ui::IconId::Battery,r.x+r.w-62,r.y+28,38,
                     config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
                 if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
                 label(batteryHeading+" STATUS",r.y+14);
-                drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
+                drawSystemIcon(desknx::ui::IconId::Battery,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+50,6,WHITE,right-70);
                 if(dataA)progress(r.y+145,battery);
@@ -3936,7 +3940,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
                      left,r.y+42,3,WHITE,right);
                 if(dataB)text(weekday,left,r.y+83,1,BLUE,right);
-                drawSystemIcon(6,right-34,r.y+38,26,accent);
+                drawSystemIcon(desknx::ui::IconId::Calendar,right-34,r.y+38,26,accent);
             } else {
                 std::tm first=current;
                 first.tm_mday=1;first.tm_hour=12;first.tm_min=0;first.tm_sec=0;
@@ -4329,7 +4333,7 @@ void drawScreen() {
         Color{37,47,62,230},Color{255,255,255,24});
     text("...",403,42,2,WHITE,431);
     softCard(448,24,374,48,Color{32,43,59,235},Color{255,255,255,24});
-    drawSystemIcon(7,464,34,27,Color{215,228,246,255});
+    drawSystemIcon(desknx::ui::IconId::User,464,34,27,Color{215,228,246,255});
     text(selectedUserLabel,504,41,2,WHITE,710);
     text("CHANGE",732,43,1,BLUE,806);
     uiButton(832,24,170,48,18,desknx::ui::ButtonVariant::Chip,
@@ -4463,13 +4467,13 @@ void drawScreen() {
     uiButton(1096,638,128,54,16,desknx::ui::ButtonVariant::Glass,
         editing?Color{53,100,156,255}:Color{34,46,64,255},
         Color{144,189,244,110},editing);
-    drawSystemIcon(5,1108,650,30,WHITE);
+    drawSystemIcon(desknx::ui::IconId::Home,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
     gModalLayer.compose(gSurfaceManager.dimAlpha());
     if(emptyDesktopSurface&&!gSurfaceManager.hasBlockingSurface()) {
         softCard(350,248,580,204,Color{19,29,43,250},Color{255,255,255,38});
         roundRect(386,276,50,50,15,Color{38,76,119,255});
-        drawSystemIcon(4,399,289,24,WHITE);
+        drawSystemIcon(desknx::ui::IconId::Library,399,289,24,WHITE);
         text("THIS DESKTOP IS EMPTY",456,276,3,WHITE,890);
         text("Add games, homebrew or widgets to build your workspace.",
              456,319,2,MUTED,890);
@@ -5219,7 +5223,7 @@ void drawScreen() {
                     roundRect(370,yy,540,40,10,Color{42,74,111,255});
                 else if(active)
                     roundRect(370,yy,540,40,10,Color{28,47,66,255});
-                drawSystemIcon(7,386,yy+8,24,active?BLUE:MUTED);
+                drawSystemIcon(desknx::ui::IconId::User,386,yy+8,24,active?BLUE:MUTED);
                 text(consoleUsers[i].nickname,424,yy+13,2,
                      static_cast<int>(i)==userPickerIndex?WHITE:MUTED,790);
                 if(active)text("ACTIVE",816,yy+14,1,GREEN,898);
