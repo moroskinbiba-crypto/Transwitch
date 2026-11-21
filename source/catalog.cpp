@@ -30,7 +30,7 @@ using desknx::model::Candidate;
 using desknx::model::Kind;
 constexpr size_t MaxItems = static_cast<size_t>(desknx::model::MaxItems);
 constexpr size_t GameReserve = 32;
-constexpr size_t WidgetReserve = 6;
+constexpr size_t WidgetReserve = 9;
 constexpr const char* CacheDir = "sdmc:/switch/DeskNX/cache";
 constexpr const char* IconsDir = "sdmc:/switch/DeskNX/cache/icons";
 constexpr const char* CacheFile = "sdmc:/switch/DeskNX/cache/catalogue.tsv";
@@ -241,12 +241,15 @@ bool IsMissingOrUsableCachedImage(const std::string& path) {
 bool EnsureBuiltinWidgets(std::vector<Candidate>& items) {
     struct WidgetSpec { Kind kind; const char* title; int width; int height; int color; };
     static constexpr WidgetSpec widgets[] = {
-        {Kind::Clock, "Clock widget", 2, 1, 1},
-        {Kind::Battery, "Battery widget", 2, 1, 2},
-        {Kind::System, "System info widget", 2, 1, 5},
-        {Kind::Recent, "Recent launch widget", 3, 1, 6},
-        {Kind::Storage, "SD storage widget", 3, 1, 3},
-        {Kind::Calendar, "Calendar widget", 3, 1, 4},
+        {Kind::Clock, "Clock", 2, 1, 1},
+        {Kind::Battery, "Battery", 2, 1, 2},
+        {Kind::System, "System monitor", 2, 1, 5},
+        {Kind::Recent, "Recent games", 2, 1, 6},
+        {Kind::Storage, "SD storage", 2, 1, 3},
+        {Kind::Calendar, "Calendar", 2, 1, 4},
+        {Kind::Nextendo, "Nextendo online", 2, 1, 0},
+        {Kind::Favorites, "Favorites", 2, 1, 8},
+        {Kind::GameLibrary, "Game library", 2, 1, 9},
     };
     bool changed = false;
     for (const auto& spec : widgets) {
@@ -769,7 +772,9 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
             [](const Candidate& item) {
                 return item.kind == Kind::Clock || item.kind == Kind::Battery ||
                     item.kind == Kind::System || item.kind == Kind::Recent ||
-                    item.kind == Kind::Storage || item.kind == Kind::Calendar;
+                    item.kind == Kind::Storage || item.kind == Kind::Calendar ||
+                    item.kind == Kind::Nextendo || item.kind == Kind::Favorites ||
+                    item.kind == Kind::GameLibrary;
             })),
         result.nroCount);
     report(false);
