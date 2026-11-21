@@ -954,7 +954,7 @@ void steamGridDbEditApiKey() {
             setStatus(steamGridDbApiKey.empty()?"STEAMGRIDDB KEY CLEARED":"STEAMGRIDDB KEY SAVED");
     }
 }
-void steamGridDbSearch(const std::string& title) {
+void steamGridDbSearch(const std::string& title,bool useSavedMapping=true) {
     Tile tile;
     std::uint64_t id=0;
     if(!steamGridDbGetSelectedGame(tile,id))return;
@@ -965,7 +965,7 @@ void steamGridDbSearch(const std::string& title) {
     steamGridDbMatchIndex=steamGridDbMatchOffset=0;
     steamGridDbAssetOffset=0;
     steamGridDbKindIndex=1;
-    if(!gSteamGridDbService.search(id,title,steamGridDbApiKey))
+    if(!gSteamGridDbService.search(id,title,steamGridDbApiKey,useSavedMapping))
         setStatus("STEAMGRIDDB REQUEST COULD NOT START",2500);
 }
 void steamGridDbEditSearchTitle() {
@@ -981,7 +981,7 @@ void steamGridDbEditSearchTitle() {
     std::snprintf(value,sizeof(value),"%s",tile.title.c_str());
     const Result rc=showKeyboard(&config,value,sizeof(value));
     swkbdClose(&config);
-    if(R_SUCCEEDED(rc)&&value[0])steamGridDbSearch(value);
+    if(R_SUCCEEDED(rc)&&value[0])steamGridDbSearch(value,false);
 }
 void steamGridDbOpenPicker() {
     Tile tile;
