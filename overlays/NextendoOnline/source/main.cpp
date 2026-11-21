@@ -395,6 +395,21 @@ public:
 
 } // namespace
 
+// libtesla's footer uses this optional C-linkage hook to choose Chinese button
+// labels. Read the actual console language instead of leaving an unresolved
+// weak callback in the overlay binary.
+extern "C" bool nextendoIsChinese() {
+    if (!g_setReady) return false;
+    u64 languageCode = 0;
+    SetLanguage language = SetLanguage_ENUS;
+    if (R_FAILED(setGetSystemLanguage(&languageCode))) return false;
+    if (R_FAILED(setMakeLanguage(languageCode, &language))) return false;
+    return language == SetLanguage_ZHCN ||
+           language == SetLanguage_ZHHANS ||
+           language == SetLanguage_ZHHANT ||
+           language == SetLanguage_ZHTW;
+}
+
 int main(int argc, char** argv) {
     return tsl::loop<NextendoOnlineOverlay>(argc, argv);
 }
