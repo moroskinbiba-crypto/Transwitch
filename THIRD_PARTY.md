@@ -32,3 +32,8 @@ uLaunch (https://github.com/XorTroll/uLaunch) is used as a design and behavior r
 The Nextendo online-player feed in `source/NextendoPlayers.cpp` adapts the endpoint selection, per-title count merge order and refresh behavior used by **HomeNX** (repository: https://github.com/ad3333m/homenx, files `projects/cards/src/Library.cpp` and `projects/cards/src/CardsActivity.cpp`). HomeNX is distributed under GNU GPL version 3. The corresponding license text is preserved in `projects/Nextendo/COPYING.HomeNX`.
 
 The transport, bounded response handling, title-ID validation, snapshot expiry and DeskNX card rendering are implemented for Transwitch.
+
+
+## NanoSVG
+
+The SVG parser and rasterizer in `include/desknx/vendor/nanosvg.h` and `include/desknx/vendor/nanosvgrast.h` are based on NanoSVG by Mikko Mononen, distributed under the Zlib license. The original license notice is preserved in `include/desknx/vendor/NANOSVG-LICENSE.txt`. DeskNX uses NanoSVG to convert its own and user-provided small SVG icons into bounded RGBA textures; the runtime renderer uses SDL textures rather than parsing paths each frame.

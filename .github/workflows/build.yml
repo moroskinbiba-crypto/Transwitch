@@ -129,6 +129,7 @@ jobs:
           mkdir -p dist/switch/DeskNX
           cp DeskNX.nro dist/switch/DeskNX/DeskNX.nro
           bash scripts/package-runtime-assets.sh dist/switch/DeskNX
+          python3 scripts/check-svg-assets.py dist/switch/DeskNX/media/icons
           cp README.md dist/README-DeskNX.md
 
       - name: Upload native standalone NRO

@@ -2,8 +2,12 @@
 set -euo pipefail
 
 DESTINATION="${1:?usage: package-runtime-assets.sh <sdmc-deskNX-directory>}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FONT_DIR="$DESTINATION/media/fonts"
-mkdir -p "$FONT_DIR"
+ICON_DIR="$DESTINATION/media/icons"
+mkdir -p "$FONT_DIR" "$ICON_DIR"
+cp "$REPO_ROOT"/assets/icons/*.svg "$ICON_DIR"/
 
 fetch() {
     local url="$1"
@@ -38,3 +42,16 @@ EOF
 
 echo "Packaged DeskNX fonts:"
 ls -lh "$FONT_DIR"/*.ttf
+
+
+cat > "$ICON_DIR/README.txt" <<'EOF'
+DeskNX vector controls
+======================
+
+The SVG controls in this folder are source vector artwork. DeskNX rasterizes
+these small files once at startup and caches the resulting textures. If this
+folder is absent, the launcher uses the embedded SVG fallback set.
+EOF
+
+echo "Packaged DeskNX SVG icons:"
+ls -lh "$ICON_DIR"/*.svg
