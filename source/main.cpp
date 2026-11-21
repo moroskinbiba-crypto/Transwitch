@@ -18,6 +18,7 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "SteamGridDbService.hpp"
 
 #include <algorithm>
 #include <array>
@@ -84,7 +85,7 @@ std::array<Color,12> COLORS{{
 int themeIndex=1;
 bool languageRussian=true;
 int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
-std::string wallpaperPath, fontPath, iconPackPath;
+std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
 SDL_Texture* roundedCornerMaskTexture=nullptr;
@@ -182,6 +183,17 @@ std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
+enum class SteamGridDbPickerView { Matches, Assets };
+bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false, steamGridDbStartupPruned=false;
+bool steamGridDbTouchTracking=false, steamGridDbTouchDragged=false;
+int steamGridDbTouchStartX=0, steamGridDbTouchStartY=0;
+int steamGridDbMatchIndex=0, steamGridDbMatchOffset=0;
+int steamGridDbKindIndex=1, steamGridDbAssetOffset=0;
+std::string steamGridDbPreviewLoadedPath;
+SDL_Texture* steamGridDbPreviewTexture=nullptr;
+uint64_t steamGridDbPreviewRevision=UINT64_MAX;
+SteamGridDbPickerView steamGridDbPickerView=SteamGridDbPickerView::Matches;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
 struct PdmQuerySnapshot {
@@ -432,6 +444,9 @@ void loadLauncherSettings() {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
             fontPath=value;
+        } else if(key=="steamgriddbkey") {
+            if(value.size()<=160 && value.find_first_of("\r\n\t")==std::string::npos)
+                steamGridDbApiKey=value;
         } else if(key=="language") {
             languageRussian=(value=="ru" || value=="russian");
         } else if(key=="iconstyle") {
@@ -460,7 +475,8 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n"
+       <<"steamgriddbkey="<<safeField(steamGridDbApiKey)<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -882,6 +898,319 @@ void searchCatalogue() {
         setStatus(catalogueQuery.empty()?"SEARCH CLEARED":"SEARCH: "+catalogueQuery,2500);
     }
 }
+
+using SteamGridArtworkKind = desknx::steamgriddb::ArtworkKind;
+using SteamGridCacheKind = desknx::steamgriddb::SteamGridDbCache::ArtworkKind;
+std::uint64_t steamGridDbCurrentTitleId=0;
+std::string steamGridDbCurrentTitle;
+std::string steamGridDbCurrentGameData;
+
+SteamGridArtworkKind steamGridDbKindFromIndex(int index) {
+    static const SteamGridArtworkKind kinds[]={SteamGridArtworkKind::Hero,
+        SteamGridArtworkKind::Grid,SteamGridArtworkKind::Logo,SteamGridArtworkKind::Icon};
+    return kinds[std::max(0,std::min(3,index))];
+}
+SteamGridCacheKind steamGridDbCacheKind(int index) {
+    return static_cast<SteamGridCacheKind>(steamGridDbKindFromIndex(index));
+}
+const char* steamGridDbKindLabel(int index) {
+    static const char* labels[]={"HERO","GRID","LOGO","ICON"};
+    return labels[std::max(0,std::min(3,index))];
+}
+bool steamGridDbGetSelectedGame(Tile& selected,std::uint64_t& titleId) {
+    if(desks.empty()||deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return false;
+    const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int index=itemAt(desk,selectedX,selectedY);
+    if(index<0||index>=static_cast<int>(desk.tiles.size()))return false;
+    selected=desk.tiles[static_cast<size_t>(index)];
+    if(selected.kind!=Kind::Game||!desknx::model::isTitleId(selected.data))return false;
+    char* end=nullptr;
+    const auto parsed=std::strtoull(selected.data.c_str(),&end,16);
+    if(parsed==0||end!=selected.data.c_str()+selected.data.size())return false;
+    titleId=static_cast<std::uint64_t>(parsed);
+    return true;
+}
+void steamGridDbDestroyPreview() {
+    if(steamGridDbPreviewTexture)SDL_DestroyTexture(steamGridDbPreviewTexture);
+    steamGridDbPreviewTexture=nullptr;
+    steamGridDbPreviewLoadedPath.clear();
+    steamGridDbPreviewRevision=UINT64_MAX;
+}
+void steamGridDbClosePicker() {
+    steamGridDbPickerOpen=false;
+    steamGridDbOfflineFallback=false;
+    steamGridDbTouchTracking=false;
+    steamGridDbTouchDragged=false;
+    // An apply is a background transaction. Closing the modal must not drop
+    // completion handling or leave the in-memory tile texture stale.
+    steamGridDbApplyPending=
+        gSteamGridDbService.snapshot().status==desknx::steamgriddb::ServiceStatus::Applying;
+    steamGridDbDestroyPreview();
+}
+void steamGridDbEditApiKey() {
+    SwkbdConfig config{};
+    if(R_FAILED(swkbdCreate(&config,0))){setStatus("STEAMGRIDDB KEYBOARD UNAVAILABLE",2500);return;}
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,"SteamGridDB API key");
+    char value[161]{};
+    std::snprintf(value,sizeof(value),"%s",steamGridDbApiKey.c_str());
+    const Result rc=showKeyboard(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_SUCCEEDED(rc)) {
+        steamGridDbApiKey=value;
+        if(saveLauncherSettings())
+            setStatus(steamGridDbApiKey.empty()?"STEAMGRIDDB KEY CLEARED":"STEAMGRIDDB KEY SAVED");
+    }
+}
+void steamGridDbSearch(const std::string& title,bool useSavedMapping=true) {
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id))return;
+    steamGridDbCurrentTitleId=id;
+    steamGridDbCurrentTitle=title;
+    steamGridDbPickerView=SteamGridDbPickerView::Matches;
+    steamGridDbOfflineFallback=false;
+    steamGridDbMatchIndex=steamGridDbMatchOffset=0;
+    steamGridDbAssetOffset=0;
+    steamGridDbKindIndex=1;
+    if(!gSteamGridDbService.search(id,title,steamGridDbApiKey,useSavedMapping))
+        setStatus("STEAMGRIDDB REQUEST COULD NOT START",2500);
+}
+void steamGridDbEditSearchTitle() {
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id))return;
+    SwkbdConfig config{};
+    if(R_FAILED(swkbdCreate(&config,0)))return;
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,"Search SteamGridDB by game title");
+    swkbdConfigSetInitialText(&config,tile.title.c_str());
+    char value[128]{};
+    std::snprintf(value,sizeof(value),"%s",tile.title.c_str());
+    const Result rc=showKeyboard(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_SUCCEEDED(rc)&&value[0])steamGridDbSearch(value,false);
+}
+void steamGridDbOpenPicker() {
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id)){setStatus("SELECT AN INSTALLED GAME FIRST",2200);return;}
+    if(!sdMounted){setStatus("STEAMGRIDDB ARTWORK NEEDS AN SD CARD",2800);return;}
+    steamGridDbCurrentTitleId=id;
+    steamGridDbCurrentTitle=tile.title;
+    steamGridDbCurrentGameData=tile.data;
+    steamGridDbPickerOpen=true;
+    steamGridDbApplyPending=false;
+    steamGridDbOfflineFallback=false;
+    steamGridDbPickerView=SteamGridDbPickerView::Matches;
+    steamGridDbKindIndex=1;
+    steamGridDbMatchIndex=steamGridDbMatchOffset=steamGridDbAssetOffset=0;
+    steamGridDbDestroyPreview();
+    (void)gSteamGridDbService.cache().ensureDirectories();
+    std::string cached=gSteamGridDbService.cache().selectedPath(id);
+    if(steamGridDbApiKey.empty()) {
+        if(cached.empty()) {
+            const auto fallbackKind=gSteamGridDbService.cache().selectedKind(id);
+            if(gSteamGridDbService.cache().hasArtwork(id,fallbackKind)) {
+                steamGridDbKindIndex=static_cast<int>(fallbackKind);
+                cached=gSteamGridDbService.cache().pathFor(id,fallbackKind);
+            }
+        }
+        if(cached.empty()) {
+            steamGridDbClosePicker();
+            steamGridDbEditApiKey();
+            return;
+        }
+        steamGridDbOfflineFallback=true;
+        steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        steamGridDbKindIndex=static_cast<int>(gSteamGridDbService.cache().selectedKind(id));
+        steamGridDbPreviewLoadedPath=cached;
+        setStatus("OFFLINE - CACHED ARTWORK",2500);
+        return;
+    }
+    steamGridDbSearch(tile.title);
+}
+void steamGridDbChooseMatch(int index) {
+    const auto state=gSteamGridDbService.snapshot();
+    if(index<0||index>=static_cast<int>(state.games.size()))return;
+    const auto match=state.games[static_cast<size_t>(index)];
+    steamGridDbKindIndex=1;
+    steamGridDbAssetOffset=0;
+    steamGridDbPickerView=SteamGridDbPickerView::Assets;
+    steamGridDbOfflineFallback=false;
+    if(!gSteamGridDbService.loadAssets(state.titleId,match.id,state.title,match.name,
+        steamGridDbKindFromIndex(steamGridDbKindIndex),steamGridDbApiKey))
+        setStatus("STEAMGRIDDB ARTWORK REQUEST FAILED",2500);
+}
+void steamGridDbChangeKind(int direction) {
+    if(steamGridDbOfflineFallback) {
+        steamGridDbKindIndex=(steamGridDbKindIndex+direction+4)%4;
+        steamGridDbDestroyPreview();
+        if(gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,
+                                                   steamGridDbCacheKind(steamGridDbKindIndex)))
+            steamGridDbPreviewLoadedPath=gSteamGridDbService.cache().pathFor(
+                steamGridDbCurrentTitleId,steamGridDbCacheKind(steamGridDbKindIndex));
+        return;
+    }
+    const auto state=gSteamGridDbService.snapshot();
+    if(state.titleId==0||state.gameId==0)return;
+    steamGridDbKindIndex=(steamGridDbKindIndex+direction+4)%4;
+    steamGridDbAssetOffset=0;
+    if(!gSteamGridDbService.loadAssets(state.titleId,state.gameId,state.title,state.gameName,
+        steamGridDbKindFromIndex(steamGridDbKindIndex),steamGridDbApiKey))
+        setStatus("STEAMGRIDDB ARTWORK REQUEST FAILED",2200);
+}
+void steamGridDbMoveAsset(int direction) {
+    const auto state=gSteamGridDbService.snapshot();
+    if(state.assets.empty())return;
+    const int count=static_cast<int>(state.assets.size());
+    const int next=((state.selectedAsset+direction)%count+count)%count;
+    if(gSteamGridDbService.selectAsset(next)) {
+        if(next<steamGridDbAssetOffset)steamGridDbAssetOffset=next;
+        if(next>=steamGridDbAssetOffset+7)steamGridDbAssetOffset=next-6;
+    }
+}
+void steamGridDbRestoreSystem() {
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id))return;
+    auto& cache=gSteamGridDbService.cache();
+    if(!cache.hasHero(id)&&!cache.hasGrid(id)&&!cache.hasLogo(id)&&!cache.hasIcon(id)) {
+        setStatus("NO CUSTOM COVER TO RESTORE",2400);
+        steamGridDbClosePicker();
+        return;
+    }
+    if(cache.restoreSystemArtwork(id)) {
+        gIconCache.invalidate(Kind::Game,tile.data);
+        setStatus("SYSTEM GAME COVER RESTORED",3000);
+    } else setStatus("NO CUSTOM COVER TO RESTORE",2400);
+    steamGridDbClosePicker();
+}
+void steamGridDbUpdatePreview(const std::string& path,std::uint64_t revision) {
+    if(path.empty())return;
+    if(steamGridDbPreviewTexture&&steamGridDbPreviewLoadedPath==path&&
+       steamGridDbPreviewRevision==revision)return;
+    steamGridDbDestroyPreview();
+    if(!IconCache::validateImagePath(path))return;
+    SDL_Surface* surface=IMG_Load(path.c_str());
+    if(!surface)return;
+    if(surface->w<=0||surface->h<=0||
+       static_cast<std::uint64_t>(surface->w)*static_cast<std::uint64_t>(surface->h)>3000000u) {
+        SDL_FreeSurface(surface);
+        return;
+    }
+    steamGridDbPreviewTexture=SDL_CreateTextureFromSurface(renderer,surface);
+    SDL_FreeSurface(surface);
+    if(steamGridDbPreviewTexture) {
+        steamGridDbPreviewLoadedPath=path;
+        steamGridDbPreviewRevision=revision;
+    }
+}
+void steamGridDbApplyCurrentCached() {
+    if(!steamGridDbCurrentTitleId)return;
+    const auto kind=steamGridDbCacheKind(steamGridDbKindIndex);
+    if(gSteamGridDbService.cache().activateCachedArtwork(steamGridDbCurrentTitleId,kind)) {
+        Tile tile;
+        std::uint64_t id=0;
+        if(steamGridDbGetSelectedGame(tile,id))gIconCache.invalidate(Kind::Game,tile.data);
+        setStatus("CACHED "+std::string(steamGridDbKindLabel(steamGridDbKindIndex))+" ARTWORK SELECTED",3000);
+        steamGridDbClosePicker();
+    } else setStatus("THIS ARTWORK TYPE IS NOT CACHED",2200);
+}
+void readCatalogueState(bool& ready,bool& complete,bool& truncated,
+                        bool* nsAvailable=nullptr,std::uint32_t* nsError=nullptr,
+                        size_t* gameCount=nullptr,size_t* nroCount=nullptr);
+
+void pumpSteamGridDbCacheCleanup() {
+    if(steamGridDbStartupPruned||!sdMounted||!catalogueMutex)return;
+    bool ready=false,complete=false,truncated=false;
+    readCatalogueState(ready,complete,truncated);
+    if(!complete||truncated)return;
+    std::vector<std::uint64_t> installed;
+    SDL_LockMutex(catalogueMutex);
+    for(const auto& entry:catalogue) {
+        if(entry.kind!=Kind::Game||!desknx::model::isTitleId(entry.data))continue;
+        char* end=nullptr;
+        const auto id=std::strtoull(entry.data.c_str(),&end,16);
+        if(id&&end==entry.data.c_str()+entry.data.size())
+            installed.push_back(static_cast<std::uint64_t>(id));
+    }
+    SDL_UnlockMutex(catalogueMutex);
+    if(gSteamGridDbService.pruneCache(
+        desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed))
+        steamGridDbStartupPruned=true;
+}
+void pumpSteamGridDbPicker() {
+    if(!steamGridDbPickerOpen&&!steamGridDbApplyPending)return;
+    const auto state=gSteamGridDbService.snapshot();
+
+    if(steamGridDbPickerOpen) {
+        if(state.status==desknx::steamgriddb::ServiceStatus::MatchesReady&&
+           steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            if(!state.games.empty()) {
+                const float first=state.games[0].matchScore;
+                const float second=state.games.size()>1?state.games[1].matchScore:0.0f;
+                if(first>=0.92f&&(state.games.size()==1||first-second>=0.08f))
+                    steamGridDbChooseMatch(0);
+                else if(first>=0.86f&&state.games.size()==1)
+                    steamGridDbChooseMatch(0);
+            }
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::LoadingAssets&&
+                  state.gameId!=0&&steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::Browsing&&
+                  steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::Error&&
+                  !steamGridDbOfflineFallback) {
+            const std::string cached=gSteamGridDbService.cache().selectedPath(state.titleId);
+            if(!cached.empty()) {
+                steamGridDbOfflineFallback=true;
+                steamGridDbPickerView=SteamGridDbPickerView::Assets;
+                steamGridDbKindIndex=static_cast<int>(
+                    gSteamGridDbService.cache().selectedKind(state.titleId));
+                steamGridDbPreviewLoadedPath=cached;
+                setStatus("OFFLINE - USING CACHED STEAMGRIDDB ARTWORK",3500);
+            }
+        }
+
+        if(state.previewRevision>0&&!state.previewPath.empty()&&!steamGridDbOfflineFallback)
+            steamGridDbUpdatePreview(state.previewPath,state.previewRevision);
+        else if(!steamGridDbPreviewLoadedPath.empty()&&!steamGridDbPreviewTexture)
+            steamGridDbUpdatePreview(steamGridDbPreviewLoadedPath,0);
+    }
+
+    if(steamGridDbApplyPending&&state.status==desknx::steamgriddb::ServiceStatus::Error) {
+        steamGridDbApplyPending=false;
+        setStatus("STEAMGRIDDB DOWNLOAD FAILED",3500);
+    }
+
+    if(state.status==desknx::steamgriddb::ServiceStatus::Applied&&steamGridDbApplyPending) {
+        if(!steamGridDbCurrentGameData.empty())
+            gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
+
+        bool ready=false,complete=false,truncated=false;
+        readCatalogueState(ready,complete,truncated);
+        if(complete&&!truncated) {
+            std::vector<std::uint64_t> installed;
+            if(catalogueMutex)SDL_LockMutex(catalogueMutex);
+            for(const auto& entry:catalogue) {
+                if(entry.kind!=Kind::Game||!desknx::model::isTitleId(entry.data))continue;
+                char* end=nullptr;
+                const auto parsed=std::strtoull(entry.data.c_str(),&end,16);
+                if(parsed&&end==entry.data.c_str()+entry.data.size())
+                    installed.push_back(static_cast<std::uint64_t>(parsed));
+            }
+            if(catalogueMutex)SDL_UnlockMutex(catalogueMutex);
+            (void)gSteamGridDbService.pruneCache(
+                desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed);
+        }
+        steamGridDbApplyPending=false;
+        setStatus("STEAMGRIDDB ARTWORK SAVED OFFLINE",3500);
+        if(steamGridDbPickerOpen)steamGridDbClosePicker();
+    }
+}
+
 void cycleCatalogueFilter(int direction) {
     constexpr int count=4;
     int current=static_cast<int>(catalogueFilter);
@@ -913,8 +1242,8 @@ void publishCatalogue(const desknx::catalog::ScanResult& result) {
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
 void readCatalogueState(bool& ready,bool& complete,bool& truncated,
-                        bool* nsAvailable=nullptr,std::uint32_t* nsError=nullptr,
-                        size_t* gameCount=nullptr,size_t* nroCount=nullptr) {
+                        bool* nsAvailable,std::uint32_t* nsError,
+                        size_t* gameCount,size_t* nroCount) {
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
     ready=catalogueReady;
     complete=catalogueScanComplete;
@@ -2506,6 +2835,16 @@ void drawScreen() {
         text("SIZE +  /  ZR",841,581,1,WHITE,984);
         roundRect(1002,571,228,28,8,Color{91,39,48,255});
         text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
+    } else if(!editing&&!dragging&&selectedTileIndex>=0&&
+              d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
+        roundRect(642,571,190,28,8,Color{35,68,101,255});
+        text("ARTWORK  /  ZR",660,581,1,WHITE,822);
+        for(int i=0;i<3;++i) {
+            const int hx=850+i*126;
+            roundRect(hx,571,43,28,8,Color{34,45,63,255});
+            text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
+            text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
+        }
     } else {
         const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
         for(int i=0;i<4;++i) {
@@ -2858,14 +3197,16 @@ void drawScreen() {
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE","STEAMGRIDDB API KEY"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
-            const int yy=214+i*31;
+        for(int i=0;i<12;++i) {
+            const int yy=214+i*29;
             if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
             text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
             if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
             if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
+            if(i==11)text(steamGridDbApiKey.empty()?"NOT CONFIGURED":"CONFIGURED",
+                755,yy+8,1,steamGridDbApiKey.empty()?MUTED:GREEN,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -2875,7 +3216,7 @@ void drawScreen() {
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
         text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
+        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS / STEAMGRIDDB",
              346,592,1,MUTED,930);
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
     }
@@ -2965,6 +3306,136 @@ void drawScreen() {
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
     }
+
+    if(steamGridDbPickerOpen) {
+        const auto sgdb=gSteamGridDbService.snapshot();
+        rect(0,0,SW,SH,Color{2,6,12,224});
+        softCard(64,34,1152,652,Color{15,23,36,255},Color{255,255,255,38});
+        text("STEAMGRIDDB  /  GAME ARTWORK",108,62,3,WHITE,900);
+        text(steamGridDbCurrentTitle,110,105,2,MUTED,820);
+        char sgdbIdText[48]{};
+        std::snprintf(sgdbIdText,sizeof(sgdbIdText),"TITLE ID  %016llX",
+            static_cast<unsigned long long>(steamGridDbCurrentTitleId));
+        text(sgdbIdText,110,133,1,MUTED,650);
+        roundRect(1082,62,94,38,10,Color{52,61,74,255});
+        text("B  BACK",1098,75,1,WHITE,1168);
+
+        if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            text("CHOOSE THE CORRECT GAME ENTRY",112,171,1,BLUE,850);
+            if(sgdb.status==desknx::steamgriddb::ServiceStatus::Searching) {
+                roundRect(132,235,1016,86,14,Color{24,38,56,255});
+                text("SEARCHING STEAMGRIDDB...",164,266,2,WHITE,1090);
+            } else if(sgdb.games.empty()) {
+                roundRect(132,235,1016,86,14,Color{24,38,56,255});
+                text(sgdb.message.empty()?"NO MATCHES FOUND":sgdb.message,164,266,2,WHITE,1100);
+            } else {
+                const int count=std::min(8,static_cast<int>(sgdb.games.size())-steamGridDbMatchOffset);
+                for(int row=0;row<count;++row) {
+                    const int index=steamGridDbMatchOffset+row;
+                    const int y=198+row*47;
+                    const bool selected=index==steamGridDbMatchIndex;
+                    roundRect(126,y,1028,40,10,selected?Color{40,72,111,255}:Color{25,35,49,255});
+                    text(sgdb.games[static_cast<size_t>(index)].name,150,y+12,1,
+                        selected?WHITE:MUTED,880);
+                    char score[24]{};
+                    std::snprintf(score,sizeof(score),"%u%%",
+                        static_cast<unsigned>(std::max(0.0f,std::min(1.0f,
+                            sgdb.games[static_cast<size_t>(index)].matchScore))*100.0f));
+                    text(score,1046,y+12,1,selected?GREEN:BLUE,1126);
+                }
+            }
+            text(sgdb.message,130,590,1,MUTED,780);
+            roundRect(842,574,160,42,11,Color{37,80,128,255});
+            text("A  SELECT",878,588,1,WHITE,990);
+            roundRect(1016,574,136,42,11,Color{34,45,62,255});
+            text("Y  SEARCH",1040,588,1,WHITE,1140);
+            text("UP / DOWN  SELECT MATCH",132,635,1,BLUE,520);
+        } else {
+            text(steamGridDbOfflineFallback?"OFFLINE LIBRARY  /  CACHED ARTWORK":
+                (sgdb.message.empty()?"CHOOSE ARTWORK TYPE AND IMAGE":sgdb.message),
+                112,164,1,steamGridDbOfflineFallback?GREEN:BLUE,900);
+            static const int tabX[]={116,374,632,890};
+            for(int i=0;i<4;++i) {
+                const int x=tabX[i];
+                const auto kind=steamGridDbCacheKind(i);
+                const bool cached=gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,kind);
+                roundRect(x,188,238,38,10,i==steamGridDbKindIndex?
+                    Color{42,82,126,255}:Color{29,39,54,255});
+                text(steamGridDbKindLabel(i),x+18,200,1,
+                    i==steamGridDbKindIndex?WHITE:(cached?GREEN:MUTED),x+220);
+                if(cached)roundRect(x+208,202,8,8,4,GREEN);
+            }
+            roundRect(108,238,382,316,14,Color{22,31,45,255});
+            if(steamGridDbOfflineFallback) {
+                text("CACHED FILES",132,260,1,BLUE,465);
+                for(int i=0;i<4;++i) {
+                    const bool cached=gSteamGridDbService.cache().hasArtwork(
+                        steamGridDbCurrentTitleId,steamGridDbCacheKind(i));
+                    const int y=295+i*48;
+                    if(i==steamGridDbKindIndex)
+                        roundRect(126,y-5,340,38,9,Color{40,68,101,255});
+                    text(steamGridDbKindLabel(i),148,y+7,1,
+                        i==steamGridDbKindIndex?WHITE:(cached?GREEN:MUTED),290);
+                    text(cached?"DOWNLOADED":"NOT CACHED",312,y+7,1,
+                        cached?GREEN:MUTED,456);
+                }
+                text("SELECT A TYPE TO USE ITS SAVED IMAGE",132,512,1,MUTED,470);
+            } else if(sgdb.status==desknx::steamgriddb::ServiceStatus::LoadingAssets) {
+                text("LOADING ARTWORK...",138,365,2,WHITE,460);
+            } else if(sgdb.assets.empty()) {
+                text(sgdb.message.empty()?"NO ARTWORK FOUND":sgdb.message,132,360,1,MUTED,466);
+            } else {
+                text("AVAILABLE IMAGES",132,260,1,BLUE,465);
+                const int count=std::min(7,static_cast<int>(sgdb.assets.size())-steamGridDbAssetOffset);
+                for(int row=0;row<count;++row) {
+                    const int index=steamGridDbAssetOffset+row;
+                    const auto& asset=sgdb.assets[static_cast<size_t>(index)];
+                    const int y=289+row*36;
+                    const bool selected=index==sgdb.selectedAsset;
+                    roundRect(124,y,350,31,8,selected?
+                        Color{40,72,111,255}:Color{28,38,52,255});
+                    char dimensions[48]{};
+                    std::snprintf(dimensions,sizeof(dimensions),"%dx%d",
+                        asset.width,asset.height);
+                    text(dimensions,141,y+9,1,selected?WHITE:MUTED,225);
+                    text(std::to_string(asset.score),385,y+9,1,
+                        selected?GREEN:MUTED,458);
+                }
+                text("UP / DOWN TO BROWSE",132,542,1,MUTED,470);
+            }
+            roundRect(510,238,662,316,14,Color{22,31,45,255});
+            if(steamGridDbPreviewTexture) {
+                int width=0,height=0;
+                if(SDL_QueryTexture(steamGridDbPreviewTexture,nullptr,nullptr,&width,&height)==0&&width>0&&height>0) {
+                    const auto fit=desknx::artwork::containDestination(
+                        530,254,622,284,width,height);
+                    SDL_Rect target{fit.x,fit.y,fit.w,fit.h};
+                    SDL_RenderCopy(renderer,steamGridDbPreviewTexture,nullptr,&target);
+                }
+            } else {
+                text("LARGE PREVIEW",714,372,2,MUTED,970);
+                text("SELECT AN IMAGE TO PREVIEW",682,410,1,MUTED,970);
+            }
+            if(!steamGridDbOfflineFallback&&sgdb.selectedAsset>=0&&
+               sgdb.selectedAsset<static_cast<int>(sgdb.assets.size())) {
+                const auto& asset=sgdb.assets[static_cast<size_t>(sgdb.selectedAsset)];
+                text(std::to_string(asset.width)+" x "+std::to_string(asset.height)+
+                    "   /   SCORE "+std::to_string(asset.score),530,526,1,BLUE,1150);
+            } else if(steamGridDbOfflineFallback) {
+                text("SAVED ON SD CARD  /  AVAILABLE WITHOUT INTERNET",530,526,1,GREEN,1150);
+            }
+            roundRect(108,574,236,42,11,Color{48,52,65,255});
+            text("Y  RESTORE SYSTEM",126,588,1,WHITE,330);
+            roundRect(358,574,178,42,11,Color{34,45,62,255});
+            text("X  SEARCH TITLE",374,588,1,WHITE,525);
+            roundRect(854,574,318,42,11,
+                steamGridDbOfflineFallback?Color{30,105,79,255}:Color{37,80,128,255});
+            text(steamGridDbOfflineFallback?"A  USE CACHED TYPE":"A  APPLY SELECTED",
+                steamGridDbOfflineFallback?886:884,588,1,WHITE,1150);
+            text("LEFT / RIGHT  ART TYPE     UP / DOWN  IMAGE",112,635,1,BLUE,700);
+        }
+    }
+
     SDL_RenderPresent(renderer);
 }
 bool saveNow(){return enqueueLayoutSave(false);}
@@ -3490,6 +3961,9 @@ void activateAppSettings(int action) {
             iconStyle=(iconStyle+1)%3;
             if(saveLauncherSettings())setStatus("ICON STYLE");
             break;
+        case 11:
+            steamGridDbEditApiKey();
+            break;
         default: break;
     }
 }
@@ -3630,6 +4104,40 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(steamGridDbPickerOpen) {
+        if(keys&HidNpadButton_B){steamGridDbClosePicker();return;}
+        if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            const auto state=gSteamGridDbService.snapshot();
+            const int count=static_cast<int>(state.games.size());
+            if(count>0&&(keys&HidNpadButton_Up)) {
+                steamGridDbMatchIndex=(steamGridDbMatchIndex-1+count)%count;
+                if(steamGridDbMatchIndex<steamGridDbMatchOffset)
+                    steamGridDbMatchOffset=steamGridDbMatchIndex;
+            }
+            if(count>0&&(keys&HidNpadButton_Down)) {
+                steamGridDbMatchIndex=(steamGridDbMatchIndex+1)%count;
+                if(steamGridDbMatchIndex>=steamGridDbMatchOffset+8)
+                    steamGridDbMatchOffset=steamGridDbMatchIndex-7;
+            }
+            if(keys&HidNpadButton_A)steamGridDbChooseMatch(steamGridDbMatchIndex);
+            if(keys&HidNpadButton_Y)steamGridDbEditSearchTitle();
+            if(keys&HidNpadButton_X)steamGridDbSearch(steamGridDbCurrentTitle);
+        } else {
+            if(keys&HidNpadButton_Left)steamGridDbChangeKind(-1);
+            if(keys&HidNpadButton_Right)steamGridDbChangeKind(1);
+            if(steamGridDbOfflineFallback) {
+                if(keys&HidNpadButton_A)steamGridDbApplyCurrentCached();
+            } else {
+                if(keys&HidNpadButton_Up)steamGridDbMoveAsset(-1);
+                if(keys&HidNpadButton_Down)steamGridDbMoveAsset(1);
+                if(keys&HidNpadButton_A)
+                    steamGridDbApplyPending=gSteamGridDbService.applySelected();
+            }
+            if(keys&HidNpadButton_Y)steamGridDbRestoreSystem();
+            if(keys&HidNpadButton_X)steamGridDbEditSearchTitle();
+        }
+        return;
+    }
     if(userPickerOpen) {
         if(keys&HidNpadButton_B){userPickerOpen=false;return;}
         if(!consoleUsers.empty()) {
@@ -3669,8 +4177,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+11)%12;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%12;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -3881,6 +4389,10 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
     if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
     if(keys&HidNpadButton_Down){if(dragging)moveTile(0,1);else updateCursor(0,1);}
+    if(!editing&&!dragging&&(keys&HidNpadButton_ZR)) {
+        steamGridDbOpenPicker();
+        return;
+    }
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
     if(editing&&(keys&HidNpadButton_ZR))resizeTile(true);
     if(editing&&(keys&HidNpadButton_Minus))removeTile();
@@ -3955,6 +4467,110 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(steamGridDbPickerOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            steamGridDbTouchTracking=true;
+            steamGridDbTouchDragged=false;
+            steamGridDbTouchStartX=static_cast<int>(e.tfinger.x*SW);
+            steamGridDbTouchStartY=static_cast<int>(e.tfinger.y*SH);
+            return;
+        }
+        if(e.type==SDL_FINGERMOTION&&steamGridDbTouchTracking) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            const int delta=steamGridDbTouchStartY-y;
+            if(steamGridDbPickerView==SteamGridDbPickerView::Matches&&
+               steamGridDbTouchStartX>=126&&steamGridDbTouchStartX<=1154&&
+               steamGridDbTouchStartY>=198&&steamGridDbTouchStartY<574) {
+                if(std::abs(delta)>=18)steamGridDbTouchDragged=true;
+                const int steps=delta/47;
+                if(steps!=0) {
+                    const int count=static_cast<int>(gSteamGridDbService.snapshot().games.size());
+                    if(count>0) {
+                        steamGridDbMatchIndex=((steamGridDbMatchIndex+steps)%count+count)%count;
+                        if(steamGridDbMatchIndex<steamGridDbMatchOffset)
+                            steamGridDbMatchOffset=steamGridDbMatchIndex;
+                        if(steamGridDbMatchIndex>=steamGridDbMatchOffset+8)
+                            steamGridDbMatchOffset=steamGridDbMatchIndex-7;
+                    }
+                    steamGridDbTouchStartY-=steps*47;
+                }
+            } else if(steamGridDbPickerView==SteamGridDbPickerView::Assets&&
+                      !steamGridDbOfflineFallback&&
+                      steamGridDbTouchStartX>=124&&steamGridDbTouchStartX<=474&&
+                      steamGridDbTouchStartY>=289&&steamGridDbTouchStartY<541) {
+                if(std::abs(delta)>=18)steamGridDbTouchDragged=true;
+                const int steps=delta/36;
+                if(steps!=0) {
+                    steamGridDbMoveAsset(steps);
+                    steamGridDbTouchStartY-=steps*36;
+                }
+            }
+            return;
+        }
+        if(e.type==SDL_FINGERUP&&steamGridDbTouchTracking) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            const bool tap=!steamGridDbTouchDragged;
+            steamGridDbTouchTracking=false;
+            steamGridDbTouchDragged=false;
+            if(!tap)return;
+
+            if(x>=1082&&x<=1178&&y>=62&&y<=102) {
+                steamGridDbClosePicker();
+            } else if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+                if(y>=198&&y<574&&x>=126&&x<=1154) {
+                    const int row=(y-198)/47;
+                    const int count=static_cast<int>(gSteamGridDbService.snapshot().games.size());
+                    const int index=steamGridDbMatchOffset+row;
+                    if(index>=0&&index<count) {
+                        steamGridDbMatchIndex=index;
+                        steamGridDbChooseMatch(index);
+                    }
+                } else if(x>=842&&x<=1002&&y>=574&&y<=616) {
+                    steamGridDbChooseMatch(steamGridDbMatchIndex);
+                } else if(x>=1016&&x<=1152&&y>=574&&y<=616) {
+                    steamGridDbEditSearchTitle();
+                }
+            } else {
+                static const int tabX[]={116,374,632,890};
+                if(y>=188&&y<=226) {
+                    for(int i=0;i<4;++i)if(x>=tabX[i]&&x<=tabX[i]+238) {
+                        if(i!=steamGridDbKindIndex)steamGridDbChangeKind(i-steamGridDbKindIndex);
+                        break;
+                    }
+                } else if(steamGridDbOfflineFallback&&x>=126&&x<=466&&y>=290&&y<486) {
+                    const int index=std::max(0,std::min(3,(y-290)/48));
+                    if(index!=steamGridDbKindIndex) {
+                        steamGridDbKindIndex=index;
+                        steamGridDbDestroyPreview();
+                        if(gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,
+                            steamGridDbCacheKind(index)))
+                            steamGridDbPreviewLoadedPath=gSteamGridDbService.cache().pathFor(
+                                steamGridDbCurrentTitleId,steamGridDbCacheKind(index));
+                    }
+                } else if(!steamGridDbOfflineFallback&&x>=124&&x<=474&&y>=289&&y<541) {
+                    const int index=steamGridDbAssetOffset+(y-289)/36;
+                    const auto state=gSteamGridDbService.snapshot();
+                    if(index>=0&&index<static_cast<int>(state.assets.size()))
+                        gSteamGridDbService.selectAsset(index);
+                } else if(x>=108&&x<=344&&y>=574&&y<=616) {
+                    steamGridDbRestoreSystem();
+                } else if(x>=358&&x<=536&&y>=574&&y<=616) {
+                    steamGridDbEditSearchTitle();
+                } else if(x>=854&&x<=1172&&y>=574&&y<=616) {
+                    if(steamGridDbOfflineFallback)steamGridDbApplyCurrentCached();
+                    else steamGridDbApplyPending=gSteamGridDbService.applySelected();
+                }
+            }
+            return;
+        }
+        if(e.type==SDL_FINGERUP) {
+            steamGridDbTouchTracking=false;
+            steamGridDbTouchDragged=false;
+        }
+        return;
+    }
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
     if(touchPressActive &&
@@ -3989,9 +4605,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
-            const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=214&&y<562) {
+            const int row=(y-214)/29;
+            if(row>=0&&row<12)activateAppSettings(row);
         }
         return;
     }
@@ -4051,6 +4667,16 @@ void touchInput(const SDL_Event&e) {
         if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
+    }
+    if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
+       !recentOpen && !powerMenu && !appSettingsMenu) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(y>=566&&y<=614&&x>=642&&x<=832) {
+            Tile tile;
+            std::uint64_t id=0;
+            if(steamGridDbGetSelectedGame(tile,id))steamGridDbOpenPicker();
+            return;
+        }
     }
     if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
@@ -4619,6 +5245,8 @@ int main(int,char**) {
         pumpAsyncLayoutSaver();
         pumpPlayStatsQuery();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        pumpSteamGridDbPicker();
+        pumpSteamGridDbCacheCleanup();
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
@@ -4635,6 +5263,7 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    gSteamGridDbService.shutdown();
     SDL_AtomicSet(&nextendoStop,1);
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
@@ -4657,6 +5286,7 @@ int main(int,char**) {
         accountServiceReady=false;
     }
     if (setsysReady) setsysExit();
+    steamGridDbDestroyPreview();
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();

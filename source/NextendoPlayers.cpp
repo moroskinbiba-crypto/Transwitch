@@ -6,6 +6,7 @@
 
 #include <switch.h>
 #include <curl/curl.h>
+#include "NetworkRuntime.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -176,18 +177,11 @@ bool readConnected(const std::string& body, unsigned& connected) {
 } // namespace
 
 bool initializeNetwork() {
-    const Result socketRc = socketInitializeDefault();
-    if (R_FAILED(socketRc)) return false;
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-        socketExit();
-        return false;
-    }
-    return true;
+    return desknx::network::acquire();
 }
 
 void shutdownNetwork() {
-    curl_global_cleanup();
-    socketExit();
+    desknx::network::release();
 }
 
 bool fetchSnapshot(PlayerSnapshot& snapshot) {
