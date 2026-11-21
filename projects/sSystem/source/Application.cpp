@@ -207,18 +207,19 @@ namespace desknx::system::app {
                           app_id, saveRc);
             return saveRc;
         }
-        // LNC-02: the menu can override the NACP verdict via the v2 flags -
-        // NoPreuser means "the game picks players itself", so the preselected
-        // user parameter must not be sent even when NACP asks for an account.
-        if (flags & desknx::ipc::LaunchFlagNoPreuser) wants_user = false;
-        else if (flags & desknx::ipc::LaunchFlagHasUser) wants_user = true;
+        // NACP controls save-data policy above, but an explicit profile
+        // selected in DeskNX is a separate launch decision. In particular,
+        // StartupUserAccount=None must not discard a valid menu-selected UID.
+        const bool push_preselected_user =
+            desknx::ipc::rules::ShouldPushPreselectedUser(
+                flags, wants_user, accountUidIsValid(&user));
 
         Result rc = appletCreateApplication(&g_AppHolder, app_id);
         if (rc != 0) return rc;
 
-        // Match HomeNX/qlaunch: an invalid or unavailable user is not a
-        // preselection. Leave the title free to show its own account picker.
-        rc = (wants_user && accountUidIsValid(&user)) ? PushUserParam(user) : 0;
+        // Never push a zero UID. When there is no explicit menu choice, retain
+        // NACP/legacy behavior and let the title present its own selector.
+        rc = push_preselected_user ? PushUserParam(user) : 0;
         if (rc == 0) {
             // Release foreground so the app can acquire it. Do not start
             // the title if AM refused the handoff.
