@@ -1076,6 +1076,7 @@ void steamGridDbUpdatePreview(const std::string& path,std::uint64_t revision) {
     if(steamGridDbPreviewTexture&&steamGridDbPreviewLoadedPath==path&&
        steamGridDbPreviewRevision==revision)return;
     steamGridDbDestroyPreview();
+    if(!IconCache::validateImagePath(path))return;
     SDL_Surface* surface=IMG_Load(path.c_str());
     if(!surface)return;
     if(surface->w<=0||surface->h<=0||
