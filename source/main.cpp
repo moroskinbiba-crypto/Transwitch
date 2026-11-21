@@ -123,6 +123,7 @@ SDL_Thread* catalogueThread = nullptr;
 SDL_Thread* nextendoThread = nullptr;
 SDL_mutex* nextendoMutex = nullptr;
 SDL_atomic_t nextendoStop{};
+SDL_atomic_t nextendoConfiguredRefreshMs{};
 desknx::nextendo::PresenceFeed nextendoFeed;
 struct CatalogueScanRequest { bool forceRefresh; bool reinitializeNs; };
 const CatalogueScanRequest catalogueRefreshRequest{true, true};
@@ -863,7 +864,9 @@ int configuredWidgetRefresh(Kind kind) {
                        widgetConfig(tile).refreshSeconds;
         found=true;
     }
-    return found?seconds:desknx::widgets::defaults(kind).refreshSeconds;
+    seconds=found?seconds:desknx::widgets::defaults(kind).refreshSeconds;
+    // Keep a modest minimum polling interval for the remote Nextendo endpoint.
+    return kind==Kind::Nextendo?std::max(30,seconds):seconds;
 }
 std::string typeName(Kind k) {
     switch(k) {
@@ -1332,7 +1335,11 @@ int nextendoThreadMain(void*) {
                 desknx::diag::Write("nextendo", "snapshot_failed",
                     "network_ready=%d", networkReady ? 1 : 0);
             }
-            nextAttempt = now + desknx::nextendo::RefreshIntervalMs;
+            const int configuredMs=SDL_AtomicGet(&nextendoConfiguredRefreshMs);
+            const std::uint32_t refreshMs=configuredMs>=30000?
+                static_cast<std::uint32_t>(configuredMs):
+                static_cast<std::uint32_t>(desknx::nextendo::RefreshIntervalMs);
+            nextAttempt = now + refreshMs;
         }
         SDL_Delay(250);
     }
@@ -2834,13 +2841,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
             return std::string(value);
         };
-        auto recentLine=[&](size_t index,int y,int iconSize) {
-            if(index>=recentLaunches.size())return;
-            const auto& entry=recentLaunches[index];
-            Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
-            drawTileIcon(iconTile,left,y,iconSize);
-            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
-        };
         std::vector<HistoryEntry> recentGames;
         for(const auto& entry:recentLaunches)
             if(entry.kind==Kind::Game)recentGames.push_back(entry);
@@ -3128,7 +3128,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                          1,WHITE,right);
                 }
             }
-            if(!wide&&dataB)label(std::to_string(favoriteTitleIds.size())+" SAVED",r.y+r.h-22);
+            if(!wide&&dataB)label(
+                std::to_string(favoritesWidget?favoriteTitleIds.size():games.size())+
+                (favoritesWidget?" SAVED":" IN LIBRARY"),r.y+r.h-22);
         } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
             text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
@@ -3608,12 +3610,11 @@ void drawScreen() {
         if(!tile)widgetEditorOpen=false;
         else {
             const auto config=widgetConfig(*tile);
-            const char* styles[]={"DIGITAL","MINIMAL","ANALOG"};
             const std::string sizeValue=std::to_string(tile->w)+" x "+std::to_string(tile->h);
             const std::string refreshValue=std::to_string(config.refreshSeconds)+" SEC";
             const std::string itemValue=std::to_string(config.itemCount)+" ITEMS";
             const std::string values[]={
-                sizeValue,styles[std::max(0,std::min(2,config.style))],
+                sizeValue,widgetEditorStyleLabel(tile->kind,config.style),
                 desknx::widgets::enabled(config,0)?"ON":"OFF",
                 desknx::widgets::enabled(config,1)?"ON":"OFF",
                 refreshValue,itemValue,"DONE"
@@ -4016,6 +4017,22 @@ void openWidgetEditor() {
 void closeWidgetEditor() {
     widgetEditorOpen=false;
 }
+std::string widgetEditorStyleLabel(Kind kind,int style) {
+    static const char* clock[]={"DIGITAL 24H","DIGITAL 12H","ANALOG"};
+    static const char* generic[]={"STANDARD","MINIMAL","DETAILED"};
+    switch(kind) {
+        case Kind::Clock:return clock[std::max(0,std::min(2,style))];
+        case Kind::Battery:return generic[std::max(0,std::min(2,style))];
+        case Kind::System:return style==0?"OVERVIEW":style==1?"THERMAL":"FREQUENCIES";
+        case Kind::Recent:return style==0?"LIST":style==1?"COVERS":"COMPACT";
+        case Kind::Storage:return style==0?"FREE SPACE":style==1?"USED SPACE":"CAPACITY";
+        case Kind::Calendar:return style==0?"MONTH":style==1?"DAY CARD":"AGENDA";
+        case Kind::Nextendo:return style==0?"ONLINE SUMMARY":style==1?"ACTIVITY FIRST":"NETWORK STATUS";
+        case Kind::Favorites:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
+        case Kind::GameLibrary:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
+        default:return generic[std::max(0,std::min(2,style))];
+    }
+}
 std::string widgetEditorDataLabel(unsigned bit) {
     switch(widgetEditorKind) {
         case Kind::Clock: return bit==0?"SECONDS":"SHOW DATE";
@@ -4095,6 +4112,8 @@ void adjustWidgetEditor(int direction) {
         default:return;
     }
     tile->data=desknx::widgets::serialize(config);
+    if(tile->kind==Kind::Nextendo)
+        SDL_AtomicSet(&nextendoConfiguredRefreshMs,configuredWidgetRefresh(Kind::Nextendo)*1000);
     layoutUserModified=true;
     saveNow();
 }
