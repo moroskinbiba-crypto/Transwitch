@@ -152,8 +152,8 @@ namespace desknx::system::app {
         u64 got = 0;
         const Result rc = nsGetApplicationControlData(NsApplicationControlSource_Storage, app_id,
                                                       ctl.get(), sizeof(*ctl), &got);
-        DaemonLog("save: app=0x%016lx user=%016lx%016lx control rc=0x%x", app_id,
-                  user.uid[0], user.uid[1], rc);
+        DaemonLog("save: app=0x%016lx user_valid=%d control rc=0x%x", app_id,
+                  accountUidIsValid(&user) ? 1 : 0, rc);
         if (R_FAILED(rc)) return 0;   // no NACP: launch as before
         const NacpStruct &n = ctl->nacp;
         wants_user = n.startup_user_account != 0;
