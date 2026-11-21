@@ -3043,7 +3043,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
                 text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
                      left,r.y+42,3,WHITE,right);
-                text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
+                if(dataB)text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
                      left,r.y+83,1,BLUE,right);
                 drawSystemIcon(6,right-34,r.y+38,26,accent);
             } else {
@@ -3076,6 +3076,59 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(languageRussian?"ТЕКУЩАЯ ДАТА":"CURRENT DATE",
                      left,r.y+r.h-22,1,accent,right);
             }
+        } else if(t.kind==Kind::Nextendo) {
+            const auto online=nextendoWidgetSnapshot();
+            label("NEXTENDO  /  ACTIVITY",r.y+12);
+            if(!online.fresh) {
+                text("WAITING FOR SYNC",left,r.y+39,2,WHITE,right);
+                label("STATUS UNKNOWN",r.y+78);
+            } else {
+                if(dataA) {
+                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
+                    label(std::to_string(online.activeTitles)+" ACTIVE GAMES",r.y+76);
+                } else {
+                    text("SERVICE SYNCED",left,r.y+40,2,GREEN,right);
+                }
+                if(dataB) {
+                    if(!online.topGame.empty())
+                        text(online.topGame+"  /  "+std::to_string(online.topPlayers),
+                             left,r.y+93,1,BLUE,right);
+                    else label("NO ACTIVE TITLE DATA",r.y+93);
+                }
+            }
+        } else if(t.kind==Kind::Favorites || t.kind==Kind::GameLibrary) {
+            const std::vector<Tile> games=t.kind==Kind::Favorites?
+                favoriteTiles():gameLibraryTiles(static_cast<std::size_t>(config.itemCount));
+            const bool favoritesWidget=t.kind==Kind::Favorites;
+            label(favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+12);
+            if(games.empty()) {
+                text(favoritesWidget?"ADD FAVORITES WITH ZL":"NO INSTALLED GAMES",
+                     left,r.y+48,1,MUTED,right);
+            } else if(wide&&config.style==1) {
+                const int count=std::min<int>(
+                    std::min<int>(config.itemCount,4),static_cast<int>(games.size()));
+                const int cellWidth=std::max(1,innerWidth/std::max(1,count));
+                for(int i=0;i<count;++i) {
+                    const int x=left+i*cellWidth;
+                    const Tile& game=games[static_cast<std::size_t>(i)];
+                    drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+31,42);
+                    text(game.title,x+2,r.y+81,1,WHITE,x+cellWidth-3);
+                }
+            } else {
+                const int iconSize=wide?24:32;
+                const int rowStep=wide?27:42;
+                const int maxRows=wide?2:std::min<int>(4,config.itemCount);
+                const int count=std::min<int>(
+                    std::min<int>(config.itemCount,maxRows),static_cast<int>(games.size()));
+                for(int i=0;i<count;++i) {
+                    const Tile& game=games[static_cast<std::size_t>(i)];
+                    const int y=r.y+(wide?34:48)+i*rowStep;
+                    drawTileIcon(game,left,y,iconSize);
+                    text(game.title,left+iconSize+8,y+std::max(3,(iconSize-8)/2),
+                         1,WHITE,right);
+                }
+            }
+            if(!wide&&dataB)label(std::to_string(favoriteTitleIds.size())+" SAVED",r.y+r.h-22);
         } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
             text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
