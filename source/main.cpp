@@ -7491,6 +7491,21 @@ void touchInput(const SDL_Event&e) {
         catalogueTouchActive=false;
         catalogueTouchMoved=false;
         catalogueTouchFingerId=0;
+    // Any surface other than the library has now had first refusal above.
+    // Never allow its unhandled motion/up events to fall through into a desktop
+    // drag or selection that started before the surface became active.
+    if(gSurfaceManager.hasBlockingSurface()&&
+       !gSurfaceManager.isTop(SurfaceId::Library)) {
+        if(e.type==SDL_FINGERUP&&touchPressActive) {
+            touchPressActive=false;
+            touchPressFingerId=0;
+            touchDragging=false;
+            dragging=false;
+            touchDragOffsetX=touchDragOffsetY=0;
+            touchDragTabStart=-1;
+        }
+        return;
+    }
     } else if(e.type==SDL_FINGERMOTION&&touchPressActive&&!touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(std::abs(x-touchPressStartX)+std::abs(y-touchPressStartY)>=12) {
