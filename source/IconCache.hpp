@@ -128,6 +128,7 @@ public:
     SDL_Texture* get(const desknx::model::Tile& tile, bool highPriority = false) {
         if (!renderer_) return nullptr;
 
+        const Uint32 now = SDL_GetTicks();
         // Hot path: resident textures are found by stable tile identity before
         // any path lookup, filesystem call or temporary allocation.
         for (auto& entry : entries_) {
@@ -143,7 +144,6 @@ public:
         if (defaultPath.empty()) return nullptr;
 
         const std::string key = makeKey(tile.kind, tile.data);
-        const Uint32 now = SDL_GetTicks();
         const auto failed = failedUntil_.find(key);
         if (failed != failedUntil_.end()) {
             if (static_cast<Sint32>(now - failed->second) < 0) return nullptr;
@@ -350,8 +350,7 @@ private:
 
     void enqueue(const desknx::model::Tile& tile, const std::string& key,
                  int priority) {
-        if (!ensureWorker() || pendingKeys_.find(key) != pendingKeys_.end())
-            return;
+        if (!ensureWorker()) return;
 
         Request request;
         request.kind = tile.kind;
@@ -363,7 +362,30 @@ private:
         request.priority = priority;
 
         SDL_LockMutex(mutex_);
-        if (stopWorker_ || pendingKeys_.find(key) != pendingKeys_.end()) {
+        if (stopWorker_) {
+            SDL_UnlockMutex(mutex_);
+            return;
+        }
+        // If a tile was prefetched and becomes focused before decoding starts,
+        // promote its queued request instead of leaving it behind background art.
+        const auto queued = std::find_if(requests_.begin(), requests_.end(),
+            [&](const Request& item) { return item.key == key; });
+        if (queued != requests_.end()) {
+            if (priority > queued->priority) {
+                Request promoted = std::move(*queued);
+                requests_.erase(queued);
+                promoted.priority = priority;
+                const auto position = std::find_if(
+                    requests_.begin(), requests_.end(),
+                    [&](const Request& item) { return item.priority < priority; });
+                requests_.insert(position, std::move(promoted));
+                SDL_CondSignal(condition_);
+            }
+            SDL_UnlockMutex(mutex_);
+            return;
+        }
+        // A matching key not in the queue is already being decoded.
+        if (pendingKeys_.find(key) != pendingKeys_.end()) {
             SDL_UnlockMutex(mutex_);
             return;
         }
