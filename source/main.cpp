@@ -4407,6 +4407,57 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(steamGridDbPickerOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=1082&&x<=1178&&y>=62&&y<=102) {
+                steamGridDbClosePicker();
+            } else if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+                if(y>=198&&y<574&&x>=126&&x<=1154) {
+                    const int row=(y-198)/47;
+                    const int count=static_cast<int>(gSteamGridDbService.snapshot().games.size());
+                    const int index=steamGridDbMatchOffset+row;
+                    if(index>=0&&index<count)steamGridDbMatchIndex=index;
+                } else if(x>=842&&x<=1002&&y>=574&&y<=616) {
+                    steamGridDbChooseMatch(steamGridDbMatchIndex);
+                } else if(x>=1016&&x<=1152&&y>=574&&y<=616) {
+                    steamGridDbEditSearchTitle();
+                }
+            } else {
+                static const int tabX[]={116,374,632,890};
+                if(y>=188&&y<=226) {
+                    for(int i=0;i<4;++i)if(x>=tabX[i]&&x<=tabX[i]+238) {
+                        if(i!=steamGridDbKindIndex)steamGridDbChangeKind(i-steamGridDbKindIndex);
+                        break;
+                    }
+                } else if(steamGridDbOfflineFallback&&x>=126&&x<=466&&y>=290&&y<486) {
+                    const int index=std::max(0,std::min(3,(y-290)/48));
+                    if(index!=steamGridDbKindIndex) {
+                        steamGridDbKindIndex=index;
+                        steamGridDbDestroyPreview();
+                        if(gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,
+                            steamGridDbCacheKind(index)))
+                            steamGridDbPreviewLoadedPath=gSteamGridDbService.cache().pathFor(
+                                steamGridDbCurrentTitleId,steamGridDbCacheKind(index));
+                    }
+                } else if(!steamGridDbOfflineFallback&&x>=124&&x<=474&&y>=289&&y<541) {
+                    const int index=steamGridDbAssetOffset+(y-289)/36;
+                    const auto state=gSteamGridDbService.snapshot();
+                    if(index>=0&&index<static_cast<int>(state.assets.size()))
+                        gSteamGridDbService.selectAsset(index);
+                } else if(x>=108&&x<=344&&y>=574&&y<=616) {
+                    steamGridDbRestoreSystem();
+                } else if(x>=358&&x<=536&&y>=574&&y<=616) {
+                    steamGridDbEditSearchTitle();
+                } else if(x>=854&&x<=1172&&y>=574&&y<=616) {
+                    if(steamGridDbOfflineFallback)steamGridDbApplyCurrentCached();
+                    else steamGridDbApplyPending=gSteamGridDbService.applySelected();
+                }
+            }
+        }
+        return;
+    }
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
     if(touchPressActive &&
