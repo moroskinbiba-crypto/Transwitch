@@ -114,6 +114,20 @@ bool safeUrl(const std::string& u){
  std::string host=u.substr(a,b==std::string::npos?std::string::npos:b-a),suffix=".steamgriddb.com";
  return host=="steamgriddb.com"||(host.size()>suffix.size()&&host.compare(host.size()-suffix.size(),suffix.size(),suffix)==0);
 }
+bool validRasterFile(const std::string& path){
+ FILE* file=std::fopen(path.c_str(),"rb");
+ if(!file)return false;
+ unsigned char header[8]{};
+ const std::size_t got=std::fread(header,1,sizeof(header),file);
+ std::fclose(file);
+ const bool png=got>=8&&header[0]==0x89&&header[1]=='P'&&
+     header[2]=='N'&&header[3]=='G'&&header[4]==0x0D&&
+     header[5]==0x0A&&header[6]==0x1A&&header[7]==0x0A;
+ const bool jpeg=got>=3&&header[0]==0xFF&&header[1]==0xD8&&header[2]==0xFF;
+ const bool ico=got>=6&&header[0]==0&&header[1]==0&&
+     header[2]==1&&header[3]==0&&header[4]!=0&&header[5]==0;
+ return png||jpeg||ico;
+}
 bool supported(const std::string& mime,const std::string& url){
  std::string m=mime;for(char& c:m)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
  if(m=="image/png"||m=="image/jpeg"||m=="image/jpg"||
@@ -179,10 +193,13 @@ bool downloadImage(const std::string& url,const std::string& destination,std::st
   curl_easy_setopt(c,CURLOPT_XFERINFODATA,&cancellation);
  }
  CURLcode rc=curl_easy_perform(c);long status=0;if(rc==CURLE_OK)curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&status);curl_easy_cleanup(c);
- bool closed=std::fclose(f)==0;if(rc!=CURLE_OK||status!=200||sink.overflow||sink.bytes==0||!closed){
+ bool closed=std::fclose(f)==0;
+ const bool validImage=closed&&sink.bytes>0&&validRasterFile(destination);
+ if(rc!=CURLE_OK||status!=200||sink.overflow||sink.bytes==0||!closed||!validImage){
   std::remove(destination.c_str());
   if(shouldCancel&&shouldCancel(cancelContext))error="Request cancelled";
   else if(sink.overflow)error="Image exceeds 16 MiB";
+  else if(!validImage)error="Server did not return a valid PNG/JPEG/ICO image";
   else if(rc!=CURLE_OK)error=std::string("Download failed: ")+curl_easy_strerror(rc);
   else error="Image server returned HTTP "+std::to_string(status);
   return false;
