@@ -5,6 +5,8 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +25,36 @@
 // used by HomeNX's IconStreamer, adapted to DeskNX's SDL2 renderer.
 class IconCache {
 public:
+    struct Stats {
+        std::size_t residentTextures{0};
+        std::size_t textureBytes{0};
+        std::size_t pendingRequests{0};
+        std::size_t completedImages{0};
+        std::size_t failedKeys{0};
+        bool workerRunning{false};
+    };
+
+    Stats stats() const {
+        Stats result;
+        result.residentTextures = entries_.size();
+        result.textureBytes = textureBytes_;
+        result.failedKeys = failedUntil_.size();
+        if (mutex_) {
+            SDL_LockMutex(mutex_);
+            result.pendingRequests = requests_.size();
+            result.completedImages = completed_.size();
+            result.workerRunning = worker_ != nullptr && !stopWorker_;
+            SDL_UnlockMutex(mutex_);
+        }
+        return result;
+    }
+
+    void prefetch(const desknx::model::Tile& tile) {
+        // get() is deliberately non-blocking; the worker performs file I/O and
+        // decoding, while beginFrame() uploads no more than one texture.
+        (void)get(tile);
+    }
+
     // Validate dimensions from image headers before asking SDL_image to decode.
     // Used by the large preview path as well as by the asynchronous tile cache.
     static bool validateImagePath(const std::string& path) {
@@ -69,7 +101,26 @@ public:
         clearTextures();
     }
 
-    SDL_Texture* get(const desknx::model::Tile& tile) {
+    void setGameIconOverridesDir(const std::string& path) {
+        if (path == gameIconOverridesDir_) return;
+        gameIconOverridesDir_ = path;
+        if (mutex_) {
+            SDL_LockMutex(mutex_);
+            ++generation_;
+            requests_.clear();
+            completed_.clear();
+            pendingKeys_.clear();
+            SDL_CondBroadcast(condition_);
+            SDL_UnlockMutex(mutex_);
+        } else {
+            ++generation_;
+            pendingKeys_.clear();
+        }
+        failedUntil_.clear();
+        clearTextures();
+    }
+
+    SDL_Texture* get(const desknx::model::Tile& tile, bool highPriority = false) {
         if (!renderer_) return nullptr;
 
         // Hot path: resident textures are found by stable tile identity before
@@ -95,7 +146,7 @@ public:
 
         // Queueing is non-blocking. Missing artwork is represented by the
         // caller's placeholder until the worker finishes decoding it.
-        enqueue(tile, key);
+        enqueue(tile, key, highPriority ? 2 : 0);
         return nullptr;
     }
 
@@ -164,7 +215,9 @@ private:
         std::string data;
         std::string key;
         std::string customDirectory;
+        std::string gameOverrideDirectory;
         std::uint64_t generation{0};
+        int priority{0};
     };
 
     struct Decoded {
@@ -268,7 +321,8 @@ private:
         return 0;
     }
 
-    void enqueue(const desknx::model::Tile& tile, const std::string& key) {
+    void enqueue(const desknx::model::Tile& tile, const std::string& key,
+                 int priority) {
         if (!ensureWorker() || pendingKeys_.find(key) != pendingKeys_.end())
             return;
 
@@ -278,14 +332,29 @@ private:
         request.data = tile.data;
         request.key = key;
         request.customDirectory = customIconPackDir_;
+        request.gameOverrideDirectory = gameIconOverridesDir_;
+        request.priority = priority;
 
         SDL_LockMutex(mutex_);
-        if (stopWorker_ || requests_.size() >= MaxQueuedRequests) {
+        if (stopWorker_ || pendingKeys_.find(key) != pendingKeys_.end()) {
             SDL_UnlockMutex(mutex_);
             return;
         }
+        if (requests_.size() >= MaxQueuedRequests) {
+            // Keep the queue bounded while allowing the focused/selected tile
+            // to replace an unstarted background prefetch.
+            if (requests_.empty() || priority <= requests_.back().priority) {
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            pendingKeys_.erase(requests_.back().key);
+            requests_.pop_back();
+        }
         request.generation = generation_;
-        requests_.push_back(std::move(request));
+        const auto position = std::find_if(
+            requests_.begin(), requests_.end(),
+            [&](const Request& queued) { return queued.priority < priority; });
+        requests_.insert(position, std::move(request));
         pendingKeys_.insert(key);
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
@@ -299,7 +368,8 @@ private:
         result.generation=request.generation;
         const std::string defaultPath=desknx::model::iconCachePath(request.kind,request.data);
         if(defaultPath.empty())return result;
-        const std::string customPath=customPathFor(request.kind,request.data,request.customDirectory);
+        const std::string customPath=customPathFor(request.kind,request.data,
+            request.customDirectory,request.gameOverrideDirectory);
 
         std::string steamGridPath;
         if(request.kind==desknx::model::Kind::Game&&desknx::model::isTitleId(request.data)){
@@ -320,7 +390,8 @@ private:
                 if(!custom)std::remove(path.c_str());
                 return false;
             }
-            SDL_Surface* source=IMG_Load(path.c_str());
+            SDL_RWops* stream=SDL_RWFromFile(path.c_str(),"rb");
+            SDL_Surface* source=stream?IMG_Load_RW(stream,1):nullptr;
             if(!source){if(!custom)std::remove(path.c_str());return false;}
             const bool dimensionsOk=source->w>0&&source->h>0&&
                 source->w<=MaxIconDimension&&source->h<=MaxIconDimension&&
@@ -444,8 +515,9 @@ private:
 
     static std::string customPathFor(desknx::model::Kind kind,
                                      const std::string& data,
-                                     const std::string& customDirectory) {
-        if (customDirectory.empty()) return {};
+                                     const std::string& customDirectory,
+                                     const std::string& gameOverrideDirectory) {
+        if (customDirectory.empty() && gameOverrideDirectory.empty()) return {};
 
         std::string stem;
         if (kind == desknx::model::Kind::Game) {
@@ -476,11 +548,12 @@ private:
             return {};
         }
 
-        static const char* const extensions[] = {".jpg", ".png", ".jpeg"};
-        auto findFile = [&](const std::string& base) -> std::string {
+        static const char* const extensions[] = {".svg", ".jpg", ".png", ".jpeg"};
+        auto findInDirectory = [&](const std::string& directory,
+                                   const std::string& base) -> std::string {
+            if (directory.empty()) return {};
             for (const char* extension : extensions) {
-                const std::string candidate =
-                    customDirectory + "/" + base + extension;
+                const std::string candidate = directory + "/" + base + extension;
                 struct stat st{};
                 if (stat(candidate.c_str(), &st) == 0 &&
                     S_ISREG(st.st_mode) && st.st_size > 0)
@@ -488,8 +561,14 @@ private:
             }
             return {};
         };
+        auto findFile = [&](const std::string& base) -> std::string {
+            return findInDirectory(customDirectory, base);
+        };
 
         if (kind == desknx::model::Kind::Game) {
+            // One-off per-title artwork overrides a shared pack or SteamGridDB.
+            const std::string perGame = findInDirectory(gameOverrideDirectory, stem);
+            if (!perGame.empty()) return perGame;
             // Prefer real landscape box art over the square NACP system icon.
             const std::string coverBases[] = {
                 "cover-" + stem, stem + "-cover",
@@ -513,7 +592,74 @@ private:
         return {};
     }
 
+    static double svgNumber(const std::string& text, const std::string& key) {
+        std::size_t at = text.find(key);
+        while (at != std::string::npos) {
+            if (at == 0 || !(std::isalnum(static_cast<unsigned char>(text[at-1])) ||
+                             text[at-1] == '-' || text[at-1] == '_'))
+                break;
+            at = text.find(key, at + key.size());
+        }
+        if (at == std::string::npos) return 0.0;
+        at += key.size();
+        while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) ++at;
+        if (at >= text.size() || text[at++] != '=') return 0.0;
+        while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) ++at;
+        if (at >= text.size() || (text[at] != '"' && text[at] != '\'')) return 0.0;
+        const char quote = text[at++];
+        char* end = nullptr;
+        const double value = std::strtod(text.c_str() + at, &end);
+        if (!end || end == text.c_str() + at || value <= 0.0 || !std::isfinite(value)) return 0.0;
+        if (static_cast<std::size_t>(end - text.c_str()) >= text.size() ||
+            text[static_cast<std::size_t>(end - text.c_str())] != quote) return 0.0;
+        return value;
+    }
+
+    static bool svgDimensionsWithinLimit(const std::string& path) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) return false;
+        std::string header(8192, '\0');
+        input.read(&header[0], static_cast<std::streamsize>(header.size()));
+        header.resize(static_cast<std::size_t>(input.gcount()));
+        const std::size_t start = header.find("<svg");
+        if (start == std::string::npos) return false;
+        const std::size_t end = header.find('>', start);
+        if (end == std::string::npos) return false;
+        const std::string tag = header.substr(start, end - start + 1);
+        double width = svgNumber(tag, "width");
+        double height = svgNumber(tag, "height");
+        if (width <= 0.0 || height <= 0.0) {
+            const std::size_t view = tag.find("viewBox");
+            if (view == std::string::npos) return false;
+            const std::size_t eq = tag.find('=', view);
+            if (eq == std::string::npos) return false;
+            const std::size_t quoteAt = tag.find_first_of("\"'", eq + 1);
+            if (quoteAt == std::string::npos) return false;
+            const char quote = tag[quoteAt];
+            const std::size_t close = tag.find(quote, quoteAt + 1);
+            if (close == std::string::npos) return false;
+            const std::string values = tag.substr(quoteAt + 1, close - quoteAt - 1);
+            double x = 0.0, y = 0.0;
+            if (std::sscanf(values.c_str(), "%lf %lf %lf %lf", &x, &y, &width, &height) != 4)
+                return false;
+        }
+        return width >= 1.0 && height >= 1.0 &&
+            width <= 512.0 && height <= 512.0 && width * height <= 1024.0 * 1024.0;
+    }
+
     static bool imageDimensionsWithinLimit(const std::string& path) {
+        const std::size_t dot = path.find_last_of('.');
+        if (dot != std::string::npos) {
+            std::string extension = path.substr(dot);
+            for (char& ch : extension)
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (extension == ".svg") {
+                struct stat st{};
+                return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) &&
+                    st.st_size > 0 && st.st_size <= 128 * 1024 &&
+                    svgDimensionsWithinLimit(path);
+            }
+        }
         std::ifstream input(path, std::ios::binary);
         unsigned char header[24]{};
         if (!input.read(reinterpret_cast<char*>(header), 8)) return false;
@@ -631,6 +777,7 @@ private:
     std::uint64_t generation_{1};
 
     std::string customIconPackDir_;
+    std::string gameIconOverridesDir_;
     std::unordered_map<std::string, Uint32> failedUntil_;
     std::unordered_set<std::string> pendingKeys_;
     std::deque<Request> requests_;

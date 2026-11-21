@@ -28,6 +28,9 @@ jobs:
       - name: Verify production HOME applet entry point
         run: bash scripts/check-home-applet-entrypoint.sh
 
+      - name: Validate SOCOMA SVG assets
+        run: python3 scripts/check-svg-assets.py assets/icons
+
       - name: Verify Switch curl dependency
         run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
 
@@ -39,6 +42,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Validate custom font preflight parser
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/font_file_validation_test.cpp -o /tmp/desknx-font-validation-test
+          /tmp/desknx-font-validation-test
+
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update
@@ -48,6 +56,26 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/nacp_title_block_test.cpp -lz -o /tmp/desknx-nacp-test
           /tmp/desknx-nacp-test
+
+      - name: Test application-size decoding
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/application_size_test.cpp -o /tmp/desknx-application-size-test
+          /tmp/desknx-application-size-test
+
+      - name: Test HomeNX library grid placement and collision handling
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/library_grid_test.cpp -o /tmp/desknx-library-grid-test
+          /tmp/desknx-library-grid-test
+
+      - name: Test bounded recursive NRO scanner
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nro_scanner_test.cpp -o /tmp/desknx-nro-scanner-test
+          /tmp/desknx-nro-scanner-test
+
+      - name: Test shutdown-time persistence guard
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/shutdown_persistence_test.cpp -o /tmp/desknx-shutdown-persistence-test
+          /tmp/desknx-shutdown-persistence-test
 
       - name: Test widget configuration persistence and validation
         run: |
@@ -127,6 +155,9 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
+
+      - name: Validate package runtime assets
+        run: python3 scripts/check-svg-assets.py assets/icons
 
       - name: Build native standalone NRO
         run: |

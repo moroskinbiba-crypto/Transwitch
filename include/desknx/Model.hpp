@@ -45,6 +45,10 @@ struct Candidate {
     uint32_t launchCount{0};
     bool playStatsQueried{false};
     bool playStatsAvailable{false};
+    std::string displayVersion{};
+    bool updateStatusAvailable{false};
+    std::uint64_t occupiedSizeBytes{0};
+    bool occupiedSizeAvailable{false};
 };
 
 inline bool isTitleId(const std::string& value) {
@@ -145,7 +149,7 @@ inline bool isValidWorkspaceAppearance(const Workspace& workspace) {
 inline bool isSupportedTileSize(int w, int h) {
     return (w == 1 && h == 1) || (w == 2 && h == 1) ||
            (w == 3 && h == 1) || (w == 2 && h == 2) ||
-           (w == 3 && h == 2);
+           (w == 3 && h == 2) || (w == 2 && h == 3);
 }
 
 inline bool overlap(const Tile& a, const Tile& b) {
@@ -185,6 +189,28 @@ inline bool firstFree(const Workspace& desk, const Tile& tile, int& x, int& y) {
                 y = yy;
                 return true;
             }
+        }
+    }
+    return false;
+}
+
+// Find the next valid origin at or after the requested cell in reading order.
+// Search wraps once, and ignore may exclude the tile being repositioned.
+inline bool firstFreeFrom(const Workspace& desk, const Tile& tile,
+                          int startX, int startY,
+                          int& resultX, int& resultY, int ignore = -1) {
+    const int x = std::max(0, std::min(Columns - 1, startX));
+    const int y = std::max(0, std::min(Rows - 1, startY));
+    const int start = y * Columns + x;
+    const int total = Columns * Rows;
+    for (int offset = 0; offset < total; ++offset) {
+        const int index = (start + offset) % total;
+        const int candidateX = index % Columns;
+        const int candidateY = index / Columns;
+        if (placeable(desk, tile, candidateX, candidateY, ignore)) {
+            resultX = candidateX;
+            resultY = candidateY;
+            return true;
         }
     }
     return false;
