@@ -3129,8 +3129,8 @@ void drawScreen() {
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
             languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE","STEAMGRIDDB API KEY"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
-            const int yy=214+i*31;
+        for(int i=0;i<12;++i) {
+            const int yy=214+i*29;
             if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
             text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
             if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
@@ -3891,6 +3891,9 @@ void activateAppSettings(int action) {
             iconStyle=(iconStyle+1)%3;
             if(saveLauncherSettings())setStatus("ICON STYLE");
             break;
+        case 11:
+            steamGridDbEditApiKey();
+            break;
         default: break;
     }
 }
@@ -4070,8 +4073,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+11)%12;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%12;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -4390,9 +4393,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
-            const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+        } else if(x>=340&&x<=940&&y>=214&&y<562) {
+            const int row=(y-214)/29;
+            if(row>=0&&row<12)activateAppSettings(row);
         }
         return;
     }
