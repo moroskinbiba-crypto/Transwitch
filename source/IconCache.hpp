@@ -352,26 +352,19 @@ private:
                  int priority) {
         if (!ensureWorker()) return;
 
-        Request request;
-        request.kind = tile.kind;
-        request.title = tile.title;
-        request.data = tile.data;
-        request.key = key;
-        request.customDirectory = customIconPackDir_;
-        request.gameOverrideDirectory = gameIconOverridesDir_;
-        request.priority = priority;
-
         SDL_LockMutex(mutex_);
         if (stopWorker_) {
             SDL_UnlockMutex(mutex_);
             return;
         }
-        // If a tile was prefetched and becomes focused before decoding starts,
-        // promote its queued request instead of leaving it behind background art.
-        const auto queued = std::find_if(requests_.begin(), requests_.end(),
-            [&](const Request& item) { return item.key == key; });
-        if (queued != requests_.end()) {
-            if (priority > queued->priority) {
+
+        // Most repeated lookups are for keys that were already prefetched.
+        // Only scan the short queue when the key is pending; do not construct
+        // or copy request strings again on every rendered frame.
+        if (pendingKeys_.find(key) != pendingKeys_.end()) {
+            const auto queued = std::find_if(requests_.begin(), requests_.end(),
+                [&](const Request& item) { return item.key == key; });
+            if (queued != requests_.end() && priority > queued->priority) {
                 Request promoted = std::move(*queued);
                 requests_.erase(queued);
                 promoted.priority = priority;
@@ -381,11 +374,7 @@ private:
                 requests_.insert(position, std::move(promoted));
                 SDL_CondSignal(condition_);
             }
-            SDL_UnlockMutex(mutex_);
-            return;
-        }
-        // A matching key not in the queue is already being decoded.
-        if (pendingKeys_.find(key) != pendingKeys_.end()) {
+            // A matching key not in the queue is already being decoded.
             SDL_UnlockMutex(mutex_);
             return;
         }
@@ -399,6 +388,15 @@ private:
             pendingKeys_.erase(requests_.back().key);
             requests_.pop_back();
         }
+
+        Request request;
+        request.kind = tile.kind;
+        request.title = tile.title;
+        request.data = tile.data;
+        request.key = key;
+        request.customDirectory = customIconPackDir_;
+        request.gameOverrideDirectory = gameIconOverridesDir_;
+        request.priority = priority;
         request.generation = generation_;
         const auto position = std::find_if(
             requests_.begin(), requests_.end(),
