@@ -30,6 +30,9 @@ jobs:
       - name: Validate SOCOMA SVG assets
         run: python3 scripts/check-svg-assets.py assets/icons
 
+      - name: Install Nextendo signature verification library
+        run: dkp-pacman -S --needed --noconfirm switch-libsodium
+
       - name: Build native SDL2 application
         run: |
           python3 scripts/check-svg-assets.py assets/icons
