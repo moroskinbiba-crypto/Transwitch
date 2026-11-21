@@ -6761,17 +6761,15 @@ void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
        !recentOpen && !favoritesOpen && !widgetEditorOpen && !powerMenu && !appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=566&&y<=614&&x>=642&&x<=840) {
+        // Normal mode keeps only the favourite shortcut. Cover editing is
+        // available exclusively through the library while Edit mode is active.
+        if(y>=566&&y<=614&&x>=642&&x<740) {
             Workspace& desk=desks[static_cast<std::size_t>(deskIndex)];
             const int index=itemAt(desk,selectedX,selectedY);
             if(index>=0) {
                 const Tile& selected=desk.tiles[static_cast<std::size_t>(index)];
-                if(selected.kind==Kind::Game) {
-                    if(x<740)(void)toggleFavorite(selected);
-                    else steamGridDbOpenPicker();
-                } else if(isWidgetKind(selected.kind)) {
-                    openWidgetEditor();
-                }
+                if(selected.kind==Kind::Game)(void)toggleFavorite(selected);
+                else if(isWidgetKind(selected.kind))openWidgetEditor();
             }
             return;
         }
