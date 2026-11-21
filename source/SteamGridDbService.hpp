@@ -29,18 +29,22 @@ public:
                  const std::string& gameName,ArtworkKind kind,const std::string& apiKey);
  bool selectAsset(int index);
  bool applySelected();
+ bool pruneCache(std::uint64_t maximumBytes,const std::vector<std::uint64_t>& installedTitleIds);
  ServiceSnapshot snapshot() const;
  void shutdown();
  SteamGridDbCache& cache(){return cache_;}
  const SteamGridDbCache& cache() const{return cache_;}
 private:
- enum class JobType : unsigned char { Search,Assets,Preview,Apply };
+ enum class JobType : unsigned char { Search,Assets,Preview,Apply,Cleanup };
  struct Job {
   JobType type{JobType::Search};
   std::uint64_t revision{0},titleId{0},gameId{0};
   ArtworkKind kind{ArtworkKind::Grid};
   int assetIndex{0};
   std::string title,gameName,apiKey;
+  std::vector<std::uint64_t> installedTitleIds;
+  std::uint64_t maximumCacheBytes{0};
+  bool mappedLookup{false};
   ArtworkAsset asset;
  };
  bool ensureWorker();
