@@ -47,6 +47,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_geometry_test.cpp -o /tmp/desknx-visual-geometry-test
           /tmp/desknx-visual-geometry-test
 
+      - name: Test modal surface stack ownership and backdrop rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/surface_manager_test.cpp -o /tmp/desknx-surface-manager-test
+          /tmp/desknx-surface-manager-test
+
       - name: Test UI component visual-state rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_component_rules_test.cpp -o /tmp/desknx-ui-component-rules-test
