@@ -1805,7 +1805,7 @@ NextendoWidgetSnapshot nextendoWidgetSnapshot() {
         result.activeTitles=nextendoFeed.activeTitleCount(now);
         for(const auto& game:games) {
             if(game.kind!=Kind::Game||!desknx::model::isTitleId(game.data))continue;
-            const auto players=nextendoFeed.playersForTitle(
+            const auto players=nextendoFeed.playersFor(
                 static_cast<desknx::nextendo::TitleId>(std::strtoull(game.data.c_str(),nullptr,16)),now);
             if(players>result.topPlayers) {
                 result.topPlayers=players;
@@ -3051,6 +3051,7 @@ void drawScreen() {
         &catalogueGameCountNow,&catalogueNroCountNow);
     refreshBattery();
     refreshStorageStats();
+    refreshSystemMonitor();
     rect(0,0,SW,SH,BG);
     for(int band=0;band<24;++band) {
         const double t=static_cast<double>(band)/23.0;
@@ -5356,6 +5357,7 @@ int main(int,char**) {
         nameCacheExists?1:0,
         nameCacheExists?static_cast<long long>(nameCacheStat.st_size):0LL);
     loadHistory();
+    loadFavorites();
     struct stat layoutStat{}, backupStat{};
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
