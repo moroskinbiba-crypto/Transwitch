@@ -568,6 +568,7 @@ void loadLauncherSettings() {
         applyThemePalette();
         return;
     }
+    bool modernSteamGridKeySeen=false;
     while(std::getline(in,line)) {
         const size_t eq=line.find('=');
         if(eq==std::string::npos)continue;
@@ -583,6 +584,7 @@ void loadLauncherSettings() {
             if(end&&*end=='\0'&&parsed>=-1&&parsed<static_cast<long>(COLORS.size()))
                 accentColorIndex=static_cast<int>(parsed);
         } else if(key=="steamgriddb_key") {
+            modernSteamGridKeySeen=true;
             bool valid=value.size()<=64;
             for(unsigned char ch:value)if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
             if(valid)steamGridDbApiKey=value;
@@ -590,9 +592,10 @@ void loadLauncherSettings() {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
             fontPath=value;
-        } else if(key=="steamgriddbkey") {
-            if(value.size()<=160 && value.find_first_of("\r\n\t")==std::string::npos)
-                steamGridDbApiKey=value;
+        } else if(key=="steamgriddbkey"&&!modernSteamGridKeySeen) {
+            bool valid=value.size()<=64;
+            for(unsigned char ch:value)if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
+            if(valid)steamGridDbApiKey=value;
         } else if(key=="language") {
             languageRussian=(value=="ru" || value=="russian");
         } else if(key=="iconstyle") {
@@ -647,8 +650,7 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n"
-       <<"steamgriddbkey="<<safeField(steamGridDbApiKey)<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -5831,7 +5833,7 @@ void launch(const Tile& t) {
         activateWidget(t);
         return;
     }
-    if(launcherSettingsSavePending && !saveLauncherSettings())return;
+    if(launcherSettingsSavePending)(void)saveLauncherSettings();
     if(t.kind==Kind::Game) {
         if(!desknx::model::isTitleId(t.data)){setStatus("INVALID TITLE ID");return;}
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
