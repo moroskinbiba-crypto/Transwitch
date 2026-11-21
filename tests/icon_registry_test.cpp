@@ -24,6 +24,8 @@ int main() {
     static_assert(iconIndex(IconId::Storage) == 13, "Storage id must follow monitor");
     static_assert(iconIndex(IconId::Network) == 14, "Network id must follow storage");
     static_assert(iconIndex(IconId::Heart) == 15, "Heart id must follow network");
+    static_assert(iconIndex(IconId::StarOutline) == 16, "Star outline id must follow heart");
+    static_assert(iconIndex(IconId::StarFilled) == 17, "Filled star id must follow outline");
 
     assert(isValidIcon(IconId::Settings));
     assert(isValidIcon(IconId::Battery));
@@ -33,6 +35,8 @@ int main() {
     assert(isValidIcon(IconId::Storage));
     assert(isValidIcon(IconId::Network));
     assert(isValidIcon(IconId::Heart));
+    assert(isValidIcon(IconId::StarOutline));
+    assert(isValidIcon(IconId::StarFilled));
     assert(!isValidIcon(IconId::Count));
 
     assert(iconInfo(IconId::Settings).asset == std::string("settings.svg"));
@@ -43,6 +47,8 @@ int main() {
     assert(iconInfo(IconId::Storage).asset == std::string("storage.svg"));
     assert(iconInfo(IconId::Network).asset == std::string("network.svg"));
     assert(iconInfo(IconId::Heart).asset == std::string("heart.svg"));
+    assert(iconInfo(IconId::StarOutline).asset == std::string("star-outline.svg"));
+    assert(iconInfo(IconId::StarFilled).asset == std::string("star-filled.svg"));
     assert(iconInfo(IconId::Battery).category == IconCategory::Widget);
     assert(iconInfo(IconId::Calendar).category == IconCategory::Widget);
     assert(iconInfo(IconId::Clock).category == IconCategory::Widget);
@@ -50,6 +56,8 @@ int main() {
     assert(iconInfo(IconId::Storage).category == IconCategory::Widget);
     assert(iconInfo(IconId::Network).category == IconCategory::Widget);
     assert(iconInfo(IconId::Heart).category == IconCategory::Widget);
+    assert(iconInfo(IconId::StarOutline).category == IconCategory::Status);
+    assert(iconInfo(IconId::StarFilled).category == IconCategory::Status);
     assert(iconInfo(IconId::Library).category == IconCategory::Navigation);
     assert(iconInfo(IconId::Gamepad).category == IconCategory::System);
 
