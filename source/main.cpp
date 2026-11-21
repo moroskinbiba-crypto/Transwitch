@@ -2316,6 +2316,10 @@ bool saveFavorites() {
     }
     return true;
 }
+bool isFavoriteTitleId(const std::string& titleId) {
+    return std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),titleId)!=
+        favoriteTitleIds.end();
+}
 bool toggleFavorite(const Tile& tile) {
     if(tile.kind!=Kind::Game||!desknx::model::isTitleId(tile.data)) {
         setStatus("FAVORITES SUPPORT INSTALLED GAMES",2200);
@@ -2327,7 +2331,8 @@ bool toggleFavorite(const Tile& tile) {
             std::distance(favoriteTitleIds.begin(),found));
         favoriteTitleIds.erase(found);
         if(saveFavorites()) {
-            setStatus("REMOVED FROM FAVORITES: "+tile.title);
+            setStatus((languageRussian?"УДАЛЕНО ИЗ ИЗБРАННОГО: ":
+                "REMOVED FROM FAVORITES: ")+tile.title);
         } else {
             favoriteTitleIds.insert(favoriteTitleIds.begin()+
                 static_cast<std::ptrdiff_t>(std::min(oldIndex,favoriteTitleIds.size())),tile.data);
@@ -2341,7 +2346,8 @@ bool toggleFavorite(const Tile& tile) {
     }
     favoriteTitleIds.insert(favoriteTitleIds.begin(),tile.data);
     if(saveFavorites()) {
-        setStatus("ADDED TO FAVORITES: "+tile.title);
+        setStatus((languageRussian?"ДОБАВЛЕНО В ИЗБРАННОЕ: ":
+            "ADDED TO FAVORITES: ")+tile.title);
         return true;
     }
     favoriteTitleIds.erase(std::remove(favoriteTitleIds.begin(),
@@ -4576,6 +4582,11 @@ void drawScreen() {
                         selectedCard?Color{106,175,255,190}:Color{255,255,255,20});
                     Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                     drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66,selectedCard);
+                    if(candidate.kind==Kind::Game&&isFavoriteTitleId(candidate.data)) {
+                        roundRect(x+cardW-36,y+8,28,28,8,Color{35,31,23,238});
+                        drawSystemIcon(desknx::ui::IconId::StarFilled,
+                            x+cardW-30,y+14,16,Color{255,207,112,255});
+                    }
                     if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,focusAccent());
                     textCentered(candidate.title,x+cardW/2,y+79,2,
                         selectedCard?WHITE:Color{201,211,225,255},x+8,x+cardW-8);
@@ -4684,18 +4695,29 @@ void drawScreen() {
             roundRect(mx+792,my+462,228,38,11,Color{49,119,199,255});
             text("A  ADD TO WORKSPACE",mx+823,my+475,1,WHITE,mx+mw-30);
             const int actionY=my+508;
-            if(selected.kind==Kind::Game&&editing) {
-                uiButton(mx+824,actionY,88,32,9,desknx::ui::ButtonVariant::Chip,
-                    Color{43,61,85,255},Color{255,255,255,18});
-                text("NAME",mx+850,actionY+11,1,WHITE,mx+908);
-                uiButton(mx+918,actionY,100,32,9,desknx::ui::ButtonVariant::Chip,
-                    Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
-                text("COVER",mx+946,actionY+11,1,WHITE,mx+1010);
-            } else if(selected.kind==Kind::Game) {
-                uiButton(mx+864,actionY,154,32,9,
-                    desknx::ui::ButtonVariant::Chip,
-                    Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
-                text("EDIT MODE",mx+908,actionY+11,1,WHITE,mx+1016);
+            if(selected.kind==Kind::Game) {
+                const bool selectedFavorite=isFavoriteTitleId(selected.data);
+                const int starX=mx+792;
+                uiButton(starX,actionY,40,32,9,desknx::ui::ButtonVariant::Chip,
+                    selectedFavorite?Color{75,58,29,255}:Color{34,48,65,255},
+                    selectedFavorite?Color{255,207,112,110}:Color{255,255,255,24},
+                    false,false,selectedFavorite?Color{255,207,112,255}:MUTED);
+                drawSystemIcon(selectedFavorite?desknx::ui::IconId::StarFilled:
+                    desknx::ui::IconId::StarOutline,starX+11,actionY+7,18,
+                    selectedFavorite?Color{255,207,112,255}:Color{178,190,207,255});
+                if(editing) {
+                    uiButton(mx+838,actionY,76,32,9,desknx::ui::ButtonVariant::Chip,
+                        Color{43,61,85,255},Color{255,255,255,18});
+                    text("NAME",mx+858,actionY+11,1,WHITE,mx+910);
+                    uiButton(mx+920,actionY,98,32,9,desknx::ui::ButtonVariant::Chip,
+                        Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
+                    text("COVER",mx+946,actionY+11,1,WHITE,mx+1010);
+                } else {
+                    uiButton(mx+844,actionY,174,32,9,
+                        desknx::ui::ButtonVariant::Chip,
+                        Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
+                    text("EDIT MODE",mx+894,actionY+11,1,WHITE,mx+1016);
+                }
             }
         }
         const std::string counts=languageRussian
@@ -6734,7 +6756,17 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(gSurfaceManager.isTop(SurfaceId::Library)) {
         const auto& available=visibleCatalogueSnapshot();
         if(keys&HidNpadButton_B){closeList();return;}
-        if(keys&HidNpadButton_ZL){if(editing)renameSelectedGame();return;}
+        if(keys&HidNpadButton_ZL) {
+            if(editing) {
+                renameSelectedGame();
+            } else if(!available.empty()&&listIndex>=0&&
+                      listIndex<static_cast<int>(available.size())) {
+                const Candidate& candidate=available[static_cast<size_t>(listIndex)];
+                (void)toggleFavorite(Tile{candidate.kind,candidate.title,candidate.data,
+                    0,0,1,1,candidate.color});
+            }
+            return;
+        }
         if(keys&HidNpadButton_ZR){if(editing)steamGridDbOpenPicker();return;}
         if(keys&HidNpadButton_Y){searchCatalogue();return;}
         if(keys&HidNpadButton_X){cycleCatalogueSort();return;}
@@ -7335,13 +7367,22 @@ void touchInput(const SDL_Event&e) {
                 addSelected();
                 return;
             }
-            if(y>=578&&y<=612&&!editing&&x>=974&&x<1128) {
+            if(y>=578&&y<=612&&!editing&&x>=950&&x<1128) {
                 editing=true;
                 setStatus("EDIT MODE ENABLED — COVER OPTIONS READY",2200);
                 return;
             }
-            if(editing&&y>=578&&y<=612&&x>=930&&x<1018){renameSelectedGame();return;}
-            if(editing&&y>=578&&y<=612&&x>=1020&&x<1128){steamGridDbOpenPicker();return;}
+            if(y>=578&&y<=612&&x>=902&&x<942) {
+                const auto& available=visibleCatalogueSnapshot();
+                if(listIndex>=0&&listIndex<static_cast<int>(available.size())) {
+                    const Candidate& candidate=available[static_cast<size_t>(listIndex)];
+                    (void)toggleFavorite(Tile{candidate.kind,candidate.title,candidate.data,
+                        0,0,1,1,candidate.color});
+                }
+                return;
+            }
+            if(editing&&y>=578&&y<=612&&x>=948&&x<1022){renameSelectedGame();return;}
+            if(editing&&y>=578&&y<=612&&x>=1028&&x<1128){steamGridDbOpenPicker();return;}
             if(y>=180&&y<570&&x>=138&&x<858) {
                 const int row=(y-180)/130,column=(x-138)/242;
                 if(row>=0&&row<3&&column>=0&&column<3) {
