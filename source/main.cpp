@@ -1007,6 +1007,7 @@ void steamGridDbOpenPicker() {
         }
         steamGridDbOfflineFallback=true;
         steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        steamGridDbKindIndex=static_cast<int>(gSteamGridDbService.cache().selectedKind(id));
         steamGridDbPreviewLoadedPath=cached;
         setStatus("OFFLINE - CACHED ARTWORK",2500);
         return;
@@ -1106,16 +1107,20 @@ void pumpSteamGridDbPicker() {
                 steamGridDbChooseMatch(0);
             else if(first>=0.86f&&state.games.size()==1)steamGridDbChooseMatch(0);
         }
+    } else if(state.status==desknx::steamgriddb::ServiceStatus::LoadingAssets&&
+              state.gameId!=0&&steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+        steamGridDbPickerView=SteamGridDbPickerView::Assets;
     } else if(state.status==desknx::steamgriddb::ServiceStatus::Browsing&&
               steamGridDbPickerView==SteamGridDbPickerView::Matches) {
         // A stored Nintendo Title ID -> SteamGridDB game ID mapping was reused.
         steamGridDbPickerView=SteamGridDbPickerView::Assets;
     } else if(state.status==desknx::steamgriddb::ServiceStatus::Error&&
-              steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+              !steamGridDbOfflineFallback) {
         const std::string cached=gSteamGridDbService.cache().selectedPath(state.titleId);
         if(!cached.empty()) {
             steamGridDbOfflineFallback=true;
             steamGridDbPickerView=SteamGridDbPickerView::Assets;
+            steamGridDbKindIndex=static_cast<int>(gSteamGridDbService.cache().selectedKind(state.titleId));
             steamGridDbPreviewLoadedPath=cached;
             setStatus("OFFLINE - USING CACHED STEAMGRIDDB ARTWORK",3500);
         }
