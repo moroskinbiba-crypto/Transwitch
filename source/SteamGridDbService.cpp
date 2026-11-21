@@ -192,7 +192,9 @@ int SteamGridDbService::workerLoop(){
   if(j.type==JobType::Apply){
    cache_.ensureDirectories();const std::string temp=std::string(SteamGridDbCache::kCacheRoot)+"/.download.tmp";
    if(!downloadImage(j.asset.url,temp,error)){publishError(j.revision,error);continue;}
-   bool saved=cache_.saveArtworkFromFile(j.titleId,j.kind,temp,j.gameId,j.asset.id,j.gameName,true);
+   bool saved=cache_.saveArtworkFromFile(j.titleId,
+    static_cast<SteamGridDbCache::ArtworkKind>(j.kind),temp,
+    j.gameId,j.asset.id,j.gameName,true);
    std::remove(temp.c_str());SDL_LockMutex(mutex_);
    if(j.revision==revision_){state_.status=saved?ServiceStatus::Applied:ServiceStatus::Error;
     state_.message=saved?"Artwork saved to the SD card":"Downloaded image could not be committed to cache";++state_.revision;}
