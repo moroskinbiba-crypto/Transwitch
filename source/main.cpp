@@ -1534,6 +1534,14 @@ void steamGridDbEditSearchTitle() {
     if(R_SUCCEEDED(rc)&&value[0])steamGridDbSearch(value,false);
 }
 void steamGridDbOpenPicker() {
+    const auto artworkState=gSteamGridDbService.snapshot();
+    if(steamGridDbApplyPending||
+       artworkState.status==desknx::steamgriddb::ServiceStatus::Applying) {
+        setStatus(languageRussian
+            ?"ПРИМЕНЕНИЕ ОБЛОЖКИ ЕЩЁ НЕ ЗАВЕРШЕНО"
+            :"WAIT FOR THE CURRENT ARTWORK APPLY TO FINISH",2600);
+        return;
+    }
     if(!editing){setStatus("ENTER EDIT MODE TO CHANGE GAME COVERS",2400);return;}
     Tile tile;
     std::uint64_t id=0;
