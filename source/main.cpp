@@ -4465,7 +4465,7 @@ void drawScreen() {
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
     gModalLayer.compose(gSurfaceManager.dimAlpha());
-    if(emptyDesktopSurface&&!modalContentActive) {
+    if(emptyDesktopSurface&&!gSurfaceManager.hasBlockingSurface()) {
         softCard(350,248,580,204,Color{19,29,43,250},Color{255,255,255,38});
         roundRect(386,276,50,50,15,Color{38,76,119,255});
         drawSystemIcon(4,399,289,24,WHITE);
