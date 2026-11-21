@@ -307,6 +307,7 @@ private:
         std::string path;
         std::uint64_t generation{0};
         std::uint64_t keyGeneration{0};
+        int priority{0};
         int width{0};
         int height{0};
         bool isCustom{false};
@@ -338,7 +339,9 @@ private:
     // RGBA image is at most 4 MiB, so this queue has a predictable upper bound.
     static constexpr std::size_t MaxCompletedImages = 2;
     static constexpr int MaxIconDimension = 2048;
+    static constexpr int MaxGpuIconDimension = 1024;
     static constexpr std::uint32_t MaxDecodedPixels = 3u * 1024u * 1024u;
+    static constexpr std::uint32_t MaxGpuDecodedPixels = 1024u * 1024u;
 
     static std::string makeKey(desknx::model::Kind kind, const std::string& data) {
         return desknx::model::typeCode(kind) + "\t" + data;
@@ -382,8 +385,9 @@ private:
         for (;;) {
             Request request;
             SDL_LockMutex(mutex_);
-            while (!stopWorker_ &&
-                   (requests_.empty() || completed_.size() >= MaxCompletedImages)) {
+            while (!stopWorker_ && (requests_.empty() ||
+                   (completed_.size() >= MaxCompletedImages &&
+                    requests_.front().priority <= completed_.back().priority))) {
                 SDL_CondWait(condition_, mutex_);
             }
             if (stopWorker_) {
@@ -404,7 +408,23 @@ private:
             const bool keyCurrent = version != keyGenerations_.end() &&
                 version->second == request.keyGeneration;
             if (!stopWorker_ && request.generation == generation_ && keyCurrent) {
-                completed_.push_back(std::move(decoded));
+                // Keep completed images ordered by priority too: decoding can
+                // finish out of order, so FIFO would make a new selected cover
+                // wait behind earlier off-screen prefetches.
+                if (completed_.size() >= MaxCompletedImages) {
+                    if (decoded.priority > completed_.back().priority)
+                        completed_.pop_back();
+                    else {
+                        pendingKeys_.erase(request.key);
+                        SDL_CondBroadcast(condition_);
+                        SDL_UnlockMutex(mutex_);
+                        continue;
+                    }
+                }
+                const auto position = std::find_if(
+                    completed_.begin(), completed_.end(),
+                    [&](const Decoded& item) { return item.priority < decoded.priority; });
+                completed_.insert(position, std::move(decoded));
             }
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
@@ -476,6 +496,7 @@ private:
         result.key=request.key;
         result.generation=request.generation;
         result.keyGeneration=request.keyGeneration;
+        result.priority=request.priority;
         const std::string defaultPath=desknx::model::iconCachePath(request.kind,request.data);
         if(defaultPath.empty())return result;
         // A one-off user-selected cover must be authoritative. Keep it separate
@@ -514,6 +535,31 @@ private:
             SDL_Surface* rgba=SDL_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0);
             SDL_FreeSurface(source);
             if(!rgba){if(!custom)std::remove(path.c_str());return false;}
+
+            // Large SteamGridDB posters do not need to become multi-megabyte
+            // GPU textures for 154px grid cells. Downsample on the decoder
+            // worker, preserving aspect ratio and alpha, before renderer upload.
+            const std::uint64_t decodedPixels=
+                static_cast<std::uint64_t>(rgba->w)*static_cast<std::uint64_t>(rgba->h);
+            if(rgba->w>MaxGpuIconDimension||rgba->h>MaxGpuIconDimension||
+               decodedPixels>MaxGpuDecodedPixels) {
+                const double scale=std::min(
+                    static_cast<double>(MaxGpuIconDimension)/rgba->w,
+                    std::min(static_cast<double>(MaxGpuIconDimension)/rgba->h,
+                        std::sqrt(static_cast<double>(MaxGpuDecodedPixels)/decodedPixels)));
+                const int targetW=std::max(1,static_cast<int>(std::lround(rgba->w*scale)));
+                const int targetH=std::max(1,static_cast<int>(std::lround(rgba->h*scale)));
+                SDL_Surface* scaled=SDL_CreateRGBSurfaceWithFormat(
+                    0,targetW,targetH,32,SDL_PIXELFORMAT_RGBA32);
+                if(!scaled||SDL_BlitScaled(rgba,nullptr,scaled,nullptr)!=0) {
+                    if(scaled)SDL_FreeSurface(scaled);
+                    SDL_FreeSurface(rgba);
+                    if(!custom)std::remove(path.c_str());
+                    return false;
+                }
+                SDL_FreeSurface(rgba);
+                rgba=scaled;
+            }
             const std::size_t rowBytes=static_cast<std::size_t>(rgba->w)*4u;
             const std::size_t totalBytes=rowBytes*static_cast<std::size_t>(rgba->h);
             if(rgba->pitch<0||static_cast<std::size_t>(rgba->pitch)<rowBytes||totalBytes>MaxTextureBytes){
