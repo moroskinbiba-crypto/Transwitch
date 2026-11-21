@@ -6498,8 +6498,8 @@ void loadConsoleUsers() {
             break;
         }
     }
-    desknx::diag::Write("account","profiles_loaded","count=%zu active=%s",
-                        consoleUsers.size(),selectedUserLabel.c_str());
+    desknx::diag::Write("account","profiles_loaded","count=%zu active_valid=%d",
+                        consoleUsers.size(),uiHasSelectedUser?1:0);
 }
 
 void selectConsoleUser(int index) {
@@ -6525,8 +6525,7 @@ void selectConsoleUser(int index) {
     selectedUserLabel=selected.nickname;
     userPickerOpen=false;
     setStatus("PLAYER: "+selected.nickname,3000);
-    desknx::diag::Write("account","selected_user","profile=%s",
-                        selected.nickname.c_str());
+    desknx::diag::Write("account","selected_user","selection_valid=1");
 }
 
 void openUserProfile() {
