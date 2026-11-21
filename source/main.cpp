@@ -3914,6 +3914,11 @@ std::string widgetEditorDataLabel(unsigned bit);
 
 void drawScreen() {
     gVisualEngine.beginFrame();
+    gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
+        SDL_Color{BLUE.r,BLUE.g,BLUE.b,BLUE.a},
+        SDL_Color{WHITE.r,WHITE.g,WHITE.b,220},
+        SDL_Color{255,255,255,28},
+        UiCornerRadius});
     const std::uint32_t screenState=
         (static_cast<std::uint32_t>(std::max(0,deskIndex))&0x0Fu) |
         (listOpen?1u<<4:0u) | (recentOpen?1u<<5:0u) |
@@ -7176,6 +7181,12 @@ int main(int,char**) {
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     if(!gVisualEngine.initialize(renderer,SW,SH))
         desknx::diag::Write("visual","engine_init_failed","fallback=direct_sdl_primitives");
+    gUiComponents.bind(&gVisualEngine,renderer);
+    gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
+        SDL_Color{BLUE.r,BLUE.g,BLUE.b,BLUE.a},
+        SDL_Color{WHITE.r,WHITE.g,WHITE.b,220},
+        SDL_Color{255,255,255,28},
+        UiCornerRadius});
     const auto& visualProfile=gVisualEngine.rendererProfile();
     desknx::diag::Write("visual","renderer_profile",
         "name=%s flags=0x%08X accelerated=%d software=%d vsync=%d target_textures=%d max_texture=%dx%d",
@@ -7590,6 +7601,7 @@ int main(int,char**) {
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (storageCommitMutex) SDL_DestroyMutex(storageCommitMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
+    gUiComponents.bind(nullptr,nullptr);
     gVisualEngine.shutdown();
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
