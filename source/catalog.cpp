@@ -1220,6 +1220,10 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     result.items.clear();
     result.fromCache = false;
     result.truncated = false;
+    // ReadCache() may have populated cached counts even when its NRO manifest
+    // was incomplete; restore the live enumeration totals before rebuilding.
+    result.gameCount = games.size();
+    result.nroCount = nros.size();
     result.items.reserve(MaxItems);
     // Keep a stable game-index prefix so each metadata result updates its
     // already-published row rather than hiding all games until the scan ends.
