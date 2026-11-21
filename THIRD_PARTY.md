@@ -32,3 +32,8 @@ uLaunch (https://github.com/XorTroll/uLaunch) is used as a design and behavior r
 The Nextendo online-player feed in `source/NextendoPlayers.cpp` adapts the endpoint selection, per-title count merge order and refresh behavior used by **HomeNX** (repository: https://github.com/ad3333m/homenx, files `projects/cards/src/Library.cpp` and `projects/cards/src/CardsActivity.cpp`). HomeNX is distributed under GNU GPL version 3. The corresponding license text is preserved in `projects/Nextendo/COPYING.HomeNX`.
 
 The transport, bounded response handling, title-ID validation, snapshot expiry and DeskNX card rendering are implemented for Transwitch.
+
+
+## SVG interface assets
+
+The SOCOMA interface includes editable SVG sources in `assets/icons/`. The runtime loads the small, size-bounded SVG files through the repository's existing SDL2_image dependency (`IMG_Load_RW`) and caches the resulting SDL textures. No separate NanoSVG implementation is compiled into DeskNX; this avoids duplicating the SVG symbols already provided by the image-loading stack.

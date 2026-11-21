@@ -2,26 +2,45 @@
 #include <switch/applets/hid_la.h>
 #include <switch/applets/album_la.h>
 #include <switch/applets/friends_la.h>
+#include <switch/services/audctl.h>
+#include <switch/services/nifm.h>
+#include <switch/services/lbl.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <desknx/Protocol.hpp>
 #include <desknx/SafeReplace.hpp>
 #include "../include/desknx/Model.hpp"
+#include "../include/desknx/LibraryGrid.hpp"
 #include "../include/desknx/WorkspaceOps.hpp"
+#include "../include/desknx/HomeNXGridAdapter.hpp"
+#include "../include/desknx/ShutdownPersistence.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
 #include "slaunch_applications.hpp"
 #include "../include/desknx/Diagnostics.hpp"
 #include "../include/desknx/Localization.hpp"
 #include "../include/desknx/NextendoPlayers.hpp"
+#include "../include/desknx/WidgetLayout.hpp"
+#include "../include/desknx/WidgetSensors.hpp"
 #include "catalog_view.hpp"
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "WorkspaceBackgroundCache.hpp"
+#include "SteamGridDbService.hpp"
+#include "desknx/WidgetConfig.hpp"
+#include "SvgIconCache.hpp"
+#include "VisualEngine.hpp"
+#include "UiComponents.hpp"
+#include "../include/desknx/UiMotion.hpp"
+#include "../include/desknx/ModalLayer.hpp"
+#include "../include/desknx/ModalLayer.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -45,7 +64,7 @@ using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
 constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
-constexpr int ToolbarStartX=64, ToolbarButtonWidth=82, ToolbarButtonStep=90, ToolbarButtonCount=4;
+constexpr int ToolbarStartX=64, ToolbarButtonWidth=100, ToolbarButtonStep=108, ToolbarButtonCount=3;
 constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarButtonStep; }
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
@@ -64,10 +83,16 @@ size_t layoutRecoveredTiles = 0, layoutDroppedTiles = 0;
 constexpr const char* HISTORY_FILE = "sdmc:/switch/DeskNX/recent.tsv";
 constexpr const char* HISTORY_TMP = "sdmc:/switch/DeskNX/recent.tmp";
 constexpr const char* HISTORY_BAK_FILE = "sdmc:/switch/DeskNX/recent.bak";
+constexpr const char* FAVORITES_FILE = "sdmc:/switch/DeskNX/favorites.tsv";
+constexpr const char* FAVORITES_TMP = "sdmc:/switch/DeskNX/favorites.tmp";
+constexpr const char* FAVORITES_BAK = "sdmc:/switch/DeskNX/favorites.bak";
 constexpr const char* SETTINGS_FILE = "sdmc:/switch/DeskNX/settings.ini";
 constexpr const char* SETTINGS_TMP = "sdmc:/switch/DeskNX/settings.tmp";
 constexpr const char* SETTINGS_BAK = "sdmc:/switch/DeskNX/settings.bak";
 constexpr const char* MEDIA_ROOT = "sdmc:/switch/DeskNX/media";
+constexpr const char* GAME_ICON_OVERRIDES_DIR = "sdmc:/switch/DeskNX/media/game-icons";
+constexpr const char* GAME_NAME_OVERRIDES_FILE = "sdmc:/switch/DeskNX/cache/game-overrides.tsv";
+constexpr const char* GAME_NAME_OVERRIDES_TMP = "sdmc:/switch/DeskNX/cache/game-overrides.tmp";
 constexpr const char* ALBUM_ROOT = "sdmc:/Nintendo/Album";
 
 struct Color { Uint8 r, g, b, a; };
@@ -81,33 +106,46 @@ std::array<Color,12> COLORS{{
     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255},
     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}
 }};
-int themeIndex=1;
+int themeIndex=0; // 0 = v0.1, 1 = SOCOMA; accent colours are independent.
+int accentColorIndex=-1; // -1 = follow selected theme, 0..11 = explicit palette colour.
 bool languageRussian=true;
-int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
-std::string wallpaperPath, fontPath, iconPackPath;
-SDL_Texture* wallpaperTexture=nullptr;
-int wallpaperWidth=0, wallpaperHeight=0;
+int iconStyle=0; // 0 clean SVG, 1 soft SVG, 2 SVG badge
+int headerStyle=0; // 0 glass bar, 1 tactical rail, 2 minimal floating
+int dockStyle=0;   // 0 glass dock, 1 segmented rail, 2 floating dock
+int surfaceOpacity=255; // 0..255; scales all soft surfaces and widget cards
+int selectionStyle=0;   // 0 outline, 1 accent rail, 2 pulse, 3 corner brackets
+bool motionEffects=false; // optional low-cost screen fade and selection pulse
+Uint32 uiTransitionStart=0;
+desknx::ui::ModalLayer gModalLayer;
+std::uint32_t lastUiScreenState=UINT32_MAX;
+std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
+bool launcherSettingsSavePending=false;
+Uint32 launcherSettingsSaveDue=0;
+struct LauncherSettingsSaveJob { std::string contents; };
+enum class LauncherSettingsSaveStatus { Success, SdUnavailable, OpenFailed, WriteFailed, TempCommitFailed, PublishFailed, FinalCommitFailed };
+SDL_Thread* launcherSettingsSaveThread=nullptr;
+std::unique_ptr<LauncherSettingsSaveJob> activeLauncherSettingsSaveJob;
+SDL_atomic_t launcherSettingsSaveDone{};
+LauncherSettingsSaveStatus launcherSettingsSaveOutcome=LauncherSettingsSaveStatus::Success;
+std::uint64_t layoutMutationRevision=0;
+std::unordered_map<std::string,std::string> gameNameOverrides;
+std::string pendingGameIconTitleId;
 SDL_Texture* roundedCornerMaskTexture=nullptr;
 int roundedCornerMaskRadius=0;
 
-enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground };
+enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground, GameIcon };
 struct MediaEntry { std::string name, path; bool directory{false}; };
 bool mediaPickerOpen=false;
 MediaPickerType mediaPickerType=MediaPickerType::Wallpaper;
-struct WorkspaceBackgroundTexture {
-    std::string path;
-    SDL_Texture* texture{nullptr};
-    int width{0}, height{0};
-    unsigned long long lastUse{0};
-};
-std::vector<WorkspaceBackgroundTexture> workspaceBackgroundTextures;
-unsigned long long workspaceBackgroundClock=0;
 std::string mediaPickerDirectory;
 std::vector<MediaEntry> mediaPickerEntries;
 int mediaPickerIndex=0, mediaPickerOffset=0;
 
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
+desknx::visual::VisualEngine gVisualEngine;
+desknx::ui::UiComponents gUiComponents;
+desknx::ui::ModalLayer gModalLayer;
 bool rendererVsync=false;
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
@@ -118,7 +156,12 @@ SDL_Thread* catalogueThread = nullptr;
 SDL_Thread* nextendoThread = nullptr;
 SDL_mutex* nextendoMutex = nullptr;
 SDL_atomic_t nextendoStop{};
+SDL_atomic_t nextendoConfiguredRefreshMs{};
+SDL_atomic_t nextendoNetworkReady{};
+SDL_atomic_t nextendoConsecutiveFailures{};
+SDL_atomic_t nextendoLastSuccessTick{};
 desknx::nextendo::PresenceFeed nextendoFeed;
+desknx::nextendo::PopularGames nextendoPopularCache{};
 struct CatalogueScanRequest { bool forceRefresh; bool reinitializeNs; };
 const CatalogueScanRequest catalogueRefreshRequest{true, true};
 #ifdef DESKNX_SYSTEM_APPLET
@@ -176,14 +219,35 @@ struct ConsoleUserProfile { AccountUid uid{}; std::string nickname; };
 std::vector<ConsoleUserProfile> consoleUsers;
 bool consoleUsersLoaded=false, userPickerOpen=false, uiHasSelectedUser=false;
 bool accountServiceReady=false;
+bool setsysServiceReady=false;
 int userPickerIndex=0;
 AccountUid uiSelectedUser{};
 std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+WorkspaceBackgroundCache gWorkspaceBackgroundCache;
+desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
+enum class SteamGridDbPickerView { Matches, Assets };
+bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false, steamGridDbStartupPruned=false;
+bool steamGridDbTouchTracking=false, steamGridDbTouchDragged=false;
+int steamGridDbTouchStartX=0, steamGridDbTouchStartY=0;
+int steamGridDbMatchIndex=0, steamGridDbMatchOffset=0;
+int steamGridDbKindIndex=1, steamGridDbAssetOffset=0;
+std::string steamGridDbPreviewLoadedPath;
+SDL_Texture* steamGridDbPreviewTexture=nullptr;
+uint64_t steamGridDbPreviewRevision=UINT64_MAX;
+SteamGridDbPickerView steamGridDbPickerView=SteamGridDbPickerView::Matches;
+VectorIconCache gVectorIconCache;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
+std::vector<std::string> favoriteTitleIds;
+std::vector<Tile> favoritesView;
+bool favoritesOpen=false, recentGamesOnly=false, gameLibraryMode=false;
+int favoritesIndex=0, favoritesOffset=0;
+bool widgetEditorOpen=false;
+int widgetEditorRow=0;
+Kind widgetEditorKind=Kind::Clock;
 struct PdmQuerySnapshot {
     char titleId[17]{};
     bool available{false};
@@ -201,9 +265,38 @@ std::string catalogueQuery;
 desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMode::All;
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
+int batteryChargerType=-1;
+struct JoyconBatteryState {
+    bool connected{false};
+    int level{-1}; // libnx reports 0..4, not an exact percentage.
+    bool charging{false};
+};
+JoyconBatteryState joyconLeft{},joyconRight{};
+Uint32 lastJoyconBatteryTick=0;
+bool joyconBatteryAvailable=false;
+std::string atmosphereVersion;
+bool atmosphereVersionAvailable=false,atmosphereVersionChecked=false;
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
+uint64_t processRamUsed=0,processRamTotal=0;
+size_t installedGameCount=0,installedHomebrewCount=0;
+bool storageStatsAvailable=false,processRamStatsAvailable=false;
 Uint32 lastStorageUpdate=0;
-bool storageStatsAvailable=false;
+SDL_Thread* storageStatsThread=nullptr;
+SDL_mutex* storageStatsMutex=nullptr;
+SDL_atomic_t storageStatsStop{};
+uint64_t backgroundSdFreeBytes=0,backgroundSdTotalBytes=0;
+bool backgroundStorageStatsAvailable=false;
+
+bool tsServiceReady=false, tsInternalOpen=false, tsSocOpen=false;
+TsSession tsInternalSession{}, tsSocSession{};
+bool systemPcbTemperatureAvailable=false, systemSocTemperatureAvailable=false;
+float systemPcbTemperature=-1.0f, systemSocTemperature=-1.0f;
+Uint32 lastSystemMonitorUpdate=0;
+bool clkrstServiceReady=false, cpuClockOpen=false, gpuClockOpen=false;
+ClkrstSession cpuClockSession{}, gpuClockSession{};
+bool systemCpuClockAvailable=false, systemGpuClockAvailable=false;
+std::uint32_t systemCpuClockHz=0, systemGpuClockHz=0;
+
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
 bool widgetPickerMode=false;
@@ -218,8 +311,34 @@ int touchPressStartX=0, touchPressStartY=0;
 int touchDragOffsetX=0, touchDragOffsetY=0;
 int catalogueTouchStartY=0, catalogueTouchRow=0, lastCatalogueTap=-1;
 Uint32 lastCatalogueTapTick=0;
-bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
-int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
+bool editing=false, dragging=false, listOpen=false, recentOpen=false, systemMenu=false, appSettingsMenu=false, diagnosticsOpen=false, workspaceMenu=false, workspaceSettingsMenu=false, workspacePicker=false, workspacePickerMoveTile=false, deletePrompt=false, running=true;
+int recentIndex=0, systemMenuIndex=0, appSettingsIndex=0, appSettingsOffset=0, workspaceMenuIndex=0, workspaceSettingsIndex=0, workspacePickerIndex=0, lastWorkspaceTabTap=-1;
+bool nextendoOpen=false;
+int nextendoSelected=0;
+bool quickSettingsOpen=false;
+int quickSettingsIndex=0;
+bool setsysServiceReady=false;
+bool quickSettingsSnapshotLoaded=false;
+Uint32 quickSettingsSnapshotTick=0;
+bool quickAirplaneMode=false,quickWifiEnabled=false,quickBluetoothEnabled=false,quickSoundMuted=false;
+bool quickAirplaneAvailable=false,quickWifiAvailable=false,quickBluetoothAvailable=false,
+     quickSoundAvailable=false,quickBrightnessAvailable=false,quickInternetConnected=false;
+float quickBrightness=0.5f;
+unsigned quickWifiStrength=0;
+AudioTarget quickAudioTarget=AudioTarget_Speaker;
+std::string quickNetworkStatus="NETWORK STATUS UNAVAILABLE";
+struct RuntimeFrameMetrics {
+    double fps{0.0};
+    double averageFrameMs{0.0};
+    double averageRenderMs{0.0};
+    double maximumFrameMs{0.0};
+    std::uint64_t slowFrames{0};
+    Uint32 updatedAt{0};
+};
+RuntimeFrameMetrics runtimeFrameMetrics;
+Uint32 lastDiagnosticsRefresh=0;
+std::uint64_t diagnosticsCacheBytes=0;
+std::size_t diagnosticsCacheFiles=0;
 int touchDragTabStart=-1;
 Uint32 lastWorkspaceTabTapTick=0;
 // PowerMenu modal (ТЗ 6.1: "- opens the power menu"). In system mode the
@@ -244,6 +363,174 @@ void setStatus(const std::string& s, Uint32 duration=2500) {
     desknx::diag::Write("ui","status","message=%s",s.c_str());
 }
 
+
+void refreshQuickSettingsSnapshot(bool force=false) {
+    const Uint32 now=SDL_GetTicks();
+    if(!force&&quickSettingsSnapshotLoaded&&now-quickSettingsSnapshotTick<3500)return;
+    quickSettingsSnapshotTick=now;
+    quickNetworkStatus="NETWORK STATUS UNAVAILABLE";
+    quickInternetConnected=false;
+    quickWifiStrength=0;
+    quickAirplaneAvailable=quickWifiAvailable=quickBluetoothAvailable=false;
+    quickSoundAvailable=quickBrightnessAvailable=false;
+
+    if(setsysServiceReady) {
+        quickWifiAvailable=R_SUCCEEDED(setsysGetWirelessLanEnableFlag(&quickWifiEnabled));
+        quickBluetoothAvailable=R_SUCCEEDED(setsysGetBluetoothEnableFlag(&quickBluetoothEnabled));
+    }
+
+    NifmInternetConnectionType connectionType=NifmInternetConnectionType_WiFi;
+    if(R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
+        bool wirelessEnabled=true;
+        quickAirplaneAvailable=R_SUCCEEDED(nifmIsWirelessCommunicationEnabled(&wirelessEnabled));
+        if(quickAirplaneAvailable)quickAirplaneMode=!wirelessEnabled;
+        NifmInternetConnectionStatus connectionStatus=NifmInternetConnectionStatus_ConnectingUnknown1;
+        u32 strength=0;
+        if(R_SUCCEEDED(nifmGetInternetConnectionStatus(&connectionType,&strength,&connectionStatus))) {
+            quickInternetConnected=connectionStatus==NifmInternetConnectionStatus_Connected;
+            quickWifiStrength=std::min<u32>(strength,3);
+        }
+        nifmExit();
+    }
+
+    if(R_SUCCEEDED(audctlInitialize())) {
+        AudioTarget target=AudioTarget_Invalid;
+        if(R_FAILED(audctlGetActiveOutputTarget(&target))||target==AudioTarget_Invalid)
+            (void)audctlGetDefaultTarget(&target);
+        if(target==AudioTarget_Invalid)target=AudioTarget_Speaker;
+        quickAudioTarget=target;
+        quickSoundAvailable=R_SUCCEEDED(audctlIsTargetMute(&quickSoundMuted,target));
+        audctlExit();
+    }
+
+    if(R_SUCCEEDED(lblInitialize())) {
+        quickBrightnessAvailable=R_SUCCEEDED(lblGetCurrentBrightnessSetting(&quickBrightness));
+        lblExit();
+    }
+    if(quickAirplaneAvailable&&quickAirplaneMode)
+        quickNetworkStatus="AIRPLANE MODE ON";
+    else if(quickInternetConnected)
+        quickNetworkStatus=connectionType==NifmInternetConnectionType_Ethernet
+            ?"ETHERNET CONNECTED"
+            :"WI-FI CONNECTED  /  SIGNAL "+std::to_string(quickWifiStrength)+"/3";
+    else if(quickWifiAvailable&&quickWifiEnabled)
+        quickNetworkStatus="WI-FI ENABLED  /  NO INTERNET";
+    else if(quickWifiAvailable)
+        quickNetworkStatus="WI-FI DISABLED";
+    quickSettingsSnapshotLoaded=true;
+}
+
+void openQuickSettings() {
+    quickSettingsIndex=0;
+    quickSettingsOpen=true;
+    refreshQuickSettingsSnapshot(true);
+}
+
+void closeQuickSettings() {
+    quickSettingsOpen=false;
+}
+
+void adjustQuickBrightness(int direction) {
+    if(!quickBrightnessAvailable) {
+        setStatus("BRIGHTNESS CONTROL UNAVAILABLE",2200);
+        return;
+    }
+    if(R_FAILED(lblInitialize())) {
+        setStatus("BRIGHTNESS SERVICE UNAVAILABLE",2200);
+        return;
+    }
+    const float next=std::max(0.10f,std::min(1.0f,
+        quickBrightness+static_cast<float>(direction)*0.05f));
+    Result rc=lblSetCurrentBrightnessSetting(next);
+    if(R_SUCCEEDED(rc))rc=lblApplyCurrentBrightnessSettingToBacklight();
+    if(R_SUCCEEDED(rc))(void)lblSaveCurrentSetting();
+    lblExit();
+    if(R_FAILED(rc))setStatus("BRIGHTNESS CHANGE FAILED",2500);
+    else {
+        quickBrightness=next;
+        quickBrightnessAvailable=true;
+        quickSettingsSnapshotLoaded=true;
+        quickSettingsSnapshotTick=SDL_GetTicks();
+        setStatus("BRIGHTNESS  "+std::to_string(static_cast<int>(std::lround(next*100.0f)))+"%",1600);
+    }
+}
+
+void toggleQuickSetting(int index) {
+    refreshQuickSettingsSnapshot();
+    Result rc=0;
+    if(index==0) {
+        if(!quickSoundAvailable) {
+            setStatus("SYSTEM SOUND CONTROL UNAVAILABLE",2500);
+            return;
+        }
+        if(R_FAILED(audctlInitialize())) {
+            setStatus("AUDIO SERVICE UNAVAILABLE",2500);
+            return;
+        }
+        rc=audctlSetTargetMute(quickAudioTarget,!quickSoundMuted);
+        audctlExit();
+        if(R_SUCCEEDED(rc))setStatus(quickSoundMuted?"SOUND ENABLED":"SOUND MUTED",1800);
+    } else if(index==1) {
+        if(R_FAILED(nifmInitialize(NifmServiceType_System))) {
+            setStatus("NETWORK SERVICE UNAVAILABLE",2500);
+            return;
+        }
+        // NIFM's system wireless flag is the console-wide airplane/radio gate.
+        rc=nifmSetWirelessCommunicationEnabled(quickAirplaneMode);
+        nifmExit();
+        if(R_SUCCEEDED(rc))setStatus(quickAirplaneMode?"AIRPLANE MODE DISABLED":"AIRPLANE MODE ENABLED",2000);
+    } else if(index==2) {
+        if(!setsysServiceReady||!quickWifiAvailable) {
+            setStatus("WI-FI CONTROL UNAVAILABLE",2500);
+            return;
+        }
+        if(!quickWifiEnabled&&quickAirplaneMode) {
+            if(R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
+                rc=nifmSetWirelessCommunicationEnabled(true);
+                nifmExit();
+            } else rc=MAKERESULT(Module_Libnx,LibnxError_NotInitialized);
+        }
+        if(R_SUCCEEDED(rc))rc=setsysSetWirelessLanEnableFlag(!quickWifiEnabled);
+        if(R_SUCCEEDED(rc))setStatus(quickWifiEnabled?"WI-FI DISABLED":"WI-FI ENABLED",1800);
+    } else if(index==3) {
+        if(!setsysServiceReady||!quickBluetoothAvailable) {
+            setStatus("BLUETOOTH CONTROL UNAVAILABLE",2500);
+            return;
+        }
+        if(quickBluetoothEnabled&&appletGetOperationMode()!=AppletOperationMode_Handheld) {
+            setStatus("BLUETOOTH IS KEPT ON WHILE DOCKED",2600);
+            return;
+        }
+        rc=setsysSetBluetoothEnableFlag(!quickBluetoothEnabled);
+        if(R_SUCCEEDED(rc))setStatus(quickBluetoothEnabled?"BLUETOOTH DISABLED":"BLUETOOTH ENABLED",1800);
+    } else if(index==4) {
+        adjustQuickBrightness(1);
+        return;
+    }
+    if(R_FAILED(rc))setStatus("QUICK SETTING CHANGE FAILED  0X"+
+        [] (Result value) { char buffer[9]{};std::snprintf(buffer,sizeof(buffer),"%08X",static_cast<unsigned int>(value));return std::string(buffer); }(rc),2800);
+    else {
+        // Reflect the confirmed toggle immediately. The full service snapshot is
+        // refreshed on the normal 3.5s cadence, not synchronously after every tap.
+        if(index==0)quickSoundMuted=!quickSoundMuted;
+        else if(index==1) {
+            quickAirplaneMode=!quickAirplaneMode;
+            quickInternetConnected=false;
+            quickNetworkStatus=quickAirplaneMode?"AIRPLANE MODE ON":
+                (quickWifiEnabled?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED");
+        } else if(index==2) {
+            const bool enablingWifi=!quickWifiEnabled;
+            quickWifiEnabled=enablingWifi;
+            if(enablingWifi&&quickAirplaneMode)quickAirplaneMode=false;
+            quickInternetConnected=false;
+            quickNetworkStatus=quickWifiEnabled&&!quickAirplaneMode
+                ?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED";
+        } else if(index==3)quickBluetoothEnabled=!quickBluetoothEnabled;
+        quickSettingsSnapshotLoaded=true;
+        quickSettingsSnapshotTick=SDL_GetTicks();
+    }
+}
+
 bool commitSdCard(const char* operation) {
     if (!sdMounted) return false;
     if(storageCommitMutex) SDL_LockMutex(storageCommitMutex);
@@ -262,12 +549,19 @@ bool commitSdCard(const char* operation) {
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
 void rect(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
+    if(gVisualEngine.ready() &&
+       gVisualEngine.fillRect(x,y,w,h,SDL_Color{c.r,c.g,c.b,c.a}))
+        return;
     color(c);
     SDL_Rect r{x,y,w,h};
     SDL_RenderFillRect(renderer,&r);
 }
 void outline(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
+    if(gVisualEngine.ready() &&
+       gVisualEngine.drawRoundedOutline(
+           x,y,w,h,UiCornerRadius,SDL_Color{c.r,c.g,c.b,c.a}))
+        return;
     const int r=std::max(0,std::min(UiCornerRadius,std::min(w,h)/2));
     color(c);
     if(r==0) {
@@ -295,73 +589,55 @@ void outline(int x,int y,int w,int h,Color c) {
 }
 
 void applyThemePalette() {
-    switch(themeIndex) {
-                case 1: // Frosted glass
-                    BG={63,69,78,255}; THEME_TOP={74,79,89,255}; THEME_BOTTOM={45,91,137,255};
-                    MUTED={215,222,231,255}; BLUE={193,147,255,255};
-                    GREEN={73,173,12,255}; RED={255,115,123,255};
-                    COLORS={{{110,151,207,255},{99,172,180,255},{163,138,206,255},{220,158,126,255},
-                             {205,123,150,255},{104,162,199,255},{142,176,116,255},{135,143,159,255},
-                             {222,111,102,255},{86,190,177,255},{203,128,171,255},{230,190,112,255}}};
-                    break;
-                case 2: // Graphite
-                    BG={15,17,21,255}; THEME_TOP={34,37,43,255}; THEME_BOTTOM={12,14,18,255};
-                    MUTED={164,169,180,255}; BLUE={187,151,255,255};
-                    GREEN={120,209,148,255}; RED={255,118,128,255};
-                    COLORS={{{142,151,166,255},{105,160,173,255},{153,132,194,255},{187,148,112,255},
-                             {177,121,143,255},{115,160,180,255},{148,169,126,255},{118,126,142,255},
-                             {190,91,91,255},{80,164,151,255},{170,116,157,255},{190,167,107,255}}};
-                    break;
-                case 3: // Violet
-                    BG={17,12,27,255}; THEME_TOP={48,27,68,255}; THEME_BOTTOM={12,17,39,255};
-                    MUTED={174,160,193,255}; BLUE={200,153,255,255};
-                    GREEN={127,222,181,255}; RED={255,116,147,255};
-                    COLORS={{{148,103,212,255},{80,155,169,255},{187,114,221,255},{209,140,111,255},
-                             {209,102,153,255},{83,154,205,255},{133,175,127,255},{127,118,160,255},
-                             {231,101,132,255},{75,202,183,255},{194,127,236,255},{235,190,116,255}}};
-                    break;
-                case 4: // Sunset
-                    BG={25,17,20,255}; THEME_TOP={70,37,44,255}; THEME_BOTTOM={29,36,61,255};
-                    MUTED={198,172,168,255}; BLUE={255,172,133,255};
-                    GREEN={153,210,119,255}; RED={255,105,105,255};
-                    COLORS={{{218,128,104,255},{104,168,145,255},{177,129,190,255},{235,162,95,255},
-                             {217,110,126,255},{113,171,196,255},{170,180,101,255},{145,130,136,255},
-                             {239,99,79,255},{70,195,174,255},{223,111,150,255},{246,196,105,255}}};
-                    break;
-        case 5: // Emerald
-            BG={7,20,17,255}; THEME_TOP={10,47,39,255}; THEME_BOTTOM={5,18,18,255};
-            MUTED={150,190,176,255}; BLUE={91,226,177,255};
-            GREEN={82,220,150,255}; RED={255,105,123,255};
-            COLORS={{{47,157,112,255},{52,190,155,255},{96,162,133,255},{190,174,91,255},
-                     {190,111,132,255},{74,168,188,255},{144,184,103,255},{111,143,130,255},
-                     {231,97,94,255},{45,212,191,255},{193,120,181,255},{231,194,91,255}}};
-            break;
-        case 6: // Rose
-            BG={24,12,20,255}; THEME_TOP={61,25,43,255}; THEME_BOTTOM={23,12,27,255};
-            MUTED={202,165,184,255}; BLUE={255,139,182,255};
-            GREEN={112,213,171,255}; RED={255,99,132,255};
-            COLORS={{{192,91,140,255},{86,166,153,255},{164,115,195,255},{212,147,112,255},
-                     {227,101,151,255},{111,153,207,255},{151,174,115,255},{143,121,143,255},
-                     {255,112,132,255},{63,196,178,255},{219,132,209,255},{239,184,124,255}}};
-            break;
-        case 7: // Arctic
-            BG={8,18,28,255}; THEME_TOP={18,48,66,255}; THEME_BOTTOM={7,18,34,255};
-            MUTED={164,195,212,255}; BLUE={117,208,255,255};
-            GREEN={100,220,191,255}; RED={255,119,138,255};
-            COLORS={{{73,150,208,255},{70,177,184,255},{140,135,213,255},{203,164,103,255},
-                     {210,116,144,255},{85,187,220,255},{144,185,129,255},{122,150,171,255},
-                     {244,110,128,255},{55,207,204,255},{183,142,236,255},{231,204,130,255}}};
-            break;
-        default: // Ocean
-            themeIndex=0;
-            BG={10,14,22,255}; THEME_TOP={16,27,44,255}; THEME_BOTTOM={9,17,31,255};
-            MUTED={145,158,180,255}; BLUE={83,157,255,255};
-            GREEN={52,211,153,255}; RED={255,99,112,255};
-            COLORS={{{91,145,226,255},{53,169,151,255},{155,116,226,255},{222,151,83,255},
-                     {218,105,133,255},{79,169,206,255},{147,171,94,255},{113,130,158,255},
-                     {242,85,65,255},{45,212,191,255},{236,72,153,255},{250,204,21,255}}};
-            break;
+    if(themeIndex==1) {
+        BG={7,13,20,255}; THEME_TOP={16,29,42,255}; THEME_BOTTOM={7,16,25,255};
+        MUTED={160,177,191,255}; BLUE={101,184,225,255};
+        GREEN={125,194,159,255}; RED={232,123,104,255};
+    } else {
+        themeIndex=0;
+        BG={63,69,78,255}; THEME_TOP={74,79,89,255}; THEME_BOTTOM={45,91,137,255};
+        MUTED={215,222,231,255}; BLUE={193,147,255,255};
+        GREEN={73,173,12,255}; RED={255,115,123,255};
     }
+    if(accentColorIndex>=0 && accentColorIndex<static_cast<int>(COLORS.size()))
+        BLUE=COLORS[static_cast<size_t>(accentColorIndex)];
+}
+
+// A low-amplitude pulse gives current focus a living highlight without
+// scaling/reflowing the desktop or adding extra draw calls.
+Color focusAccent() {
+    const double phase=static_cast<double>(SDL_GetTicks())/360.0;
+    const double pulse=(std::sin(phase)+1.0)*0.5;
+    return Color{BLUE.r,BLUE.g,BLUE.b,static_cast<Uint8>(185.0+70.0*pulse)};
+}
+
+const char* themeName(int index) {
+    static const char* const names[]={"0.1","SOCOMA"};
+    return names[index==1?1:0];
+}
+const char* accentColorName(int index) {
+    static const char* const namesEn[]={"Blue","Teal","Violet","Amber","Rose","Sky","Sage","Slate","Coral","Mint","Pink","Yellow"};
+    static const char* const namesRu[]={"Синий","Бирюзовый","Фиолетовый","Янтарный","Розовый","Голубой","Шалфей","Сланец","Коралловый","Мятный","Малиновый","Жёлтый"};
+    if(index<0||index>=static_cast<int>(COLORS.size()))return languageRussian?"Авто":"Auto";
+    return languageRussian?namesRu[index]:namesEn[index];
+}
+const char* headerStyleName(int value) {
+    static const char* const namesEn[]={"Glass","Tactical rail","Minimal"};
+    static const char* const namesRu[]={"Стекло","Тактическая","Минимальная"};
+    const int index=std::max(0,std::min(2,value));
+    return languageRussian?namesRu[index]:namesEn[index];
+}
+const char* dockStyleName(int value) {
+    static const char* const namesEn[]={"Glass dock","Segmented rail","Floating"};
+    static const char* const namesRu[]={"Стеклянный","Сегментный","Плавающий"};
+    const int index=std::max(0,std::min(2,value));
+    return languageRussian?namesRu[index]:namesEn[index];
+}
+const char* selectionStyleName(int value) {
+    static const char* const namesEn[]={"Outline","Accent rail","Pulse","Corner brackets"};
+    static const char* const namesRu[]={"Контур","Акцент","Пульс","Углы"};
+    const int index=std::max(0,std::min(3,value));
+    return languageRussian?namesRu[index]:namesEn[index];
 }
 
 bool hasExtension(const std::string& path,const char* const* extensions,size_t count) {
@@ -392,15 +668,20 @@ void loadLauncherSettings() {
     if(!sdMounted){applyThemePalette();return;}
     languageRussian=true;
     iconStyle=0;
+    headerStyle=0;
+    dockStyle=0;
+    surfaceOpacity=255;
+    selectionStyle=0;
+    motionEffects=false;
     std::string selectedPath;
     const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
     for(const char* candidate:candidates) {
         struct stat st{};
-        if(stat(candidate,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>4096)
+        if(stat(candidate,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>8192)
             continue;
         std::ifstream in(candidate,std::ios::binary);
         std::string header;
-        if(in && std::getline(in,header) && header=="DESKNXSET1") {
+        if(in && std::getline(in,header) && (header=="DESKNXSET1"||header=="DESKNXSET2")) {
             selectedPath=candidate;
             break;
         }
@@ -415,10 +696,12 @@ void loadLauncherSettings() {
     }
     std::ifstream in(selectedPath,std::ios::binary);
     std::string line;
-    if(!std::getline(in,line)||line!="DESKNXSET1") {
+    if(!std::getline(in,line)||(line!="DESKNXSET1"&&line!="DESKNXSET2")) {
         applyThemePalette();
         return;
     }
+    const bool settingsV2=line=="DESKNXSET2";
+    bool modernSteamGridKeySeen=false;
     while(std::getline(in,line)) {
         const size_t eq=line.find('=');
         if(eq==std::string::npos)continue;
@@ -426,18 +709,53 @@ void loadLauncherSettings() {
         if(key=="theme") {
             char* end=nullptr;
             const long valueLong=std::strtol(value.c_str(),&end,10);
-            if(end&&*end=='\0'&&valueLong>=0&&valueLong<=7)
-                themeIndex=static_cast<int>(valueLong);
+            if(end&&*end=='\0') {
+                if(settingsV2) {
+                    if(valueLong>=0&&valueLong<=1)themeIndex=static_cast<int>(valueLong);
+                } else if(valueLong>=0&&valueLong<=8)themeIndex=valueLong==8?1:0;
+            }
+        } else if(key=="accent") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=-1&&parsed<static_cast<long>(COLORS.size()))
+                accentColorIndex=static_cast<int>(parsed);
+        } else if(key=="steamgriddb_key") {
+            modernSteamGridKeySeen=true;
+            bool valid=value.size()<=64;
+            for(unsigned char ch:value)if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
+            if(valid)steamGridDbApiKey=value;
         } else if(key=="wallpaper"&&isAllowedMediaPath(value,MediaPickerType::Wallpaper)) {
             wallpaperPath=value;
         } else if(key=="font"&&isAllowedMediaPath(value,MediaPickerType::Font)) {
             fontPath=value;
+        } else if(key=="steamgriddbkey"&&!modernSteamGridKeySeen) {
+            bool valid=value.size()<=64;
+            for(unsigned char ch:value)if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
+            if(valid)steamGridDbApiKey=value;
         } else if(key=="language") {
             languageRussian=(value=="ru" || value=="russian");
         } else if(key=="iconstyle") {
             char* end=nullptr;
             const long parsed=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
+        } else if(key=="headerstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=2)headerStyle=static_cast<int>(parsed);
+        } else if(key=="dockstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=2)dockStyle=static_cast<int>(parsed);
+        } else if(key=="surfaceopacity") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=255)surfaceOpacity=static_cast<int>(parsed);
+        } else if(key=="selectionstyle") {
+            char* end=nullptr;
+            const long parsed=std::strtol(value.c_str(),&end,10);
+            if(end&&*end=='\0'&&parsed>=0&&parsed<=3)selectionStyle=static_cast<int>(parsed);
+        } else if(key=="effects") {
+            motionEffects=(value=="1"||value=="true"||value=="on");
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -449,138 +767,176 @@ void loadLauncherSettings() {
     applyThemePalette();
 }
 
-bool saveLauncherSettings() {
-    if(!sdMounted){setStatus("SD CARD REQUIRED TO SAVE APPEARANCE",3000);return false;}
-    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
-    std::ofstream out(SETTINGS_TMP,std::ios::binary|std::ios::trunc);
-    if(!out){setStatus("SETTINGS SAVE FAILED",3000);return false;}
-    out<<"DESKNXSET1\n"
+std::string serializeLauncherSettingsSnapshot() {
+    std::ostringstream out;
+    out<<"DESKNXSET2\n"
        <<"theme="<<themeIndex<<"\n"
+       <<"headerstyle="<<headerStyle<<"\n"
+       <<"dockstyle="<<dockStyle<<"\n"
+       <<"surfaceopacity="<<surfaceOpacity<<"\n"
+       <<"selectionstyle="<<selectionStyle<<"\n"
+       <<"effects="<<(motionEffects?1:0)<<"\n"
+       <<"accent="<<accentColorIndex<<"\n"
+       <<"steamgriddb_key="<<steamGridDbApiKey<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
        <<"iconstyle="<<iconStyle<<"\n";
+    return out.str();
+}
+LauncherSettingsSaveStatus writeLauncherSettingsSnapshot(const std::string& contents) {
+    if(!sdMounted)return LauncherSettingsSaveStatus::SdUnavailable;
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
+    std::ofstream out(SETTINGS_TMP,std::ios::binary|std::ios::trunc);
+    if(!out)return LauncherSettingsSaveStatus::OpenFailed;
+    out.write(contents.data(),static_cast<std::streamsize>(contents.size()));
     out.flush();const bool good=out.good();out.close();
-    if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
-    if(!commitSdCard("settings-temp")) {
-        std::remove(SETTINGS_TMP);
-        setStatus("SETTINGS SD COMMIT FAILED",3000);
-        return false;
+    if(!good){std::remove(SETTINGS_TMP);return LauncherSettingsSaveStatus::WriteFailed;}
+    if(!commitSdCard("settings-temp")){std::remove(SETTINGS_TMP);return LauncherSettingsSaveStatus::TempCommitFailed;}
+    const auto rc=desknx::safeio::replaceFilePreservingOnFailure(SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,true);
+    if(rc!=desknx::safeio::ReplaceStatus::Success){std::remove(SETTINGS_TMP);return LauncherSettingsSaveStatus::PublishFailed;}
+    if(!commitSdCard("settings-publish"))return LauncherSettingsSaveStatus::FinalCommitFailed;
+    return LauncherSettingsSaveStatus::Success;
+}
+void reportLauncherSettingsSaveFailure(LauncherSettingsSaveStatus status) {
+    switch(status) {
+        case LauncherSettingsSaveStatus::SdUnavailable:setStatus("SD CARD REQUIRED TO SAVE APPEARANCE",3000);break;
+        case LauncherSettingsSaveStatus::OpenFailed:setStatus("SETTINGS SAVE FAILED",3000);break;
+        case LauncherSettingsSaveStatus::WriteFailed:setStatus("SETTINGS WRITE FAILED",3000);break;
+        case LauncherSettingsSaveStatus::TempCommitFailed:setStatus("SETTINGS SD COMMIT FAILED",3000);break;
+        case LauncherSettingsSaveStatus::PublishFailed:setStatus("SETTINGS PUBLISH FAILED",3000);break;
+        case LauncherSettingsSaveStatus::FinalCommitFailed:setStatus("SETTINGS COMMIT FAILED; BACKUP KEPT",4000);break;
+        case LauncherSettingsSaveStatus::Success:break;
     }
-    const auto rc=desknx::safeio::replaceFilePreservingOnFailure(
-        SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,true);
-    if(rc!=desknx::safeio::ReplaceStatus::Success) {
-        std::remove(SETTINGS_TMP);
-        setStatus("SETTINGS PUBLISH FAILED",3000);
-        return false;
-    }
-    if(!commitSdCard("settings-publish")) {
-        setStatus("SETTINGS COMMIT FAILED; BACKUP KEPT",4000);
-        return false;
-    }
+}
+bool saveLauncherSettings() {
+    launcherSettingsSavePending=false;
+    const auto result=writeLauncherSettingsSnapshot(serializeLauncherSettingsSnapshot());
+    if(result!=LauncherSettingsSaveStatus::Success){reportLauncherSettingsSaveFailure(result);return false;}
     return true;
 }
-
-SDL_Surface* limitBackgroundSurface(SDL_Surface* source) {
-    if(!source)return nullptr;
-    constexpr int MaxBackgroundWidth=1600;
-    constexpr int MaxBackgroundHeight=900;
-    if(source->w<=MaxBackgroundWidth&&source->h<=MaxBackgroundHeight)
-        return source;
-    const double scale=std::min(
-        static_cast<double>(MaxBackgroundWidth)/source->w,
-        static_cast<double>(MaxBackgroundHeight)/source->h);
-    const int width=std::max(1,static_cast<int>(source->w*scale));
-    const int height=std::max(1,static_cast<int>(source->h*scale));
-    SDL_Surface* resized=SDL_CreateRGBSurfaceWithFormat(
-        0,width,height,32,SDL_PIXELFORMAT_RGBA32);
-    if(!resized)return source;
-    // Preserve the original alpha channel while resampling PNG backgrounds.
-    SDL_SetSurfaceBlendMode(source,SDL_BLENDMODE_NONE);
-    if(SDL_BlitScaled(source,nullptr,resized,nullptr)!=0) {
-        SDL_FreeSurface(resized);
-        return source;
+int launcherSettingsSaveThreadMain(void* context) {
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+    const auto* job=static_cast<const LauncherSettingsSaveJob*>(context);
+    launcherSettingsSaveOutcome=job?writeLauncherSettingsSnapshot(job->contents):LauncherSettingsSaveStatus::WriteFailed;
+    SDL_AtomicSet(&launcherSettingsSaveDone,1);
+    return 0;
+}
+void scheduleLauncherSettingsSave(Uint32 debounceMs=450) {
+    launcherSettingsSavePending=true;launcherSettingsSaveDue=SDL_GetTicks()+debounceMs;
+}
+void reapLauncherSettingsSave(bool waitForCompletion=false) {
+    if(!launcherSettingsSaveThread)return;
+    if(!waitForCompletion&&!SDL_AtomicGet(&launcherSettingsSaveDone))return;
+    SDL_WaitThread(launcherSettingsSaveThread,nullptr);
+    launcherSettingsSaveThread=nullptr;activeLauncherSettingsSaveJob.reset();
+    if(launcherSettingsSaveOutcome!=LauncherSettingsSaveStatus::Success) {
+        reportLauncherSettingsSaveFailure(launcherSettingsSaveOutcome);
+        if(!launcherSettingsSavePending){launcherSettingsSavePending=true;launcherSettingsSaveDue=SDL_GetTicks()+5000;}
     }
-    SDL_FreeSurface(source);
-    return resized;
+}
+void pumpLauncherSettingsSave() {
+    reapLauncherSettingsSave(false);
+    if(launcherSettingsSaveThread||!launcherSettingsSavePending||
+       static_cast<Sint32>(SDL_GetTicks()-launcherSettingsSaveDue)<0)return;
+    if(!sdMounted){reportLauncherSettingsSaveFailure(LauncherSettingsSaveStatus::SdUnavailable);launcherSettingsSaveDue=SDL_GetTicks()+5000;return;}
+    auto job=std::make_unique<LauncherSettingsSaveJob>();
+    job->contents=serializeLauncherSettingsSnapshot();activeLauncherSettingsSaveJob=std::move(job);
+    launcherSettingsSaveOutcome=LauncherSettingsSaveStatus::Success;SDL_AtomicSet(&launcherSettingsSaveDone,0);
+    launcherSettingsSavePending=false;
+    launcherSettingsSaveThread=SDL_CreateThread(launcherSettingsSaveThreadMain,"DeskNX settings persistence",activeLauncherSettingsSaveJob.get());
+    if(!launcherSettingsSaveThread) {
+        activeLauncherSettingsSaveJob.reset();launcherSettingsSavePending=true;
+        launcherSettingsSaveDue=SDL_GetTicks()+5000;setStatus("BACKGROUND SETTINGS SAVE UNAVAILABLE",3000);
+    }
+}
+void drainLauncherSettingsSave() {
+    reapLauncherSettingsSave(true);
+    if(launcherSettingsSavePending)(void)saveLauncherSettings();
+}
+
+void loadGameNameOverrides() {
+    gameNameOverrides.clear();
+    struct stat st{};
+    if(stat(GAME_NAME_OVERRIDES_FILE,&st)!=0||!S_ISREG(st.st_mode)||
+       st.st_size<=0||st.st_size>512*1024)return;
+    std::ifstream input(GAME_NAME_OVERRIDES_FILE,std::ios::binary);
+    if(!input)return;
+    std::string line;
+    size_t count=0;
+    while(std::getline(input,line)) {
+        if(line.size()>640||++count>4096)break;
+        const auto fields=desknx::model::splitTabs(line);
+        if(fields.size()!=2||!desknx::model::isTitleId(fields[0])||
+           fields[1].empty()||fields[1].size()>124)continue;
+        gameNameOverrides[fields[0]]=fields[1];
+    }
+    desknx::diag::Write("library","name_overrides_loaded","entries=%zu",gameNameOverrides.size());
+}
+
+bool saveGameNameOverrides() {
+    if(!sdMounted){setStatus("SD CARD REQUIRED TO SAVE GAME NAMES",3000);return false;}
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir("sdmc:/switch/DeskNX/cache",0777);
+    std::ofstream output(GAME_NAME_OVERRIDES_TMP,std::ios::binary|std::ios::trunc);
+    if(!output){setStatus("GAME NAME SAVE FAILED",3000);return false;}
+    for(const auto& entry:gameNameOverrides) {
+        if(!desknx::model::isTitleId(entry.first)||entry.second.empty()||entry.second.size()>124)continue;
+        output<<entry.first<<'\t'<<desknx::model::safeField(entry.second)<<'\n';
+    }
+    output.flush();const bool good=output.good();output.close();
+    if(!good){std::remove(GAME_NAME_OVERRIDES_TMP);return false;}
+    if(!commitSdCard("game-name-overrides-temp")){
+        std::remove(GAME_NAME_OVERRIDES_TMP);return false;
+    }
+    const auto rc=desknx::safeio::replaceFilePreservingOnFailure(
+        GAME_NAME_OVERRIDES_TMP,GAME_NAME_OVERRIDES_FILE,
+        "sdmc:/switch/DeskNX/cache/game-overrides.bak",true);
+    if(rc!=desknx::safeio::ReplaceStatus::Success){
+        std::remove(GAME_NAME_OVERRIDES_TMP);setStatus("GAME NAME PUBLISH FAILED",3000);return false;
+    }
+    return commitSdCard("game-name-overrides-publish");
+}
+
+void applyGameNameOverridesToWorkspaces() {
+    for(auto& desk:desks)for(auto& tile:desk.tiles) {
+        if(tile.kind!=Kind::Game)continue;
+        const auto found=gameNameOverrides.find(tile.data);
+        if(found!=gameNameOverrides.end())tile.title=found->second;
+    }
 }
 
 bool loadWallpaperTexture(const std::string& path) {
-    if(path.empty()) {
-        if(wallpaperTexture)SDL_DestroyTexture(wallpaperTexture);
-        wallpaperTexture=nullptr;wallpaperWidth=wallpaperHeight=0;
-        return true;
-    }
-    if(!isAllowedMediaPath(path,MediaPickerType::Wallpaper))return false;
+    // Validate the selection without decoding it on the UI thread. The actual
+    // read/decode is queued by drawWallpaper() and processed by a low-priority
+    // worker; the previous wallpaper remains visible until the new one is ready.
+    if(path.empty()) return true;
+    if(!isAllowedMediaPath(path,MediaPickerType::Wallpaper)) return false;
     struct stat st{};
-    if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
-       st.st_size>24LL*1024*1024)return false;
-    SDL_Surface* surface=IMG_Load(path.c_str());
-    if(!surface)return false;
-    const bool sizeOk=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
-        static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
-    if(!sizeOk){SDL_FreeSurface(surface);return false;}
-    surface=limitBackgroundSurface(surface);
-    SDL_Texture* next=SDL_CreateTextureFromSurface(renderer,surface);
-    const int width=surface->w,height=surface->h;
-    SDL_FreeSurface(surface);
-    if(!next)return false;
-    SDL_SetTextureBlendMode(next,SDL_BLENDMODE_NONE);
-    if(wallpaperTexture)SDL_DestroyTexture(wallpaperTexture);
-    wallpaperTexture=next;wallpaperWidth=width;wallpaperHeight=height;
-    return true;
+    return stat(path.c_str(),&st)==0 && S_ISREG(st.st_mode) &&
+        st.st_size>0 && st.st_size<=24LL*1024*1024;
 }
 
 void drawWallpaper() {
-    if(!wallpaperTexture||wallpaperWidth<=0||wallpaperHeight<=0)return;
-    const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,wallpaperWidth,wallpaperHeight);
+    if(wallpaperPath.empty()) return;
+    int width=0,height=0;
+    SDL_Texture* texture=gWorkspaceBackgroundCache.get(wallpaperPath,width,height);
+    if(!texture||width<=0||height<=0) return;
+    const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,width,height);
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
     SDL_RenderSetClipRect(renderer,&viewport);
-    SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
+    SDL_RenderCopy(renderer,texture,nullptr,&dst);
     SDL_RenderSetClipRect(renderer,nullptr);
     SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
 }
 
-SDL_Texture* getWorkspaceBackgroundTexture(const std::string& path,int& width,int& height) {
-    if(path.empty()||!isAllowedMediaPath(path,MediaPickerType::WorkspaceBackground))return nullptr;
-    for(auto& entry:workspaceBackgroundTextures) {
-        if(entry.path==path) {
-            entry.lastUse=++workspaceBackgroundClock;
-            width=entry.width;height=entry.height;return entry.texture;
-        }
-    }
-    struct stat st{};
-    if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
-       st.st_size>24LL*1024*1024)return nullptr;
-    SDL_Surface* surface=IMG_Load(path.c_str());
-    if(!surface)return nullptr;
-    const bool valid=surface->w>0&&surface->h>0&&surface->w<=4096&&surface->h<=4096&&
-        static_cast<uint64_t>(surface->w)*static_cast<uint64_t>(surface->h)<=16ULL*1024ULL*1024ULL;
-    if(!valid){SDL_FreeSurface(surface);return nullptr;}
-    surface=limitBackgroundSurface(surface);
-    SDL_Texture* texture=SDL_CreateTextureFromSurface(renderer,surface);
-    const int imageWidth=surface->w,imageHeight=surface->h;
-    SDL_FreeSurface(surface);
-    if(!texture)return nullptr;
-    SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_NONE);
-    if(workspaceBackgroundTextures.size()>=3) {
-        auto oldest=workspaceBackgroundTextures.begin();
-        for(auto it=workspaceBackgroundTextures.begin();it!=workspaceBackgroundTextures.end();++it)
-            if(it->lastUse<oldest->lastUse)oldest=it;
-        if(oldest->texture)SDL_DestroyTexture(oldest->texture);
-        workspaceBackgroundTextures.erase(oldest);
-    }
-    workspaceBackgroundTextures.push_back({path,texture,imageWidth,imageHeight,++workspaceBackgroundClock});
-    width=imageWidth;height=imageHeight;return texture;
-}
-
 void drawWorkspaceBackground(const Workspace& desk) {
-    if(desk.backgroundPath.empty()){drawWallpaper();return;}
+    if(desk.backgroundPath.empty()) { drawWallpaper(); return; }
     int width=0,height=0;
-    SDL_Texture* texture=getWorkspaceBackgroundTexture(desk.backgroundPath,width,height);
-    if(!texture||width<=0||height<=0){drawWallpaper();return;}
+    SDL_Texture* texture=gWorkspaceBackgroundCache.get(
+        desk.backgroundPath,width,height);
+    if(!texture||width<=0||height<=0) { drawWallpaper(); return; }
     const auto fit=desknx::artwork::destination(0,0,SW,SH,width,height,
         static_cast<desknx::artwork::FitMode>(desk.backgroundFit));
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
@@ -642,6 +998,7 @@ void openMediaPicker(MediaPickerType type) {
 void mediaPickerBack() {
     if(mediaPickerDirectory==MEDIA_ROOT) {
         mediaPickerOpen=false;
+        if(mediaPickerType==MediaPickerType::GameIcon)pendingGameIconTitleId.clear();
         return;
     }
     if(mediaPickerDirectory==ALBUM_ROOT) {
@@ -657,6 +1014,7 @@ void mediaPickerBack() {
     refreshMediaPicker();
 }
 bool saveLayout();
+bool saveNow();
 
 void applyMediaPickerSelection(int index) {
     if(index<0||index>=static_cast<int>(mediaPickerEntries.size()))return;
@@ -670,7 +1028,8 @@ void applyMediaPickerSelection(int index) {
         }
         iconPackPath=selected.path;
         gIconCache.setCustomIconPackDir(iconPackPath);
-        if(saveLauncherSettings())setStatus("ICON PACK APPLIED");
+        scheduleLauncherSettingsSave(0);
+        setStatus("ICON PACK APPLIED");
         mediaPickerOpen=false;
         return;
     }
@@ -684,6 +1043,50 @@ void applyMediaPickerSelection(int index) {
         setStatus("CHOOSE A FOLDER TO APPLY AN ICON PACK",2500);
         return;
     }
+    if(mediaPickerType==MediaPickerType::GameIcon) {
+        if(!desknx::model::isTitleId(pendingGameIconTitleId)||
+           !isAllowedMediaPath(selected.path,MediaPickerType::GameIcon)) {
+            setStatus("INVALID GAME ICON FILE",2500);return;
+        }
+        struct stat sourceStat{};
+        if(stat(selected.path.c_str(),&sourceStat)!=0||!S_ISREG(sourceStat.st_mode)||
+           sourceStat.st_size<4||sourceStat.st_size>2*1024*1024) {
+            setStatus("ICON MUST BE A VALID IMAGE UNDER 2 MB",3000);return;
+        }
+        std::string extension=selected.path.substr(selected.path.find_last_of('.'));
+        for(char& ch:extension)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        mkdir(GAME_ICON_OVERRIDES_DIR,0777);
+        const std::string target=std::string(GAME_ICON_OVERRIDES_DIR)+"/"+
+            pendingGameIconTitleId+extension;
+        const std::string temporary=target+".tmp";
+        std::ifstream source(selected.path,std::ios::binary);
+        std::ofstream destination(temporary,std::ios::binary|std::ios::trunc);
+        if(!source||!destination){setStatus("CANNOT READ OR WRITE GAME ICON",3000);return;}
+        char buffer[8192];
+        while(source) {
+            source.read(buffer,sizeof(buffer));
+            const std::streamsize bytes=source.gcount();
+            if(bytes>0)destination.write(buffer,bytes);
+        }
+        destination.flush();const bool copied=!source.bad()&&destination.good();destination.close();
+        if(!copied){std::remove(temporary.c_str());setStatus("GAME ICON COPY FAILED",3000);return;}
+        if(!commitSdCard("game-icon-temp")){std::remove(temporary.c_str());return;}
+        const auto replaceRc=desknx::safeio::replaceFilePreservingOnFailure(
+            temporary.c_str(),target.c_str(),(target+".bak").c_str(),true);
+        if(replaceRc!=desknx::safeio::ReplaceStatus::Success) {
+            std::remove(temporary.c_str());setStatus("GAME ICON SAVE FAILED",3000);return;
+        }
+        for(const char* ext:{".svg",".jpg",".jpeg",".png"}) {
+            const std::string obsolete=std::string(GAME_ICON_OVERRIDES_DIR)+"/"+
+                pendingGameIconTitleId+ext;
+            if(obsolete!=target)std::remove(obsolete.c_str());
+        }
+        gIconCache.invalidate(Kind::Game,pendingGameIconTitleId);
+        pendingGameIconTitleId.clear();
+        mediaPickerOpen=false;
+        setStatus("CUSTOM GAME ICON ASSIGNED",2500);
+        return;
+    }
     if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
         if (!isAllowedMediaPath(selected.path,MediaPickerType::WorkspaceBackground)) {
             setStatus("INVALID DESKTOP BACKGROUND",3000); return;
@@ -691,7 +1094,7 @@ void applyMediaPickerSelection(int index) {
         Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         desk.backgroundPath=selected.path;
         layoutUserModified=true;
-        if(saveLayout())setStatus("DESKTOP BACKGROUND APPLIED");
+        if(saveNow())setStatus("DESKTOP BACKGROUND SAVE QUEUED");
         mediaPickerOpen=false;
         return;
     }
@@ -703,18 +1106,26 @@ void applyMediaPickerSelection(int index) {
         wallpaperPath=selected.path;
     } else {
         if(!gFontRenderer.setCustomFont(selected.path)) {
-            setStatus("FONT LOAD FAILED - CHOOSE ANOTHER FILE",3500);
+            setStatus("FONT BUSY OR LOAD FAILED - CHOOSE AGAIN",3500);
             return;
         }
         fontPath=selected.path;
+        scheduleLauncherSettingsSave(0);
+        setStatus("CUSTOM FONT LOADING IN BACKGROUND");
+        mediaPickerOpen=false;
+        return;
     }
-    if(saveLauncherSettings())setStatus(mediaPickerType==MediaPickerType::Wallpaper
-        ?"WALLPAPER APPLIED":"CUSTOM FONT APPLIED");
+    scheduleLauncherSettingsSave(0);
+    setStatus("WALLPAPER APPLIED");
     mediaPickerOpen=false;
 }
 
 void roundRect(int x,int y,int w,int h,int radius,Color c) {
     if(w<=0||h<=0) return;
+    if(gVisualEngine.ready() &&
+       gVisualEngine.fillRoundedRect(
+           x,y,w,h,radius,SDL_Color{c.r,c.g,c.b,c.a}))
+        return;
     // One consistent 10 px corner radius across cards, tiles, controls and modals.
     const int r=std::max(0,std::min(UiCornerRadius,std::min(radius,std::min(w,h)/2)));
     color(c);
@@ -739,10 +1150,44 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
         SDL_RenderDrawLine(renderer,left,y+h-1-row,right,y+h-1-row);
     }
 }
+Color themeSurfaceTint(Color source) {
+    const Color target=themeIndex==1?Color{17,37,52,255}:Color{112,132,154,255};
+    const unsigned amount=themeIndex==1?22u:34u;
+    const auto mix=[&](Uint8 from,Uint8 to){return static_cast<Uint8>((static_cast<unsigned>(from)*(255u-amount)+static_cast<unsigned>(to)*amount+127u)/255u);};
+    source.r=mix(source.r,target.r);source.g=mix(source.g,target.g);source.b=mix(source.b,target.b);return source;
+}
+Color themeEdgeTint(Color source) {
+    const Color target=themeIndex==1?Color{116,166,194,255}:Color{204,220,237,255};
+    const unsigned amount=themeIndex==1?42u:48u;
+    const auto mix=[&](Uint8 from,Uint8 to){return static_cast<Uint8>((static_cast<unsigned>(from)*(255u-amount)+static_cast<unsigned>(to)*amount+127u)/255u);};
+    source.r=mix(source.r,target.r);source.g=mix(source.g,target.g);source.b=mix(source.b,target.b);return source;
+}
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
-    roundRect(x,y+5,w,h,UiCornerRadius,Color{0,0,0,54});
+    fill=themeSurfaceTint(fill);edge=themeEdgeTint(edge);
+    const SDL_Rect bounds{x,y,w,h};
+    if(gUiComponents.surface(bounds,
+        SDL_Color{fill.r,fill.g,fill.b,fill.a},
+        SDL_Color{edge.r,edge.g,edge.b,edge.a},
+        UiCornerRadius,true,surfaceOpacity)) return;
+    const int opacity=std::max(0,std::min(255,surfaceOpacity));
+    fill.a=static_cast<Uint8>((static_cast<unsigned int>(fill.a)*opacity)/255u);
+    edge.a=static_cast<Uint8>((static_cast<unsigned int>(edge.a)*opacity)/255u);
+    roundRect(x,y+5,w,h,UiCornerRadius,
+              Color{0,0,0,static_cast<Uint8>((54u*static_cast<unsigned int>(opacity))/255u)});
     roundRect(x,y,w,h,UiCornerRadius,fill);
     roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
+}
+void uiButton(int x,int y,int w,int h,int radius,
+              desknx::ui::ButtonVariant variant,Color fill,Color edge,
+              bool active=false,bool focused=false,Color accent=BLUE) {
+    fill=themeSurfaceTint(fill);
+    edge=themeEdgeTint(edge);
+    const SDL_Rect bounds{x,y,w,h};
+    (void)gUiComponents.button(bounds,variant,
+        desknx::ui::ButtonState{active,focused,false},
+        SDL_Color{fill.r,fill.g,fill.b,fill.a},
+        SDL_Color{edge.r,edge.g,edge.b,edge.a},radius,
+        SDL_Color{accent.r,accent.g,accent.b,accent.a});
 }
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
@@ -808,15 +1253,69 @@ void text(const std::string& value,int x,int y,int scale,Color c,int right=1260)
         px+=6*scale;
     }
 }
+void textCentered(const std::string& value,int centerX,int y,int scale,
+                  Color c,int left,int right) {
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    const SDL_Color tint{c.r,c.g,c.b,c.a};
+    if(gFontRenderer.drawCentered(localized,centerX,y,scale,tint,left,right))return;
+    const std::string fallback=fallbackAscii(localized);
+    const int width=fallback.empty()?0:
+        static_cast<int>(fallback.size())*6*scale-scale;
+    int px=std::max(left,std::min(right-width,centerX-width/2));
+    color(c);
+    for(char ch:fallback) {
+        if(px+5*scale>right)break;
+        const auto rows=glyph(ch);
+        for(int ry=0;ry<7;++ry)for(int rx=0;rx<5;++rx)
+            if(rows[ry]&(1u<<(4-rx))) {
+                SDL_Rect p{px+rx*scale,y+ry*scale,scale,scale};
+                SDL_RenderFillRect(renderer,&p);
+            }
+        px+=6*scale;
+    }
+}
 std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
 }
+desknx::widgets::Config widgetConfig(const Tile& tile) {
+    return desknx::widgets::parse(tile.kind,tile.data);
+}
+bool hasWidgetKind(Kind kind) {
+    for(const auto& workspace:desks)
+        for(const auto& tile:workspace.tiles)
+            if(tile.kind==kind)return true;
+    return false;
+}
+int configuredWidgetRefresh(Kind kind) {
+    int seconds=180;
+    bool found=false;
+    for(const auto& workspace:desks)for(const auto& tile:workspace.tiles) {
+        if(tile.kind!=kind)continue;
+        seconds=found?std::min(seconds,widgetConfig(tile).refreshSeconds):
+                       widgetConfig(tile).refreshSeconds;
+        found=true;
+    }
+    seconds=found?seconds:desknx::widgets::defaults(kind).refreshSeconds;
+    // Keep a modest minimum polling interval for the remote Nextendo endpoint.
+    return kind==Kind::Nextendo?std::max(30,seconds):seconds;
+}
 std::string typeName(Kind k) {
-    switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
-        case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT";
-        case Kind::Storage:return "WIDGET / STORAGE"; case Kind::Calendar:return "WIDGET / CALENDAR";
-        case Kind::Unsupported:return "UNSUPPORTED"; }
+    switch(k) {
+        case Kind::Game:return "GAME";
+        case Kind::Nro:return "HOMEBREW";
+        case Kind::Clock:return "WIDGET / CLOCK";
+        case Kind::Battery:return "WIDGET / BATTERY";
+        case Kind::System:return "WIDGET / SYSTEM MONITOR";
+        case Kind::Recent:return "WIDGET / RECENT GAMES";
+        case Kind::Storage:return "WIDGET / STORAGE";
+        case Kind::Calendar:return "WIDGET / CALENDAR";
+        case Kind::Nextendo:return "WIDGET / NEXTENDO";
+        case Kind::Favorites:return "WIDGET / FAVORITES";
+        case Kind::GameLibrary:return "WIDGET / GAME LIBRARY";
+        case Kind::QuickSettings:return "WIDGET / QUICK SETTINGS";
+        case Kind::Unsupported:return "UNSUPPORTED";
+    }
     return "ITEM";
 }
 
@@ -848,6 +1347,11 @@ const std::vector<Candidate>& visibleCatalogueSnapshot() {
             return visibleCatalogueCache;
         all = catalogue;
     }
+    for(auto& item:all) {
+        if(item.kind!=Kind::Game)continue;
+        const auto renamed=gameNameOverrides.find(item.data);
+        if(renamed!=gameNameOverrides.end())item.title=renamed->second;
+    }
     std::vector<desknx::catalog_view::RecentKey> recent;
     recent.reserve(recentLaunches.size());
     for(const auto& item:recentLaunches) recent.push_back({item.kind,item.data});
@@ -859,6 +1363,48 @@ const std::vector<Candidate>& visibleCatalogueSnapshot() {
     return visibleCatalogueCache;
 }
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize);
+void cycleTheme(int direction) {
+    themeIndex=(themeIndex+direction+2)%2;
+    applyThemePalette();
+    scheduleLauncherSettingsSave();
+    setStatus(languageRussian?"ТЕМА ОБНОВЛЕНА":"THEME UPDATED",1400);
+}
+
+void cycleAccent(int direction) {
+    constexpr int count=static_cast<int>(COLORS.size())+1; // AUTO + twelve palette colours.
+    int index=accentColorIndex+1;
+    index=(index+direction+count)%count;
+    accentColorIndex=index-1;
+    applyThemePalette();
+    scheduleLauncherSettingsSave();
+    setStatus(languageRussian?"ЦВЕТ АКЦЕНТА ОБНОВЛЁН":"ACCENT COLOUR UPDATED",1400);
+}
+
+void editSteamGridDbApiKey() {
+    SwkbdConfig config{};
+    const Result createRc=swkbdCreate(&config,0);
+    if(R_FAILED(createRc)){setStatus("KEYBOARD UNAVAILABLE",2500);return;}
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,languageRussian?
+        "Ключ SteamGridDB для обложек":"SteamGridDB artwork API key");
+    swkbdConfigSetInitialText(&config,steamGridDbApiKey.c_str());
+    char value[96]{};
+    std::snprintf(value,sizeof(value),"%s",steamGridDbApiKey.c_str());
+    const Result rc=showKeyboard(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_FAILED(rc))return;
+    std::string key=value;
+    while(!key.empty()&&std::isspace(static_cast<unsigned char>(key.back())))key.pop_back();
+    size_t first=0;while(first<key.size()&&std::isspace(static_cast<unsigned char>(key[first])))++first;
+    key.erase(0,first);
+    bool valid=key.size()<=64;
+    for(unsigned char ch:key)if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
+    if(!valid){setStatus("INVALID API KEY FORMAT",3000);return;}
+    steamGridDbApiKey=key;
+    scheduleLauncherSettingsSave(0);
+    setStatus(key.empty()?"STEAMGRIDDB KEY CLEARED":"STEAMGRIDDB KEY SAVED",2500);
+}
+
 void searchCatalogue() {
     const Uint64 keyboardStarted=SDL_GetTicks64();
     SwkbdConfig config{};
@@ -882,6 +1428,330 @@ void searchCatalogue() {
         setStatus(catalogueQuery.empty()?"SEARCH CLEARED":"SEARCH: "+catalogueQuery,2500);
     }
 }
+
+using SteamGridArtworkKind = desknx::steamgriddb::ArtworkKind;
+using SteamGridCacheKind = desknx::steamgriddb::SteamGridDbCache::ArtworkKind;
+std::uint64_t steamGridDbCurrentTitleId=0;
+std::string steamGridDbCurrentTitle;
+std::string steamGridDbCurrentGameData;
+
+SteamGridArtworkKind steamGridDbKindFromIndex(int index) {
+    static const SteamGridArtworkKind kinds[]={SteamGridArtworkKind::Hero,
+        SteamGridArtworkKind::Grid,SteamGridArtworkKind::Logo,SteamGridArtworkKind::Icon};
+    return kinds[std::max(0,std::min(3,index))];
+}
+SteamGridCacheKind steamGridDbCacheKind(int index) {
+    return static_cast<SteamGridCacheKind>(steamGridDbKindFromIndex(index));
+}
+const char* steamGridDbKindLabel(int index) {
+    static const char* labels[]={"HERO","GRID","LOGO","ICON"};
+    return labels[std::max(0,std::min(3,index))];
+}
+bool steamGridDbGetSelectedGame(Tile& selected,std::uint64_t& titleId) {
+    if(listOpen) {
+        const auto& available=visibleCatalogueSnapshot();
+        if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())return false;
+        const Candidate& candidate=available[static_cast<size_t>(listIndex)];
+        if(candidate.kind!=Kind::Game||!desknx::model::isTitleId(candidate.data))return false;
+        selected=Tile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
+    } else {
+        if(desks.empty()||deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return false;
+        const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+        const int index=itemAt(desk,selectedX,selectedY);
+        if(index<0||index>=static_cast<int>(desk.tiles.size()))return false;
+        selected=desk.tiles[static_cast<size_t>(index)];
+    }
+    if(selected.kind!=Kind::Game||!desknx::model::isTitleId(selected.data))return false;
+    char* end=nullptr;
+    const auto parsed=std::strtoull(selected.data.c_str(),&end,16);
+    if(parsed==0||end!=selected.data.c_str()+selected.data.size())return false;
+    titleId=static_cast<std::uint64_t>(parsed);
+    return true;
+}
+void steamGridDbDestroyPreview() {
+    if(steamGridDbPreviewTexture)SDL_DestroyTexture(steamGridDbPreviewTexture);
+    steamGridDbPreviewTexture=nullptr;
+    // Cached artwork is persistent; only per-request preview files are disposable.
+    if(steamGridDbPreviewLoadedPath.find("/.preview-")!=std::string::npos)
+        std::remove(steamGridDbPreviewLoadedPath.c_str());
+    steamGridDbPreviewLoadedPath.clear();
+    steamGridDbPreviewRevision=UINT64_MAX;
+}
+void steamGridDbClosePicker() {
+    steamGridDbPickerOpen=false;
+    steamGridDbOfflineFallback=false;
+    steamGridDbTouchTracking=false;
+    steamGridDbTouchDragged=false;
+    // A confirmed apply must finish after the modal closes. Uncommitted search,
+    // asset-list and preview requests are cancelled instead of wasting network
+    // time or publishing late state into the next picker session.
+    steamGridDbApplyPending=
+        gSteamGridDbService.snapshot().status==desknx::steamgriddb::ServiceStatus::Applying;
+    if(!steamGridDbApplyPending)gSteamGridDbService.cancelBrowsing();
+    steamGridDbDestroyPreview();
+}
+void steamGridDbEditApiKey() {
+    // Reuse the validated Settings editor so both entry points accept exactly
+    // the same API-key format and persist it through one path.
+    editSteamGridDbApiKey();
+}
+void steamGridDbSearch(const std::string& title,bool useSavedMapping=true) {
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id))return;
+    steamGridDbCurrentTitleId=id;
+    steamGridDbCurrentTitle=title;
+    steamGridDbPickerView=SteamGridDbPickerView::Matches;
+    steamGridDbOfflineFallback=false;
+    steamGridDbMatchIndex=steamGridDbMatchOffset=0;
+    steamGridDbAssetOffset=0;
+    steamGridDbKindIndex=1;
+    if(!gSteamGridDbService.search(id,title,steamGridDbApiKey,useSavedMapping))
+        setStatus("STEAMGRIDDB REQUEST COULD NOT START",2500);
+}
+void steamGridDbEditSearchTitle() {
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id))return;
+    SwkbdConfig config{};
+    if(R_FAILED(swkbdCreate(&config,0)))return;
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,"Search SteamGridDB by game title");
+    swkbdConfigSetInitialText(&config,tile.title.c_str());
+    char value[128]{};
+    std::snprintf(value,sizeof(value),"%s",tile.title.c_str());
+    const Result rc=showKeyboard(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_SUCCEEDED(rc)&&value[0])steamGridDbSearch(value,false);
+}
+void steamGridDbOpenPicker() {
+    if(!editing){setStatus("ENTER EDIT MODE TO CHANGE GAME COVERS",2400);return;}
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id)){setStatus("SELECT AN INSTALLED GAME FIRST",2200);return;}
+    if(!sdMounted){setStatus("STEAMGRIDDB ARTWORK NEEDS AN SD CARD",2800);return;}
+    steamGridDbCurrentTitleId=id;
+    steamGridDbCurrentTitle=tile.title;
+    steamGridDbCurrentGameData=tile.data;
+    steamGridDbPickerOpen=true;
+    steamGridDbApplyPending=false;
+    steamGridDbOfflineFallback=false;
+    steamGridDbPickerView=SteamGridDbPickerView::Matches;
+    steamGridDbKindIndex=1;
+    steamGridDbMatchIndex=steamGridDbMatchOffset=steamGridDbAssetOffset=0;
+    steamGridDbDestroyPreview();
+    (void)gSteamGridDbService.cache().ensureDirectories();
+    std::string cached=gSteamGridDbService.cache().selectedPath(id);
+    if(steamGridDbApiKey.empty()) {
+        if(cached.empty()) {
+            const auto fallbackKind=gSteamGridDbService.cache().selectedKind(id);
+            if(gSteamGridDbService.cache().hasArtwork(id,fallbackKind)) {
+                steamGridDbKindIndex=static_cast<int>(fallbackKind);
+                cached=gSteamGridDbService.cache().pathFor(id,fallbackKind);
+            }
+        }
+        if(cached.empty()) {
+            steamGridDbClosePicker();
+            steamGridDbEditApiKey();
+            return;
+        }
+        steamGridDbOfflineFallback=true;
+        steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        steamGridDbKindIndex=static_cast<int>(gSteamGridDbService.cache().selectedKind(id));
+        steamGridDbPreviewLoadedPath=cached;
+        setStatus("OFFLINE - CACHED ARTWORK",2500);
+        return;
+    }
+    steamGridDbSearch(tile.title);
+}
+void steamGridDbChooseMatch(int index) {
+    const auto state=gSteamGridDbService.snapshot();
+    if(index<0||index>=static_cast<int>(state.games.size()))return;
+    const auto match=state.games[static_cast<size_t>(index)];
+    steamGridDbKindIndex=1;
+    steamGridDbAssetOffset=0;
+    steamGridDbPickerView=SteamGridDbPickerView::Assets;
+    steamGridDbOfflineFallback=false;
+    if(!gSteamGridDbService.loadAssets(state.titleId,match.id,state.title,match.name,
+        steamGridDbKindFromIndex(steamGridDbKindIndex),steamGridDbApiKey))
+        setStatus("STEAMGRIDDB ARTWORK REQUEST FAILED",2500);
+}
+void steamGridDbChangeKind(int direction) {
+    if(steamGridDbOfflineFallback) {
+        steamGridDbKindIndex=(steamGridDbKindIndex+direction+4)%4;
+        steamGridDbDestroyPreview();
+        if(gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,
+                                                   steamGridDbCacheKind(steamGridDbKindIndex)))
+            steamGridDbPreviewLoadedPath=gSteamGridDbService.cache().pathFor(
+                steamGridDbCurrentTitleId,steamGridDbCacheKind(steamGridDbKindIndex));
+        return;
+    }
+    const auto state=gSteamGridDbService.snapshot();
+    if(state.titleId==0||state.gameId==0)return;
+    steamGridDbKindIndex=(steamGridDbKindIndex+direction+4)%4;
+    steamGridDbAssetOffset=0;
+    if(!gSteamGridDbService.loadAssets(state.titleId,state.gameId,state.title,state.gameName,
+        steamGridDbKindFromIndex(steamGridDbKindIndex),steamGridDbApiKey))
+        setStatus("STEAMGRIDDB ARTWORK REQUEST FAILED",2200);
+}
+void steamGridDbMoveAsset(int direction) {
+    const auto state=gSteamGridDbService.snapshot();
+    if(state.assets.empty())return;
+    const int count=static_cast<int>(state.assets.size());
+    const int next=((state.selectedAsset+direction)%count+count)%count;
+    if(gSteamGridDbService.selectAsset(next)) {
+        if(next<steamGridDbAssetOffset)steamGridDbAssetOffset=next;
+        if(next>=steamGridDbAssetOffset+7)steamGridDbAssetOffset=next-6;
+    }
+}
+void steamGridDbRestoreSystem() {
+    // Restoring the system cover must not race an already-confirmed artwork
+    // apply that is still committing its file and metadata.
+    if(gSteamGridDbService.snapshot().status==
+       desknx::steamgriddb::ServiceStatus::Applying) {
+        setStatus("WAIT FOR THE CURRENT ARTWORK SAVE TO FINISH",2600);
+        return;
+    }
+    Tile tile;
+    std::uint64_t id=0;
+    if(!steamGridDbGetSelectedGame(tile,id))return;
+    auto& cache=gSteamGridDbService.cache();
+    if(!cache.hasHero(id)&&!cache.hasGrid(id)&&!cache.hasLogo(id)&&!cache.hasIcon(id)) {
+        setStatus("NO CUSTOM COVER TO RESTORE",2400);
+        steamGridDbClosePicker();
+        return;
+    }
+    if(cache.restoreSystemArtwork(id)) {
+        gIconCache.invalidate(Kind::Game,tile.data);
+        setStatus("SYSTEM GAME COVER RESTORED",3000);
+    } else setStatus("NO CUSTOM COVER TO RESTORE",2400);
+    steamGridDbClosePicker();
+}
+void steamGridDbUpdatePreview(const std::string& path,std::uint64_t revision) {
+    if(path.empty())return;
+    if(steamGridDbPreviewTexture&&steamGridDbPreviewLoadedPath==path&&
+       steamGridDbPreviewRevision==revision)return;
+    steamGridDbDestroyPreview();
+    if(!IconCache::validateImagePath(path))return;
+    SDL_Surface* surface=IMG_Load(path.c_str());
+    if(!surface)return;
+    if(surface->w<=0||surface->h<=0||
+       static_cast<std::uint64_t>(surface->w)*static_cast<std::uint64_t>(surface->h)>3000000u) {
+        SDL_FreeSurface(surface);
+        return;
+    }
+    steamGridDbPreviewTexture=SDL_CreateTextureFromSurface(renderer,surface);
+    SDL_FreeSurface(surface);
+    if(steamGridDbPreviewTexture) {
+        steamGridDbPreviewLoadedPath=path;
+        steamGridDbPreviewRevision=revision;
+    }
+}
+void steamGridDbApplyCurrentCached() {
+    if(!steamGridDbCurrentTitleId)return;
+    const auto kind=steamGridDbCacheKind(steamGridDbKindIndex);
+    if(gSteamGridDbService.cache().activateCachedArtwork(steamGridDbCurrentTitleId,kind)) {
+        Tile tile;
+        std::uint64_t id=0;
+        if(steamGridDbGetSelectedGame(tile,id))gIconCache.invalidate(Kind::Game,tile.data);
+        setStatus("CACHED "+std::string(steamGridDbKindLabel(steamGridDbKindIndex))+" ARTWORK SELECTED",3000);
+        steamGridDbClosePicker();
+    } else setStatus("THIS ARTWORK TYPE IS NOT CACHED",2200);
+}
+void readCatalogueState(bool& ready,bool& complete,bool& truncated,
+                        bool* nsAvailable=nullptr,std::uint32_t* nsError=nullptr,
+                        size_t* gameCount=nullptr,size_t* nroCount=nullptr);
+
+void pumpSteamGridDbCacheCleanup() {
+    if(steamGridDbStartupPruned||!sdMounted||!catalogueMutex)return;
+    bool ready=false,complete=false,truncated=false;
+    readCatalogueState(ready,complete,truncated);
+    if(!complete||truncated)return;
+    std::vector<std::uint64_t> installed;
+    SDL_LockMutex(catalogueMutex);
+    for(const auto& entry:catalogue) {
+        if(entry.kind!=Kind::Game||!desknx::model::isTitleId(entry.data))continue;
+        char* end=nullptr;
+        const auto id=std::strtoull(entry.data.c_str(),&end,16);
+        if(id&&end==entry.data.c_str()+entry.data.size())
+            installed.push_back(static_cast<std::uint64_t>(id));
+    }
+    SDL_UnlockMutex(catalogueMutex);
+    if(gSteamGridDbService.pruneCache(
+        desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed))
+        steamGridDbStartupPruned=true;
+}
+void pumpSteamGridDbPicker() {
+    if(!steamGridDbPickerOpen&&!steamGridDbApplyPending)return;
+    const auto state=gSteamGridDbService.snapshot();
+
+    if(steamGridDbPickerOpen) {
+        if(state.status==desknx::steamgriddb::ServiceStatus::MatchesReady&&
+           steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            if(!state.games.empty()) {
+                const float first=state.games[0].matchScore;
+                const float second=state.games.size()>1?state.games[1].matchScore:0.0f;
+                if(first>=0.92f&&(state.games.size()==1||first-second>=0.08f))
+                    steamGridDbChooseMatch(0);
+                else if(first>=0.86f&&state.games.size()==1)
+                    steamGridDbChooseMatch(0);
+            }
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::LoadingAssets&&
+                  state.gameId!=0&&steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::Browsing&&
+                  steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            steamGridDbPickerView=SteamGridDbPickerView::Assets;
+        } else if(state.status==desknx::steamgriddb::ServiceStatus::Error&&
+                  !steamGridDbOfflineFallback) {
+            const std::string cached=gSteamGridDbService.cache().selectedPath(state.titleId);
+            if(!cached.empty()) {
+                steamGridDbOfflineFallback=true;
+                steamGridDbPickerView=SteamGridDbPickerView::Assets;
+                steamGridDbKindIndex=static_cast<int>(
+                    gSteamGridDbService.cache().selectedKind(state.titleId));
+                steamGridDbPreviewLoadedPath=cached;
+                setStatus("OFFLINE - USING CACHED STEAMGRIDDB ARTWORK",3500);
+            }
+        }
+
+        if(state.previewRevision>0&&!state.previewPath.empty()&&!steamGridDbOfflineFallback)
+            steamGridDbUpdatePreview(state.previewPath,state.previewRevision);
+        else if(!steamGridDbPreviewLoadedPath.empty()&&!steamGridDbPreviewTexture)
+            steamGridDbUpdatePreview(steamGridDbPreviewLoadedPath,0);
+    }
+
+    if(steamGridDbApplyPending&&state.status==desknx::steamgriddb::ServiceStatus::Error) {
+        steamGridDbApplyPending=false;
+        setStatus("STEAMGRIDDB DOWNLOAD FAILED",3500);
+    }
+
+    if(state.status==desknx::steamgriddb::ServiceStatus::Applied&&steamGridDbApplyPending) {
+        if(!steamGridDbCurrentGameData.empty())
+            gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
+
+        bool ready=false,complete=false,truncated=false;
+        readCatalogueState(ready,complete,truncated);
+        if(complete&&!truncated) {
+            std::vector<std::uint64_t> installed;
+            if(catalogueMutex)SDL_LockMutex(catalogueMutex);
+            for(const auto& entry:catalogue) {
+                if(entry.kind!=Kind::Game||!desknx::model::isTitleId(entry.data))continue;
+                char* end=nullptr;
+                const auto parsed=std::strtoull(entry.data.c_str(),&end,16);
+                if(parsed&&end==entry.data.c_str()+entry.data.size())
+                    installed.push_back(static_cast<std::uint64_t>(parsed));
+            }
+            if(catalogueMutex)SDL_UnlockMutex(catalogueMutex);
+            (void)gSteamGridDbService.pruneCache(
+                desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed);
+        }
+        steamGridDbApplyPending=false;
+        setStatus("STEAMGRIDDB ARTWORK SAVED OFFLINE",3500);
+        if(steamGridDbPickerOpen)steamGridDbClosePicker();
+    }
+}
+
 void cycleCatalogueFilter(int direction) {
     constexpr int count=4;
     int current=static_cast<int>(catalogueFilter);
@@ -913,8 +1783,8 @@ void publishCatalogue(const desknx::catalog::ScanResult& result) {
     if(catalogueMutex) SDL_UnlockMutex(catalogueMutex);
 }
 void readCatalogueState(bool& ready,bool& complete,bool& truncated,
-                        bool* nsAvailable=nullptr,std::uint32_t* nsError=nullptr,
-                        size_t* gameCount=nullptr,size_t* nroCount=nullptr) {
+                        bool* nsAvailable,std::uint32_t* nsError,
+                        size_t* gameCount,size_t* nroCount) {
     if(catalogueMutex) SDL_LockMutex(catalogueMutex);
     ready=catalogueReady;
     complete=catalogueScanComplete;
@@ -928,14 +1798,22 @@ void readCatalogueState(bool& ready,bool& complete,bool& truncated,
 void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
     publishCatalogue(snapshot);
 }
+bool nextendoCancelRequested(void*) {
+    return SDL_AtomicGet(&nextendoStop) != 0;
+}
 int nextendoThreadMain(void*) {
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     bool networkReady = false;
+    unsigned int consecutiveFailures = 0;
+    SDL_AtomicSet(&nextendoNetworkReady,0);
+    SDL_AtomicSet(&nextendoConsecutiveFailures,0);
     std::uint64_t nextAttempt = SDL_GetTicks64() + 8000;
     while (!SDL_AtomicGet(&nextendoStop)) {
         const std::uint64_t now = SDL_GetTicks64();
         if (now >= nextAttempt) {
             if (!networkReady) {
                 networkReady = desknx::nextendo::initializeNetwork();
+                SDL_AtomicSet(&nextendoNetworkReady,networkReady?1:0);
                 desknx::diag::Write("nextendo", networkReady ? "network_ready" : "network_init_failed",
                     "retry_ms=%u", networkReady ? 0u : 30000u);
                 if (!networkReady) {
@@ -945,22 +1823,53 @@ int nextendoThreadMain(void*) {
                 }
             }
             desknx::nextendo::PlayerSnapshot snapshot;
-            const bool ok = desknx::nextendo::fetchSnapshot(snapshot);
+            const bool ok = desknx::nextendo::fetchSnapshot(
+                snapshot,nextendoCancelRequested,nullptr);
             if (ok && nextendoMutex) {
                 SDL_LockMutex(nextendoMutex);
                 const bool applied = nextendoFeed.apply(snapshot, SDL_GetTicks64());
+                if (applied)
+                    nextendoPopularCache=desknx::nextendo::rankPopularGames(snapshot);
                 SDL_UnlockMutex(nextendoMutex);
+                consecutiveFailures = 0;
+                SDL_AtomicSet(&nextendoConsecutiveFailures,0);
+                SDL_AtomicSet(&nextendoLastSuccessTick,
+                    static_cast<int>(static_cast<Uint32>(SDL_GetTicks())));
                 desknx::diag::Write("nextendo", applied ? "snapshot_updated" : "snapshot_rejected",
                     "titles=%zu total=%u", snapshot.perTitle.size(), snapshot.total);
             } else {
+                ++consecutiveFailures;
+                SDL_AtomicSet(&nextendoConsecutiveFailures,
+                    static_cast<int>(consecutiveFailures));
                 desknx::diag::Write("nextendo", "snapshot_failed",
-                    "network_ready=%d", networkReady ? 1 : 0);
+                    "network_ready=%d consecutive_failures=%u",
+                    networkReady ? 1 : 0,consecutiveFailures);
+                // curl/socket sessions occasionally become unusable after a
+                // long Wi-Fi outage. Recreate the whole network stack instead
+                // of endlessly polling with the stale session.
+                if(consecutiveFailures>=3) {
+                    desknx::diag::Write("nextendo","network_recovery",
+                        "action=reinitialize failures=%u",consecutiveFailures);
+                    if(networkReady)desknx::nextendo::shutdownNetwork();
+                    networkReady=false;
+                    SDL_AtomicSet(&nextendoNetworkReady,0);
+                    consecutiveFailures=0;
+                    SDL_AtomicSet(&nextendoConsecutiveFailures,0);
+                    nextAttempt=now+8000;
+                    SDL_Delay(250);
+                    continue;
+                }
             }
-            nextAttempt = now + desknx::nextendo::RefreshIntervalMs;
+            const int configuredMs=SDL_AtomicGet(&nextendoConfiguredRefreshMs);
+            const std::uint32_t refreshMs=configuredMs>=30000?
+                static_cast<std::uint32_t>(configuredMs):
+                static_cast<std::uint32_t>(desknx::nextendo::RefreshIntervalMs);
+            nextAttempt = now + refreshMs;
         }
         SDL_Delay(250);
     }
     if (networkReady) desknx::nextendo::shutdownNetwork();
+    SDL_AtomicSet(&nextendoNetworkReady,0);
     return 0;
 }
 
@@ -975,6 +1884,32 @@ unsigned nextendoPlayersForTitle(const std::string& titleId) {
     return count;
 }
 
+bool nextendoPlayersSnapshotForTitle(const std::string& titleId,unsigned& players) {
+    players=0;
+    if(!nextendoMutex||!desknx::model::isTitleId(titleId))return false;
+    char* end=nullptr;
+    const unsigned long long id=std::strtoull(titleId.c_str(),&end,16);
+    if(end!=titleId.c_str()+titleId.size()||id==0)return false;
+    bool fresh=false;
+    SDL_LockMutex(nextendoMutex);
+    const std::uint64_t now=SDL_GetTicks64();
+    fresh=nextendoFeed.hasTitleSnapshot(static_cast<std::uint64_t>(id),now);
+    if(fresh)players=nextendoFeed.playersFor(static_cast<std::uint64_t>(id),now);
+    SDL_UnlockMutex(nextendoMutex);
+    return fresh;
+}
+
+
+desknx::nextendo::PopularGames nextendoPopularSnapshot() {
+    desknx::nextendo::PopularGames result{};
+    if (!nextendoMutex) return result;
+    SDL_LockMutex(nextendoMutex);
+    if (nextendoFeed.hasTotal(SDL_GetTicks64()))
+        result=nextendoPopularCache;
+    SDL_UnlockMutex(nextendoMutex);
+    return result;
+}
+
 std::string nextendoTotalLabel() {
     if (!nextendoMutex) return "NEXTENDO --";
     SDL_LockMutex(nextendoMutex);
@@ -986,6 +1921,7 @@ std::string nextendoTotalLabel() {
 }
 
 int catalogueThreadMain(void* context) {
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     const auto* request=static_cast<const CatalogueScanRequest*>(context);
     const bool forceRefresh=request&&request->forceRefresh;
     if(request&&request->reinitializeNs) {
@@ -1282,6 +2218,204 @@ void recordRecentLaunch(const Tile& tile) {
     if(recentLaunches.size()>10)recentLaunches.resize(10);
     lastLaunched=tile.title;saveHistory();
 }
+
+bool readFavoritesFile(const char* path,std::vector<std::string>& output) {
+    struct stat st{};
+    constexpr std::uint64_t MaxFavoritesBytes=32u*1024u;
+    if(!path||stat(path,&st)!=0||!S_ISREG(st.st_mode)||
+       st.st_size<=0||static_cast<std::uint64_t>(st.st_size)>MaxFavoritesBytes)return false;
+    std::ifstream input(path,std::ios::binary);
+    std::string line;
+    if(!input||!std::getline(input,line)||line!="DESKNXF1")return false;
+    std::vector<std::string> parsed;
+    while(std::getline(input,line)&&parsed.size()<256) {
+        if(line.size()!=16||!desknx::model::isTitleId(line))continue;
+        if(std::find(parsed.begin(),parsed.end(),line)==parsed.end())
+            parsed.push_back(line);
+    }
+    if(input.bad())return false;
+    output=std::move(parsed);
+    return true;
+}
+void loadFavorites() {
+    if(!sdMounted)return;
+    std::vector<std::string> loaded;
+    if(readFavoritesFile(FAVORITES_FILE,loaded)) {
+        favoriteTitleIds=std::move(loaded);
+    } else if(readFavoritesFile(FAVORITES_BAK,loaded)) {
+        favoriteTitleIds=std::move(loaded);
+        setStatus("FAVORITES RESTORED FROM BACKUP",3500);
+    }
+}
+bool saveFavorites() {
+    if(!sdMounted)return false;
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
+    std::ofstream out(FAVORITES_TMP,std::ios::binary|std::ios::trunc);
+    if(!out){setStatus("FAVORITES SAVE FAILED",3000);return false;}
+    out<<"DESKNXF1\n";
+    for(const auto& id:favoriteTitleIds)
+        if(desknx::model::isTitleId(id))out<<id<<"\n";
+    out.flush();
+    bool good=out.good();
+    out.close();
+    if(!good){std::remove(FAVORITES_TMP);setStatus("FAVORITES WRITE FAILED",3000);return false;}
+    if(!commitSdCard("favorites-temp")) {
+        std::remove(FAVORITES_TMP);
+        setStatus("FAVORITES SD COMMIT FAILED",3000);
+        return false;
+    }
+    const auto result=desknx::safeio::replaceFilePreservingOnFailure(
+        FAVORITES_TMP,FAVORITES_FILE,FAVORITES_BAK,true);
+    if(result!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(FAVORITES_TMP);
+        setStatus("FAVORITES RENAME FAILED; BACKUP KEPT",3500);
+        return false;
+    }
+    if(!commitSdCard("favorites-publish")) {
+        setStatus("FAVORITES COMMIT FAILED; BACKUP KEPT",3500);
+        return false;
+    }
+    return true;
+}
+bool isFavorite(const std::string& titleId) {
+    return std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),titleId)!=favoriteTitleIds.end();
+}
+bool toggleFavorite(const Tile& tile) {
+    if(tile.kind!=Kind::Game||!desknx::model::isTitleId(tile.data)) {
+        setStatus("FAVORITES SUPPORT INSTALLED GAMES",2200);
+        return false;
+    }
+    const auto found=std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),tile.data);
+    if(found!=favoriteTitleIds.end()) {
+        const std::size_t oldIndex=static_cast<std::size_t>(
+            std::distance(favoriteTitleIds.begin(),found));
+        favoriteTitleIds.erase(found);
+        if(saveFavorites()) {
+            setStatus("REMOVED FROM FAVORITES: "+tile.title);
+        } else {
+            favoriteTitleIds.insert(favoriteTitleIds.begin()+
+                static_cast<std::ptrdiff_t>(std::min(oldIndex,favoriteTitleIds.size())),tile.data);
+            return false;
+        }
+        return true;
+    }
+    if(favoriteTitleIds.size()>=256) {
+        setStatus("FAVORITES LIMIT REACHED",2500);
+        return false;
+    }
+    favoriteTitleIds.insert(favoriteTitleIds.begin(),tile.data);
+    if(saveFavorites()) {
+        setStatus("ADDED TO FAVORITES: "+tile.title);
+        return true;
+    }
+    favoriteTitleIds.erase(std::remove(favoriteTitleIds.begin(),
+        favoriteTitleIds.end(),tile.data),favoriteTitleIds.end());
+    return false;
+}
+std::vector<Tile> favoriteTiles() {
+    const auto all=catalogueSnapshot();
+    std::vector<Tile> result;
+    result.reserve(favoriteTitleIds.size());
+    for(const auto& id:favoriteTitleIds) {
+        const auto it=std::find_if(all.begin(),all.end(),[&](const Candidate& entry) {
+            return entry.kind==Kind::Game&&entry.data==id;
+        });
+        if(it!=all.end())result.push_back(Tile{Kind::Game,it->title,it->data,0,0,1,1,it->color});
+    }
+    return result;
+}
+void openFavorites() {
+    favoritesView=favoriteTiles();
+    favoritesIndex=0;
+    favoritesOffset=0;
+    if(favoritesView.empty()) {
+        setStatus(favoriteTitleIds.empty()?"NO FAVORITE GAMES YET":"FAVORITE GAMES ARE NOT IN THE CURRENT CATALOGUE");
+        return;
+    }
+    favoritesOpen=true;
+}
+
+std::vector<Tile> gameLibraryTiles(std::size_t limit,bool recentFirst=true) {
+    const auto all=catalogueSnapshot();
+    std::vector<Tile> result;
+    result.reserve(std::min<std::size_t>(limit,all.size()));
+    auto appendById=[&](const std::string& id) {
+        if(result.size()>=limit)return;
+        if(std::any_of(result.begin(),result.end(),[&](const Tile& tile){return tile.data==id;}))return;
+        const auto found=std::find_if(all.begin(),all.end(),[&](const Candidate& item) {
+            return item.kind==Kind::Game&&item.data==id;
+        });
+        if(found!=all.end())
+            result.push_back(Tile{Kind::Game,found->title,found->data,0,0,1,1,found->color});
+    };
+    // Recent launches and favourites can be surfaced first; users may switch
+    // to a strictly alphabetical catalogue from the widget editor.
+    if(recentFirst) {
+        for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)appendById(entry.data);
+        for(const auto& id:favoriteTitleIds)appendById(id);
+    }
+    std::vector<Candidate> games;
+    for(const auto& item:all)if(item.kind==Kind::Game)games.push_back(item);
+    std::sort(games.begin(),games.end(),[](const Candidate& a,const Candidate& b) {
+        return a.title<b.title;
+    });
+    for(const auto& item:games)appendById(item.data);
+    if(!recentFirst)
+        for(const auto& id:favoriteTitleIds)appendById(id);
+    if(result.size()>limit)result.resize(limit);
+    return result;
+}
+
+struct NextendoWidgetSnapshot {
+    bool fresh{false};
+    unsigned total{0};
+    unsigned activeTitles{0};
+    unsigned topPlayers{0};
+    std::string topGame;
+};
+NextendoWidgetSnapshot nextendoWidgetSnapshot() {
+    static NextendoWidgetSnapshot cached;
+    static std::uint64_t cachedAt=0;
+    const std::uint64_t now=SDL_GetTicks64();
+    if(cachedAt!=0&&now-cachedAt<5000)return cached;
+    NextendoWidgetSnapshot result;
+    const auto games=catalogueSnapshot();
+    if(nextendoMutex)SDL_LockMutex(nextendoMutex);
+    result.fresh=nextendoFeed.hasFreshSnapshot(now);
+    if(result.fresh) {
+        result.total=nextendoFeed.total(now);
+        result.activeTitles=nextendoFeed.activeTitleCount(now);
+        for(const auto& game:games) {
+            if(game.kind!=Kind::Game||!desknx::model::isTitleId(game.data))continue;
+            const auto players=nextendoFeed.playersFor(
+                static_cast<desknx::nextendo::TitleId>(std::strtoull(game.data.c_str(),nullptr,16)),now);
+            if(players>result.topPlayers) {
+                result.topPlayers=players;
+                result.topGame=game.title;
+            }
+        }
+    }
+    if(nextendoMutex)SDL_UnlockMutex(nextendoMutex);
+    cached=result;
+    cachedAt=now;
+    return result;
+}
+std::vector<HistoryEntry> recentEntriesForModal() {
+    if(!recentGamesOnly)return recentLaunches;
+    std::vector<HistoryEntry> games;
+    for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)games.push_back(entry);
+    return games;
+}
+void openRecentGames() {
+    recentGamesOnly=true;
+    recentIndex=0;
+    recentOpen=true;
+}
+void openRecentAll() {
+    recentGamesOnly=false;
+    recentIndex=0;
+    recentOpen=true;
+}
 bool backupBrokenLayout() {
     struct stat st{};
     if (stat(CFG_FILE, &st) != 0) return errno == ENOENT;
@@ -1543,6 +2677,7 @@ bool writeActiveWorkspaceSnapshot(const LayoutSaveJob& job) {
 }
 
 int layoutSaveThreadMain(void* context) {
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     const auto* job=static_cast<const LayoutSaveJob*>(context);
     LayoutSaveOutcome outcome{};
     outcome.markerOnly=job->markerOnly;
@@ -1822,34 +2957,248 @@ void defaultLayout() {
         if(c.kind==Kind::Game&&gi<12) {desks[0].tiles.push_back(Tile{c.kind,c.title,c.data,gi%COLS,gi/COLS,1,1,c.color});++gi;}
         if(c.kind==Kind::Nro&&hi<12) {desks[1].tiles.push_back(Tile{c.kind,c.title,c.data,hi%COLS,hi/COLS,1,1,c.color});++hi;}
     }
-    desks[2].tiles.push_back(Tile{Kind::Clock,"Clock","",0,0,2,1,1});
-    desks[2].tiles.push_back(Tile{Kind::Battery,"Battery","",2,0,2,1,2});
-    desks[2].tiles.push_back(Tile{Kind::System,"System info","",4,0,2,1,5});
-    desks[2].tiles.push_back(Tile{Kind::Recent,"Recent launches","",0,1,3,1,6});
-    desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
-    desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
+    desks[2].tiles={
+        Tile{Kind::Clock,"Clock","",0,0,2,1,1},
+        Tile{Kind::Battery,"Battery","",2,0,2,1,2},
+        Tile{Kind::Nextendo,"Nextendo","",4,0,2,1,0},
+        Tile{Kind::Recent,"Recent games","",0,1,2,1,6},
+        Tile{Kind::Favorites,"Favorites","",2,1,2,1,8},
+        Tile{Kind::GameLibrary,"Game library","",4,1,2,1,9},
+        Tile{Kind::Storage,"SD storage","",0,2,2,1,3},
+        Tile{Kind::System,"System monitor","",2,2,2,1,5},
+        Tile{Kind::Calendar,"Calendar","",4,2,2,1,4}
+    };
 }
-void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
-    if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
+void updateJoyconBatteryState(JoyconBatteryState& target,
+                              const HidPowerInfo& info) {
+    target.connected=true;
+    target.level=static_cast<int>(std::min<u32>(info.battery_level,4));
+    target.charging=info.is_charging;
 }
-void refreshStorageStats() {
+
+void refreshJoyconBattery() {
     const Uint32 now=SDL_GetTicks();
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
-    lastStorageUpdate=now;
-    struct statvfs fs{};
-    if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
-        const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
-        sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
-        sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0;
-    } else {
-        sdTotalBytes=0;
-        sdFreeBytes=0;
-        storageStatsAvailable=false;
+    if(lastJoyconBatteryTick!=0&&now-lastJoyconBatteryTick<3000)return;
+    lastJoyconBatteryTick=now;
+    joyconLeft=JoyconBatteryState{};
+    joyconRight=JoyconBatteryState{};
+
+    auto inspectNpad=[&](HidNpadIdType id) {
+        const u32 device=hidGetNpadDeviceType(id);
+        const bool leftConnected=(device&
+            (HidDeviceTypeBits_JoyLeft|HidDeviceTypeBits_HandheldLeft))!=0;
+        const bool rightConnected=(device&
+            (HidDeviceTypeBits_JoyRight|HidDeviceTypeBits_HandheldRight))!=0;
+        if(!leftConnected&&!rightConnected)return;
+
+        if(leftConnected&&rightConnected) {
+            HidPowerInfo left{},right{};
+            hidGetNpadPowerInfoSplit(id,&left,&right);
+            if(!joyconLeft.connected)updateJoyconBatteryState(joyconLeft,left);
+            if(!joyconRight.connected)updateJoyconBatteryState(joyconRight,right);
+            return;
+        }
+
+        HidPowerInfo single{};
+        hidGetNpadPowerInfoSingle(id,&single);
+        if(leftConnected&&!joyconLeft.connected)
+            updateJoyconBatteryState(joyconLeft,single);
+        if(rightConnected&&!joyconRight.connected)
+            updateJoyconBatteryState(joyconRight,single);
+    };
+
+    // Prefer the attached pair in handheld mode, then paired controllers.
+    inspectNpad(HidNpadIdType_Handheld);
+    for(int i=0;i<8;++i)
+        inspectNpad(static_cast<HidNpadIdType>(i));
+    joyconBatteryAvailable=joyconLeft.connected||joyconRight.connected;
+}
+
+void refreshAtmosphereVersion() {
+    if(atmosphereVersionChecked)return;
+    atmosphereVersionChecked=true;
+
+    const Result initRc=splInitialize();
+    if(R_FAILED(initRc)) {
+        desknx::diag::Write("system_info","atmosphere_unavailable",
+            "spl_init_rc=0x%08X",static_cast<unsigned int>(initRc));
+        return;
+    }
+
+    u64 packed=0;
+    const Result versionRc=splGetConfig(static_cast<SplConfigItem>(65000),&packed);
+    splExit();
+    if(R_FAILED(versionRc)) {
+        desknx::diag::Write("system_info","atmosphere_unavailable",
+            "spl_config_rc=0x%08X",static_cast<unsigned int>(versionRc));
+        return;
+    }
+
+    const auto decoded=desknx::widget_sensors::decodeAtmosphereConfig(packed);
+    if(!decoded.available)return;
+    char version[32]{};
+    std::snprintf(version,sizeof(version),"%u.%u.%u",
+        decoded.major,decoded.minor,decoded.patch);
+    atmosphereVersion=version;
+    atmosphereVersionAvailable=true;
+    desknx::diag::Write("system_info","atmosphere_version",
+        "version=%s raw=0x%016llX",atmosphereVersion.c_str(),
+        static_cast<unsigned long long>(packed));
+}
+
+void refreshBattery() {
+    if(!hasWidgetKind(Kind::Battery))return;
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Battery))*1000u;
+    if(lastBatteryTick!=0&&now-lastBatteryTick<interval)return;
+    lastBatteryTick=now;
+    if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
+    if(psmReady) {
+        u32 pct=0;
+        if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct))&&pct<=100u)
+            battery=static_cast<int>(pct);
+        PsmChargerType charger=PsmChargerType_Unconnected;
+        if(R_SUCCEEDED(psmGetChargerType(&charger)))
+            batteryChargerType=static_cast<int>(charger);
+        else batteryChargerType=-1;
     }
 }
+
+int storageStatsThreadMain(void*) {
+    Uint64 nextUpdate=0;
+    while(!SDL_AtomicGet(&storageStatsStop)) {
+        const Uint64 now=SDL_GetTicks64();
+        if(now>=nextUpdate) {
+            struct statvfs fs{};
+            uint64_t total=0,free=0;
+            const bool available=statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0;
+            if(available) {
+                const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
+                total=static_cast<uint64_t>(fs.f_blocks)*blockSize;
+                free=static_cast<uint64_t>(fs.f_bavail)*blockSize;
+            }
+            if(storageStatsMutex)SDL_LockMutex(storageStatsMutex);
+            backgroundSdTotalBytes=total;
+            backgroundSdFreeBytes=free;
+            backgroundStorageStatsAvailable=available&&total>0;
+            if(storageStatsMutex)SDL_UnlockMutex(storageStatsMutex);
+            desknx::diag::Write("storage","stats_refresh",
+                "available=%d total_bytes=%llu free_bytes=%llu",
+                available?1:0,static_cast<unsigned long long>(total),
+                static_cast<unsigned long long>(free));
+            nextUpdate=now+10000;
+        }
+        SDL_Delay(100);
+    }
+    return 0;
+}
+
+void refreshStorageStats() {
+    if(!hasWidgetKind(Kind::Storage))return;
+    // The render thread only copies a small snapshot. statvfs runs on its own
+    // worker and can no longer stall a workspace/library frame.
+    if(storageStatsMutex)SDL_LockMutex(storageStatsMutex);
+    sdTotalBytes=backgroundSdTotalBytes;
+    sdFreeBytes=backgroundSdFreeBytes;
+    storageStatsAvailable=backgroundStorageStatsAvailable;
+    if(storageStatsMutex)SDL_UnlockMutex(storageStatsMutex);
+}
+
+void refreshDiagnosticsSnapshot(bool force=false) {
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Storage))*1000u;
+    if(!force&&lastStorageUpdate!=0&&now-lastStorageUpdate<interval)return;
+    lastStorageUpdate=now;
+
+    refreshStorageStats();
+
+    const auto items=catalogueSnapshot();
+    installedGameCount=static_cast<size_t>(std::count_if(items.begin(),items.end(),
+        [](const Candidate& item){return item.kind==Kind::Game;}));
+    installedHomebrewCount=static_cast<size_t>(std::count_if(items.begin(),items.end(),
+        [](const Candidate& item){return item.kind==Kind::Nro;}));
+
+    u64 used=0,total=0;
+    const Result usedRc=svcGetInfo(&used,InfoType_UsedMemorySize,CUR_PROCESS_HANDLE,0);
+    const Result totalRc=svcGetInfo(&total,InfoType_TotalMemorySize,CUR_PROCESS_HANDLE,0);
+    processRamStatsAvailable=R_SUCCEEDED(usedRc)&&R_SUCCEEDED(totalRc)&&total>0;
+    if(processRamStatsAvailable) {
+        processRamUsed=used;
+        processRamTotal=total;
+    } else {
+        processRamUsed=processRamTotal=0;
+    }
+}
+void refreshSystemMonitor() {
+    if(!hasWidgetKind(Kind::System))return;
+    const Uint32 now=SDL_GetTicks();
+    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::System))*1000u;
+    if(lastSystemMonitorUpdate!=0&&now-lastSystemMonitorUpdate<interval)return;
+    lastSystemMonitorUpdate=now;
+    systemPcbTemperatureAvailable=false;
+    systemSocTemperatureAvailable=false;
+    systemCpuClockAvailable=false;
+    systemGpuClockAvailable=false;
+
+    if(!tsServiceReady&&R_SUCCEEDED(tsInitialize()))tsServiceReady=true;
+    if(tsServiceReady) {
+        if(hosversionGet()>=MAKEHOSVERSION(10,0,0)) {
+            if(!tsInternalOpen&&R_SUCCEEDED(tsOpenSession(
+                &tsInternalSession,TsDeviceCode_LocationInternal)))tsInternalOpen=true;
+            if(!tsSocOpen&&R_SUCCEEDED(tsOpenSession(
+                &tsSocSession,TsDeviceCode_LocationExternal)))tsSocOpen=true;
+            float temperature=0.0f;
+            if(tsInternalOpen&&R_SUCCEEDED(tsSessionGetTemperature(
+                &tsInternalSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
+                systemPcbTemperature=temperature;
+                systemPcbTemperatureAvailable=true;
+            }
+            temperature=0.0f;
+            if(tsSocOpen&&R_SUCCEEDED(tsSessionGetTemperature(
+                &tsSocSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
+                systemSocTemperature=temperature;
+                systemSocTemperatureAvailable=true;
+            }
+        } else {
+            s32 temperature=0;
+            if(R_SUCCEEDED(tsGetTemperature(TsLocation_Internal,&temperature))&&
+               temperature>=-20&&temperature<=120) {
+                systemPcbTemperature=static_cast<float>(temperature);
+                systemPcbTemperatureAvailable=true;
+            }
+            temperature=0;
+            if(R_SUCCEEDED(tsGetTemperature(TsLocation_External,&temperature))&&
+               temperature>=-20&&temperature<=120) {
+                systemSocTemperature=static_cast<float>(temperature);
+                systemSocTemperatureAvailable=true;
+            }
+        }
+    }
+
+    if(hosversionGet()>=MAKEHOSVERSION(8,0,0)) {
+        if(!clkrstServiceReady&&R_SUCCEEDED(clkrstInitialize()))clkrstServiceReady=true;
+        if(clkrstServiceReady) {
+            if(!cpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
+                &cpuClockSession,PcvModuleId_CpuBus,3)))cpuClockOpen=true;
+            if(!gpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
+                &gpuClockSession,PcvModuleId_GPU,3)))gpuClockOpen=true;
+            std::uint32_t rate=0;
+            if(cpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&cpuClockSession,&rate))&&
+               rate>=1000000u&&rate<=4000000000u) {
+                systemCpuClockHz=rate;
+                systemCpuClockAvailable=true;
+            }
+            rate=0;
+            if(gpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&gpuClockSession,&rate))&&
+               rate>=1000000u&&rate<=4000000000u) {
+                systemGpuClockHz=rate;
+                systemGpuClockAvailable=true;
+            }
+        }
+    }
+}
+
+
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
     // through, multibyte sequences contribute their lead byte which yields
@@ -1867,9 +3216,14 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
         roundRect(x-3,y-3,size+6,size+6,std::max(7,size/4),
                   Color{static_cast<Uint8>(c.r/5),static_cast<Uint8>(c.g/5),
                         static_cast<Uint8>(c.b/5),220});
-        c=WHITE; // material-like filled treatment with a high-contrast glyph
+        c=WHITE;
+    } else if(iconStyle==1) {
+        roundRect(x-3,y-3,size+6,size+6,std::max(7,size/4),
+                  Color{static_cast<Uint8>(c.r/8),static_cast<Uint8>(c.g/8),
+                        static_cast<Uint8>(c.b/8),54});
     }
-    color(c);
+    if(gVectorIconCache.draw(kind,x,y,size,SDL_Color{c.r,c.g,c.b,c.a}))return;
+    // Geometric fallback is retained only for a broken/missing SVG asset.
     const int cx=x+size/2,cy=y+size/2;
     auto line=[&](int x1,int y1,int x2,int y2) {
         SDL_RenderDrawLine(renderer,x1,y1,x2,y2);
@@ -1941,10 +3295,40 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
         }
     }
 }
-void drawTileIcon(const Tile&t,int x,int y,int size) {
+void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
+    const float pulse=motionEffects
+        ?desknx::ui::motion::pingPongEase(SDL_GetTicks(),1000u)
+        :static_cast<float>(70.0f/95.0f);
+    accent.a=static_cast<Uint8>(150.0f+pulse*95.0f+0.5f);
+    switch(selectionStyle) {
+        case 1:
+            rect(x,y,4,h,accent);
+            outline(x,y,w,h,Color{accent.r,accent.g,accent.b,static_cast<Uint8>(pulse/2)});
+            break;
+        case 2:
+            outline(x-2,y-2,w+4,h+4,Color{accent.r,accent.g,accent.b,static_cast<Uint8>(pulse/2)});
+            outline(x,y,w,h,accent);
+            break;
+        case 3: {
+            const int length=std::max(10,std::min(28,std::min(w,h)/4));
+            const Color bright{accent.r,accent.g,accent.b,255};
+            rect(x,y,length,3,bright);rect(x,y,3,length,bright);
+            rect(x+w-length,y,length,3,bright);rect(x+w-3,y,3,length,bright);
+            rect(x,y+h-3,length,3,bright);rect(x,y+h-length,3,length,bright);
+            rect(x+w-length,y+h-3,length,3,bright);rect(x+w-3,y+h-length,3,length,bright);
+            break;
+        }
+        default:
+            outline(x,y,w,h,accent);
+            outline(x+1,y+1,w-2,h-2,Color{255,255,255,90});
+            break;
+    }
+}
+
+void drawTileIcon(const Tile&t,int x,int y,int size,bool highPriority=false) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     roundRect(x,y,size,size,std::max(8,size/5),Color{255,255,255,12});
-    if(SDL_Texture* texture=gIconCache.get(t)) {
+    if(SDL_Texture* texture=gIconCache.get(t,highPriority)) {
         int width=0,height=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)==0) {
             const int inset=std::max(3,size/24),inner=std::max(1,size-inset*2);
@@ -2091,7 +3475,7 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
 }
 
 void drawTileCover(const Tile& tile,const Workspace& workspace,
-                   const SDL_Rect& bounds,Color cornerFill) {
+                   const SDL_Rect& bounds,Color cornerFill,bool selected) {
     const Color fallback=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
@@ -2099,7 +3483,7 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
         std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
     roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
 
-    SDL_Texture* texture=gIconCache.get(tile);
+    SDL_Texture* texture=gIconCache.get(tile,selected);
     if(texture) {
         int sourceWidth=0,sourceHeight=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&sourceWidth,&sourceHeight)==0 &&
@@ -2134,14 +3518,15 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
     if(overlay>0)
         rect(viewport.x,viewport.y+viewport.h-stripHeight,viewport.w,stripHeight,
              Color{5,9,16,static_cast<Uint8>(overlay)});
+    const int titleCenter=bounds.x+bounds.w/2;
     if(titleLines.size()==1) {
-        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+8,
-             2,WHITE,bounds.x+bounds.w-10);
+        textCentered(titleLines[0],titleCenter,bounds.y+bounds.h-stripHeight+8,
+                      2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
     } else {
-        text(titleLines[0],bounds.x+10,bounds.y+bounds.h-stripHeight+3,
-             2,WHITE,bounds.x+bounds.w-10);
-        text(titleLines[1],bounds.x+10,bounds.y+bounds.h-stripHeight+22,
-             2,WHITE,bounds.x+bounds.w-10);
+        textCentered(titleLines[0],titleCenter,bounds.y+bounds.h-stripHeight+3,
+                     2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
+        textCentered(titleLines[1],titleCenter,bounds.y+bounds.h-stripHeight+22,
+                     2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
     }
     // Texture rendering uses a rectangular clip; paint only the four corner
     // wedges afterwards so the actual game artwork follows the tile's 10px
@@ -2165,30 +3550,46 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     const Color accent=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
-    const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
-    softCard(r.x,r.y,r.w,r.h,fill,
+    const bool artworkTile=t.kind==Kind::Game||t.kind==Kind::Nro;
+    const Color fill=artworkTile&&selected
+        ?Color{29,48,73,255}:Color{22,29,42,255};
+    softCard(r.x,r.y,r.w,r.h,
+             themeIndex==1&&t.kind!=Kind::Game&&t.kind!=Kind::Nro
+                ?Color{13,29,41,236}:fill,
              selected?Color{92,164,255,210}:Color{255,255,255,18});
+    if(themeIndex==1&&t.kind!=Kind::Game&&t.kind!=Kind::Nro)
+        rect(r.x+4,r.y+18,3,std::max(12,r.h-36),
+             workspace.accentColor>=0
+                ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
+                :COLORS[static_cast<size_t>(t.color)%COLORS.size()]);
 
-    if(t.kind==Kind::Game||t.kind==Kind::Nro) {
-        drawTileCover(t,workspace,r,fill);
-        if(selected) {
-            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
-            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
-        }
+    if(artworkTile) {
+        drawTileCover(t,workspace,r,fill,selected);
+        if(selected)
+            drawSelectionFrame(r.x,r.y,r.w,r.h,focusAccent());
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
-        const bool compact=t.w==1&&t.h==1;
+        const auto metrics=desknx::widget_layout::measure(
+            r.x,r.y,r.w,r.h,t.w,t.h);
+        const bool compact=metrics.compact();
+        const bool banner=metrics.banner();
+        const bool portrait=metrics.portrait();
         const bool wide=t.h==1&&t.w>=2;
-        const int left=r.x+18, right=r.x+r.w-14;
-        const int innerWidth=std::max(1,r.w-36);
+        const auto config=widgetConfig(t);
+        const bool dataA=desknx::widgets::enabled(config,0);
+        const bool dataB=desknx::widgets::enabled(config,1);
+        const int left=metrics.left,right=metrics.right,center=metrics.center;
+        const int bodyTop=metrics.bodyTop,bottom=metrics.bodyBottom;
+        const int innerWidth=std::max(1,right-left);
         auto label=[&](const std::string& value,int y) {
-            text(value,left,y,1,MUTED,right);
+            textCentered(value,center,metrics.clampY(y,8),1,MUTED,left,right);
         };
         auto progress=[&](int y,int percent) {
-            const int barWidth=std::max(16,innerWidth);
+            const int barWidth=std::max(12,right-left);
             const int bounded=std::max(0,std::min(100,percent));
-            roundRect(left,y,barWidth,8,4,Color{48,62,79,255});
-            roundRect(left,y,std::max(2,barWidth*bounded/100),8,4,
+            const int barY=metrics.clampY(y,8);
+            roundRect(left,barY,barWidth,8,4,Color{48,62,79,255});
+            roundRect(left,barY,std::max(2,barWidth*bounded/100),8,4,
                       bounded>=80?RED:GREEN);
         };
         auto freeSpaceText=[&]() {
@@ -2197,143 +3598,253 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0));
             return std::string(value);
         };
-        auto recentLine=[&](size_t index,int y,int iconSize) {
-            if(index>=recentLaunches.size())return;
-            const auto& entry=recentLaunches[index];
-            Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
-            drawTileIcon(iconTile,left,y,iconSize);
-            text(entry.title,left+iconSize+8,y+(iconSize>28?6:4),1,WHITE,right);
+        std::vector<HistoryEntry> recentGames;
+        for(const auto& entry:recentLaunches)
+            if(entry.kind==Kind::Game)recentGames.push_back(entry);
+        auto recentGameLine=[&](size_t index,int y,int iconSize) {
+            if(index>=recentGames.size())return;
+            const auto& entry=recentGames[index];
+            Tile iconTile{Kind::Game,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
+            if(dataB)drawTileIcon(iconTile,left,y,iconSize);
+            text(entry.title,left+(dataB?iconSize+8:0),y+(iconSize>28?6:4),1,WHITE,right);
+        };
+        auto drawDate=[&](int y,int scale) {
+            const std::string date=clockText(true);
+            const std::string value=date.size()>6?date.substr(6):date;
+            textCentered(value,center,metrics.clampY(y,7*scale),scale,MUTED,left,right);
         };
 
         if(t.kind==Kind::Clock) {
-            const std::string time=clockText();
-            const std::string date=clockText(true).substr(6);
-            if(compact) {
-                text(time,r.x+10,r.y+20,3,WHITE,right);
-                label(date,r.y+66);
-                text("CLOCK",left,r.y+r.h-18,1,BLUE,right);
-            } else if(wide) {
-                text(time,left,r.y+23,5,WHITE,right);
-                label(date,r.y+78);
-                if(t.w>=3) {
-                    drawSystemIcon(6,r.x+r.w-68,r.y+28,38,accent);
-                    text("LOCAL TIME",r.x+r.w-118,r.y+78,1,BLUE,right);
+            const std::time_t stamp=std::time(nullptr);
+            std::tm current{};
+            if(const std::tm* value=std::localtime(&stamp))current=*value;
+            char timeValue[40]{},dateValue[40]{};
+            const char* format=config.style==1?"%I:%M %p":(dataA?"%H:%M:%S":"%H:%M");
+            if(!std::strftime(timeValue,sizeof(timeValue),format,&current))
+                std::snprintf(timeValue,sizeof(timeValue),"--:--");
+            std::strftime(dateValue,sizeof(dateValue),"%d.%m.%Y",&current);
+            if(config.style==2) {
+                const int radius=std::min(39,std::max(23,(wide?r.h:r.w)/3));
+                const int cx=left+radius+4,cy=r.y+r.h/2;
+                color(Color{91,112,139,255});
+                for(int tick=0;tick<60;++tick) {
+                    const double angle=(static_cast<double>(tick)/60.0)*6.283185307179586-1.5707963267948966;
+                    const int outer=radius-1,inner=radius-(tick%5==0?8:4);
+                    SDL_RenderDrawLine(renderer,
+                        cx+static_cast<int>(std::cos(angle)*inner),
+                        cy+static_cast<int>(std::sin(angle)*inner),
+                        cx+static_cast<int>(std::cos(angle)*outer),
+                        cy+static_cast<int>(std::sin(angle)*outer));
                 }
+                auto hand=[&](double angle,int length,Color shade) {
+                    color(shade);
+                    SDL_RenderDrawLine(renderer,cx,cy,
+                        cx+static_cast<int>(std::cos(angle)*length),
+                        cy+static_cast<int>(std::sin(angle)*length));
+                };
+                const double minute=(current.tm_min+current.tm_sec/60.0)/60.0*6.283185307179586-1.5707963267948966;
+                const double hour=((current.tm_hour%12)+current.tm_min/60.0)/12.0*6.283185307179586-1.5707963267948966;
+                hand(hour,radius*5/10,WHITE);
+                hand(minute,radius*8/10,BLUE);
+                roundRect(cx-3,cy-3,6,6,3,WHITE);
+                text(timeValue,cx+radius+12,r.y+29,config.style==2?2:3,WHITE,right);
+                if(dataB)label(dateValue,r.y+65);
+                label("LOCAL TIME",r.y+r.h-18);
             } else {
-                text(time,left,r.y+24,6,WHITE,right);
-                text(date,left,r.y+105,2,MUTED,right);
-                text(languageRussian?"ТЕКУЩЕЕ ВРЕМЯ":"LOCAL TIME",left,r.y+160,1,BLUE,right);
-                drawSystemIcon(6,r.x+r.w-76,r.y+152,48,accent);
+                const int scale=wide?4:6;
+                text(timeValue,left,r.y+(wide?23:24),scale,WHITE,right);
+                if(dataB)label(dateValue,r.y+(wide?78:105));
+                label(config.style==1?"12-HOUR CLOCK":"24-HOUR CLOCK",r.y+r.h-18);
             }
         } else if(t.kind==Kind::Battery) {
+            const bool powerConnected=batteryChargerType>=0&&
+                batteryChargerType!=PsmChargerType_Unconnected;
+            const std::string powerLabel=batteryChargerType<0?"POWER UNKNOWN":
+                (powerConnected?"POWER CONNECTED":"ON BATTERY");
+            const std::string batteryHeading=config.style==1?"CHARGE":
+                (config.style==2?"BATTERY / POWER":"BATTERY");
+            auto joyconLabel=[&](const JoyconBatteryState& joy,const char* side) {
+                if(!joy.connected)return std::string(side)+"  --";
+                std::string value=std::string(side)+"  "+
+                    std::to_string(joy.level)+"/4";
+                if(joy.charging)value+="  CHG";
+                return value;
+            };
             if(compact) {
-                label("BATTERY",r.y+13);
+                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+34,3,WHITE,right);
-                progress(r.y+82,battery);
+                if(dataA)progress(r.y+82,battery);
+                if(dataB)label(powerLabel,r.y+92);
             } else if(wide) {
-                label("BATTERY",r.y+13);
+                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
-                     left,r.y+33,t.w>=3?4:3,WHITE,right-70);
-                progress(r.y+82,battery);
-                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,battery>=20?GREEN:RED);
-                if(t.w>=3)text(languageRussian?"ЗАРЯД":"CHARGE",
-                    r.x+r.w-112,r.y+75,1,MUTED,right);
+                     left,r.y+33,3,WHITE,right-70);
+                if(dataA)progress(r.y+82,battery);
+                drawSystemIcon(3,r.x+r.w-62,r.y+28,38,
+                    config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
+                if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
-                label("BATTERY STATUS",r.y+14);
+                label(batteryHeading+" STATUS",r.y+14);
                 drawSystemIcon(3,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+50,6,WHITE,right-70);
-                progress(r.y+145,battery);
-                text(battery<0?(languageRussian?"НЕТ ДАННЫХ":"UNAVAILABLE"):
-                     battery>=80?(languageRussian?"ЗАРЯЖЕНО":"CHARGED"):
-                     battery>=20?(languageRussian?"НОРМАЛЬНО":"NORMAL"):
-                                 (languageRussian?"НИЗКИЙ ЗАРЯД":"LOW BATTERY"),
+                if(dataA)progress(r.y+145,battery);
+                text(battery<0?"UNAVAILABLE":
+                     battery>=80?"HIGH CHARGE":
+                     battery>=20?"NORMAL":"LOW BATTERY",
                      left,r.y+172,2,battery>=20?GREEN:RED,right);
+                if(dataB)label(powerLabel,r.y+208);
             }
         } else if(t.kind==Kind::System) {
             const u32 firmware=hosversionGet();
             char firmwareText[48]{};
             std::snprintf(firmwareText,sizeof(firmwareText),"%u.%u.%u",
                 HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            char socText[32]{},pcbText[32]{},cpuText[32]{},gpuText[32]{};
+            if(systemSocTemperatureAvailable)std::snprintf(socText,sizeof(socText),"%.1f C",systemSocTemperature);
+            else std::snprintf(socText,sizeof(socText),"N/A");
+            if(systemPcbTemperatureAvailable)std::snprintf(pcbText,sizeof(pcbText),"%.1f C",systemPcbTemperature);
+            else std::snprintf(pcbText,sizeof(pcbText),"N/A");
+            if(systemCpuClockAvailable)std::snprintf(cpuText,sizeof(cpuText),"%u MHz",systemCpuClockHz/1000000u);
+            else std::snprintf(cpuText,sizeof(cpuText),"N/A");
+            if(systemGpuClockAvailable)std::snprintf(gpuText,sizeof(gpuText),"%u MHz",systemGpuClockHz/1000000u);
+            else std::snprintf(gpuText,sizeof(gpuText),"N/A");
+            const std::string atmosphereText=atmosphereVersionAvailable
+                ?"AMS "+atmosphereVersion:"AMS N/A";
             if(compact) {
-                drawSystemIcon(0,left,r.y+24,40,accent);
-                label("SYSTEM",r.y+13);
-                text("HOS "+std::string(firmwareText),left,r.y+70,1,WHITE,right);
+                label(config.style==1?"THERMAL MONITOR":
+                    (config.style==2?"CLOCK MONITOR":"SYSTEM MONITOR"),r.y+13);
+                if(config.style==2&&dataB)
+                    text(cpuText,left,r.y+38,2,WHITE,right);
+                else text(dataA?socText:"HOS "+std::string(firmwareText),left,r.y+38,2,WHITE,right);
+                if(dataB)label("GPU "+std::string(gpuText),r.y+78);
+                else if(dataA)label("PCB "+std::string(pcbText),r.y+78);
             } else if(wide) {
-                drawSystemIcon(0,left,r.y+31,48,accent);
-                label("SYSTEM INFO",r.y+13);
-                text("HOS "+std::string(firmwareText),left+62,r.y+34,2,WHITE,right);
-                text(languageRussian?"DESKNX • NATIVE":"DESKNX • NATIVE",
-                     left+62,r.y+67,1,BLUE,right);
+                label(config.style==1?"THERMAL / SYSTEM":
+                    (config.style==2?"CLOCK / SYSTEM":"SYSTEM MONITOR"),r.y+12);
+                if(config.style==2) {
+                    if(dataB) {
+                        text("CPU "+std::string(cpuText),left,r.y+35,2,WHITE,right);
+                        text("GPU "+std::string(gpuText),left+150,r.y+35,2,BLUE,right);
+                    }
+                    if(dataA)text("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),left,r.y+72,1,BLUE,right);
+                } else {
+                    if(dataA)text("SOC "+std::string(socText),left,r.y+35,2,WHITE,right);
+                    if(dataA)text("PCB "+std::string(pcbText),left,r.y+65,1,BLUE,right);
+                    if(dataB) {
+                        text("CPU "+std::string(cpuText),left+150,r.y+35,1,BLUE,right);
+                        text("GPU "+std::string(gpuText),left+150,r.y+65,1,BLUE,right);
+                    }
+                }
+                if(!dataA&&!dataB)text("HOS "+std::string(firmwareText),left,r.y+43,2,WHITE,right);
             } else {
-                roundRect(left,r.y+34,66,66,18,Color{37,61,91,255});
-                drawSystemIcon(0,left+12,r.y+46,42,WHITE);
-                label("SYSTEM INFORMATION",r.y+20);
-                text("HOS "+std::string(firmwareText),left+82,r.y+54,2,WHITE,right);
-                text(languageRussian?"НАТИВНЫЙ ЛАУНЧЕР":"NATIVE LAUNCHER",
-                     left+82,r.y+86,1,BLUE,right);
-                text(languageRussian?"12 РАБОЧИХ СТОЛОВ":"12 WORKSPACES",
-                     left,r.y+132,2,MUTED,right);
-                text("SDL2 / LIBNX",left,r.y+168,1,MUTED,right);
+                label(config.style==1?"THERMAL  /  HOS "+std::string(firmwareText):
+                    (config.style==2?"FREQUENCIES  /  HOS "+std::string(firmwareText):
+                     "SYSTEM MONITOR  /  HOS "+std::string(firmwareText)),r.y+14);
+                if(config.style==2) {
+                    if(dataB) {
+                        text("CPU  "+std::string(cpuText),left,r.y+48,3,WHITE,right);
+                        text("GPU  "+std::string(gpuText),left,r.y+100,3,BLUE,right);
+                    }
+                    if(dataA)text("SOC "+std::string(socText)+"   PCB "+std::string(pcbText),
+                        left,r.y+161,1,MUTED,right);
+                } else {
+                    if(dataA) {
+                        text("SOC",left,r.y+48,1,MUTED,right);
+                        text(socText,left,r.y+66,3,WHITE,right);
+                        text("PCB  "+std::string(pcbText),left,r.y+111,1,MUTED,right);
+                    }
+                    if(dataB) {
+                        text("CPU  "+std::string(cpuText),left,r.y+151,2,BLUE,right);
+                        text("GPU  "+std::string(gpuText),left,r.y+184,2,BLUE,right);
+                    }
+                }
+                if(!dataA&&!dataB)text("NATIVE LIBNX SERVICES",left,r.y+90,2,MUTED,right);
             }
         } else if(t.kind==Kind::Recent) {
+            const auto& entries=recentGames;
             if(compact) {
-                label("RECENT",r.y+13);
-                if(recentLaunches.empty())
-                    text(languageRussian?"ПУСТО":"EMPTY",left,r.y+50,1,WHITE,right);
-                else recentLine(0,r.y+42,26);
-            } else if(wide) {
-                label("RECENTLY OPENED",r.y+12);
-                if(recentLaunches.empty())
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+48,2,WHITE,right);
+                label("RECENT GAMES",r.y+13);
+                if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
+                else recentGameLine(0,r.y+42,26);
+            } else if(wide&&config.style==1&&dataB) {
+                label("RECENT GAMES",r.y+12);
+                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
-                    recentLine(0,r.y+34,26);
-                    if(t.w>=3)recentLine(1,r.y+67,26);
+                    const int count=std::min<int>(
+                        std::min<int>(config.itemCount,t.w>=3?4:2),
+                        static_cast<int>(entries.size()));
+                    const int cellWidth=std::max(1,innerWidth/std::max(1,count));
+                    for(int i=0;i<count;++i) {
+                        const int x=left+i*cellWidth;
+                        const auto& entry=entries[static_cast<std::size_t>(i)];
+                        Tile game{Kind::Game,entry.title,entry.data,0,0,1,1,i};
+                        drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+30,42);
+                        text(entry.title,x+2,r.y+78,1,WHITE,x+cellWidth-2);
+                    }
+                }
+            } else if(wide) {
+                label("RECENT GAMES",r.y+12);
+                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
+                else {
+                    const size_t count=std::min<std::size_t>(
+                        config.style==2?1:(dataA?config.itemCount:1),
+                        std::min<std::size_t>(2,entries.size()));
+                    for(size_t i=0;i<count;++i)
+                        recentGameLine(i,r.y+32+static_cast<int>(i)*(config.style==2?0:35),
+                            config.style==2?32:25);
                 }
             } else {
-                label(languageRussian?"НЕДАВНИЕ ЗАПУСКИ":"RECENTLY OPENED",r.y+17);
-                if(recentLaunches.empty()) {
-                    text(languageRussian?"ПОКА НИЧЕГО НЕТ":"NOTHING HERE YET",
-                         left,r.y+86,2,WHITE,right);
-                } else {
-                    const size_t count=std::min<size_t>(4,recentLaunches.size());
-                    for(size_t i=0;i<count;++i)recentLine(i,r.y+50+static_cast<int>(i)*42,32);
+                label("RECENT GAMES",r.y+17);
+                if(entries.empty())text("NO GAMES YET",left,r.y+86,2,WHITE,right);
+                else {
+                    const size_t count=std::min<std::size_t>(config.itemCount,entries.size());
+                    for(size_t i=0;i<count;++i)
+                        recentGameLine(i,r.y+50+static_cast<int>(i)*42,32);
                 }
-                text(languageRussian?"ИСТОРИЯ ЭТОЙ КОНСОЛИ":"HISTORY ON THIS CONSOLE",
-                     left,r.y+r.h-24,1,BLUE,right);
+                label("LOCAL PLAY HISTORY",r.y+r.h-24);
             }
         } else if(t.kind==Kind::Storage) {
             const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
             const int percent=storageStatsAvailable
                 ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
                 :-1;
-            if(compact) {
+            char usedText[48]{},totalText[48]{};
+            std::snprintf(usedText,sizeof(usedText),"%.1f GB USED",
+                static_cast<double>(used)/(1024.0*1024.0*1024.0));
+            std::snprintf(totalText,sizeof(totalText),"%.1f GB TOTAL",
+                static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+            const std::string mainValue=!storageStatsAvailable?"N/A":
+                (config.style==2?freeSpaceText()+" / "+std::string(totalText):
+                 (dataA?std::string(usedText):freeSpaceText()+" FREE"));
+            if(config.style==1&&storageStatsAvailable&&!compact) {
+                label("SD CAPACITY",r.y+13);
+                text(std::to_string(percent)+"%",left,r.y+34,4,WHITE,right);
+                if(dataA)text(usedText,left,r.y+(wide?78:92),1,MUTED,right);
+                else text(freeSpaceText()+" FREE",left,r.y+(wide?78:92),1,MUTED,right);
+                if(dataB)progress(r.y+(wide?100:122),percent);
+            } else if(compact) {
                 label("SD STORAGE",r.y+13);
-                text(storageStatsAvailable?freeSpaceText():"N/A",left,r.y+39,2,WHITE,right);
-                progress(r.y+82,percent);
+                text(mainValue,left,r.y+39,2,WHITE,right);
+                if(dataB)progress(r.y+82,percent);
             } else if(wide) {
                 label("SD CARD STORAGE",r.y+12);
-                text(storageStatsAvailable?freeSpaceText()+" FREE":"N/A",
-                     left,r.y+34,t.w>=3?4:3,WHITE,right-78);
-                if(percent>=0)text(std::to_string(percent)+"% USED",
+                text(mainValue,left,r.y+34,2,WHITE,right-78);
+                if(dataB&&percent>=0)text(std::to_string(percent)+"% USED",
                     right-70,r.y+49,1,MUTED,right);
-                progress(r.y+83,percent);
+                if(dataB)progress(r.y+83,percent);
+                else if(dataA)label(totalText,r.y+83);
             } else {
                 label("SD CARD STORAGE",r.y+18);
                 if(storageStatsAvailable) {
-                    text(freeSpaceText()+" GB FREE",left,r.y+50,5,WHITE,right);
-                    if(sdTotalBytes>0) {
-                        char total[64]{};
-                        std::snprintf(total,sizeof(total),"%.1f GB TOTAL",
-                            static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
-                        text(total,left,r.y+112,2,MUTED,right);
+                    text(mainValue,left,r.y+50,4,WHITE,right);
+                    if(dataA)text(totalText,left,r.y+112,2,MUTED,right);
+                    if(dataB) {
+                        progress(r.y+157,percent);
+                        text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
                     }
-                    progress(r.y+157,percent);
-                    text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
-                } else text(languageRussian?"SD-КАРТА НЕДОСТУПНА":"SD STATUS UNAVAILABLE",
-                            left,r.y+90,2,RED,right);
+                } else text("SD CARD UNAVAILABLE",left,r.y+90,2,RED,right);
             }
         } else if(t.kind==Kind::Calendar) {
             std::time_t now=std::time(nullptr);
@@ -2348,54 +3859,224 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             static const char* ruWeek[]={"Пн","Вт","Ср","Чт","Пт","Сб","Вс"};
             const int month=std::max(0,std::min(11,current.tm_mon));
             const char* monthName=languageRussian?ruMonths[month]:enMonths[month];
-            if(compact) {
-                text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
-                text(monthName,left,r.y+78,1,BLUE,right);
-            } else if(wide) {
+            const std::string weekday=languageRussian?
+                ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7];
+            if(config.style==1) {
+                label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
+                const bool compactCalendar=wide||compact;
+                text(std::to_string(current.tm_mday),left,r.y+(compactCalendar?22:30),
+                     compactCalendar?4:5,WHITE,right);
+                text(std::string(monthName)+"  "+std::to_string(current.tm_year+1900),
+                     left,r.y+(compactCalendar?68:100),compactCalendar?1:2,BLUE,right);
+                if(dataA&&!compact)label(weekday,r.y+(wide?94:142));
+                if(dataB&&!compact)label(clockText(),r.y+(wide?104:169));
+            } else if(config.style==2) {
+                label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
+                const bool compactCalendar=wide||compact;
+                text(weekday,left,r.y+(compactCalendar?34:40),compactCalendar?1:2,BLUE,right);
+                text(std::to_string(current.tm_mday)+" "+monthName,left,
+                    r.y+(compactCalendar?58:68),compactCalendar?1:2,WHITE,right);
+                if(dataA)text(std::to_string(current.tm_year+1900),left,
+                    r.y+(compactCalendar?82:122),1,MUTED,right);
+                if(dataB)text(clockText(),left,r.y+(compactCalendar?96:158),
+                    compactCalendar?1:2,WHITE,right);
+            } else if(compact) {
+                textCentered(std::to_string(current.tm_mday),center,r.y+18,5,WHITE,left,right);
+                textCentered(monthName,center,r.y+78,1,BLUE,left,right);
+            } else if(banner) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
                 text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
                      left,r.y+42,3,WHITE,right);
-                text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
-                     left,r.y+83,1,BLUE,right);
+                if(dataB)text(weekday,left,r.y+83,1,BLUE,right);
                 drawSystemIcon(6,right-34,r.y+38,26,accent);
             } else {
                 std::tm first=current;
-                first.tm_mday=1; first.tm_hour=12; first.tm_min=0; first.tm_sec=0;
+                first.tm_mday=1;first.tm_hour=12;first.tm_min=0;first.tm_sec=0;
                 (void)std::mktime(&first);
                 std::tm lastDay=first;
-                lastDay.tm_mon+=1;
-                lastDay.tm_mday=0;
+                lastDay.tm_mon+=1;lastDay.tm_mday=0;
                 (void)std::mktime(&lastDay);
                 const int daysInMonth=lastDay.tm_mday;
                 const int startColumn=(first.tm_wday+6)%7;
-                label(monthName,r.y+15);
-                text(std::to_string(current.tm_year+1900),right-45,r.y+15,1,MUTED,right);
-                const int gridX=left,gridY=r.y+52;
-                const int cellW=std::max(24,innerWidth/7),cellH=25;
+                label(monthName,metrics.headerY);
+                text(std::to_string(current.tm_year+1900),right-42,
+                     metrics.headerY,1,MUTED,right);
+                const int cellW=std::max(1,(right-left)/7);
+                const int gridY=metrics.bodyTop;
+                const int cellH=std::max(19,std::min(28,(r.h-(gridY-r.y)-40)/6));
                 for(int col=0;col<7;++col)
                     text(languageRussian?ruWeek[col]:enWeek[col],
-                         gridX+col*cellW+2,gridY,1,BLUE,right);
+                         left+col*cellW+2,gridY,1,BLUE,right);
                 for(int day=1;day<=daysInMonth;++day) {
                     const int index=startColumn+day-1;
                     const int col=index%7,row=index/7;
-                    const int dx=gridX+col*cellW,dy=gridY+24+row*cellH;
+                    const int dx=left+col*cellW,dy=gridY+22+row*cellH;
+                    const int safeY=metrics.clampY(dy,8);
                     if(day==current.tm_mday)
-                        roundRect(dx,dy-2,std::max(20,cellW-3),22,6,
+                        roundRect(dx,safeY-2,std::max(14,cellW-3),18,5,
                                   Color{42,91,145,255});
-                    text(std::to_string(day),dx+4,dy+3,1,
+                    text(std::to_string(day),dx+3,safeY+2,1,
                          day==current.tm_mday?WHITE:MUTED,right);
                 }
                 text(languageRussian?"ТЕКУЩАЯ ДАТА":"CURRENT DATE",
-                     left,r.y+r.h-22,1,accent,right);
+                     left,metrics.clampY(bottom-12,8),1,accent,right);
             }
-        } else if(t.kind==Kind::Unsupported) {
-            roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
-            text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
-            text(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
-                 r.x+14,r.y+52,2,MUTED,right);
+        } else if(t.kind==Kind::Nextendo) {
+            const auto online=nextendoWidgetSnapshot();
+            label(config.style==2?"NEXTENDO  /  NETWORK":"NEXTENDO  /  ACTIVITY",r.y+12);
+            if(!online.fresh) {
+                text("WAITING FOR SYNC",left,r.y+39,2,WHITE,right);
+                label("STATUS UNKNOWN",r.y+78);
+            } else if(config.style==1&&wide) {
+                if(dataB&&!online.topGame.empty()) {
+                    text(online.topGame,left,r.y+34,2,WHITE,right);
+                    label(std::to_string(online.topPlayers)+" PLAYERS ACTIVE",r.y+68);
+                } else {
+                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
+                }
+                if(dataA)label(std::to_string(online.activeTitles)+" ACTIVE TITLES",r.y+95);
+            } else {
+                if(dataA) {
+                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
+                    label(std::to_string(online.activeTitles)+" ACTIVE GAMES",r.y+76);
+                } else text("SERVICE SYNCED",left,r.y+40,2,GREEN,right);
+                if(dataB) {
+                    if(!online.topGame.empty())
+                        text(online.topGame+"  /  "+std::to_string(online.topPlayers),
+                             left,r.y+93,1,BLUE,right);
+                    else label("NO ACTIVE TITLE DATA",r.y+93);
+                }
+            }
+        } else if(t.kind==Kind::Favorites || t.kind==Kind::GameLibrary) {
+            const std::vector<Tile> games=t.kind==Kind::Favorites?
+                favoriteTiles():gameLibraryTiles(static_cast<std::size_t>(config.itemCount),dataA);
+            const bool favoritesWidget=t.kind==Kind::Favorites;
+            label(favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+12);
+            if(games.empty()) {
+                text(favoritesWidget?"ADD FAVORITES WITH ZL":"NO INSTALLED GAMES",
+                     left,r.y+48,1,MUTED,right);
+            } else if(wide&&config.style==1) {
+                const int count=std::min<int>(
+                    std::min<int>(config.itemCount,4),static_cast<int>(games.size()));
+                const int cellWidth=std::max(1,innerWidth/std::max(1,count));
+                for(int i=0;i<count;++i) {
+                    const int x=left+i*cellWidth;
+                    const Tile& game=games[static_cast<std::size_t>(i)];
+                    drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+31,42);
+                    text(game.title,x+2,r.y+81,1,WHITE,x+cellWidth-3);
+                }
+            } else {
+                const int iconSize=wide?(config.style==2?18:24):(config.style==2?24:32);
+                const int rowStep=wide?(config.style==2?22:27):(config.style==2?32:42);
+                const int maxRows=wide?(config.style==2?3:2):std::min<int>(4,config.itemCount);
+                const int count=std::min<int>(
+                    std::min<int>(config.itemCount,maxRows),static_cast<int>(games.size()));
+                for(int i=0;i<count;++i) {
+                    const Tile& game=games[static_cast<std::size_t>(i)];
+                    const int y=r.y+(wide?34:48)+i*rowStep;
+                    const bool showCover=favoritesWidget?dataA:dataB;
+                    if(showCover)drawTileIcon(game,left,y,iconSize);
+                    text(game.title,left+(showCover?iconSize+8:0),y+std::max(3,(iconSize-8)/2),
+                         1,WHITE,right);
+                }
+            }
+            if(!wide&&favoritesWidget&&dataB)
+                label(std::to_string(favoriteTitleIds.size())+" SAVED",r.y+r.h-22);
+        } else if(t.kind==Kind::Nextendo) {
+            const auto popular=nextendoPopularSnapshot();
+            label("NEXTENDO  /  ONLINE",metrics.headerY);
+            if(!popular.available) {
+                textCentered(languageRussian?"ПОЛУЧЕНИЕ ДАННЫХ...":"LOADING LIVE DATA...",
+                             center,metrics.clampY(bodyTop+8,8),1,MUTED,left,right);
+            } else if(popular.count==0) {
+                textCentered(languageRussian?"СЕЙЧАС НЕТ ИГР":"NO SUPPORTED GAMES ONLINE",
+                             center,metrics.clampY(bodyTop+8,8),1,MUTED,left,right);
+            } else {
+                const int rows=compact?1:(banner?std::min(2,metrics.maxRows):metrics.maxRows);
+                const int nameRight=right-43;
+                for(std::size_t i=0;i<popular.count&&i<static_cast<std::size_t>(rows);++i) {
+                    const auto& game=popular.games[i];
+                    const int y=metrics.rowY(static_cast<int>(i));
+                    text(std::to_string(i+1)+".",left,y,1,BLUE,nameRight-4);
+                    text(game.title?game.title:"Unknown game",left+20,y,1,WHITE,nameRight);
+                    text(std::to_string(game.players),right-38,y,1,GREEN,right);
+                }
+            }
+            if(!compact&&!banner)
+                text(languageRussian?"ИГРЫ С МАКСИМАЛЬНЫМ ОНЛАЙНОМ":
+                    "MOST PLAYED RIGHT NOW",left,metrics.clampY(bottom-11,8),1,MUTED,right);
+        } else if(t.kind==Kind::QuickSettings) {
+            if(!quickSettingsSnapshotLoaded)refreshQuickSettingsSnapshot(true);
+            label("QUICK SETTINGS",metrics.headerY);
+            const std::string brightnessValue=quickBrightnessAvailable
+                ?std::to_string(static_cast<int>(std::lround(
+                    std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%"
+                :"N/A";
+            const char* networkValue=quickInternetConnected?"ONLINE":
+                (quickAirplaneMode?"AIRPLANE":
+                    (quickWifiEnabled?"CONNECTING":"OFFLINE"));
+            struct QuickCell {
+                const char* name;
+                std::string value;
+                bool available;
+                bool active;
+            };
+            const QuickCell cells[]={
+                {"SOUND",quickSoundAvailable?(quickSoundMuted?"MUTED":"ON"):"N/A",
+                    quickSoundAvailable,quickSoundAvailable&&!quickSoundMuted},
+                {"AIRPLANE",quickAirplaneAvailable?(quickAirplaneMode?"ON":"OFF"):"N/A",
+                    quickAirplaneAvailable,quickAirplaneMode},
+                {"WI-FI",quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"N/A",
+                    quickWifiAvailable,quickWifiEnabled&&!quickAirplaneMode},
+                {"BLUETOOTH",quickBluetoothAvailable?(quickBluetoothEnabled?"ON":"OFF"):"N/A",
+                    quickBluetoothAvailable,quickBluetoothEnabled},
+                {"BRIGHTNESS",brightnessValue,quickBrightnessAvailable,
+                    quickBrightnessAvailable&&quickBrightness>=0.5f},
+                {"NETWORK",networkValue,quickAirplaneAvailable||quickWifiAvailable,
+                    quickInternetConnected}
+            };
+            if(t.h<=1||t.w<=1) {
+                const std::string summary=
+                    "SOUND "+std::string(quickSoundAvailable?(quickSoundMuted?"MUTED":"ON"):"N/A")+
+                    "   WI-FI "+(quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"N/A");
+                label(summary,metrics.clampY(metrics.bodyTop+8,8));
+            } else {
+                const int count=std::max(2,std::min(6,config.itemCount));
+                const int rows=(count+1)/2;
+                const int gap=6;
+                const int availableHeight=std::max(rows*24,
+                    metrics.bodyBottom-metrics.bodyTop-4-gap*(rows-1));
+                const int cellH=std::max(24,std::min(42,availableHeight/rows));
+                const int cellW=std::max(1,(right-left-gap)/2);
+                const int gridY=metrics.bodyTop+2;
+                for(int i=0;i<count;++i) {
+                    const int col=i%2,row=i/2;
+                    const int x=left+col*(cellW+gap),y=gridY+row*(cellH+gap);
+                    const QuickCell& cell=cells[i];
+                    const Color stateColor=!cell.available?MUTED:
+                        (cell.active?GREEN:Color{185,157,122,255});
+                    const bool compact=config.style==1;
+                    const Color surface=config.style==2
+                        ?Color{19,31,47,245}:Color{31,43,59,245};
+                    roundRect(x,y,cellW,cellH,9,compact?Color{25,38,54,230}:surface);
+                    if(config.style==2) {
+                        roundRect(x+7,y+7,5,std::max(10,cellH-14),2,stateColor);
+                    } else {
+                        roundRect(x+7,y+7,4,std::max(10,cellH-14),2,stateColor);
+                    }
+                    text(cell.name,x+15,y+5,1,MUTED,right);
+                    text(cell.value,x+15,y+cellH/2,1,stateColor,right);
+                }
+            }
+        }        } else if(t.kind==Kind::Unsupported) {
+            roundRect(r.x+3,r.y+3,std::max(1,r.w-6),std::max(1,r.h-6),14,
+                      Color{39,46,58,255});
+            textCentered("UNSUPPORTED ITEM",center,metrics.clampY(r.y+18,14),
+                         2,WHITE,left,right);
+            textCentered(t.unknownTypeCode.empty()?"?":t.unknownTypeCode,
+                         center,metrics.clampY(r.y+52,14),2,MUTED,left,right);
         }
     }
-    if(selected)roundRect(r.x+r.w-20,r.y+13,7,7,4,BLUE);
 }
 void drawDotted(int x,int y,int w,int h) {
     for(int xx=x;xx<x+w;xx+=12){rect(xx,y,6,2,Color{67,79,98,180});rect(xx,y+h-2,6,2,Color{67,79,98,180});}
@@ -2405,8 +4086,45 @@ int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+bool isWidgetKind(Kind kind);
+Tile* selectedWidgetTile();
+std::string widgetEditorStyleLabel(Kind kind,int style);
+std::string widgetEditorDataLabel(unsigned bit);
+
 void drawScreen() {
+    gVisualEngine.beginFrame();
+    gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
+        SDL_Color{BLUE.r,BLUE.g,BLUE.b,BLUE.a},
+        SDL_Color{WHITE.r,WHITE.g,WHITE.b,220},
+        SDL_Color{255,255,255,28},
+        UiCornerRadius});
+    const std::uint32_t screenState=
+        (static_cast<std::uint32_t>(std::max(0,deskIndex))&0x0Fu) |
+        (listOpen?1u<<4:0u) | (recentOpen?1u<<5:0u) |
+        (systemMenu?1u<<6:0u) | (appSettingsMenu?1u<<7:0u) |
+        (workspaceMenu?1u<<8:0u) | (workspaceSettingsMenu?1u<<9:0u) |
+        (workspacePicker?1u<<10:0u) | (mediaPickerOpen?1u<<11:0u) |
+        (powerMenu?1u<<12:0u) | (userPickerOpen?1u<<13:0u) |
+        (deletePrompt?1u<<14:0u) | (quickSettingsOpen?1u<<15:0u);
+    if(lastUiScreenState==UINT32_MAX) {
+        lastUiScreenState=screenState;
+    } else if(screenState!=lastUiScreenState) {
+        lastUiScreenState=screenState;
+        uiTransitionStart=motionEffects?SDL_GetTicks():0;
+    }
+    const bool emptyDesktopSurface=!desks.empty()&&deskIndex>=0&&
+        deskIndex<static_cast<int>(desks.size())&&
+        desks[static_cast<size_t>(deskIndex)].tiles.empty();
+    const bool modalContentActive=listOpen||recentOpen||systemMenu||appSettingsMenu||
+        diagnosticsOpen||workspaceMenu||workspaceSettingsMenu||workspacePicker||
+        deletePrompt||userPickerOpen||mediaPickerOpen||powerMenu||favoritesOpen||
+        widgetEditorOpen||nextendoOpen||steamGridDbPickerOpen||quickSettingsOpen;
+    const bool modalSurfaceActive=emptyDesktopSurface||modalContentActive;
+    gWorkspaceBackgroundCache.beginFrame();
     gIconCache.beginFrame();
+    gFontRenderer.beginFrame();
+    if(quickSettingsOpen)refreshQuickSettingsSnapshot();
+    gModalLayer.beginFrame(renderer,modalSurfaceActive,SW,SH);
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     bool catalogueNsAvailableNow=false;
@@ -2415,17 +4133,52 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
+    static bool prefetchValid=false,previousListOpen=false;
+    static int previousDesk=-1,previousX=-1,previousY=-1,previousList=-1;
+    static std::uint64_t previousCatalogue=UINT64_MAX,previousLayout=UINT64_MAX;
+    const std::uint64_t currentCatalogue=visibleCacheCatalogueRevision^(catalogueViewRevision*0x9E3779B97F4A7C15ull);
+    const bool changed=!prefetchValid||previousListOpen!=listOpen||previousDesk!=deskIndex||
+        previousX!=selectedX||previousY!=selectedY||previousList!=listIndex||
+        previousCatalogue!=currentCatalogue||previousLayout!=layoutMutationRevision;
+    if(changed) {
+        if(listOpen&&!available.empty()) {
+            const int first=std::max(0,listIndex-2),last=std::min(static_cast<int>(available.size())-1,listIndex+2);
+            for(int index=first;index<=last;++index) {
+                const Candidate& candidate=available[static_cast<std::size_t>(index)];
+                Tile tile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
+                gIconCache.prefetch(tile);
+            }
+        } else if(!desks.empty()) {
+            const Workspace& activeDesk=desks[static_cast<std::size_t>(std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
+            int queued=0;
+            for(const Tile& tile:activeDesk.tiles) {
+                const int distance=std::abs(tile.x+tile.w/2-selectedX)+std::abs(tile.y+tile.h/2-selectedY);
+                if(distance<=3&&queued<8){gIconCache.prefetch(tile);++queued;}
+            }
+        }
+        prefetchValid=true;previousListOpen=listOpen;previousDesk=deskIndex;
+        previousX=selectedX;previousY=selectedY;previousList=listIndex;
+        previousCatalogue=currentCatalogue;previousLayout=layoutMutationRevision;
+    }
     refreshBattery();
     refreshStorageStats();
+    refreshSystemMonitor();
     rect(0,0,SW,SH,BG);
-    for(int band=0;band<24;++band) {
-        const double t=static_cast<double>(band)/23.0;
-        const auto blend=[&](Uint8 a,Uint8 b) {
-            return static_cast<Uint8>(static_cast<double>(a)+
-                (static_cast<double>(b)-static_cast<double>(a))*t);
-        };
-        rect(0,band*30,SW,31,Color{blend(THEME_TOP.r,THEME_BOTTOM.r),
-            blend(THEME_TOP.g,THEME_BOTTOM.g),blend(THEME_TOP.b,THEME_BOTTOM.b),255});
+    const SDL_Color gradientTop{
+        THEME_TOP.r,THEME_TOP.g,THEME_TOP.b,THEME_TOP.a};
+    const SDL_Color gradientBottom{
+        THEME_BOTTOM.r,THEME_BOTTOM.g,THEME_BOTTOM.b,THEME_BOTTOM.a};
+    if(!gVisualEngine.drawVerticalGradient(gradientTop,gradientBottom)) {
+        // Keep a resilient fallback if surface/texture allocation fails.
+        for(int band=0;band<24;++band) {
+            const double t=static_cast<double>(band)/23.0;
+            const auto blend=[&](Uint8 a,Uint8 b) {
+                return static_cast<Uint8>(static_cast<double>(a)+
+                    (static_cast<double>(b)-static_cast<double>(a))*t);
+            };
+            rect(0,band*30,SW,31,Color{blend(THEME_TOP.r,THEME_BOTTOM.r),
+                blend(THEME_TOP.g,THEME_BOTTOM.g),blend(THEME_TOP.b,THEME_BOTTOM.b),255});
+        }
     }
     if(!desks.empty())
         drawWorkspaceBackground(desks[static_cast<size_t>(std::max(0,
@@ -2433,32 +4186,78 @@ void drawScreen() {
     else
         drawWallpaper();
 
-    // Compact, labelled system toolbar. Each control has a generous touch
-    // target and a visible name; the same tools are available from the gamepad.
-    softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
+    // Three interchangeable header compositions. The same hit targets and
+    // controller mappings are retained; only the visual treatment changes.
+    const Color headerSurface=themeIndex==1
+        ?Color{12,24,36,232}:Color{24,32,45,224};
+    const Color headerRailSurface=themeIndex==1
+        ?Color{12,24,36,static_cast<Uint8>(
+            (static_cast<unsigned int>(surfaceOpacity)*232u)/255u)}
+        :Color{24,32,45,static_cast<Uint8>(
+            (static_cast<unsigned int>(surfaceOpacity)*224u)/255u)};
+    if(headerStyle==0) {
+        softCard(56,16,1168,64,headerSurface,Color{255,255,255,28});
+    } else if(headerStyle==1) {
+        rect(0,0,SW,82,headerRailSurface);
+        rect(0,79,SW,2,BLUE);
+    }
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
         {2,false,"GALLERY"},{0,appSettingsMenu,"SETTINGS"},
-        {1,false,"PADS"},{8,systemMenu,"TOOLS"}
+        {1,false,"PADS"}
     };
     for(int i=0;i<ToolbarButtonCount;++i) {
         const auto& item=headerTools[i];
         const int x=toolbarButtonX(i);
-        roundRect(x,24,ToolbarButtonWidth,48,13,
-            item.active?Color{48,82,124,255}:Color{37,47,62,230});
-        if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
+        const Color activeColor=themeIndex==1?Color{35,75,94,255}:Color{48,82,124,255};
+        if(headerStyle==0) {
+            uiButton(x,24,ToolbarButtonWidth,48,13,
+                desknx::ui::ButtonVariant::Glass,
+                item.active?activeColor:Color{37,47,62,230},
+                Color{120,174,235,150},item.active,false,
+                BLUE);
+        } else if(headerStyle==1) {
+            if(item.active)uiButton(x,22,ToolbarButtonWidth,46,9,
+                desknx::ui::ButtonVariant::Solid,
+                Color{static_cast<Uint8>(activeColor.r/2),
+                      static_cast<Uint8>(activeColor.g/2),
+                      static_cast<Uint8>(activeColor.b/2),180},
+                Color{0,0,0,0},true,false,BLUE);
+            if(item.active)gUiComponents.divider(x,76,ToolbarButtonWidth,
+                SDL_Color{(BLUE).r,
+                          (BLUE).g,
+                          (BLUE).b,255});
+        } else {
+            if(item.active)uiButton(x,22,ToolbarButtonWidth,46,14,
+                desknx::ui::ButtonVariant::Solid,
+                Color{static_cast<Uint8>(activeColor.r/2),
+                      static_cast<Uint8>(activeColor.g/2),
+                      static_cast<Uint8>(activeColor.b/2),130},
+                Color{0,0,0,0},true,false,BLUE);
+            if(item.active)gUiComponents.divider(x+18,72,ToolbarButtonWidth-36,
+                SDL_Color{(BLUE).r,
+                          (BLUE).g,
+                          (BLUE).b,255});
+        }
         drawSystemIcon(item.icon,x+12,31,24,item.active?WHITE:Color{204,214,228,255});
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
         text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),56,1,
              item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
     }
-    softCard(470,24,392,48,Color{32,43,59,235},Color{255,255,255,24});
-    drawSystemIcon(7,486,34,27,Color{215,228,246,255});
-    text(selectedUserLabel,526,41,2,WHITE,760);
-    text("CHANGE",780,43,1,BLUE,850);
-    roundRect(870,24,142,48,18,Color{32,43,59,235});
-    text(nextendoTotalLabel(),882,43,1,GREEN,1003);
-    roundRect(1022,24,180,48,18,Color{32,43,59,235});
+    // Compact overflow button keeps the quick tools reachable by touch without
+    // restoring a fourth top-level navigation destination.
+    uiButton(392,24,44,48,14,desknx::ui::ButtonVariant::Chip,
+        Color{37,47,62,230},Color{255,255,255,24});
+    text("...",403,42,2,WHITE,431);
+    softCard(448,24,374,48,Color{32,43,59,235},Color{255,255,255,24});
+    drawSystemIcon(7,464,34,27,Color{215,228,246,255});
+    text(selectedUserLabel,504,41,2,WHITE,710);
+    text("CHANGE",732,43,1,BLUE,806);
+    uiButton(832,24,170,48,18,desknx::ui::ButtonVariant::Chip,
+        Color{32,43,59,235},Color{255,255,255,18});
+    text(nextendoTotalLabel(),846,43,1,GREEN,990);
+    uiButton(1012,24,190,48,18,desknx::ui::ButtonVariant::Chip,
+        Color{32,43,59,235},Color{255,255,255,18});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,30});
     text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
@@ -2467,21 +4266,11 @@ void drawScreen() {
     // Single desktop surface under the tiles and widgets.
     softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
-    if(d.tiles.empty()) {
-        softCard(360,278,560,154,Color{20,29,43,245},Color{255,255,255,24});
-        roundRect(390,302,46,46,14,Color{38,76,119,255});
-        drawSystemIcon(4,402,314,22,WHITE);
-        text("THIS DESKTOP IS EMPTY",454,302,2,WHITE,880);
-        text("Add games, homebrew and widgets to get started.",454,337,1,MUTED,880);
-        roundRect(454,370,176,38,12,Color{43,111,190,255});
-        text("Y  ADD APPS",493,383,1,WHITE,620);
-        text("+  CREATE ANOTHER DESKTOP",650,384,1,MUTED,890);
-    }
     if(editing)for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
         int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
         if(x==selectedX&&y==selectedY) {
             roundRect(px+2,py+2,CW-4,CH-4,16,Color{34,63,99,100});
-            outline(px+2,py+2,CW-4,CH-4,BLUE);
+            outline(px+2,py+2,CW-4,CH-4,focusAccent());
             text("+",px+CW/2-4,py+CH/2-10,2,WHITE,px+CW-3);
         }
     }
@@ -2493,73 +4282,156 @@ void drawScreen() {
     text(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
          68,575,1,show?WHITE:MUTED,620);
     struct Hint { const char* key; const char* action; };
-    const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L/R","SPACES"}};
+    const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L3","QUICK MENU"}};
     const Hint editHints[]={{"A","MOVE / ADD"},{"D-PAD","POSITION"},{"ZL/ZR","SIZE"},{"-","REMOVE"}};
     const Hint dragHints[]={{"D-PAD","MOVE"},{"L/R","CHANGE DESK"},{"A / B","DROP"},{"-","REMOVE"}};
     const int selectedTileIndex=itemAt(d,selectedX,selectedY);
     if(editing&&!dragging&&selectedTileIndex>=0) {
         // Touchscreen users need the same tile-management actions as controller
         // users. Keep these real, generous hit targets in the persistent footer.
-        roundRect(650,571,165,28,8,Color{35,57,83,255});
+        uiButton(650,571,165,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{35,57,83,255},Color{255,255,255,12});
         text("SIZE -  /  ZL",665,581,1,WHITE,808);
-        roundRect(826,571,165,28,8,Color{35,57,83,255});
+        uiButton(826,571,165,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{35,57,83,255},Color{255,255,255,12});
         text("SIZE +  /  ZR",841,581,1,WHITE,984);
-        roundRect(1002,571,228,28,8,Color{91,39,48,255});
+        uiButton(1002,571,228,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{91,39,48,255},Color{255,255,255,12});
         text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
+    } else if(!editing&&!dragging&&selectedTileIndex>=0&&
+              d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
+        for(int i=0;i<4;++i) {
+            const int hx=642+i*146;
+            uiButton(hx,571,48,28,8,desknx::ui::ButtonVariant::Chip,
+                Color{34,45,63,255},Color{255,255,255,12});
+            text(normalHints[i].key,hx+5,581,1,BLUE,hx+43);
+            text(normalHints[i].action,hx+56,581,1,MUTED,hx+144);
+        }
+    } else if(!editing&&!dragging&&selectedTileIndex>=0&&
+              isWidgetKind(d.tiles[static_cast<size_t>(selectedTileIndex)].kind)) {
+        uiButton(642,571,190,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{35,68,101,255},Color{255,255,255,12});
+        text("WIDGET SETTINGS / ZR",654,581,1,WHITE,828);
+        for(int i=0;i<3;++i) {
+            const int hx=850+i*126;
+            uiButton(hx,571,43,28,8,desknx::ui::ButtonVariant::Chip,
+                Color{34,45,63,255},Color{255,255,255,12});
+            text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
+            text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
+        }
     } else {
         const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
         for(int i=0;i<4;++i) {
             const int hx=642+i*148;
-            roundRect(hx,571,48,28,8,Color{34,45,63,255});
+            uiButton(hx,571,48,28,8,desknx::ui::ButtonVariant::Chip,
+                Color{34,45,63,255},Color{255,255,255,12});
             text(hints[i].key,hx+5,581,1,BLUE,hx+43);
             text(hints[i].action,hx+56,581,1,MUTED,hx+144);
         }
     }
-    // Workspace switcher anchors the lower edge, matching a familiar
-    // console desktop rather than duplicating navigation in a second dock.
-    softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    // Three dock treatments share the same geometry so touch hit targets and
+    // workspace switching never depend on the selected visual style.
+    if(dockStyle==0) {
+        softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    } else if(dockStyle==1) {
+        rect(0,620,SW,100,Color{10,20,31,static_cast<Uint8>(
+            (static_cast<unsigned int>(surfaceOpacity)*220u)/255u)});
+        rect(0,620,SW,2,BLUE);
+    } else {
+        softCard(28,630,1224,70,Color{13,24,36,226},Color{255,255,255,34});
+    }
     const int deskStart=visibleStart();
     for(int i=0;i<VisibleDeskTabs&&deskStart+i<static_cast<int>(desks.size());++i) {
         const int index=deskStart+i;
         const int x=DeskTabX+i*DeskTabStep;
         const bool active=index==deskIndex;
-        roundRect(x,641,DeskTabWidth,48,14,
-            active?Color{53,91,139,255}:Color{34,43,58,235});
-        if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
+        if(dockStyle==1) {
+            uiButton(x,642,DeskTabWidth,42,6,desknx::ui::ButtonVariant::Solid,
+                Color{static_cast<Uint8>(themeIndex==1?27:35),53,static_cast<Uint8>(themeIndex==1?68:78),static_cast<Uint8>(active?255:0)},
+                Color{0,0,0,0},active,false,BLUE);
+            if(active)gUiComponents.divider(x+12,685,DeskTabWidth-24,
+                SDL_Color{(BLUE).r,
+                          (BLUE).g,
+                          (BLUE).b,255});
+        } else if(dockStyle==2) {
+            uiButton(x,641,DeskTabWidth,45,22,desknx::ui::ButtonVariant::Glass,
+                active?Color{51,89,112,210}:Color{255,255,255,12},
+                Color{103,184,225,130},active);
+        } else {
+            uiButton(x,641,DeskTabWidth,48,14,desknx::ui::ButtonVariant::Glass,
+                active?Color{53,91,139,255}:Color{34,43,58,235},
+                Color{144,189,244,110},active);
+        }
         text(desks[static_cast<size_t>(index)].name,x+12,658,1,
              active?WHITE:MUTED,x+DeskTabWidth-8);
     }
-    roundRect(770,641,52,48,14,desks.size()<static_cast<size_t>(MAX_DESKS)?
-        Color{35,70,105,255}:Color{34,43,58,235});
+    uiButton(770,641,52,48,14,desknx::ui::ButtonVariant::Chip,
+        desks.size()<static_cast<size_t>(MAX_DESKS)?
+            Color{35,70,105,255}:Color{34,43,58,235},
+        Color{255,255,255,18},false,false,
+        desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED);
     text("+",787,652,3,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,812);
-    roundRect(832,641,52,48,14,Color{34,43,58,235});
+    uiButton(832,641,52,48,14,desknx::ui::ButtonVariant::Chip,
+        Color{34,43,58,235},Color{255,255,255,18});
     text("...",842,660,2,WHITE,876);
     text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
          916,658,1,MUTED,1040);
-    roundRect(1096,638,128,54,16,
-        editing?Color{53,100,156,255}:Color{34,46,64,255});
+    uiButton(1096,638,128,54,16,desknx::ui::ButtonVariant::Glass,
+        editing?Color{53,100,156,255}:Color{34,46,64,255},
+        Color{144,189,244,110},editing);
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
+    gModalLayer.compose(174);
+    if(emptyDesktopSurface&&!modalContentActive) {
+        softCard(350,248,580,204,Color{19,29,43,250},Color{255,255,255,38});
+        roundRect(386,276,50,50,15,Color{38,76,119,255});
+        drawSystemIcon(4,399,289,24,WHITE);
+        text("THIS DESKTOP IS EMPTY",456,276,3,WHITE,890);
+        text("Add games, homebrew or widgets to build your workspace.",
+             456,319,2,MUTED,890);
+        uiButton(386,376,206,48,13,desknx::ui::ButtonVariant::Solid,
+            Color{43,111,190,255},Color{255,255,255,35},true,false,BLUE);
+        text("Y  ADD APPS",431,391,2,WHITE,570);
+        uiButton(604,376,284,48,13,desknx::ui::ButtonVariant::Chip,
+            Color{32,45,63,255},Color{255,255,255,20});
+        text("+  CREATE ANOTHER DESKTOP",626,391,1,WHITE,872);
+    }
     if(listOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         const int mx=110,my=70,mw=1060,mh=570;
-        softCard(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
-        text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
-        text("Installed games, homebrew and system widgets",
-             mx+30,my+43,1,MUTED,mx+mw-24);
+        softCard(mx,my,mw,mh,
+            themeIndex==1?Color{10,20,30,252}:Color{17,24,36,255},
+            themeIndex==1?Color{89,144,169,110}:Color{255,255,255,25});
+        if(themeIndex==1) {
+            softCard(mx+18,my+14,mw-36,88,Color{15,32,46,246},
+                     Color{100,157,181,68});
+            rect(mx+18,my+14,4,88,BLUE);
+            text("SOCOMA  /  APPLICATION CONTROL",mx+36,my+20,1,BLUE,mx+mw-30);
+            text("APP LIBRARY",mx+36,my+39,3,WHITE,mx+mw-24);
+        } else {
+            text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
+            text("Installed games, homebrew and system widgets",
+                 mx+30,my+43,1,MUTED,mx+mw-24);
+        }
         struct DrawerChip { int x; int w; const char* label; };
         const DrawerChip chips[]={{mx+28,96,"Y  SEARCH"},{mx+132,82,"X  SORT"},
             {mx+222,112,"L/R  FILTER"},{mx+342,82,"-  CLEAR"},
             {mx+432,126,"R STICK RESCAN"},{mx+566,72,"B  CLOSE"},
             {mx+646,72,"A  ADD"}};
+        const int chipY=my+(themeIndex==1?64:52);
         for(const auto& chip:chips) {
-            roundRect(chip.x,my+52,chip.w,25,9,Color{31,43,61,255});
-            text(chip.label,chip.x+7,my+61,1,WHITE,chip.x+chip.w-5);
+            uiButton(chip.x,chipY,chip.w,25,themeIndex==1?7:9,
+                themeIndex==1?desknx::ui::ButtonVariant::Chip:
+                              desknx::ui::ButtonVariant::Solid,
+                themeIndex==1?Color{22,43,56,255}:Color{31,43,61,255},
+                Color{93,143,166,90},false,false,
+                BLUE);
+            text(chip.label,chip.x+7,chipY+8,1,WHITE,chip.x+chip.w-5);
         }
-        std::string viewLabel=std::string("FILTER  ")+
-            desknx::catalog_view::FilterName(catalogueFilter)+"     SORT  "+
+        std::string viewLabel=std::string("FILTER: ")+
+            desknx::catalog_view::FilterName(catalogueFilter)+"     SORT: "+
             desknx::catalog_view::SortName(catalogueSort);
-        if(!catalogueQuery.empty())viewLabel+="     SEARCH  "+catalogueQuery;
+        if(!catalogueQuery.empty())viewLabel+="     SEARCH: "+catalogueQuery;
         if(!catalogCompleteNow)viewLabel+="     /  UPDATING";
         if(catalogueNsErrorNow!=0) {
             char nsError[40]{};
@@ -2567,18 +4439,15 @@ void drawScreen() {
                 static_cast<unsigned int>(catalogueNsErrorNow));
             viewLabel+=nsError;
         }
-        text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-22);
-        text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
-        constexpr int vis=10;
-        if(available.empty()) {
-            listIndex=0;
-            listOffset=0;
-        } else {
+        text(viewLabel,mx+28,my+(themeIndex==1?96:82),1,
+             BLUE,mx+mw-22);
+        if(themeIndex!=1)
+            text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
+        if(available.empty()) { listIndex=0; listOffset=0; }
+        else {
             listIndex=std::max(0,std::min(listIndex,static_cast<int>(available.size())-1));
-            const int maxOffset=std::max(0,static_cast<int>(available.size())-vis);
-            listOffset=std::max(0,std::min(listOffset,maxOffset));
-            if(listIndex<listOffset)listOffset=listIndex;
-            if(listIndex>=listOffset+vis)listOffset=listIndex-vis+1;
+            listOffset=desknx::library_grid::offsetForSelection(
+                listIndex,static_cast<int>(available.size()));
         }
         roundRect(mx+20,my+110,744,410,16,Color{13,19,29,255});
         if(!catalogCompleteNow&&available.empty()) {
@@ -2599,46 +4468,79 @@ void drawScreen() {
                      mx+42,my+184,1,MUTED,mx+720);
             }
         } else {
-            for(int row=0;row<vis;++row) {
-                const int i=listOffset+row;
-                if(i>=static_cast<int>(available.size()))break;
-                const int yy=my+110+row*40;
-                const Candidate& candidate=available[static_cast<size_t>(i)];
-                if(i==listIndex)roundRect(mx+27,yy,730,35,10,Color{35,58,88,255});
-                Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                drawTileIcon(iconTile,mx+38,yy+4,27);
-                text(candidate.title,mx+78,yy+8,2,
-                     i==listIndex?WHITE:MUTED,mx+592);
-                std::string appBadge=typeName(candidate.kind);
-                if(candidate.kind==Kind::Game) {
-                    if(candidate.viewFlags&NsViewFlagNeedsUpdate)appBadge="UPDATE";
-                    else if(candidate.viewFlags&NsViewFlagIsGameCard)appBadge="GAME CARD";
+            constexpr int cardX=138,cardY=180,cardW=232,cardH=120;
+            constexpr int cardStepX=242,cardStepY=130;
+            for(int row=0;row<desknx::library_grid::VisibleRows;++row) {
+                for(int column=0;column<desknx::library_grid::Columns;++column) {
+                    const int i=desknx::library_grid::indexAt(listOffset,row,column,
+                        static_cast<int>(available.size()));
+                    if(i<0)continue;
+                    const Candidate& candidate=available[static_cast<size_t>(i)];
+                    const int x=cardX+column*cardStepX,y=cardY+row*cardStepY;
+                    const bool selectedCard=i==listIndex;
+                    softCard(x,y,cardW,cardH,
+                        selectedCard?Color{36,60,91,255}:Color{20,29,43,255},
+                        selectedCard?Color{106,175,255,190}:Color{255,255,255,20});
+                    Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
+                    drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66,selectedCard);
+                    if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,focusAccent());
+                    textCentered(candidate.title,x+cardW/2,y+79,2,
+                        selectedCard?WHITE:Color{201,211,225,255},x+8,x+cardW-8);
+                    std::string appBadge=typeName(candidate.kind);
+                    Color badgeColor=selectedCard?BLUE:MUTED;
+                    if(candidate.kind==Kind::Game) {
+                        appBadge=candidate.displayVersion.empty()
+                            ?(languageRussian?"ВЕРСИЯ Н/Д":"VERSION N/A")
+                            :"v"+candidate.displayVersion;
+                        badgeColor=!candidate.updateStatusAvailable?MUTED:
+                            (candidate.viewFlags&NsViewFlagNeedsUpdate)
+                                ?Color{255,196,87,255}:GREEN;
+                    }
+                    textCentered(appBadge,x+cardW/2,y+101,1,badgeColor,x+8,x+cardW-8);
                 }
-                text(appBadge,mx+615,yy+11,1,
-                    (candidate.viewFlags&NsViewFlagNeedsUpdate)?Color{255,177,74,255}:
-                    (i==listIndex?BLUE:MUTED),mx+750);
             }
         }
-        roundRect(mx+780,my+110,252,410,16,Color{22,31,45,255});
+        roundRect(mx+780,my+110,252,438,16,Color{22,31,45,255});
         if(!available.empty()) {
             const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
             Tile preview{selected.kind,selected.title,selected.data,0,0,1,1,selected.color};
-            drawTileIcon(preview,mx+866,my+128,78);
+            drawTileIcon(preview,mx+866,my+128,78,true);
             text(selected.title,mx+798,my+218,2,WHITE,mx+mw-30);
             std::string detailType=typeName(selected.kind);
-            if(selected.kind==Kind::Game&&(selected.viewFlags&NsViewFlagNeedsUpdate))
-                detailType="UPDATE AVAILABLE";
-            else if(selected.kind==Kind::Game&&(selected.viewFlags&NsViewFlagIsGameCard))
-                detailType="GAME CARD";
-            text(detailType,mx+800,my+252,1,BLUE,mx+mw-30);
+            Color detailColor=BLUE;
             if(selected.kind==Kind::Game) {
-                text("TITLE ID",mx+800,my+282,1,MUTED,mx+mw-30);
-                text(selected.data,mx+800,my+300,1,WHITE,mx+mw-30);
+                detailType=selected.displayVersion.empty()
+                    ?(languageRussian?"УСТАНОВЛЕНА: Н/Д":"INSTALLED: N/A")
+                    :(languageRussian?"УСТАНОВЛЕНА: ":"INSTALLED: ")+selected.displayVersion;
+                detailColor=!selected.updateStatusAvailable?MUTED:
+                    (selected.viewFlags&NsViewFlagNeedsUpdate)
+                        ?Color{255,196,87,255}:GREEN;
+            }
+            text(detailType,mx+800,my+252,1,detailColor,mx+mw-30);
+            if(selected.kind==Kind::Game) {
+                text("TITLE ID",mx+800,my+278,1,MUTED,mx+mw-30);
+                text(selected.data,mx+800,my+296,1,WHITE,mx+mw-30);
+                if(selected.occupiedSizeAvailable&&selected.occupiedSizeBytes>0) {
+                    char sizeLabel[64]{};
+                    const double gib=static_cast<double>(selected.occupiedSizeBytes)/(1024.0*1024.0*1024.0);
+                    if(gib>=1.0)std::snprintf(sizeLabel,sizeof(sizeLabel),"INSTALLED SIZE  %.2f GB",gib);
+                    else std::snprintf(sizeLabel,sizeof(sizeLabel),"INSTALLED SIZE  %.0f MB",
+                        static_cast<double>(selected.occupiedSizeBytes)/(1024.0*1024.0));
+                    text(sizeLabel,mx+800,my+318,1,MUTED,mx+mw-30);
+                } else {
+                    text("INSTALLED SIZE  --",mx+800,my+318,1,MUTED,mx+mw-30);
+                }
+                unsigned onlinePlayers=0;
+                const bool onlineFresh=nextendoPlayersSnapshotForTitle(selected.data,onlinePlayers);
+                char onlineLabel[64]{};
+                if(onlineFresh)std::snprintf(onlineLabel,sizeof(onlineLabel),"ONLINE  %u PLAYERS",onlinePlayers);
+                else std::snprintf(onlineLabel,sizeof(onlineLabel),"ONLINE  UNKNOWN (NEXTENDO)");
+                text(onlineLabel,mx+800,my+340,1,onlineFresh?(onlinePlayers?GREEN:MUTED):MUTED,mx+mw-30);
                 if(!selected.playStatsQueried) {
-                    text("PLAY STATS NOT LOADED",mx+800,my+332,1,MUTED,mx+mw-30);
+                    text("PLAY STATS NOT LOADED",mx+800,my+362,1,MUTED,mx+mw-30);
                 } else if(!selected.playStatsAvailable) {
-                    text("PLAY STATS UNAVAILABLE",mx+800,my+332,1,RED,mx+mw-30);
+                    text("PLAY STATS UNAVAILABLE",mx+800,my+362,1,RED,mx+mw-30);
                 } else {
                     char playLabel[48]{};
                     const unsigned long long minutes=
@@ -2648,21 +4550,19 @@ void drawScreen() {
                     else
                         std::snprintf(playLabel,sizeof(playLabel),"PLAY TIME  %lluH %02lluM",
                                       minutes/60,minutes%60);
-                    text(playLabel,mx+800,my+332,1,MUTED,mx+mw-30);
-                    char launchLabel[48]{};
-                    std::snprintf(launchLabel,sizeof(launchLabel),"LAUNCHES  %u",
-                                  selected.launchCount);
-                    text(launchLabel,mx+800,my+354,1,MUTED,mx+mw-30);
-                    if(selected.lastPlayed!=0) {
-                        const std::time_t stamp=static_cast<std::time_t>(selected.lastPlayed);
-                        std::tm local{};
-                        char dateLabel[48]{};
-                        if(localtime_r(&stamp,&local)&&
-                           std::strftime(dateLabel,sizeof(dateLabel),"LAST PLAYED  %d.%m.%Y",&local))
-                            text(dateLabel,mx+800,my+376,1,MUTED,mx+mw-30);
-                    } else {
-                        text("NOT PLAYED YET",mx+800,my+376,1,MUTED,mx+mw-30);
-                    }
+                    text(playLabel,mx+800,my+362,1,MUTED,mx+mw-30);
+                }
+                char launchLabel[48]{};
+                std::snprintf(launchLabel,sizeof(launchLabel),"LAUNCHES  %u",selected.launchCount);
+                text(launchLabel,mx+800,my+384,1,MUTED,mx+mw-30);
+                if(selected.lastPlayed!=0) {
+                    const std::time_t stamp=static_cast<std::time_t>(selected.lastPlayed);
+                    std::tm local{};char dateLabel[48]{};
+                    if(localtime_r(&stamp,&local)&&
+                       std::strftime(dateLabel,sizeof(dateLabel),"LAST PLAYED  %d.%m.%Y",&local))
+                        text(dateLabel,mx+800,my+406,1,MUTED,mx+mw-30);
+                } else {
+                    text("NOT PLAYED YET",mx+800,my+406,1,MUTED,mx+mw-30);
                 }
             } else if(selected.kind==Kind::Nro) {
                 std::string fileName=selected.data;
@@ -2688,21 +4588,39 @@ void drawScreen() {
             }
             text(std::to_string(listIndex+1)+" OF "+std::to_string(available.size()),
                  mx+800,my+438,1,MUTED,mx+mw-30);
-            roundRect(mx+792,my+462,228,42,12,Color{49,119,199,255});
-            text("A  ADD TO WORKSPACE",mx+823,my+477,1,WHITE,mx+mw-30);
+            roundRect(mx+792,my+462,228,38,11,Color{49,119,199,255});
+            text("A  ADD TO WORKSPACE",mx+823,my+475,1,WHITE,mx+mw-30);
+            const int actionY=my+508;
+            if(selected.kind==Kind::Game&&editing) {
+                uiButton(mx+824,actionY,88,32,9,desknx::ui::ButtonVariant::Chip,
+                    Color{43,61,85,255},Color{255,255,255,18});
+                text("NAME",mx+850,actionY+11,1,WHITE,mx+908);
+                uiButton(mx+918,actionY,100,32,9,desknx::ui::ButtonVariant::Chip,
+                    Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
+                text("COVER",mx+946,actionY+11,1,WHITE,mx+1010);
+            } else if(selected.kind==Kind::Game) {
+                uiButton(mx+864,actionY,154,32,9,
+                    desknx::ui::ButtonVariant::Chip,
+                    Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
+                text("EDIT MODE",mx+908,actionY+11,1,WHITE,mx+1016);
+            }
         }
-        const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
-            std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
-            std::to_string(available.size())+" SHOWN";
+        const std::string counts=languageRussian
+            ?std::to_string(catalogueGameCountNow)+" ИГР  /  "+
+             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
+             std::to_string(available.size())+" ПОКАЗАНО"
+            :std::to_string(catalogueGameCountNow)+" GAMES  /  "+
+             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
+             std::to_string(available.size())+" SHOWN";
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
     if(workspaceMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
+
         softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
         text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
-        const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE","CUSTOMIZE DESKTOP",
+        const char* actions[]={"OPEN WORKSPACE","MOVE ICON TO ANOTHER DESKTOP","CUSTOMIZE DESKTOP",
                                "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
         for(int i=0;i<6;++i) {
             const int yy=238+i*44;
@@ -2711,10 +4629,12 @@ void drawScreen() {
                                    (i==workspaceMenuIndex?WHITE:MUTED);
             text(actions[i],412,yy+12,1,labelColor,875);
         }
-        text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
+        text("EDIT MODE: SELECT A TILE BEFORE MOVING IT",390,512,1,MUTED,900);
+        text("D-PAD + L/R WHILE DRAGGING ALSO MOVES BETWEEN DESKTOPS",
+             390,528,1,BLUE,920);
     }
     if(workspaceSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
+
         softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
@@ -2742,7 +4662,7 @@ void drawScreen() {
         text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
     }
     if(workspacePicker) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         softCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
         text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
              360,100,3,WHITE,920);
@@ -2762,10 +4682,11 @@ void drawScreen() {
         }
         roundRect(744,590,176,38,10,Color{54,57,66,255});
         text("CANCEL",795,603,1,WHITE,875);
-        text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
+        text(workspacePickerMoveTile?"A MOVE HERE     B CANCEL":"A OPEN     B BACK",
+             360,608,1,MUTED,730);
     }
     if(deletePrompt) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
         softCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
         text("DELETE WORKSPACE?",405,270,3,WHITE,890);
@@ -2781,26 +4702,27 @@ void drawScreen() {
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(recentOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
+        const auto entries=recentEntriesForModal();
+
         softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
-        text("RECENTLY OPENED",266,104,3,WHITE,850);
+        text(recentGamesOnly?"RECENT GAMES":"RECENTLY OPENED",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
         text("B BACK",850,118,1,WHITE,912);
         roundRect(924,108,88,30,9,Color{10,132,255,255});
         text("LAUNCH",936,118,1,WHITE,1006);
         text("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,1,MUTED,850);
-        if(recentLaunches.empty()) {
-            text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
-            text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
+        if(entries.empty()) {
+            text(recentGamesOnly?"NO RECENT GAMES YET":"NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
+            text("LAUNCH AN APP TO SEE IT HERE",310,280,1,MUTED,970);
         } else {
-            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-            const int visible=std::min(10,static_cast<int>(recentLaunches.size()));
+            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
+            const int visible=std::min(10,static_cast<int>(entries.size()));
             for(int row=0;row<visible;++row) {
-                const auto& entry=recentLaunches[static_cast<size_t>(row)];
+                const auto& entry=entries[static_cast<size_t>(row)];
                 const int yy=190+row*39;
                 if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
                 Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
-                drawTileIcon(iconTile,290,yy+4,27);
+                drawTileIcon(iconTile,290,yy+4,27,row==recentIndex);
                 text(entry.title,330,yy+8,2,row==recentIndex?WHITE:MUTED,850);
                 text(entry.kind==Kind::Game?"GAME":"HOMEBREW",870,yy+11,1,
                      row==recentIndex?BLUE:MUTED,990);
@@ -2808,8 +4730,116 @@ void drawScreen() {
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
     }
+    if(favoritesOpen) {
+        favoritesView=favoriteTiles();
+        if(favoritesView.empty())favoritesOpen=false;
+        else {
+            favoritesIndex=std::max(0,std::min(favoritesIndex,
+                static_cast<int>(favoritesView.size())-1));
+    
+            softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+            text("FAVORITE GAMES",266,104,3,WHITE,850);
+            roundRect(838,108,78,30,9,Color{49,52,61,255});
+            text("B BACK",850,118,1,WHITE,912);
+            roundRect(924,108,88,30,9,Color{10,132,255,255});
+            text("LAUNCH",936,118,1,WHITE,1006);
+            text("A  LAUNCH     MINUS  REMOVE FROM FAVORITES",282,153,1,MUTED,850);
+            if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+            if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
+            const int visible=std::min(10,static_cast<int>(favoritesView.size())-favoritesOffset);
+            for(int row=0;row<visible;++row) {
+                const int index=favoritesOffset+row;
+                const auto& game=favoritesView[static_cast<std::size_t>(index)];
+                const int yy=190+row*39;
+                if(index==favoritesIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                drawTileIcon(game,290,yy+4,27,index==favoritesIndex);
+                text(game.title,330,yy+8,2,index==favoritesIndex?WHITE:MUTED,950);
+                text("★",970,yy+8,2,GREEN,996);
+            }
+            text(std::to_string(favoritesView.size())+" FAVORITES SAVED",
+                 282,594,1,BLUE,850);
+        }
+    }
+    if(widgetEditorOpen) {
+        Tile* tile=selectedWidgetTile();
+        if(!tile)widgetEditorOpen=false;
+        else {
+            const auto config=widgetConfig(*tile);
+            const std::string sizeValue=std::to_string(tile->w)+" x "+std::to_string(tile->h);
+            const std::string refreshValue=std::to_string(config.refreshSeconds)+" SEC";
+            const std::string itemValue=std::to_string(config.itemCount)+" ITEMS";
+            const std::string values[]={
+                sizeValue,widgetEditorStyleLabel(tile->kind,config.style),
+                desknx::widgets::enabled(config,0)?"ON":"OFF",
+                desknx::widgets::enabled(config,1)?"ON":"OFF",
+                refreshValue,itemValue,"DONE"
+            };
+    
+            softCard(260,82,760,548,Color{17,24,36,255},Color{255,255,255,28});
+            text("WIDGET EDITOR",300,110,3,WHITE,970);
+            text(typeName(widgetEditorKind)+"  /  CHANGES SAVE AUTOMATICALLY",
+                 302,150,1,MUTED,970);
+            roundRect(900,108,88,34,10,Color{52,61,74,255});
+            text("B BACK",916,119,1,WHITE,980);
+            for(int row=0;row<7;++row) {
+                const int y=188+row*52;
+                const bool selected=row==widgetEditorRow;
+                roundRect(294,y,692,44,10,selected?
+                    Color{39,69,103,255}:Color{24,34,49,255});
+                const std::string label=row==0?"SIZE":
+                    row==1?"STYLE":row==2?widgetEditorDataLabel(0):
+                    row==3?widgetEditorDataLabel(1):row==4?"REFRESH RATE":
+                    row==5?"ITEM COUNT":"FINISH";
+                text(label,316,y+15,1,selected?WHITE:MUTED,660);
+                text(values[row],700,y+14,1,selected?GREEN:BLUE,876);
+                if(row<6) {
+                    roundRect(896,y+6,38,32,8,Color{46,58,75,255});
+                    text("−",908,y+13,2,WHITE,932);
+                    roundRect(940,y+6,38,32,8,Color{46,58,75,255});
+                    text("+",952,y+13,2,WHITE,976);
+                }
+            }
+            text("UP / DOWN  ROW     LEFT / RIGHT  CHANGE     A  APPLY",
+                 302,600,1,BLUE,970);
+        }
+    }
+    if(nextendoOpen) {
+        const auto popular=nextendoPopularSnapshot();
+
+        softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,30});
+        text(languageRussian?"NEXTENDO  /  ПОПУЛЯРНЫЕ ИГРЫ":
+            "NEXTENDO  /  POPULAR GAMES",266,104,3,WHITE,850);
+        text(popular.available?std::to_string(popular.totalPlayers)+" PLAYERS ONLINE":
+            (languageRussian?"НЕТ СВЕЖИХ ДАННЫХ":"NO LIVE DATA"),
+            268,149,1,popular.available?GREEN:MUTED,850);
+        roundRect(926,108,86,32,9,Color{49,52,61,255});
+        text("B BACK",940,119,1,WHITE,1003);
+        if(!popular.available) {
+            text(languageRussian?"ПОДКЛЮЧЕНИЕ К NEXTENDO...":
+                "CONNECTING TO NEXTENDO...",290,238,2,MUTED,980);
+        } else if(popular.count==0) {
+            text(languageRussian?"НЕТ ИГР С АКТИВНЫМ ОНЛАЙНОМ":
+                "NO SUPPORTED GAMES ARE ONLINE",290,238,2,MUTED,980);
+        } else {
+            for(std::size_t i=0;i<popular.count;++i) {
+                const int yy=184+static_cast<int>(i)*36;
+                const bool selected=static_cast<int>(i)==nextendoSelected;
+                if(selected)roundRect(270,yy-4,740,32,9,Color{39,61,88,255});
+                roundRect(284,yy+2,26,24,8,Color{32,66,91,255});
+                text(std::to_string(i+1),292,yy+9,1,BLUE,305);
+                text(popular.games[i].title?popular.games[i].title:"Unknown game",
+                     326,yy+8,2,selected?WHITE:MUTED,900);
+                text(std::to_string(popular.games[i].players)+" ONLINE",
+                     908,yy+10,1,GREEN,996);
+            }
+        }
+        text(languageRussian?"ДАННЫЕ NEXTENDO ОБНОВЛЯЮТСЯ АВТОМАТИЧЕСКИ":
+            "NEXTENDO LIVE DATA REFRESHES AUTOMATICALLY",
+            270,584,1,MUTED,990);
+        text("A / B  CLOSE     UP / DOWN  SELECT",270,600,1,BLUE,990);
+    }
     if(systemMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
+
         softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
         text("TOOLS",146,130,3,WHITE,1020);
         text("Library, recent apps, widgets and system actions.",
@@ -2821,7 +4851,7 @@ void drawScreen() {
             {836,218,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
             {156,382,5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
             {496,382,0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
-            {836,382,4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
+            {836,382,4,"NETWORK QUICK SETTINGS","WI-FI / AIRPLANE / BLUETOOTH"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
@@ -2841,50 +4871,198 @@ void drawScreen() {
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(appSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
-        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
-        text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
-        text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
-        roundRect(842,132,92,32,10,Color{54,57,66,255});
-        text("B  BACK",856,143,1,WHITE,926);
-        text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
-        const size_t fontSlash=fontPath.find_last_of('/');
-        const std::string fontLabel=fontPath.empty()?std::string("SYSTEM"):
-            (fontSlash==std::string::npos?fontPath:fontPath.substr(fontSlash+1));
-        text("FONT  "+fontLabel,646,190,1,fontPath.empty()?MUTED:BLUE,930);
-        text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
+        softCard(200,38,880,644,Color{17,24,36,255},Color{255,255,255,42});
+        text("LAUNCHER SETTINGS",244,68,3,WHITE,920);
+        text("PERSONALIZE  /  APPEARANCE, WIDGETS AND WORKSPACES",
+             246,112,2,MUTED,970);
+        roundRect(948,64,92,38,12,Color{48,59,76,255});
+        text("B BACK",964,77,2,WHITE,1032);
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
-            "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
-            "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
-        const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
-            const int yy=214+i*31;
-            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
-            text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
-            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
-            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
+            "COLOR THEME","ACCENT COLOUR","STEAMGRIDDB API KEY",
+            "ADD WIDGET TO WORKSPACE","WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE",
+            "RESCAN GAME LIBRARY","RESET APPEARANCE",
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH",
+            "ICON STYLE","RUNTIME DIAGNOSTICS","HEADER STYLE","DOCK STYLE",
+            "SURFACE OPACITY","SELECTION EFFECT","MOTION EFFECTS"};
+        const char* iconStyles[]={"CLEAN SVG","SOFT SVG","SVG BADGE"};
+        const char* headerStyles[]={"GLASS BAR","TACTICAL RAIL","MINIMAL FLOAT"};
+        const char* dockStyles[]={"GLASS DOCK","SEGMENTED RAIL","FLOATING DOCK"};
+        const char* selectionStyles[]={"OUTLINE","ACCENT RAIL","PULSE","CORNER BRACKETS"};
+        constexpr int VisibleSettingsRows=8;
+        appSettingsIndex=std::max(0,std::min(18,appSettingsIndex));
+        appSettingsOffset=std::max(0,std::min(11,appSettingsOffset));
+        if(appSettingsIndex<appSettingsOffset)appSettingsOffset=appSettingsIndex;
+        if(appSettingsIndex>=appSettingsOffset+VisibleSettingsRows)
+            appSettingsOffset=appSettingsIndex-VisibleSettingsRows+1;
+        for(int row=0;row<VisibleSettingsRows;++row) {
+            const int i=appSettingsOffset+row;
+            if(i>=19)break;
+            const int yy=170+row*47;
+            const bool selected=i==appSettingsIndex;
+            if(selected)roundRect(242,yy,796,42,11,Color{35,61,93,255});
+            else softCard(242,yy,796,42,Color{23,33,48,190},Color{255,255,255,10});
+            text(actions[i],264,yy+12,2,selected?WHITE:MUTED,765);
+            if(i==3)text(themeName(themeIndex),800,yy+14,1,BLUE,1024);
+            if(i==4)text(accentColorName(accentColorIndex),800,yy+14,1,BLUE,1024);
+            if(i==5)text(steamGridDbApiKey.empty()?"NOT CONFIGURED":"CONFIGURED",
+                800,yy+14,1,steamGridDbApiKey.empty()?MUTED:GREEN,1024);
+            if(i==12)text(iconStyles[static_cast<size_t>(iconStyle)],800,yy+14,1,BLUE,1024);
+            if(i==14)text(headerStyles[static_cast<size_t>(headerStyle)],800,yy+14,1,BLUE,1024);
+            if(i==15)text(dockStyles[static_cast<size_t>(dockStyle)],800,yy+14,1,BLUE,1024);
+            if(i==16)text(std::to_string(surfaceOpacity*100/255)+"%",800,yy+14,1,BLUE,1024);
+            if(i==17)text(selectionStyles[static_cast<size_t>(selectionStyle)],800,yy+14,1,BLUE,1024);
+            if(i==18)text(motionEffects?"ON":"OFF",800,yy+14,1,motionEffects?GREEN:MUTED,1024);
         }
-        char nsInfo[80]{};
+        uiButton(1040,170,36,42,9,desknx::ui::ButtonVariant::Chip,
+            Color{34,46,64,255},Color{255,255,255,18});
+        text("UP",1045,184,1,WHITE,1074);
+        uiButton(1040,499,36,42,9,desknx::ui::ButtonVariant::Chip,
+            Color{34,46,64,255},Color{255,255,255,18});
+        text("DN",1045,513,1,WHITE,1074);
+        char nsInfo[112]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY INITIALIZING");
         else if(!catalogueNsAvailableNow)
             std::snprintf(nsInfo,sizeof(nsInfo),"GAME SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
-        text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
-             346,592,1,MUTED,930);
-        text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
+        text(nsInfo,246,570,1,catalogueNsAvailableNow?GREEN:RED,690);
+        text("ITEMS  "+std::to_string(appSettingsOffset+1)+"–"+
+             std::to_string(std::min(19,appSettingsOffset+VisibleSettingsRows))+" / 19",
+             790,570,1,MUTED,1034);
+        text("UP / DOWN SCROLL     LEFT / RIGHT CHANGE     A SELECT     B CLOSE",
+             246,620,1,BLUE,1036);
+    }
+    if(diagnosticsOpen) {
+        refreshDiagnosticsSnapshot();
+        const auto iconStats=gIconCache.stats();
+        const Uint32 lastNetworkSuccess=static_cast<Uint32>(
+            SDL_AtomicGet(&nextendoLastSuccessTick));
+        const Uint32 networkAge=lastNetworkSuccess==0
+            ?0:SDL_GetTicks()-lastNetworkSuccess;
+        bool ready=false,complete=false,truncated=false,nsAvailable=false;
+        std::uint32_t nsError=0;
+        size_t games=0,nros=0;
+        readCatalogueState(ready,complete,truncated,&nsAvailable,&nsError,&games,&nros);
+        const int failures=SDL_AtomicGet(&nextendoConsecutiveFailures);
+        const bool networkReady=SDL_AtomicGet(&nextendoNetworkReady)!=0;
+
+        softCard(120,48,1040,624,Color{17,24,36,255},Color{255,255,255,35});
+        text("RUNTIME DIAGNOSTICS",158,72,3,WHITE,920);
+        text("B BACK",1010,84,1,BLUE,1140);
+        text("X / A REFRESH",880,84,1,MUTED,1000);
+        const Color okColor=Color{52,211,153,255};
+        const Color warnColor=Color{255,177,74,255};
+        const Color badColor=Color{255,99,112,255};
+        // Storage and catalogue/cache health.
+        softCard(152,126,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("SD CARD",176,146,2,WHITE,580);
+        text(sdMounted?(storageStatsAvailable?"MOUNTED / READABLE":"MOUNTED / SPACE UNKNOWN"):"NOT MOUNTED",
+             176,178,1,sdMounted?okColor:badColor,580);
+        if(storageStatsAvailable) {
+            char storageText[96]{};
+            std::snprintf(storageText,sizeof(storageText),"FREE %.1f GB  /  TOTAL %.1f GB",
+                static_cast<double>(sdFreeBytes)/(1024.0*1024.0*1024.0),
+                static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
+            text(storageText,176,202,1,MUTED,580);
+        }
+        char cacheText[96]{};
+        std::snprintf(cacheText,sizeof(cacheText),"CACHE FILES %zu  /  %.2f MB",
+            diagnosticsCacheFiles,
+            static_cast<double>(diagnosticsCacheBytes)/(1024.0*1024.0));
+        text(cacheText,176,226,1,BLUE,580);
+
+        softCard(628,126,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("NETWORK / NEXTENDO",652,146,2,WHITE,1050);
+        text(networkReady?"NETWORK SESSION READY":"NETWORK SESSION OFFLINE",
+             652,178,1,networkReady?okColor:warnColor,1050);
+        char networkText[96]{};
+        if(lastNetworkSuccess!=0)
+            std::snprintf(networkText,sizeof(networkText),
+                "LAST UPDATE %u SEC AGO  /  FAILURES %d",networkAge/1000,failures);
+        else
+            std::snprintf(networkText,sizeof(networkText),
+                "NO SUCCESSFUL UPDATE YET  /  FAILURES %d",failures);
+        text(networkText,652,202,1,MUTED,1050);
+        text(nextendoTotalLabel(),652,226,1,BLUE,1050);
+
+        softCard(152,278,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("APPLICATION CATALOGUE",176,298,2,WHITE,580);
+        char catalogueText[112]{};
+        std::snprintf(catalogueText,sizeof(catalogueText),
+            "%s  /  %s  /  %zu GAMES  /  %zu HOMEBREW",
+            ready?"READY":"SEEDING",complete?"COMPLETE":"SCANNING",games,nros);
+        text(catalogueText,176,330,1,nsAvailable?okColor:warnColor,580);
+        char nsText[64]{};
+        std::snprintf(nsText,sizeof(nsText),"NS %s  /  RC 0X%08X  /  TRUNCATED %s",
+            nsAvailable?"ONLINE":"OFFLINE",static_cast<unsigned int>(nsError),
+            truncated?"YES":"NO");
+        text(nsText,176,356,1,MUTED,580);
+        text("INCREMENTAL METADATA CACHE ACTIVE",176,382,1,BLUE,580);
+
+        softCard(628,278,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("IMAGE / GPU CACHE",652,298,2,WHITE,1050);
+        char gpuText[112]{};
+        std::snprintf(gpuText,sizeof(gpuText),
+            "%zu / 64 TEXTURES  /  %.1f / 32 MB",
+            iconStats.residentTextures,
+            static_cast<double>(iconStats.textureBytes)/(1024.0*1024.0));
+        text(gpuText,652,330,1,okColor,1050);
+        char queueText[112]{};
+        std::snprintf(queueText,sizeof(queueText),
+            "QUEUE %zu  /  DECODED %zu  /  FAILED %zu",
+            iconStats.pendingRequests,iconStats.completedImages,iconStats.failedKeys);
+        text(queueText,652,356,1,MUTED,1050);
+        text(iconStats.workerRunning?"DECODER THREAD RUNNING":"DECODER THREAD STOPPED",
+             652,382,1,iconStats.workerRunning?okColor:warnColor,1050);
+
+        softCard(152,430,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("BACKGROUND TASKS",176,450,2,WHITE,580);
+        char workerText[112]{};
+        std::snprintf(workerText,sizeof(workerText),
+            "CATALOGUE %s  /  NEXTENDO %s",
+            catalogueThread?"STARTED":"OFF",nextendoThread?"RUNNING":"OFF");
+        text(workerText,176,482,1,catalogueThread?okColor:warnColor,580);
+        std::snprintf(workerText,sizeof(workerText),
+            "STORAGE %s  /  PDM %s",
+            storageStatsThread?"RUNNING":"OFF",playStatsThread?"RUNNING":"IDLE");
+        text(workerText,176,506,1,WHITE,580);
+#ifdef DESKNX_SYSTEM_APPLET
+        std::snprintf(workerText,sizeof(workerText),
+            "LAYOUT SAVE %s  /  IPC %s",
+            layoutSaveThread?"RUNNING":"IDLE",heartbeatThread?"ACTIVE":"OFF");
+        text(workerText,176,530,1,heartbeatThread?okColor:warnColor,580);
+#else
+        std::snprintf(workerText,sizeof(workerText),
+            "LAYOUT SAVE %s  /  NATIVE NRO",
+            layoutSaveThread?"RUNNING":"IDLE");
+        text(workerText,176,530,1,MUTED,580);
+#endif
+
+        softCard(628,430,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        text("FRAME PERFORMANCE",652,450,2,WHITE,1050);
+        char perfText[112]{};
+        std::snprintf(perfText,sizeof(perfText),"FPS %.1f  /  FRAME %.2f MS AVG",
+            runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs);
+        text(perfText,652,482,1,okColor,1050);
+        std::snprintf(perfText,sizeof(perfText),"RENDER %.2f MS AVG  /  PEAK %.2F MS",
+            runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs);
+        text(perfText,652,506,1,MUTED,1050);
+        std::snprintf(perfText,sizeof(perfText),"SLOW FRAMES IN WINDOW %llu",
+            static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
+        text(perfText,652,530,1,warnColor,1050);
+        text("LIVE SNAPSHOT UPDATES EVERY 5 SECONDS  /  A OR X TO REFRESH",
+             176,604,1,MUTED,1060);
+        text("NO ACCOUNT IDS OR PERSONAL FILE CONTENT IS INCLUDED",
+             176,628,1,MUTED,1060);
     }
     if(mediaPickerOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,205});
+
         softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
         text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
              mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
-             mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
+             mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":
+             mediaPickerType==MediaPickerType::GameIcon?"CHOOSE GAME ICON":"CHOOSE ICON PACK",
              264,88,3,WHITE,1000);
         const bool browsingAlbum=mediaPickerDirectory.compare(
             0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0;
@@ -2922,7 +5100,7 @@ void drawScreen() {
     }
     if(powerMenu) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
         softCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
         text("POWER",454,238,3,WHITE,820);
         roundRect(780,238,52,30,9,Color{54,57,66,255});
@@ -2937,7 +5115,7 @@ void drawScreen() {
         text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
     }
     if(userPickerOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,210});
+
         softCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
         text("SELECT PLAYER",374,142,3,WHITE,900);
         text("The selected profile is used for games that request a player account.",
@@ -2965,9 +5143,193 @@ void drawScreen() {
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
     }
+
+    if(steamGridDbPickerOpen) {
+        const auto sgdb=gSteamGridDbService.snapshot();
+
+        softCard(64,34,1152,652,Color{15,23,36,255},Color{255,255,255,38});
+        text("STEAMGRIDDB  /  GAME ARTWORK",108,62,3,WHITE,900);
+        text(steamGridDbCurrentTitle,110,105,2,MUTED,820);
+        char sgdbIdText[48]{};
+        std::snprintf(sgdbIdText,sizeof(sgdbIdText),"TITLE ID  %016llX",
+            static_cast<unsigned long long>(steamGridDbCurrentTitleId));
+        text(sgdbIdText,110,133,1,MUTED,650);
+        roundRect(1082,62,94,38,10,Color{52,61,74,255});
+        text("B  BACK",1098,75,1,WHITE,1168);
+
+        if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            text("CHOOSE THE CORRECT GAME ENTRY",112,171,1,BLUE,850);
+            if(sgdb.status==desknx::steamgriddb::ServiceStatus::Searching) {
+                roundRect(132,235,1016,86,14,Color{24,38,56,255});
+                text("SEARCHING STEAMGRIDDB...",164,266,2,WHITE,1090);
+            } else if(sgdb.games.empty()) {
+                roundRect(132,235,1016,86,14,Color{24,38,56,255});
+                text(sgdb.message.empty()?"NO MATCHES FOUND":sgdb.message,164,266,2,WHITE,1100);
+            } else {
+                const int count=std::min(8,static_cast<int>(sgdb.games.size())-steamGridDbMatchOffset);
+                for(int row=0;row<count;++row) {
+                    const int index=steamGridDbMatchOffset+row;
+                    const int y=198+row*47;
+                    const bool selected=index==steamGridDbMatchIndex;
+                    roundRect(126,y,1028,40,10,selected?Color{40,72,111,255}:Color{25,35,49,255});
+                    text(sgdb.games[static_cast<size_t>(index)].name,150,y+12,1,
+                        selected?WHITE:MUTED,880);
+                    char score[24]{};
+                    std::snprintf(score,sizeof(score),"%u%%",
+                        static_cast<unsigned>(std::max(0.0f,std::min(1.0f,
+                            sgdb.games[static_cast<size_t>(index)].matchScore))*100.0f));
+                    text(score,1046,y+12,1,selected?GREEN:BLUE,1126);
+                }
+            }
+            text(sgdb.message,130,590,1,MUTED,780);
+            roundRect(842,574,160,42,11,Color{37,80,128,255});
+            text("A  SELECT",878,588,1,WHITE,990);
+            roundRect(1016,574,136,42,11,Color{34,45,62,255});
+            text("Y  SEARCH",1040,588,1,WHITE,1140);
+            text("UP / DOWN  SELECT MATCH",132,635,1,BLUE,520);
+        } else {
+            text(steamGridDbOfflineFallback?"OFFLINE LIBRARY  /  CACHED ARTWORK":
+                (sgdb.message.empty()?"CHOOSE ARTWORK TYPE AND IMAGE":sgdb.message),
+                112,164,1,steamGridDbOfflineFallback?GREEN:BLUE,900);
+            static const int tabX[]={116,374,632,890};
+            for(int i=0;i<4;++i) {
+                const int x=tabX[i];
+                const auto kind=steamGridDbCacheKind(i);
+                const bool cached=gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,kind);
+                roundRect(x,188,238,38,10,i==steamGridDbKindIndex?
+                    Color{42,82,126,255}:Color{29,39,54,255});
+                text(steamGridDbKindLabel(i),x+18,200,1,
+                    i==steamGridDbKindIndex?WHITE:(cached?GREEN:MUTED),x+220);
+                if(cached)roundRect(x+208,202,8,8,4,GREEN);
+            }
+            roundRect(108,238,382,316,14,Color{22,31,45,255});
+            if(steamGridDbOfflineFallback) {
+                text("CACHED FILES",132,260,1,BLUE,465);
+                for(int i=0;i<4;++i) {
+                    const bool cached=gSteamGridDbService.cache().hasArtwork(
+                        steamGridDbCurrentTitleId,steamGridDbCacheKind(i));
+                    const int y=295+i*48;
+                    if(i==steamGridDbKindIndex)
+                        roundRect(126,y-5,340,38,9,Color{40,68,101,255});
+                    text(steamGridDbKindLabel(i),148,y+7,1,
+                        i==steamGridDbKindIndex?WHITE:(cached?GREEN:MUTED),290);
+                    text(cached?"DOWNLOADED":"NOT CACHED",312,y+7,1,
+                        cached?GREEN:MUTED,456);
+                }
+                text("SELECT A TYPE TO USE ITS SAVED IMAGE",132,512,1,MUTED,470);
+            } else if(sgdb.status==desknx::steamgriddb::ServiceStatus::LoadingAssets) {
+                text("LOADING ARTWORK...",138,365,2,WHITE,460);
+            } else if(sgdb.assets.empty()) {
+                text(sgdb.message.empty()?"NO ARTWORK FOUND":sgdb.message,132,360,1,MUTED,466);
+            } else {
+                text("AVAILABLE IMAGES",132,260,1,BLUE,465);
+                const int count=std::min(7,static_cast<int>(sgdb.assets.size())-steamGridDbAssetOffset);
+                for(int row=0;row<count;++row) {
+                    const int index=steamGridDbAssetOffset+row;
+                    const auto& asset=sgdb.assets[static_cast<size_t>(index)];
+                    const int y=289+row*36;
+                    const bool selected=index==sgdb.selectedAsset;
+                    roundRect(124,y,350,31,8,selected?
+                        Color{40,72,111,255}:Color{28,38,52,255});
+                    char dimensions[48]{};
+                    std::snprintf(dimensions,sizeof(dimensions),"%dx%d",
+                        asset.width,asset.height);
+                    text(dimensions,141,y+9,1,selected?WHITE:MUTED,225);
+                    text(std::to_string(asset.score),385,y+9,1,
+                        selected?GREEN:MUTED,458);
+                }
+                text("UP / DOWN TO BROWSE",132,542,1,MUTED,470);
+            }
+            roundRect(510,238,662,316,14,Color{22,31,45,255});
+            if(steamGridDbPreviewTexture) {
+                int width=0,height=0;
+                if(SDL_QueryTexture(steamGridDbPreviewTexture,nullptr,nullptr,&width,&height)==0&&width>0&&height>0) {
+                    const auto fit=desknx::artwork::containDestination(
+                        530,254,622,284,width,height);
+                    SDL_Rect target{fit.x,fit.y,fit.w,fit.h};
+                    SDL_RenderCopy(renderer,steamGridDbPreviewTexture,nullptr,&target);
+                }
+            } else {
+                text("LARGE PREVIEW",714,372,2,MUTED,970);
+                text("SELECT AN IMAGE TO PREVIEW",682,410,1,MUTED,970);
+            }
+            if(!steamGridDbOfflineFallback&&sgdb.selectedAsset>=0&&
+               sgdb.selectedAsset<static_cast<int>(sgdb.assets.size())) {
+                const auto& asset=sgdb.assets[static_cast<size_t>(sgdb.selectedAsset)];
+                text(std::to_string(asset.width)+" x "+std::to_string(asset.height)+
+                    "   /   SCORE "+std::to_string(asset.score),530,526,1,BLUE,1150);
+            } else if(steamGridDbOfflineFallback) {
+                text("SAVED ON SD CARD  /  AVAILABLE WITHOUT INTERNET",530,526,1,GREEN,1150);
+            }
+            roundRect(108,574,236,42,11,Color{48,52,65,255});
+            text("Y  RESTORE SYSTEM",126,588,1,WHITE,330);
+            roundRect(358,574,178,42,11,Color{34,45,62,255});
+            text("X  SEARCH TITLE",374,588,1,WHITE,525);
+            roundRect(854,574,318,42,11,
+                steamGridDbOfflineFallback?Color{30,105,79,255}:Color{37,80,128,255});
+            text(steamGridDbOfflineFallback?"A  USE CACHED TYPE":"A  APPLY SELECTED",
+                steamGridDbOfflineFallback?886:884,588,1,WHITE,1150);
+            text("LEFT / RIGHT  ART TYPE     UP / DOWN  IMAGE",112,635,1,BLUE,700);
+        }
+    }
+
+    if(quickSettingsOpen) {
+        refreshQuickSettingsSnapshot();
+        softCard(292,72,696,576,Color{16,26,40,255},Color{135,174,216,74});
+        text("QUICK SETTINGS",332,102,3,WHITE,920);
+        text(quickNetworkStatus,334,148,2,
+            quickInternetConnected?GREEN:(quickAirplaneMode?Color{255,190,96,255}:MUTED),934);
+        roundRect(878,94,84,36,10,Color{48,59,76,255});
+        text("B BACK",891,105,1,WHITE,950);
+        const char* labels[]={"SOUND OUTPUT","AIRPLANE MODE","WI-FI","BLUETOOTH","SCREEN BRIGHTNESS"};
+        const char* values[]={
+            quickSoundAvailable?(quickSoundMuted?"MUTED":"SOUND ON"):"UNAVAILABLE",
+            quickAirplaneAvailable?(quickAirplaneMode?"ON":"OFF"):"UNAVAILABLE",
+            quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"UNAVAILABLE",
+            quickBluetoothAvailable?(quickBluetoothEnabled?"ON":"OFF"):"UNAVAILABLE",
+            quickBrightnessAvailable?std::to_string(static_cast<int>(std::lround(
+                std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%":"UNAVAILABLE"
+        };
+        for(int i=0;i<5;++i) {
+            const int y=194+i*68;
+            const bool selected=i==quickSettingsIndex;
+            roundRect(326,y,628,58,12,selected?Color{40,72,111,255}:Color{24,37,54,255});
+            text(labels[i],348,y+10,1,MUTED,680);
+            text(values[i],348,y+29,2,selected?WHITE:
+                (i==1&&quickAirplaneMode?Color{255,190,96,255}:
+                 (i==0&&!quickSoundMuted?GREEN:BLUE)),748);
+            if(i==4&&quickBrightnessAvailable) {
+                const int percent=static_cast<int>(std::lround(quickBrightness*100.0f));
+                roundRect(770,y+20,150,12,6,Color{8,15,25,255});
+                roundRect(770,y+20,std::max(1,percent*150/100),12,6,BLUE);
+            } else if(i<4) {
+                roundRect(912,y+18,18,18,9,
+                    ((i==0&&!quickSoundMuted)||(i==1&&quickAirplaneMode)||
+                     (i==2&&quickWifiEnabled&&!quickAirplaneMode)||
+                     (i==3&&quickBluetoothEnabled))?GREEN:MUTED);
+            }
+        }
+        text("A TOGGLE    LEFT / RIGHT ADJUST BRIGHTNESS    UP / DOWN SELECT",
+             334,560,1,BLUE,930);
+        text("BLUETOOTH IS KEPT ENABLED WHILE DOCKED TO PROTECT CONTROLLER LINKS",
+             334,592,1,MUTED,952);
+    }
+
+    if(motionEffects&&uiTransitionStart!=0) {
+        const Uint32 elapsed=SDL_GetTicks()-uiTransitionStart;
+        constexpr Uint32 TransitionDurationMs=150;
+        if(elapsed<TransitionDurationMs) {
+            const Uint8 alpha=desknx::ui::motion::fadeAlpha(
+                elapsed,TransitionDurationMs,70);
+            rect(0,0,SW,SH,Color{0,0,0,alpha});
+        } else {
+            uiTransitionStart=0;
+        }
+    }
+    gVisualEngine.endFrame();
     SDL_RenderPresent(renderer);
 }
-bool saveNow(){return enqueueLayoutSave(false);}
+bool saveNow(){++layoutMutationRevision;return enqueueLayoutSave(false);}
 bool finishTileDrag(const char* message="POSITION SAVED") {
     dragging=false;
     touchDragging=false;
@@ -2979,7 +5341,37 @@ bool finishTileDrag(const char* message="POSITION SAVED") {
     if(saved&&message&&*message)setStatus(message);
     return saved;
 }
-void updateCursor(int dx,int dy){selectedX=std::max(0,std::min(COLS-1,selectedX+dx));selectedY=std::max(0,std::min(ROWS-1,selectedY+dy));}
+void updateCursor(int dx,int dy) {
+    if(desks.empty() || (dx==0 && dy==0)) return;
+    const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    desknx::homenx::WorkspaceProjection projection{};
+    if(!desknx::homenx::projectWorkspace(desk,projection,nullptr)) {
+        // Keep navigation recoverable if an old or manually edited layout is
+        // malformed; never index a projection that failed validation.
+        selectedX=std::max(0,std::min(COLS-1,selectedX+dx));
+        selectedY=std::max(0,std::min(ROWS-1,selectedY+dy));
+        return;
+    }
+    desknx::homenx::Direction direction=desknx::homenx::Direction::Right;
+    if(dx<0) direction=desknx::homenx::Direction::Left;
+    else if(dx>0) direction=desknx::homenx::Direction::Right;
+    else if(dy<0) direction=desknx::homenx::Direction::Up;
+    else direction=desknx::homenx::Direction::Down;
+    const auto next=desknx::homenx::focusNeighbour(
+        projection,selectedX,selectedY,direction);
+    if(next.valid()) {
+        selectedX=next.x;
+        selectedY=next.y;
+    } else {
+        // Empty cells are not focus stops. Keep focus on the current tile
+        // when no tile exists in the requested direction.
+        const auto current=desknx::homenx::primaryOf(projection,selectedX,selectedY);
+        if(current.valid()) {
+            selectedX=current.x;
+            selectedY=current.y;
+        }
+    }
+}
 bool moveTile(int dx,int dy) {
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(!desknx::workspace_ops::moveSelectedTile(d,selectedX,selectedY,dx,dy)) {
@@ -3014,6 +5406,137 @@ void resizeTile(bool bigger) {
                   "SELECT A TILE FIRST":"RESIZE BLOCKED OR SIZE LIMIT REACHED");
         return;
     }
+    layoutUserModified=true;
+    saveNow();
+}
+
+bool isWidgetKind(Kind kind) {
+    switch(kind) {
+        case Kind::Clock: case Kind::Battery: case Kind::System:
+        case Kind::Recent: case Kind::Storage: case Kind::Calendar:
+        case Kind::Nextendo: case Kind::Favorites: case Kind::GameLibrary:
+        case Kind::QuickSettings:
+            return true;
+        default:return false;
+    }
+}
+Tile* selectedWidgetTile() {
+    if(desks.empty()||deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return nullptr;
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int index=itemAt(desk,selectedX,selectedY);
+    if(index<0||index>=static_cast<int>(desk.tiles.size()))return nullptr;
+    Tile& tile=desk.tiles[static_cast<size_t>(index)];
+    return isWidgetKind(tile.kind)?&tile:nullptr;
+}
+void openWidgetEditor() {
+    Tile* tile=selectedWidgetTile();
+    if(!tile){setStatus("SELECT A WIDGET FIRST",2000);return;}
+    widgetEditorKind=tile->kind;
+    widgetEditorRow=0;
+    widgetEditorOpen=true;
+}
+void closeWidgetEditor() {
+    widgetEditorOpen=false;
+}
+std::string widgetEditorStyleLabel(Kind kind,int style) {
+    static const char* clock[]={"DIGITAL 24H","DIGITAL 12H","ANALOG"};
+    static const char* generic[]={"STANDARD","MINIMAL","DETAILED"};
+    switch(kind) {
+        case Kind::Clock:return clock[std::max(0,std::min(2,style))];
+        case Kind::Battery:return generic[std::max(0,std::min(2,style))];
+        case Kind::System:return style==0?"OVERVIEW":style==1?"THERMAL":"FREQUENCIES";
+        case Kind::Recent:return style==0?"LIST":style==1?"COVERS":"COMPACT";
+        case Kind::Storage:return style==0?"FREE SPACE":style==1?"USED SPACE":"CAPACITY";
+        case Kind::Calendar:return style==0?"MONTH":style==1?"DAY CARD":"AGENDA";
+        case Kind::Nextendo:return style==0?"ONLINE SUMMARY":style==1?"ACTIVITY FIRST":"NETWORK STATUS";
+        case Kind::Favorites:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
+        case Kind::GameLibrary:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
+        case Kind::QuickSettings:return style==0?"TOGGLE GRID":style==1?"COMPACT GRID":"STATUS GRID";
+        default:return generic[std::max(0,std::min(2,style))];
+    }
+}
+std::string widgetEditorDataLabel(unsigned bit) {
+    switch(widgetEditorKind) {
+        case Kind::Clock: return bit==0?"SECONDS":"SHOW DATE";
+        case Kind::Battery: return bit==0?"CHARGE BAR":"POWER STATE";
+        case Kind::System: return bit==0?"TEMPERATURES":"CPU / GPU CLOCKS";
+        case Kind::Recent: return bit==0?"MORE ENTRIES":"GAME COVERS";
+        case Kind::Storage: return bit==0?"USED OR FREE":"USAGE BAR";
+        case Kind::Calendar: return bit==0?"SHOW WEEKDAY":"SHOW TIME";
+        case Kind::Nextendo: return bit==0?"ONLINE TOTAL":"TOP ACTIVITY";
+        case Kind::Favorites: return bit==0?"SHOW COVER ICONS":"SAVED COUNT";
+        case Kind::GameLibrary: return bit==0?"RECENT FIRST":"SHOW COVER ICONS";
+        case Kind::QuickSettings: return bit==0?"SHOW BRIGHTNESS":"SHOW NETWORK STATE";
+        default:return bit==0?"DATA A":"DATA B";
+    }
+}
+bool resizeWidgetTo(int width,int height) {
+    Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+    const int index=itemAt(desk,selectedX,selectedY);
+    if(index<0)return false;
+    Tile& tile=desk.tiles[static_cast<size_t>(index)];
+    Tile proposed=tile;
+    proposed.w=width;
+    proposed.h=height;
+    if(!desknx::model::placeable(desk,proposed,tile.x,tile.y,index)) {
+        setStatus("WIDGET SIZE DOES NOT FIT HERE",2200);
+        return false;
+    }
+    tile.w=width;
+    tile.h=height;
+    layoutUserModified=true;
+    saveNow();
+    return true;
+}
+void adjustWidgetEditor(int direction) {
+    Tile* tile=selectedWidgetTile();
+    if(!tile){closeWidgetEditor();return;}
+    auto config=widgetConfig(*tile);
+    if(direction==0)direction=1;
+    switch(widgetEditorRow) {
+        case 0: {
+            static constexpr int sizes[][2]={{1,1},{2,1},{3,1},{2,2},{3,2},{2,3}};
+            int current=0;
+            for(int i=0;i<6;++i)if(tile->w==sizes[i][0]&&tile->h==sizes[i][1])current=i;
+            for(int step=0;step<6;++step) {
+                current=(current+direction+6)%6;
+                if(resizeWidgetTo(sizes[current][0],sizes[current][1]))return;
+            }
+            break;
+        }
+        case 1:
+            config.style=(config.style+direction+3)%3;
+            break;
+        case 2:
+            desknx::widgets::toggle(config,0);
+            break;
+        case 3:
+            desknx::widgets::toggle(config,1);
+            break;
+        case 4: {
+            static constexpr int rates[]={5,15,30,60,180};
+            int index=0;
+            for(int i=0;i<5;++i)if(rates[i]==config.refreshSeconds)index=i;
+            index=(index+direction+5)%5;
+            config.refreshSeconds=rates[index];
+            break;
+        }
+        case 5: {
+            static constexpr int counts[]={2,3,4,6};
+            int index=0;
+            for(int i=0;i<4;++i)if(counts[i]==config.itemCount)index=i;
+            index=(index+direction+4)%4;
+            config.itemCount=counts[index];
+            break;
+        }
+        case 6:
+            closeWidgetEditor();
+            return;
+        default:return;
+    }
+    tile->data=desknx::widgets::serialize(config);
+    if(tile->kind==Kind::Nextendo)
+        SDL_AtomicSet(&nextendoConfiguredRefreshMs,configuredWidgetRefresh(Kind::Nextendo)*1000);
     layoutUserModified=true;
     saveNow();
 }
@@ -3073,6 +5596,7 @@ void addSelected() {
     if(saveNow())setStatus(addStatus,2600);
 }
 int playStatsThreadMain(void* context) {
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     const char* title=static_cast<const char*>(context);
     PdmQuerySnapshot snapshot{};
     if(title)std::snprintf(snapshot.titleId,sizeof(snapshot.titleId),"%s",title);
@@ -3155,6 +5679,11 @@ void pumpPlayStatsQuery() {
     }
 }
 void openList(){
+    // Normal add flow opens on Games. The widget picker sets its own filter.
+    if(!widgetPickerMode && catalogueFilter!=desknx::catalog_view::FilterMode::Games) {
+        catalogueFilter=desknx::catalog_view::FilterMode::Games;
+        ++catalogueViewRevision;
+    }
     // Opening the catalogue is also useful when a workspace is full: the user
     // can inspect/filter the library before deciding what to remove. addSelected
     // performs the definitive capacity check when an app is actually added.
@@ -3169,16 +5698,76 @@ void closeList() {
     catalogueTouchActive=false;
     catalogueTouchMoved=false;
     catalogueTouchFingerId=0;
-    if(widgetPickerMode) {
+    if(widgetPickerMode||gameLibraryMode) {
         catalogueFilter=widgetPickerPreviousFilter;
         catalogueSort=widgetPickerPreviousSort;
         catalogueQuery=widgetPickerPreviousQuery;
         widgetPickerMode=false;
+        gameLibraryMode=false;
         ++catalogueViewRevision;
         listIndex=0;
         listOffset=0;
     }
 }
+void openGameLibraryCatalogue() {
+    widgetPickerPreviousFilter=catalogueFilter;
+    widgetPickerPreviousSort=catalogueSort;
+    widgetPickerPreviousQuery=catalogueQuery;
+    gameLibraryMode=true;
+    catalogueFilter=desknx::catalog_view::FilterMode::Games;
+    catalogueSort=desknx::catalog_view::SortMode::Name;
+    catalogueQuery.clear();
+    ++catalogueViewRevision;
+    listIndex=0;
+    listOffset=0;
+    openList();
+    setStatus("GAME LIBRARY",1800);
+}
+
+void renameSelectedGame() {
+    const auto& available=visibleCatalogueSnapshot();
+    if(available.empty()||listIndex<0||static_cast<size_t>(listIndex)>=available.size())return;
+    const Candidate selected=available[static_cast<size_t>(listIndex)];
+    if(selected.kind!=Kind::Game){setStatus("SELECT A GAME TO RENAME",2200);return;}
+    SwkbdConfig config{};
+    const Result createRc=swkbdCreate(&config,0);
+    if(R_FAILED(createRc)){setStatus("KEYBOARD UNAVAILABLE",2500);return;}
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,languageRussian?"Переименовать игру":"Rename game");
+    swkbdConfigSetInitialText(&config,selected.title.c_str());
+    char output[128]{};
+    std::snprintf(output,sizeof(output),"%s",selected.title.c_str());
+    const Result rc=showKeyboard(&config,output,sizeof(output));
+    swkbdClose(&config);
+    if(R_FAILED(rc))return;
+    std::string name=output;
+    const size_t first=name.find_first_not_of(" \t\r\n");
+    if(first==std::string::npos){setStatus("GAME NAME CANNOT BE EMPTY",2200);return;}
+    const size_t last=name.find_last_not_of(" \t\r\n");
+    name=name.substr(first,last-first+1);
+    if(name.size()>124||name.find('\t')!=std::string::npos||
+       name.find('\n')!=std::string::npos||name.find('\r')!=std::string::npos) {
+        setStatus("GAME NAME TOO LONG (124 UTF-8 BYTES MAX)",3000);return;
+    }
+    const auto old=gameNameOverrides.find(selected.data);
+    const bool hadOld=old!=gameNameOverrides.end();
+    const std::string oldName=hadOld?old->second:std::string{};
+    if(name==selected.title)return;
+    gameNameOverrides[selected.data]=name;
+    if(!saveGameNameOverrides()) {
+        if(hadOld)gameNameOverrides[selected.data]=oldName;
+        else gameNameOverrides.erase(selected.data);
+        return;
+    }
+    for(auto& desk:desks)for(auto& tile:desk.tiles)
+        if(tile.kind==Kind::Game&&tile.data==selected.data)tile.title=name;
+    ++catalogueViewRevision;
+    layoutUserModified=true;
+    (void)saveNow();
+    setStatus("GAME RENAMED",2200);
+}
+
+
 void newDesk() {
     if(dragging || touchDragging) {
         setStatus("DROP THE MOVING TILE BEFORE CREATING A WORKSPACE");
@@ -3441,18 +6030,17 @@ void activateWorkspaceAppearance(int action) {
 }
 
 void activateAppSettings(int action) {
-    appSettingsMenu=false;
+    if(action!=3&&action!=4&&action!=5&&action!=12&&
+       (action<14||action>18))
+        appSettingsMenu=false;
     switch(action) {
         case 0: openMediaPicker(MediaPickerType::Wallpaper); break;
         case 1: openMediaPicker(MediaPickerType::Font); break;
         case 2: openMediaPicker(MediaPickerType::IconPack); break;
-        case 3:
-            themeIndex=(themeIndex+1)%8;
-            applyThemePalette();
-            if(saveLauncherSettings())
-                setStatus("THEME "+std::to_string(themeIndex+1)+" APPLIED");
-            break;
-        case 4:
+        case 3: cycleTheme(1); break;
+        case 4: cycleAccent(1); break;
+        case 5: editSteamGridDbApiKey(); break;
+        case 6:
             widgetPickerPreviousFilter=catalogueFilter;
             widgetPickerPreviousSort=catalogueSort;
             widgetPickerPreviousQuery=catalogueQuery;
@@ -3464,35 +6052,116 @@ void activateAppSettings(int action) {
             openList();
             setStatus("CHOOSE A WIDGET TO ADD");
             break;
-        case 5: restartCatalogueScan(); break;
-        case 6:
+        case 7:
             workspaceMenu=true;
             workspaceMenuIndex=0;
             break;
-        case 7:
+        case 8:
             editing=!editing;
             if(!editing&&dragging){dragging=false;saveNow();}
             setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
             break;
-        case 8:
-            wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;iconStyle=0;
+        case 9: restartCatalogueScan(); break;
+        case 10:
+            wallpaperPath.clear();
+            if(!gFontRenderer.isLoadingCustomFont()) {
+                fontPath.clear();
+                (void)gFontRenderer.setCustomFont("");
+            }
+            iconPackPath.clear();
+            themeIndex=0;accentColorIndex=-1;iconStyle=0;
+            headerStyle=0;dockStyle=0;surfaceOpacity=255;
+            selectionStyle=0;motionEffects=false;
             (void)loadWallpaperTexture("");
-            (void)gFontRenderer.setCustomFont("");
             gIconCache.setCustomIconPackDir("");
             applyThemePalette();
-            if(saveLauncherSettings())setStatus("APPEARANCE RESET");
+            scheduleLauncherSettingsSave(0);
+            setStatus("APPEARANCE RESET TO V0.1");
             break;
-        case 9:
+        case 11:
             languageRussian=!languageRussian;
-            if(saveLauncherSettings())setStatus(languageRussian?"ЯЗЫК: РУССКИЙ":"LANGUAGE: ENGLISH");
+            scheduleLauncherSettingsSave(0);
+            setStatus(languageRussian?"ЯЗЫК: РУССКИЙ":"LANGUAGE: ENGLISH");
             break;
-        case 10:
-            iconStyle=(iconStyle+1)%3;
-            if(saveLauncherSettings())setStatus("ICON STYLE");
+        case 12:
+        case 14:
+        case 15:
+        case 16:
+        case 17:
+        case 18: {
+            switch(action) {
+                case 12: iconStyle=(iconStyle+1)%3; break;
+                case 14: headerStyle=(headerStyle+1)%3; break;
+                case 15: dockStyle=(dockStyle+1)%3; break;
+                case 16: {
+                    const int levels[]={64,112,160,208,255};
+                    int pos=0;while(pos<4&&levels[pos]!=surfaceOpacity)++pos;
+                    surfaceOpacity=levels[(pos+1)%5];
+                    break;
+                }
+                case 17: selectionStyle=(selectionStyle+1)%4; break;
+                case 18: motionEffects=!motionEffects; break;
+                default: break;
+            }
+            applyThemePalette();
+            scheduleLauncherSettingsSave(0);
+            break;
+        }
+        case 13:
+            appSettingsMenu=false;
+            diagnosticsOpen=true;
+            refreshDiagnosticsSnapshot(true);
             break;
         default: break;
     }
 }
+void activateWidget(const Tile& t) {
+    desknx::diag::Write("widgets","activate_begin",
+        "kind=%s title=%s width=%d height=%d",
+        typeName(t.kind).c_str(),t.title.c_str(),t.w,t.h);
+    switch(t.kind) {
+        case Kind::Nextendo:
+            nextendoSelected=0;
+            nextendoOpen=true;
+            setStatus(languageRussian?"ПОПУЛЯРНЫЕ ИГРЫ NEXTENDO":
+                "NEXTENDO POPULAR GAMES");
+            break;
+        case Kind::Battery:
+            setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":
+                "BATTERY STATUS UNAVAILABLE");
+            break;
+        case Kind::Storage:
+            setStatus("SD STORAGE WIDGET");
+            break;
+        case Kind::Calendar:
+            setStatus("CALENDAR WIDGET");
+            break;
+        case Kind::System: {
+            const u32 firmware=hosversionGet();
+            char detail[64]{};
+            std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
+                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+            setStatus(detail,3500);
+            break;
+        }
+        case Kind::Clock:
+            setStatus("CLOCK WIDGET");
+            break;
+        case Kind::QuickSettings:
+            openQuickSettings();
+            break;
+        case Kind::Recent:
+            if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
+            else {recentIndex=0;recentOpen=true;}
+            break;
+        default:
+            setStatus("WIDGET ACTION UNAVAILABLE");
+            break;
+    }
+    desknx::diag::Write("widgets","activate_end","kind=%s modal=%d",
+        typeName(t.kind).c_str(),nextendoOpen?1:0);
+}
+
 void launch(const Tile& t) {
     desknx::diag::Write("launch", "requested", "kind=%s",
         t.kind == Kind::Game ? "game" : t.kind == Kind::Nro ? "homebrew" : "widget");
@@ -3500,6 +6169,13 @@ void launch(const Tile& t) {
         setStatus("UNSUPPORTED TILE TYPE: " + t.unknownTypeCode, 3500);
         return;
     }
+    if(t.kind!=Kind::Game && t.kind!=Kind::Nro) {
+        // Widgets are UI components, never application launch targets. Keep
+        // them out of the HOME/NS/chain-load path that owns game and NRO launches.
+        activateWidget(t);
+        return;
+    }
+    drainLauncherSettingsSave();
     if(t.kind==Kind::Game) {
         if(!desknx::model::isTitleId(t.data)){setStatus("INVALID TITLE ID");return;}
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
@@ -3609,20 +6285,37 @@ void launch(const Tile& t) {
 #endif
         return;
     }
-    if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
-    else if(t.kind==Kind::Storage)setStatus("SD STORAGE WIDGET");
-    else if(t.kind==Kind::Calendar)setStatus("CALENDAR WIDGET");
-    else if(t.kind==Kind::System) {
+    if(t.kind==Kind::Battery) {
+        setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
+    } else if(t.kind==Kind::Storage) {
+        setStatus(storageStatsAvailable?"SD STORAGE: "+std::to_string(sdFreeBytes/(1024u*1024u))+" MB FREE":"SD STORAGE UNAVAILABLE");
+    } else if(t.kind==Kind::Calendar) {
+        setStatus(clockText(true),3000);
+    } else if(t.kind==Kind::System) {
         const u32 firmware=hosversionGet();
-        char detail[64]{};
-        std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
-            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+        char detail[128]{};
+        std::snprintf(detail,sizeof(detail),"SYSTEM %.1f C  CPU %u MHz  GPU %u MHz",
+            systemSocTemperatureAvailable?systemSocTemperature:0.0f,
+            systemCpuClockAvailable?systemCpuClockHz/1000000u:0u,
+            systemGpuClockAvailable?systemGpuClockHz/1000000u:0u);
+        if(!systemSocTemperatureAvailable&& !systemCpuClockAvailable && !systemGpuClockAvailable)
+            std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
+                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
         setStatus(detail,3500);
-    }
-    else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
-    else if(t.kind==Kind::Recent) {
-        if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
-        else {recentIndex=0;recentOpen=true;}
+    } else if(t.kind==Kind::Clock) {
+        setStatus("LOCAL TIME: "+clockText(),2500);
+    } else if(t.kind==Kind::Recent) {
+        if(recentEntriesForModal().empty())setStatus("NO RECENT GAMES YET");
+        else openRecentGames();
+    } else if(t.kind==Kind::Favorites) {
+        openFavorites();
+    } else if(t.kind==Kind::GameLibrary) {
+        openGameLibraryCatalogue();
+    } else if(t.kind==Kind::Nextendo) {
+        const auto snapshot=nextendoWidgetSnapshot();
+        setStatus(snapshot.fresh?"NEXTENDO: "+std::to_string(snapshot.total)+
+            " ONLINE / "+std::to_string(snapshot.activeTitles)+" ACTIVE GAMES":
+            "NEXTENDO STATUS UNKNOWN",3000);
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
@@ -3630,6 +6323,99 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(quickSettingsOpen) {
+        if(keys&HidNpadButton_B){closeQuickSettings();return;}
+        if(keys&HidNpadButton_Up)quickSettingsIndex=(quickSettingsIndex+4)%5;
+        if(keys&HidNpadButton_Down)quickSettingsIndex=(quickSettingsIndex+1)%5;
+        if(quickSettingsIndex==4) {
+            if(keys&HidNpadButton_Left)adjustQuickBrightness(-1);
+            if(keys&HidNpadButton_Right)adjustQuickBrightness(1);
+            if(keys&HidNpadButton_A)adjustQuickBrightness(1);
+        } else if(keys&HidNpadButton_A)toggleQuickSetting(quickSettingsIndex);
+        return;
+    }
+    if(widgetEditorOpen) {
+        if(keys&HidNpadButton_B){closeWidgetEditor();return;}
+        if(keys&HidNpadButton_Up)widgetEditorRow=(widgetEditorRow+6)%7;
+        if(keys&HidNpadButton_Down)widgetEditorRow=(widgetEditorRow+1)%7;
+        if(keys&HidNpadButton_Left)adjustWidgetEditor(-1);
+        if(keys&HidNpadButton_Right)adjustWidgetEditor(1);
+        if(keys&HidNpadButton_A)adjustWidgetEditor(1);
+        return;
+    }
+    if(favoritesOpen) {
+        if(keys&HidNpadButton_B){favoritesOpen=false;return;}
+        favoritesView=favoriteTiles();
+        const int count=static_cast<int>(favoritesView.size());
+        if(count<=0){favoritesOpen=false;return;}
+        favoritesIndex=std::max(0,std::min(favoritesIndex,count-1));
+        if(keys&HidNpadButton_Up)favoritesIndex=(favoritesIndex-1+count)%count;
+        if(keys&HidNpadButton_Down)favoritesIndex=(favoritesIndex+1)%count;
+        if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+        if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
+        if(keys&HidNpadButton_Minus) {
+            const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+            (void)toggleFavorite(selected);
+            favoritesView=favoriteTiles();
+            favoritesIndex=std::min(favoritesIndex,std::max(0,static_cast<int>(favoritesView.size())-1));
+            if(favoritesIndex<favoritesOffset)favoritesOffset=favoritesIndex;
+            if(favoritesIndex>=favoritesOffset+10)favoritesOffset=favoritesIndex-9;
+            return;
+        }
+        if(keys&HidNpadButton_A&&favoritesIndex<count) {
+            const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+            favoritesOpen=false;
+            launch(selected);
+        }
+        return;
+    }
+    if(steamGridDbPickerOpen) {
+        if(keys&HidNpadButton_B){steamGridDbClosePicker();return;}
+        if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            const auto state=gSteamGridDbService.snapshot();
+            const int count=static_cast<int>(state.games.size());
+            if(count>0&&(keys&HidNpadButton_Up)) {
+                steamGridDbMatchIndex=(steamGridDbMatchIndex-1+count)%count;
+                if(steamGridDbMatchIndex<steamGridDbMatchOffset)
+                    steamGridDbMatchOffset=steamGridDbMatchIndex;
+            }
+            if(count>0&&(keys&HidNpadButton_Down)) {
+                steamGridDbMatchIndex=(steamGridDbMatchIndex+1)%count;
+                if(steamGridDbMatchIndex>=steamGridDbMatchOffset+8)
+                    steamGridDbMatchOffset=steamGridDbMatchIndex-7;
+            }
+            if(keys&HidNpadButton_A)steamGridDbChooseMatch(steamGridDbMatchIndex);
+            if(keys&HidNpadButton_Y)steamGridDbEditSearchTitle();
+            if(keys&HidNpadButton_X)steamGridDbSearch(steamGridDbCurrentTitle);
+        } else {
+            if(keys&HidNpadButton_Left)steamGridDbChangeKind(-1);
+            if(keys&HidNpadButton_Right)steamGridDbChangeKind(1);
+            if(steamGridDbOfflineFallback) {
+                if(keys&HidNpadButton_A)steamGridDbApplyCurrentCached();
+            } else {
+                if(keys&HidNpadButton_Up)steamGridDbMoveAsset(-1);
+                if(keys&HidNpadButton_Down)steamGridDbMoveAsset(1);
+                if(keys&HidNpadButton_A)
+                    steamGridDbApplyPending=gSteamGridDbService.applySelected();
+            }
+            if(keys&HidNpadButton_Y)steamGridDbRestoreSystem();
+            if(keys&HidNpadButton_X)steamGridDbEditSearchTitle();
+        }
+        return;
+    }
+    if(nextendoOpen) {
+        if(keys&HidNpadButton_B || keys&HidNpadButton_A) {
+            nextendoOpen=false;
+            return;
+        }
+        const auto popular=nextendoPopularSnapshot();
+        const int count=static_cast<int>(popular.count);
+        if(count>0&&keys&HidNpadButton_Up)
+            nextendoSelected=(nextendoSelected-1+count)%count;
+        if(count>0&&keys&HidNpadButton_Down)
+            nextendoSelected=(nextendoSelected+1)%count;
+        return;
+    }
     if(userPickerOpen) {
         if(keys&HidNpadButton_B){userPickerOpen=false;return;}
         if(!consoleUsers.empty()) {
@@ -3669,9 +6455,41 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(appSettingsMenu) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        appSettingsIndex=std::max(0,std::min(18,appSettingsIndex));
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+18)%19;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%19;
+        if(appSettingsIndex<appSettingsOffset)appSettingsOffset=appSettingsIndex;
+        if(appSettingsIndex>=appSettingsOffset+8)appSettingsOffset=appSettingsIndex-7;
+        appSettingsOffset=std::max(0,std::min(11,appSettingsOffset));
+        auto adjustSettingsRow=[&](int direction) {
+            switch(appSettingsIndex) {
+                case 3: cycleTheme(direction); break;
+                case 4: cycleAccent(direction); break;
+                case 12: iconStyle=(iconStyle+direction+3)%3; break;
+                case 14: headerStyle=(headerStyle+direction+3)%3; break;
+                case 15: dockStyle=(dockStyle+direction+3)%3; break;
+                case 16: {
+                    const int levels[]={64,112,160,208,255};
+                    int pos=0;while(pos<4&&levels[pos]!=surfaceOpacity)++pos;
+                    surfaceOpacity=levels[(pos+direction+5)%5];
+                    break;
+                }
+                case 17: selectionStyle=(selectionStyle+direction+4)%4; break;
+                case 18: motionEffects=!motionEffects; break;
+                default: return;
+            }
+            applyThemePalette();
+            scheduleLauncherSettingsSave();
+        };
+        if(keys&HidNpadButton_Left)adjustSettingsRow(-1);
+        if(keys&HidNpadButton_Right)adjustSettingsRow(1);
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
+        return;
+    }
+    if(diagnosticsOpen) {
+        if(keys&HidNpadButton_B){diagnosticsOpen=false;return;}
+        if(keys&(HidNpadButton_A|HidNpadButton_X))
+            refreshDiagnosticsSnapshot(true);
         return;
     }
     if(workspaceSettingsMenu) {
@@ -3694,14 +6512,14 @@ void keyInput(u64 keys, bool fromRepeat) {
             const int action=systemMenuIndex;
             systemMenu=false;
             if(action==0)openList();
-            else if(action==1){recentIndex=0;recentOpen=true;}
+            else if(action==1)openRecentAll();
             else if(action==2){powerMenu=true;powerIndex=0;}
             else if(action==3) {
                 editing=!editing;
                 if(!editing&&dragging){dragging=false;saveNow();}
                 setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-            } else if(action==4)activateAppSettings(4);
-            else if(action==5)restartCatalogueScan();
+            } else if(action==4)activateAppSettings(6);
+            else if(action==5)openQuickSettings();
         }
         return;
     }
@@ -3733,16 +6551,18 @@ void keyInput(u64 keys, bool fromRepeat) {
         return;
     }
     if(recentOpen) {
-        if(keys&HidNpadButton_B){recentOpen=false;return;}
-        if(recentLaunches.empty())return;
-        recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+        if(keys&HidNpadButton_B){recentOpen=false;recentGamesOnly=false;return;}
+        const auto entries=recentEntriesForModal();
+        if(entries.empty()){recentOpen=false;recentGamesOnly=false;return;}
+        recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
         if(keys&HidNpadButton_Up)
-            recentIndex=(recentIndex-1+static_cast<int>(recentLaunches.size()))%static_cast<int>(recentLaunches.size());
+            recentIndex=(recentIndex-1+static_cast<int>(entries.size()))%static_cast<int>(entries.size());
         if(keys&HidNpadButton_Down)
-            recentIndex=(recentIndex+1)%static_cast<int>(recentLaunches.size());
+            recentIndex=(recentIndex+1)%static_cast<int>(entries.size());
         if(keys&HidNpadButton_A) {
-            const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
+            const HistoryEntry entry=entries[static_cast<size_t>(recentIndex)];
             recentOpen=false;
+            recentGamesOnly=false;
             launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
         }
         return;
@@ -3798,6 +6618,8 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(listOpen) {
         const auto& available=visibleCatalogueSnapshot();
         if(keys&HidNpadButton_B){closeList();return;}
+        if(keys&HidNpadButton_ZL){if(editing)renameSelectedGame();return;}
+        if(keys&HidNpadButton_ZR){if(editing)steamGridDbOpenPicker();return;}
         if(keys&HidNpadButton_Y){searchCatalogue();return;}
         if(keys&HidNpadButton_X){cycleCatalogueSort();return;}
         if(keys&HidNpadButton_L){cycleCatalogueFilter(-1);return;}
@@ -3806,13 +6628,20 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_StickR){restartCatalogueScan();return;}
         if(available.empty())return;
         if(listIndex>=static_cast<int>(available.size()))listIndex=static_cast<int>(available.size())-1;
-        if(keys&HidNpadButton_Up) {
-            listIndex=(listIndex-1+static_cast<int>(available.size()))%static_cast<int>(available.size());
-            loadPlayStatsForSelection();
-        }
-        if(keys&HidNpadButton_Down) {
-            listIndex=(listIndex+1)%static_cast<int>(available.size());
-            loadPlayStatsForSelection();
+        if(keys&(HidNpadButton_Left|HidNpadButton_Right|
+                 HidNpadButton_Up|HidNpadButton_Down)) {
+            const int dx=(keys&HidNpadButton_Left)?-1:
+                         ((keys&HidNpadButton_Right)?1:0);
+            const int dy=(keys&HidNpadButton_Up)?-1:
+                         ((keys&HidNpadButton_Down)?1:0);
+            const int next=desknx::library_grid::move(
+                listIndex,static_cast<int>(available.size()),dx,dy);
+            if(next!=listIndex) {
+                listIndex=next;
+                listOffset=desknx::library_grid::offsetForSelection(
+                    listIndex,static_cast<int>(available.size()));
+                loadPlayStatsForSelection();
+            }
         }
         if(keys&HidNpadButton_A)addSelected();
         return;
@@ -3881,6 +6710,18 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
     if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
     if(keys&HidNpadButton_Down){if(dragging)moveTile(0,1);else updateCursor(0,1);}
+    if(!editing&&!dragging&&(keys&HidNpadButton_ZR)) {
+        Tile* widget=selectedWidgetTile();
+        if(widget)openWidgetEditor();
+        else {
+            Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+            const int index=itemAt(desk,selectedX,selectedY);
+            if(index>=0&&desk.tiles[static_cast<size_t>(index)].kind==Kind::Game)
+                setStatus("ENTER EDIT MODE TO CHANGE GAME COVERS",2200);
+            else setStatus("SELECT A WIDGET",1800);
+        }
+        return;
+    }
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
     if(editing&&(keys&HidNpadButton_ZR))resizeTile(true);
     if(editing&&(keys&HidNpadButton_Minus))removeTile();
@@ -3893,7 +6734,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_A) {
         Workspace& d=desks[static_cast<size_t>(deskIndex)];int i=itemAt(d,selectedX,selectedY);
         if(editing){if(dragging){dragging=false;saveNow();setStatus("POSITION SAVED");}
-            else if(i>=0){const Tile&t=d.tiles[static_cast<size_t>(i)];selectedX=t.x;selectedY=t.y;dragging=true;setStatus("MOVE WITH D-PAD; L/R CHANGES WORKSPACE");}
+            else if(i>=0){const Tile&t=d.tiles[static_cast<size_t>(i)];selectedX=t.x;selectedY=t.y;dragging=true;setStatus("D-PAD MOVE; L/R CHANGE DESKTOP; A/B DROP");}
             else openList();}
         else if(i>=0)launch(d.tiles[static_cast<size_t>(i)]);else setStatus("EMPTY CELL - PRESS Y TO ADD");
     }
@@ -3940,7 +6781,37 @@ int tabStart(){
     return std::max(0,std::min(deskIndex-2,
         static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+void openControllerSupport() {
+    const Uint64 started=SDL_GetTicks64();
+    HidLaControllerSupportArg arg{};
+    hidLaCreateControllerSupportArg(&arg);
+    HidLaControllerSupportResultInfo result{};
+    desknx::diag::Write("controller","support_applet_begin",
+                        "applet_type=%d",static_cast<int>(appletGetAppletType()));
+    const Result rc=hidLaShowControllerSupport(&result,&arg);
+    desknx::diag::Write("controller","support_applet_end",
+        "rc=0x%08X elapsed_ms=%llu",
+        static_cast<unsigned int>(rc),
+        static_cast<unsigned long long>(SDL_GetTicks64()-started));
+    if(R_FAILED(rc))setStatus("PADS MENU UNAVAILABLE",3000);
+}
+
 void touchInput(const SDL_Event&e) {
+    if(nextendoOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=920&&x<=1020&&y>=100&&y<=152) {
+                nextendoOpen=false;
+            } else if(y>=180&&y<540) {
+                const int row=(y-180)/36;
+                const auto popular=nextendoPopularSnapshot();
+                if(row>=0&&static_cast<std::size_t>(row)<popular.count)
+                    nextendoSelected=row;
+            }
+        }
+        return;
+    }
     if(userPickerOpen) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
@@ -3955,6 +6826,164 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    if(widgetEditorOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            if(x>=900&&x<=990&&y>=108&&y<=144) {
+                closeWidgetEditor();
+                return;
+            }
+            if(y>=188&&y<552) {
+                const int row=(y-188)/52;
+                if(row>=0&&row<7) {
+                    widgetEditorRow=row;
+                    if(row==6)closeWidgetEditor();
+                    else if(x>=896&&x<=934)adjustWidgetEditor(-1);
+                    else if(x>=940&&x<=978)adjustWidgetEditor(1);
+                }
+            }
+        }
+        return;
+    }
+    if(favoritesOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            favoritesView=favoriteTiles();
+            if(x>=838&&x<=916&&y>=104&&y<=150) {
+                favoritesOpen=false;
+                return;
+            }
+            if(x>=924&&x<=1012&&y>=104&&y<=150) {
+                if(!favoritesView.empty()) {
+                    favoritesIndex=std::max(0,std::min(favoritesIndex,
+                        static_cast<int>(favoritesView.size())-1));
+                    const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+                    favoritesOpen=false;
+                    launch(selected);
+                }
+                return;
+            }
+            if(y>=190&&y<580&&x>=278&&x<=1002) {
+                const int row=(y-190)/39;
+                if(row>=0&&static_cast<std::size_t>(row)<favoritesView.size()) {
+                    favoritesIndex=row;
+                    if(x>=940) {
+                        const Tile selected=favoritesView[static_cast<std::size_t>(row)];
+                        (void)toggleFavorite(selected);
+                        favoritesView=favoriteTiles();
+                        favoritesIndex=std::min(favoritesIndex,
+                            std::max(0,static_cast<int>(favoritesView.size())-1));
+                    }
+                }
+            }
+        }
+        return;
+    }
+    if(steamGridDbPickerOpen) {
+        if(e.type==SDL_FINGERDOWN) {
+            steamGridDbTouchTracking=true;
+            steamGridDbTouchDragged=false;
+            steamGridDbTouchStartX=static_cast<int>(e.tfinger.x*SW);
+            steamGridDbTouchStartY=static_cast<int>(e.tfinger.y*SH);
+            return;
+        }
+        if(e.type==SDL_FINGERMOTION&&steamGridDbTouchTracking) {
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            const int delta=steamGridDbTouchStartY-y;
+            if(steamGridDbPickerView==SteamGridDbPickerView::Matches&&
+               steamGridDbTouchStartX>=126&&steamGridDbTouchStartX<=1154&&
+               steamGridDbTouchStartY>=198&&steamGridDbTouchStartY<574) {
+                if(std::abs(delta)>=18)steamGridDbTouchDragged=true;
+                const int steps=delta/47;
+                if(steps!=0) {
+                    const int count=static_cast<int>(gSteamGridDbService.snapshot().games.size());
+                    if(count>0) {
+                        steamGridDbMatchIndex=((steamGridDbMatchIndex+steps)%count+count)%count;
+                        if(steamGridDbMatchIndex<steamGridDbMatchOffset)
+                            steamGridDbMatchOffset=steamGridDbMatchIndex;
+                        if(steamGridDbMatchIndex>=steamGridDbMatchOffset+8)
+                            steamGridDbMatchOffset=steamGridDbMatchIndex-7;
+                    }
+                    steamGridDbTouchStartY-=steps*47;
+                }
+            } else if(steamGridDbPickerView==SteamGridDbPickerView::Assets&&
+                      !steamGridDbOfflineFallback&&
+                      steamGridDbTouchStartX>=124&&steamGridDbTouchStartX<=474&&
+                      steamGridDbTouchStartY>=289&&steamGridDbTouchStartY<541) {
+                if(std::abs(delta)>=18)steamGridDbTouchDragged=true;
+                const int steps=delta/36;
+                if(steps!=0) {
+                    steamGridDbMoveAsset(steps);
+                    steamGridDbTouchStartY-=steps*36;
+                }
+            }
+            return;
+        }
+        if(e.type==SDL_FINGERUP&&steamGridDbTouchTracking) {
+            const int x=static_cast<int>(e.tfinger.x*SW);
+            const int y=static_cast<int>(e.tfinger.y*SH);
+            const bool tap=!steamGridDbTouchDragged;
+            steamGridDbTouchTracking=false;
+            steamGridDbTouchDragged=false;
+            if(!tap)return;
+
+            if(x>=1082&&x<=1178&&y>=62&&y<=102) {
+                steamGridDbClosePicker();
+            } else if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+                if(y>=198&&y<574&&x>=126&&x<=1154) {
+                    const int row=(y-198)/47;
+                    const int count=static_cast<int>(gSteamGridDbService.snapshot().games.size());
+                    const int index=steamGridDbMatchOffset+row;
+                    if(index>=0&&index<count) {
+                        steamGridDbMatchIndex=index;
+                        steamGridDbChooseMatch(index);
+                    }
+                } else if(x>=842&&x<=1002&&y>=574&&y<=616) {
+                    steamGridDbChooseMatch(steamGridDbMatchIndex);
+                } else if(x>=1016&&x<=1152&&y>=574&&y<=616) {
+                    steamGridDbEditSearchTitle();
+                }
+            } else {
+                static const int tabX[]={116,374,632,890};
+                if(y>=188&&y<=226) {
+                    for(int i=0;i<4;++i)if(x>=tabX[i]&&x<=tabX[i]+238) {
+                        if(i!=steamGridDbKindIndex)steamGridDbChangeKind(i-steamGridDbKindIndex);
+                        break;
+                    }
+                } else if(steamGridDbOfflineFallback&&x>=126&&x<=466&&y>=290&&y<486) {
+                    const int index=std::max(0,std::min(3,(y-290)/48));
+                    if(index!=steamGridDbKindIndex) {
+                        steamGridDbKindIndex=index;
+                        steamGridDbDestroyPreview();
+                        if(gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,
+                            steamGridDbCacheKind(index)))
+                            steamGridDbPreviewLoadedPath=gSteamGridDbService.cache().pathFor(
+                                steamGridDbCurrentTitleId,steamGridDbCacheKind(index));
+                    }
+                } else if(!steamGridDbOfflineFallback&&x>=124&&x<=474&&y>=289&&y<541) {
+                    const int index=steamGridDbAssetOffset+(y-289)/36;
+                    const auto state=gSteamGridDbService.snapshot();
+                    if(index>=0&&index<static_cast<int>(state.assets.size()))
+                        gSteamGridDbService.selectAsset(index);
+                } else if(x>=108&&x<=344&&y>=574&&y<=616) {
+                    steamGridDbRestoreSystem();
+                } else if(x>=358&&x<=536&&y>=574&&y<=616) {
+                    steamGridDbEditSearchTitle();
+                } else if(x>=854&&x<=1172&&y>=574&&y<=616) {
+                    if(steamGridDbOfflineFallback)steamGridDbApplyCurrentCached();
+                    else steamGridDbApplyPending=gSteamGridDbService.applySelected();
+                }
+            }
+            return;
+        }
+        if(e.type==SDL_FINGERUP) {
+            steamGridDbTouchTracking=false;
+            steamGridDbTouchDragged=false;
+        }
+        return;
+    }
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
     if(touchPressActive &&
@@ -3966,6 +6995,34 @@ void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN && (touchPressActive||catalogueTouchActive))return;
     if(e.type==SDL_FINGERDOWN && dragging && !touchDragging) {
         setStatus("FINISH MOVING THE TILE FIRST");
+        return;
+    }
+    if(e.type==SDL_FINGERDOWN && quickSettingsOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=878&&x<=962&&y>=94&&y<=130)closeQuickSettings();
+        else if(x>=326&&x<=954&&y>=194&&y<524) {
+            const int relativeY=y-194;
+            const int row=relativeY/68;
+            const int withinRow=relativeY%68;
+            if(row>=0&&row<5&&withinRow<58) {
+                quickSettingsIndex=row;
+                if(row==4) {
+                    const float ratio=std::max(0.0f,std::min(1.0f,
+                        static_cast<float>(x-770)/150.0f));
+                    if(quickBrightnessAvailable) {
+                        const int target=static_cast<int>(std::lround(10.0f+ratio*90.0f));
+                        const int current=static_cast<int>(std::lround(quickBrightness*100.0f));
+                        adjustQuickBrightness(target>current?1:(target<current?-1:0));
+                    }
+                } else toggleQuickSetting(quickSettingsIndex);
+            }
+        }
+        return;
+    }
+    if(e.type==SDL_FINGERDOWN && diagnosticsOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(x>=1000&&x<=1145&&y>=72&&y<=112)diagnosticsOpen=false;
+        else if(x>=840&&x<=1000&&y>=72&&y<=112)refreshDiagnosticsSnapshot(true);
         return;
     }
     if(e.type==SDL_FINGERDOWN && mediaPickerOpen) {
@@ -3987,11 +7044,21 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=842&&x<=934&&y>=132&&y<=164) {
+        if(x>=948&&x<=1040&&y>=64&&y<=104) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
-            const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+        } else if(x>=1040&&x<=1076&&y>=170&&y<214) {
+            appSettingsIndex=std::max(0,appSettingsIndex-1);
+            appSettingsOffset=std::max(0,appSettingsIndex-7);
+        } else if(x>=1040&&x<=1076&&y>=499&&y<543) {
+            appSettingsIndex=std::min(18,appSettingsIndex+1);
+            appSettingsOffset=std::min(11,appSettingsIndex-7);
+        } else if(x>=242&&x<=1038&&y>=170&&y<546) {
+            const int row=(y-170)/47;
+            const int index=appSettingsOffset+row;
+            if(row>=0&&row<8&&index<19) {
+                appSettingsIndex=index;
+                activateAppSettings(index);
+            }
         }
         return;
     }
@@ -4052,7 +7119,19 @@ void touchInput(const SDL_Event&e) {
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
+    if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
+       !recentOpen && !favoritesOpen && !widgetEditorOpen && !powerMenu && !appSettingsMenu &&
+       !quickSettingsOpen) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        if(y>=566&&y<=614&&x>=642&&x<832) {
+            Workspace& desk=desks[static_cast<std::size_t>(deskIndex)];
+            const int index=itemAt(desk,selectedX,selectedY);
+            if(index>=0&&isWidgetKind(desk.tiles[static_cast<std::size_t>(index)].kind))
+                openWidgetEditor();
+            return;
+        }
+    }
+    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !nextendoOpen && !powerMenu) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=566&&y<=614&&itemAt(
                desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
@@ -4076,18 +7155,21 @@ void touchInput(const SDL_Event&e) {
     if(recentOpen) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+            const auto entries=recentEntriesForModal();
             if(x>=838&&x<=916&&y>=104&&y<=150) {
                 recentOpen=false;
+                recentGamesOnly=false;
             } else if(x>=924&&x<=1012&&y>=104&&y<=150) {
-                if(!recentLaunches.empty()) {
-                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-                    const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
+                if(!entries.empty()) {
+                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
+                    const HistoryEntry entry=entries[static_cast<size_t>(recentIndex)];
                     recentOpen=false;
+                    recentGamesOnly=false;
                     launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
                 }
-            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
+            } else if(y>=190&&y<580&&!entries.empty()) {
                 const int index=(y-190)/39;
-                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size())
+                if(index>=0&&static_cast<size_t>(index)<entries.size())
                     recentIndex=index;
             }
         }
@@ -4095,6 +7177,21 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        const bool emptyDeskVisible=!desks.empty()&&deskIndex>=0&&
+            deskIndex<static_cast<int>(desks.size())&&
+            desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
+            !systemMenu&&!appSettingsMenu&&!workspaceMenu&&
+            !workspaceSettingsMenu&&!workspacePicker&&!powerMenu&&!diagnosticsOpen;
+        if(emptyDeskVisible&&y>=376&&y<=424) {
+            if(x>=386&&x<592) {
+                openList();
+                return;
+            }
+            if(x>=604&&x<888) {
+                newDesk();
+                return;
+            }
+        }
         if(listOpen) {
             if(y>=122&&y<=151) {
                 if(x>=138&&x<234) searchCatalogue();
@@ -4106,43 +7203,54 @@ void touchInput(const SDL_Event&e) {
                 else if(x>=756&&x<828) addSelected();
                 return;
             }
-            if(y>=532&&y<=576&&x>=900&&x<=1150) {
+            if(y>=532&&y<572&&x>=900&&x<=1150) {
                 addSelected();
                 return;
             }
-            if(y>=180&&y<580&&x>=130&&x<874) {
-                const int row=(y-180)/40;
-                const auto& available=visibleCatalogueSnapshot();
-                const int index=listOffset+row;
-                if(index>=0&&static_cast<size_t>(index)<available.size()) {
-                    const Uint32 now=SDL_GetTicks();
-                    if(lastCatalogueTap==index&&now-lastCatalogueTapTick<=500) {
-                        listIndex=index;
-                        addSelected();
-                        lastCatalogueTap=-1;
-                        catalogueTouchActive=false;
-                        catalogueTouchFingerId=0;
-                        return;
-                    } else {
-                        listIndex=index;
-                        lastCatalogueTap=index;
-                        lastCatalogueTapTick=now;
-                        loadPlayStatsForSelection();
+            if(y>=578&&y<=612&&!editing&&x>=974&&x<1128) {
+                editing=true;
+                setStatus("EDIT MODE ENABLED — COVER OPTIONS READY",2200);
+                return;
+            }
+            if(editing&&y>=578&&y<=612&&x>=930&&x<1018){renameSelectedGame();return;}
+            if(editing&&y>=578&&y<=612&&x>=1020&&x<1128){steamGridDbOpenPicker();return;}
+            if(y>=180&&y<570&&x>=138&&x<858) {
+                const int row=(y-180)/130,column=(x-138)/242;
+                if(row>=0&&row<3&&column>=0&&column<3) {
+                    const int cardX=138+column*242,cardY=180+row*130;
+                    if(x<cardX+232&&y<cardY+120) {
+                        const auto& available=visibleCatalogueSnapshot();
+                        const int index=desknx::library_grid::indexAt(
+                            listOffset,row,column,static_cast<int>(available.size()));
+                        if(index>=0) {
+                            const Uint32 now=SDL_GetTicks();
+                            if(lastCatalogueTap==index&&now-lastCatalogueTapTick<=500) {
+                                listIndex=index;addSelected();lastCatalogueTap=-1;
+                                catalogueTouchActive=false;catalogueTouchFingerId=0;return;
+                            }
+                            listIndex=index;
+                            listOffset=desknx::library_grid::offsetForSelection(
+                                listIndex,static_cast<int>(available.size()));
+                            lastCatalogueTap=index;lastCatalogueTapTick=now;
+                            loadPlayStatsForSelection();
+                            catalogueTouchActive=true;catalogueTouchFingerId=e.tfinger.fingerId;
+                            catalogueTouchMoved=false;catalogueTouchStartY=y;catalogueTouchRow=row;
+                        }
                     }
-                    catalogueTouchActive=true;
-                    catalogueTouchFingerId=e.tfinger.fingerId;
-                    catalogueTouchMoved=false;
-                    catalogueTouchStartY=y;
-                    catalogueTouchRow=row;
                 }
                 return;
             }
             return;
         }
         if(deletePrompt)return;
-        // Four permanent shortcuts: Gallery, Settings, Pads and Tools.
+        // Three permanent header shortcuts; quick tools stay accessible via L3.
         if(y>=16&&y<=82) {
-            if(x>=470&&x<=862) {
+            if(x>=392&&x<436) {
+                systemMenu=true;
+                systemMenuIndex=0;
+                return;
+            }
+            if(x>=448&&x<=822) {
                 openUserProfile();
                 return;
             }
@@ -4160,15 +7268,8 @@ void touchInput(const SDL_Event&e) {
                         if(R_FAILED(galleryRc))setStatus("GALLERY UNAVAILABLE",3000);
                         break;
                     }
-                    case 1: appSettingsMenu=true;appSettingsIndex=0; break;
-                    case 2: {
-                        HidLaControllerSupportArg arg{};hidLaCreateControllerSupportArg(&arg);
-                        HidLaControllerSupportResultInfo result{};
-                        if(R_FAILED(hidLaShowControllerSupport(&result,&arg)))
-                            setStatus("PADS MENU UNAVAILABLE",3000);
-                        break;
-                    }
-                    case 3: systemMenu=true;systemMenuIndex=0; break;
+                    case 1: appSettingsMenu=true;appSettingsIndex=0;appSettingsOffset=0; break;
+                    case 2: openControllerSupport(); break;
                     default: break;
                 }
             }
@@ -4267,13 +7368,14 @@ void touchInput(const SDL_Event&e) {
         const int y=static_cast<int>(e.tfinger.y*SH);
         if(std::abs(y-catalogueTouchStartY)>=10) catalogueTouchMoved=true;
         if(catalogueTouchMoved) {
-            const int delta=(catalogueTouchStartY-y)/40;
-            if(delta!=0) {
+            const int deltaRows=(catalogueTouchStartY-y)/130;
+            if(deltaRows!=0) {
                 const auto available=visibleCatalogueSnapshot();
-                const int maxOffset=std::max(0,static_cast<int>(available.size())-10);
-                listOffset=std::max(0,std::min(maxOffset,listOffset+delta));
-                listIndex=std::max(0,std::min(static_cast<int>(available.size())-1,
-                                              listOffset+catalogueTouchRow));
+                listIndex=desknx::library_grid::move(
+                    listIndex,static_cast<int>(available.size()),0,deltaRows);
+                listOffset=desknx::library_grid::offsetForSelection(
+                    listIndex,static_cast<int>(available.size()));
+                loadPlayStatsForSelection();
                 catalogueTouchStartY=y;
             }
         }
@@ -4330,8 +7432,43 @@ void touchInput(const SDL_Event&e) {
 } // namespace
 
 int main(int,char**) {
-    const Result sdMountRc = fsdevMountSdmc();
-    if(R_SUCCEEDED(sdMountRc))sdMounted=true;
+    // libnx normally mounts sdmc during __libnx_init(), before main(). Calling
+    // fsdevMountSdmc() again fails because a device with the same name already
+    // exists; the old code treated that expected condition as "no SD card".
+    // Reuse and probe the pre-mounted device first, and only mount when absent.
+    Result sdMountRc = 0;
+    const bool sdWasAlreadyMounted =
+        fsdevGetDeviceFileSystem("sdmc") != nullptr;
+    int sdProbeErrno = 0;
+    auto probeSdRoot = [&]() {
+        struct statvfs probe{};
+        errno = 0;
+        const int rc = statvfs("sdmc:/", &probe);
+        sdProbeErrno = rc == 0 ? 0 : errno;
+        return rc == 0;
+    };
+
+    if (sdWasAlreadyMounted) {
+        sdMounted = probeSdRoot();
+        if (!sdMounted) {
+            // The registered device may refer to a card removed between
+            // libnx startup and main(). Detach that stale handle and retry
+            // the normal mount once; never mount over an existing device.
+            const int unmountRc = fsdevUnmountDevice("sdmc");
+            if (unmountRc == 0) {
+                sdMountRc = fsdevMountSdmc();
+                if (R_SUCCEEDED(sdMountRc)) sdMounted = probeSdRoot();
+            }
+        }
+    } else {
+        sdMountRc = fsdevMountSdmc();
+        if (R_SUCCEEDED(sdMountRc)) sdMounted = probeSdRoot();
+        // A concurrent/automatic mount between the existence check and mount
+        // is harmless: accept it after verifying the actual SD root.
+        if (!sdMounted && fsdevGetDeviceFileSystem("sdmc") != nullptr)
+            sdMounted = probeSdRoot();
+    }
+
     desknx::diag::Initialize(sdMounted);
 #ifdef DESKNX_SYSTEM_APPLET
     constexpr const char* buildMode = "system-applet";
@@ -4340,13 +7477,14 @@ int main(int,char**) {
 #endif
     const AppletType appletType = appletGetAppletType();
     desknx::diag::Write("session", "start",
-        "mode=%s applet_type=%u application_mode=%d sd_mounted=%d sd_mount_rc=0x%08X",
+        "mode=%s applet_type=%u application_mode=%d sd_mounted=%d sd_pre_mounted=%d sd_probe_errno=%d sd_mount_rc=0x%08X",
         buildMode, static_cast<unsigned int>(appletType),
         appletType == AppletType_Application ? 1 : 0,
-        sdMounted ? 1 : 0, static_cast<unsigned int>(sdMountRc));
+        sdMounted ? 1 : 0, sdWasAlreadyMounted ? 1 : 0,
+        sdProbeErrno, static_cast<unsigned int>(sdMountRc));
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER)!=0){
         desknx::diag::Write("startup", "sdl_init_failed", "error=%s", SDL_GetError());
-        if(sdMounted) fsdevUnmountDevice("sdmc");
+        
         return 1;
     }
     desknx::diag::Write("startup", "sdl_init_ok", "sdl_version=%u.%u.%u",
@@ -4355,14 +7493,14 @@ int main(int,char**) {
     window=SDL_CreateWindow("Transwitch Launcher",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,SW,SH,SDL_WINDOW_FULLSCREEN_DESKTOP);
     if(!window){
         desknx::diag::Write("startup", "window_create_failed", "error=%s", SDL_GetError());
-        SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 2;
+        SDL_Quit();return 2;
     }
     desknx::diag::Write("startup", "window_created", "logical_width=%d logical_height=%d", SW, SH);
     renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
     if(!renderer)renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
     if(!renderer){
         desknx::diag::Write("startup", "renderer_create_failed", "error=%s", SDL_GetError());
-        SDL_DestroyWindow(window);SDL_Quit();if(sdMounted)fsdevUnmountDevice("sdmc");return 3;
+        SDL_DestroyWindow(window);SDL_Quit();return 3;
     }
     SDL_RendererInfo rendererInfo{};
     const int rendererInfoRc = SDL_GetRendererInfo(renderer, &rendererInfo);
@@ -4371,10 +7509,26 @@ int main(int,char**) {
         rendererInfo.name ? rendererInfo.name : "unknown", rendererInfoRc,
         static_cast<unsigned int>(rendererInfo.flags),rendererVsync?1:0);
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+    if(!gVisualEngine.initialize(renderer,SW,SH))
+        desknx::diag::Write("visual","engine_init_failed","fallback=direct_sdl_primitives");
+    gUiComponents.bind(&gVisualEngine,renderer);
+    gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
+        SDL_Color{BLUE.r,BLUE.g,BLUE.b,BLUE.a},
+        SDL_Color{WHITE.r,WHITE.g,WHITE.b,220},
+        SDL_Color{255,255,255,28},
+        UiCornerRadius});
+    const auto& visualProfile=gVisualEngine.rendererProfile();
+    desknx::diag::Write("visual","renderer_profile",
+        "name=%s flags=0x%08X accelerated=%d software=%d vsync=%d target_textures=%d max_texture=%dx%d",
+        visualProfile.name.c_str(),static_cast<unsigned int>(visualProfile.flags),
+        visualProfile.accelerated?1:0,visualProfile.software?1:0,
+        visualProfile.presentVsync?1:0,visualProfile.targetTextures?1:0,
+        visualProfile.maxTextureWidth,visualProfile.maxTextureHeight);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
     storageCommitMutex=SDL_CreateMutex();
     playStatsMutex=SDL_CreateMutex();
     nextendoMutex=SDL_CreateMutex();
+    storageStatsMutex=SDL_CreateMutex();
     nextendoFeed.setEnabled(true);
 
     // Match SLauncher's startup order: query the real firmware version and
@@ -4384,6 +7538,7 @@ int main(int,char**) {
     // newer than the build SDK.
     const Result setsysRc = setsysInitialize();
     const bool setsysReady = R_SUCCEEDED(setsysRc);
+    setsysServiceReady=setsysReady;
     SetSysFirmwareVersion firmware{};
     const Result firmwareRc = setsysReady ? setsysGetFirmwareVersion(&firmware) : setsysRc;
     const bool firmwareRead = setsysReady && R_SUCCEEDED(firmwareRc);
@@ -4425,6 +7580,7 @@ int main(int,char**) {
         nameCacheExists?1:0,
         nameCacheExists?static_cast<long long>(nameCacheStat.st_size):0LL);
     loadHistory();
+    loadFavorites();
     struct stat layoutStat{}, backupStat{};
     const bool layoutExists = stat(CFG_FILE, &layoutStat) == 0;
     const bool backupExists = stat(CFG_BAK_FILE, &backupStat) == 0;
@@ -4477,6 +7633,8 @@ int main(int,char**) {
     }
 
     loadLauncherSettings();
+    loadGameNameOverrides();
+    applyGameNameOverridesToWorkspaces();
     applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
     setStatus("STARTING TRANSWITCH...",5000);
@@ -4490,7 +7648,11 @@ int main(int,char**) {
     setStatus("CATALOGUE LOADING - Y ADD  X EDIT",5000);
 #endif
     IMG_Init(IMG_INIT_JPG|IMG_INIT_PNG);
+    gWorkspaceBackgroundCache.setRenderer(renderer);
     gIconCache.setRenderer(renderer);
+    // The nine authored SVG controls are parsed/rasterized once at startup;
+    // thereafter they are ordinary cached SDL textures with no per-frame work.
+    gVectorIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
     gFontRenderer.initialize(); // slow pl initialization cannot delay MenuReady
     if(fontPath.empty()) {
@@ -4508,6 +7670,7 @@ int main(int,char**) {
         }
     }
     gIconCache.setCustomIconPackDir(iconPackPath);
+    gIconCache.setGameIconOverridesDir(GAME_ICON_OVERRIDES_DIR);
     if(!fontPath.empty()&&!gFontRenderer.setCustomFont(fontPath)) {
         desknx::diag::Write("font","load_failed","path=%s error=%s",
             fontPath.c_str(),TTF_GetError());
@@ -4534,6 +7697,12 @@ int main(int,char**) {
                       static_cast<unsigned int>(nsInitError));
         setStatus(message, 6000);
     }
+    SDL_AtomicSet(&nextendoConfiguredRefreshMs,
+        configuredWidgetRefresh(Kind::Nextendo)*1000);
+    if(storageStatsMutex)
+        storageStatsThread=SDL_CreateThread(storageStatsThreadMain,"DeskNX storage stats",nullptr);
+    if(!storageStatsThread)
+        desknx::diag::Write("storage","stats_thread_create_failed","storage widget will show unavailable values");
     catalogueThread=SDL_CreateThread(catalogueThreadMain,"DeskNX catalogue",nullptr);
     nextendoThread=SDL_CreateThread(nextendoThreadMain,"Nextendo online counts",nullptr);
     if(!nextendoThread)desknx::diag::Write("nextendo","thread_create_failed","online counts disabled");
@@ -4545,7 +7714,12 @@ int main(int,char**) {
     if(!consoleUsersLoaded) loadConsoleUsers();
     Uint32 previousFrameTick = SDL_GetTicks();
     Uint32 lastSlowFrameLog = 0;
+    const Uint64 performanceFrequency=SDL_GetPerformanceFrequency();
+    Uint64 metricsWindowStart=SDL_GetPerformanceCounter();
+    std::uint64_t metricsFrames=0,metricsSlowFrames=0;
+    double metricsFrameSumMs=0.0,metricsRenderSumMs=0.0,metricsMaximumFrameMs=0.0;
     while(running&&appletMainLoop()) {
+        const Uint64 frameStartCounter=SDL_GetPerformanceCounter();
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
         const Uint32 frameNow = SDL_GetTicks();
@@ -4562,7 +7736,7 @@ int main(int,char**) {
             // catalogue is ready. Saving an active workspace switch must not
             // cancel this population; actual content edits must be preserved.
             if(!layoutUserModified)defaultLayout();
-            const bool saved=saveLayout();
+            const bool saved=saveNow();
             // Finalize the first-run decision even if SD is read-only. Keep the
             // in-memory desks intact and do not rebuild them every frame.
             layoutLoaded=true;
@@ -4617,31 +7791,113 @@ int main(int,char**) {
             }
         }
         pumpAsyncLayoutSaver();
+        pumpLauncherSettingsSave();
         pumpPlayStatsQuery();
+        (void)gFontRenderer.pumpWarmup();
+        if(gFontRenderer.consumeLoadFailure()) {
+            fontPath=gFontRenderer.customFontPath();
+            scheduleLauncherSettingsSave(0);
+            desknx::diag::Write("font","load_rejected",
+                "fallback=%s",fontPath.empty()?"system":fontPath.c_str());
+            setStatus(languageRussian
+                ?"ШРИФТ НЕ ПОДХОДИТ — ПРЕДЫДУЩИЙ СОХРАНЁН"
+                :"FONT REJECTED — PREVIOUS FONT RESTORED",4500);
+        }
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        pumpSteamGridDbPicker();
+        pumpSteamGridDbCacheCleanup();
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
             (void)flushActiveWorkspaceSave();
         const Uint32 renderStarted=SDL_GetTicks();
+        const Uint64 renderStartCounter=SDL_GetPerformanceCounter();
         drawScreen();
+        const Uint64 renderEndCounter=SDL_GetPerformanceCounter();
+        const double renderMs=performanceFrequency>0
+            ?static_cast<double>(renderEndCounter-renderStartCounter)*1000.0/
+                static_cast<double>(performanceFrequency):0.0;
         // Present already waits for the display when VSync is active. Sleeping
         // another 16ms here capped the accelerated path at roughly 30 FPS.
         if(!rendererVsync) {
             const Uint32 elapsed=SDL_GetTicks()-renderStarted;
             if(elapsed<16)svcSleepThread(static_cast<s64>(16-elapsed)*1'000'000LL);
         }
+        const Uint64 frameEndCounter=SDL_GetPerformanceCounter();
+        const double frameMs=performanceFrequency>0
+            ?static_cast<double>(frameEndCounter-frameStartCounter)*1000.0/
+                static_cast<double>(performanceFrequency):0.0;
+        ++metricsFrames;
+        metricsFrameSumMs+=frameMs;
+        metricsRenderSumMs+=renderMs;
+        metricsMaximumFrameMs=std::max(metricsMaximumFrameMs,frameMs);
+        if(frameMs>20.0)++metricsSlowFrames;
+        if(performanceFrequency>0&&frameEndCounter-metricsWindowStart>=
+            performanceFrequency*5) {
+            const double windowMs=static_cast<double>(
+                frameEndCounter-metricsWindowStart)*1000.0/
+                static_cast<double>(performanceFrequency);
+            runtimeFrameMetrics.fps=windowMs>0.0
+                ?static_cast<double>(metricsFrames)*1000.0/windowMs:0.0;
+            runtimeFrameMetrics.averageFrameMs=metricsFrames
+                ?metricsFrameSumMs/static_cast<double>(metricsFrames):0.0;
+            runtimeFrameMetrics.averageRenderMs=metricsFrames
+                ?metricsRenderSumMs/static_cast<double>(metricsFrames):0.0;
+            runtimeFrameMetrics.maximumFrameMs=metricsMaximumFrameMs;
+            runtimeFrameMetrics.slowFrames=metricsSlowFrames;
+            runtimeFrameMetrics.updatedAt=SDL_GetTicks();
+            desknx::diag::Write("runtime","frame_metrics",
+                "fps=%.2f avg_frame_ms=%.3f avg_render_ms=%.3f max_frame_ms=%.3f slow_frames=%llu",
+                runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs,
+                runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs,
+                static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
+            const auto& visualStats=gVisualEngine.lastFrameStats();
+            desknx::diag::Write("visual","frame_primitives",
+                "fill_rect=%u rounded_rect=%u rounded_batches=%u outlines=%u gradient_draws=%u gradient_rebuilds=%u failures=%u",
+                visualStats.filledRectCalls,visualStats.roundedRectCalls,
+                visualStats.roundedFillBatches,visualStats.outlineCalls,
+                visualStats.gradientDrawCalls,visualStats.gradientTextureRebuilds,
+                visualStats.failedCalls);
+            metricsWindowStart=frameEndCounter;
+            metricsFrames=metricsSlowFrames=0;
+            metricsFrameSumMs=metricsRenderSumMs=metricsMaximumFrameMs=0.0;
+        }
     }
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
     SDL_AtomicSet(&nextendoStop,1);
+    drainLauncherSettingsSave();
+    gSteamGridDbService.shutdown();
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
-    if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
-        (void)saveLayout();
-    for(auto& entry:workspaceBackgroundTextures)
-        if(entry.texture)SDL_DestroyTexture(entry.texture);
-    workspaceBackgroundTextures.clear();
+    // The storage worker only publishes a small snapshot, but it still owns
+    // an SD read path and the shared mutex. Stop/join it before destroying
+    // that mutex or unmounting SDMC.
+    SDL_AtomicSet(&storageStatsStop,1);
+    if(storageStatsThread){SDL_WaitThread(storageStatsThread,nullptr);storageStatsThread=nullptr;}
+
+    // Always retire async SD writers before destroying SDL, unmounting SDMC,
+    // or returning to the caller. On first run layoutLoaded can still be false
+    // while a user-triggered save is already in flight; skipping this drain
+    // allowed the process to exit with the only current snapshot unwritten.
+    const bool asyncSavePendingAtExit =
+        layoutSaveThread || activeLayoutSaveJob || pendingLayoutSaveJob;
+    desknx::diag::Write("layout","shutdown_flush_begin",
+        "loaded=%d default_pending=%d user_modified=%d blocked=%d async_pending=%d",
+        layoutLoaded?1:0,defaultLayoutPending?1:0,layoutUserModified?1:0,
+        layoutSaveBlocked?1:0,asyncSavePendingAtExit?1:0);
+    drainAsyncLayoutSaver();
+
+    const bool shouldSaveAtExit =
+        desknx::persistence::shouldSaveLayoutOnShutdown(
+            sdMounted,layoutSaveBlocked,!desks.empty(),
+            layoutLoaded,defaultLayoutPending,layoutUserModified);
+    bool finalLayoutSaveOk = true;
+    if(shouldSaveAtExit) finalLayoutSaveOk=saveLayout();
+    desknx::diag::Write("layout","shutdown_flush_end",
+        "async_was_pending=%d save_requested=%d save_ok=%d loaded=%d",
+        asyncSavePendingAtExit?1:0,shouldSaveAtExit?1:0,
+        finalLayoutSaveOk?1:0,layoutLoaded?1:0);
     if(roundedCornerMaskTexture){SDL_DestroyTexture(roundedCornerMaskTexture);roundedCornerMaskTexture=nullptr;}
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
@@ -4656,20 +7912,31 @@ int main(int,char**) {
         accountExit();
         accountServiceReady=false;
     }
-    if (setsysReady) setsysExit();
-    gIconCache.shutdown();gFontRenderer.shutdown();
-    if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
+    if (setsysReady) {setsysExit();setsysServiceReady=false;}
+    if(tsInternalOpen){tsSessionClose(&tsInternalSession);tsInternalOpen=false;}
+    if(tsSocOpen){tsSessionClose(&tsSocSession);tsSocOpen=false;}
+    if(tsServiceReady){tsExit();tsServiceReady=false;}
+    if(cpuClockOpen){clkrstCloseSession(&cpuClockSession);cpuClockOpen=false;}
+    if(gpuClockOpen){clkrstCloseSession(&gpuClockSession);gpuClockOpen=false;}
+    if(clkrstServiceReady){clkrstExit();clkrstServiceReady=false;}
+    steamGridDbDestroyPreview();
+    gWorkspaceBackgroundCache.shutdown();
+    gModalLayer.shutdown();
+    gIconCache.shutdown();gVectorIconCache.shutdown();gFontRenderer.shutdown();
     IMG_Quit();
     if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (nextendoMutex) SDL_DestroyMutex(nextendoMutex);
+    if (storageStatsMutex) SDL_DestroyMutex(storageStatsMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (storageCommitMutex) SDL_DestroyMutex(storageCommitMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
+    gUiComponents.bind(nullptr,nullptr);
+    gVisualEngine.shutdown();
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
     SDL_Quit();
     desknx::diag::Write("session", "end", "normal_exit=1");
-    if(sdMounted)fsdevUnmountDevice("sdmc");
+    
     return 0;
 }

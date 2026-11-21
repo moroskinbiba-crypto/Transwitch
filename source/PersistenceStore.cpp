@@ -1,4 +1,5 @@
 #include "PersistenceStore.hpp"
+#include "../projects/common/include/desknx/SafeReplace.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -338,15 +339,28 @@ private:
 };
 
 bool readJsonFile(const char* path, JsonValue& root) {
+    if (!path || !path[0]) return false;
+    std::error_code sizeError;
+    const auto bytes=std::filesystem::file_size(path,sizeError);
+    constexpr std::uintmax_t MaxJsonBytes=2u*1024u*1024u;
+    if (sizeError || bytes==0 || bytes>MaxJsonBytes) return false;
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open())
         return false;
     const std::string input((std::istreambuf_iterator<char>(file)),
                             std::istreambuf_iterator<char>());
-    if (file.bad())
+    if (file.bad() || input.size()!=bytes)
         return false;
     JsonParser parser(input);
     return parser.parse(root) && root.isObject();
+}
+
+bool readJsonFileWithBackup(const char* path, JsonValue& root) {
+    if (readJsonFile(path,root)) return true;
+    const std::string backup=std::string(path)+".bak";
+    if (!readJsonFile(backup.c_str(),root)) return false;
+    fprintf(stderr,"[persistence] restored %s from backup\n",path);
+    return true;
 }
 
 void appendQuoted(std::string& output, const std::string& value) {
@@ -392,18 +406,12 @@ bool writeJsonFileAtomically(const char* path, const std::string& content) {
         }
     }
 
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    if (ec) {
+    const std::string backup=std::string(path)+".bak";
+    const auto status=desknx::safeio::replaceFilePreservingOnFailure(
+        temporary.c_str(),path,backup.c_str(),true);
+    if(status!=desknx::safeio::ReplaceStatus::Success) {
         std::error_code cleanupError;
-        std::filesystem::remove(temporary, cleanupError);
-        return false;
-    }
-    ec.clear();
-    std::filesystem::rename(temporary, path, ec);
-    if (ec) {
-        std::error_code cleanupError;
-        std::filesystem::remove(temporary, cleanupError);
+        std::filesystem::remove(temporary,cleanupError);
         return false;
     }
     return true;
@@ -445,7 +453,7 @@ bool PersistenceStore::load() {
 
 bool PersistenceStore::loadConfig() {
     JsonValue root;
-    if (!readJsonFile(kConfigPath, root))
+    if (!readJsonFileWithBackup(kConfigPath, root))
         return false;
 
     if (const JsonValue* value = root.get("theme"))
@@ -462,7 +470,7 @@ bool PersistenceStore::loadConfig() {
 
 bool PersistenceStore::loadDesktops() {
     JsonValue root;
-    if (!readJsonFile(kDesktopsPath, root))
+    if (!readJsonFileWithBackup(kDesktopsPath, root))
         return false;
 
     m_desktops.clear();
@@ -496,7 +504,7 @@ bool PersistenceStore::loadDesktops() {
 
 bool PersistenceStore::loadWidgets() {
     JsonValue root;
-    if (!readJsonFile(kWidgetsPath, root))
+    if (!readJsonFileWithBackup(kWidgetsPath, root))
         return false;
 
     m_widgets.clear();

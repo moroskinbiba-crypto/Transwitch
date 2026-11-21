@@ -1,50 +1,39 @@
 #pragma once
-
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <functional>
-
 namespace desknx::steamgriddb {
-
-// Manages SteamGridDB artwork cache on SD card
-// Root: sdmc:/switch/DeskNX/steamgriddb/
 class SteamGridDbCache {
 public:
-    enum class ArtworkKind { Hero, Logo, Icon };
-
-    SteamGridDbCache() = default;
-    ~SteamGridDbCache() = default;
-
-    // Ensure cache directories exist on SD card
-    bool ensureDirectories();
-
-    // Check if artwork exists for a title
-    bool hasHero(std::uint64_t titleId) const;
-    bool hasLogo(std::uint64_t titleId) const;
-    bool hasIcon(std::uint64_t titleId) const;
-
-    // Get full paths to artwork files
-    static std::string heroPath(std::uint64_t titleId);
-    static std::string logoPath(std::uint64_t titleId);
-    static std::string iconPath(std::uint64_t titleId);
-    static std::string metadataPath(std::uint64_t titleId);
-
-    // Clear artwork for a title (optionally specific kind)
-    bool clearArtwork(std::uint64_t titleId, ArtworkKind kind);
-
-    // Get cache root directory
-    static constexpr const char* kCacheRoot = "sdmc:/switch/DeskNX/steamgriddb";
-
-    // Save artwork from URL (downloads via HTTP)
-    // Returns true if successful
-    using ProgressCallback = std::function<void(const std::string&, float)>;
-    bool saveArtworkFromFile(std::uint64_t titleId, ArtworkKind kind,
-                             const std::string& sourceFile,
-                             const ProgressCallback& onProgress = {});
-
+ enum class ArtworkKind { Hero,Grid,Logo,Icon };
+ static constexpr const char* kCacheRoot="sdmc:/switch/DeskNX/steamgriddb";
+ static constexpr std::uint64_t kDefaultMaximumBytes=256u*1024u*1024u;
+ bool ensureDirectories();
+ static std::string titleDirectory(std::uint64_t id);
+ static std::string heroPath(std::uint64_t id);
+ static std::string gridPath(std::uint64_t id);
+ static std::string logoPath(std::uint64_t id);
+ static std::string iconPath(std::uint64_t id);
+ static std::string metadataPath(std::uint64_t id);
+ static std::string pathFor(std::uint64_t id,ArtworkKind kind);
+ bool hasArtwork(std::uint64_t id,ArtworkKind kind)const;
+ bool hasHero(std::uint64_t id)const;
+ bool hasGrid(std::uint64_t id)const;
+ bool hasLogo(std::uint64_t id)const;
+ bool hasIcon(std::uint64_t id)const;
+ std::string selectedPath(std::uint64_t id)const;
+ ArtworkKind selectedKind(std::uint64_t id)const;
+ std::uint64_t mappedGameId(std::uint64_t id)const;
+ bool saveGameMapping(std::uint64_t titleId,std::uint64_t gameId,const std::string& gameName);
+ bool activateCachedArtwork(std::uint64_t titleId,ArtworkKind kind);
+ bool saveArtworkFromFile(std::uint64_t titleId,ArtworkKind kind,const std::string& sourceFile,
+                          std::uint64_t gameId,std::uint64_t assetId,const std::string& gameName,
+                          bool makeActive=true);
+ bool clearArtwork(std::uint64_t titleId,ArtworkKind kind);
+ bool restoreSystemArtwork(std::uint64_t titleId);
+ std::uint64_t cacheBytes()const;
+ std::uint64_t prune(std::uint64_t maximumBytes,const std::vector<std::uint64_t>& installedTitleIds);
 private:
-    static std::string titleDirectory(std::uint64_t titleId);
+ static const char* kindKey(ArtworkKind kind);
 };
-
-}  // namespace desknx::steamgriddb
+} // namespace desknx::steamgriddb

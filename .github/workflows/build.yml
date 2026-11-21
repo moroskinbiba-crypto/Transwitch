@@ -28,6 +28,9 @@ jobs:
       - name: Verify production HOME applet entry point
         run: bash scripts/check-home-applet-entrypoint.sh
 
+      - name: Validate SOCOMA SVG assets
+        run: python3 scripts/check-svg-assets.py assets/icons
+
       - name: Verify Switch curl dependency
         run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
 
@@ -39,15 +42,67 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test visual engine rounded geometry
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_geometry_test.cpp -o /tmp/desknx-visual-geometry-test
+          /tmp/desknx-visual-geometry-test
+
+      - name: Test UI component visual-state rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_component_rules_test.cpp -o /tmp/desknx-ui-component-rules-test
+          /tmp/desknx-ui-component-rules-test
+
+      - name: Test UI motion easing and transitions
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_motion_test.cpp -o /tmp/desknx-ui-motion-test
+          /tmp/desknx-ui-motion-test
+
+      - name: Validate custom font preflight parser
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/font_file_validation_test.cpp -o /tmp/desknx-font-validation-test
+          /tmp/desknx-font-validation-test
+
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev
+          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev pkg-config
 
       - name: Test compressed NACP title normalization
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/nacp_title_block_test.cpp -lz -o /tmp/desknx-nacp-test
           /tmp/desknx-nacp-test
+
+      - name: Test application-size decoding
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/application_size_test.cpp -o /tmp/desknx-application-size-test
+          /tmp/desknx-application-size-test
+
+      - name: Test HomeNX library grid placement and collision handling
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/library_grid_test.cpp -o /tmp/desknx-library-grid-test
+          /tmp/desknx-library-grid-test
+
+      - name: Test bounded recursive NRO scanner
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nro_scanner_test.cpp -o /tmp/desknx-nro-scanner-test
+          /tmp/desknx-nro-scanner-test
+
+      - name: Test shutdown-time persistence guard
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/shutdown_persistence_test.cpp -o /tmp/desknx-shutdown-persistence-test
+          /tmp/desknx-shutdown-persistence-test
+
+      - name: Test widget configuration persistence and validation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_config_test.cpp -o /tmp/desknx-widget-config-test
+          /tmp/desknx-widget-config-test
+
+      - name: Test SteamGridDB title matching and cache behavior
+        run: |
+          c++ -std=c++17 -Iinclude tests/steamgriddb_client_test.cpp source/SteamGridDbClient.cpp $(pkg-config --cflags --libs libcurl) -o /tmp/desknx-steamgriddb-client-test
+          /tmp/desknx-steamgriddb-client-test
+          c++ -std=c++17 -Isource tests/steamgriddb_cache_test.cpp source/SteamGridDbCache.cpp -o /tmp/desknx-steamgriddb-cache-test
+          /tmp/desknx-steamgriddb-cache-test
 
       - name: Test IPC protocol validation boundaries
         run: |
@@ -115,6 +170,9 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
+
+      - name: Validate package runtime assets
+        run: python3 scripts/check-svg-assets.py assets/icons
 
       - name: Build native standalone NRO
         run: |

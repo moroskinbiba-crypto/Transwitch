@@ -1,6 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <unordered_map>
 
 namespace desknx::nextendo {
@@ -47,7 +52,9 @@ enum class Presence : unsigned char {
 // Network transport is kept separate from the feed model so the latter remains host-testable.
 bool initializeNetwork();
 void shutdownNetwork();
-bool fetchSnapshot(PlayerSnapshot& snapshot);
+using CancelCheck = bool (*)(void*);
+bool fetchSnapshot(PlayerSnapshot& snapshot, CancelCheck shouldCancel = nullptr,
+                   void* cancelContext = nullptr);
 
 class PresenceFeed final {
 public:
@@ -104,6 +111,25 @@ public:
         return hasFreshSnapshot(nowMs) ? m_snapshot.total : 0u;
     }
 
+    unsigned activeTitleCount(std::uint64_t nowMs) const {
+        if (!hasFreshSnapshot(nowMs)) return 0u;
+        unsigned count = 0;
+        for (const auto& entry : m_snapshot.perTitle)
+            if (entry.second > 0u) ++count;
+        return count;
+    }
+
+    bool copyFreshSnapshot(PlayerSnapshot& out, std::uint64_t nowMs) const {
+        if (!hasFreshSnapshot(nowMs)) return false;
+        out = m_snapshot;
+        return true;
+    }
+
+    bool hasTitleSnapshot(TitleId titleId,std::uint64_t nowMs) const {
+        return hasFreshSnapshot(nowMs) &&
+            m_snapshot.perTitle.find(titleId) != m_snapshot.perTitle.end();
+    }
+
     unsigned playersFor(TitleId titleId, std::uint64_t nowMs) const {
         if (!hasFreshSnapshot(nowMs)) return 0u;
         const auto found = m_snapshot.perTitle.find(titleId);
@@ -139,5 +165,107 @@ private:
     std::uint64_t m_appliedAtMs{0};
     PlayerSnapshot m_snapshot{};
 };
+
+// Compact, deterministic ranking data for the home-screen widget. The public
+// feed currently reports title IDs rather than display names, so only IDs with
+// an explicit, verified mapping are shown. Regional Splatoon 2 title IDs are
+// combined into one row instead of appearing as duplicate games.
+constexpr std::size_t MaxPopularGames = 10;
+constexpr std::size_t MaxTrackedGames = 32;
+
+struct PopularGame {
+    TitleId titleId{0};
+    const char* title{nullptr};
+    unsigned players{0};
+};
+
+struct PopularGames {
+    bool available{false}; // false means no fresh snapshot; never invent a zero
+    unsigned totalPlayers{0};
+    std::array<PopularGame, MaxPopularGames> games{};
+    std::size_t count{0};
+};
+
+inline const char* displayNameForTitle(TitleId id) {
+    switch (id) {
+        case 0x0100152000022000ull: return "Mario Kart 8 Deluxe";
+        case 0x0100F8F0000A2000ull:
+        case 0x01003BC0000A0000ull:
+        case 0x01003C700009C000ull: return "Splatoon 2";
+        case 0x0100C2500FC20000ull: return "Splatoon 3";
+        case 0x01009B90006DC000ull: return "Super Mario Maker 2";
+        case 0x0100B04011742000ull: return "Monster Hunter Rise";
+        case 0x0100F43008C44000ull: return "Pokemon Legends: Z-A";
+        case 0x0100A250097F0000ull: return "Dragon Ball FighterZ";
+        case 0x01009B500007C000ull: return "ARMS";
+        case 0x010047700D540000ull: return "Clubhouse Games: 51 Worldwide Classics";
+        case 0x0100BDE00862A000ull: return "Mario Tennis Aces";
+        case 0x0100C9C00E25C000ull: return "Mario Golf: Super Rush";
+        case 0x010019401051C000ull: return "Mario Strikers: Battle League";
+        case 0x0100000000010000ull: return "Super Mario Odyssey";
+        case 0x01006A800016E000ull: return "Super Smash Bros. Ultimate";
+        case 0x01006F8002326000ull: return "Animal Crossing: New Horizons";
+        case 0x01006FE013472000ull: return "Mario Party Superstars";
+        case 0x010028600EBDA000ull: return "Super Mario 3D World + Bowser's Fury";
+        case 0x0100965017338000ull: return "Super Mario Party Jamboree";
+        case 0x0100E65002BB8000ull: return "Stardew Valley";
+        case 0x0100A8E016236000ull: return "Kirby's Dream Buffet";
+        case 0x0100EA6014BB8000ull: return "Just Dance 2022";
+        case 0x0100B6E012EBE000ull: return "UNO";
+        default: return nullptr;
+    }
+}
+
+inline PopularGames rankPopularGames(const PlayerSnapshot& snapshot,
+                                     std::size_t limit = MaxPopularGames) {
+    struct Aggregate {
+        TitleId id{0};
+        const char* title{nullptr};
+        std::uint64_t players{0};
+    };
+    std::array<Aggregate, MaxTrackedGames> grouped{};
+    std::size_t groupedCount = 0;
+
+    for (const auto& entry : snapshot.perTitle) {
+        if (entry.second == 0) continue;
+        const char* name = displayNameForTitle(entry.first);
+        if (!name) continue;
+
+        std::size_t found = groupedCount;
+        for (std::size_t i = 0; i < groupedCount; ++i) {
+            if (std::strcmp(grouped[i].title, name) == 0) {
+                found = i;
+                break;
+            }
+        }
+        if (found == groupedCount) {
+            if (groupedCount >= grouped.size()) continue;
+            grouped[groupedCount++] = {entry.first, name, entry.second};
+        } else {
+            grouped[found].players = std::min<std::uint64_t>(
+                std::numeric_limits<unsigned>::max(),
+                grouped[found].players + entry.second);
+        }
+    }
+
+    std::sort(grouped.begin(), grouped.begin() + groupedCount,
+        [](const Aggregate& a, const Aggregate& b) {
+            if (a.players != b.players) return a.players > b.players;
+            return std::strcmp(a.title, b.title) < 0;
+        });
+
+    PopularGames result{};
+    result.available = true;
+    result.totalPlayers = snapshot.total;
+    result.count = std::min({groupedCount, limit, result.games.size()});
+    for (std::size_t i = 0; i < result.count; ++i) {
+        result.games[i] = {
+            grouped[i].id, grouped[i].title,
+            static_cast<unsigned>(grouped[i].players)
+        };
+    }
+    return result;
+}
+
 
 } // namespace desknx::nextendo

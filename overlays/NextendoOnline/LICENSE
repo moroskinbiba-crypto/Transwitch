@@ -1,0 +1,8 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+
+This standalone overlay is distributed under the GNU General Public License
+version 2 or (at your option) any later version. The complete license text is
+included in CI build artifacts as LICENSE-GPL-2, copied from the libtesla
+dependency used by this overlay.
+
+The main DeskNX/Transwitch launcher remains under its existing license.

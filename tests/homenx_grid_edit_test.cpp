@@ -3,6 +3,7 @@
 // leave the workspace exactly as it was - a half-applied drag corrupts a layout
 // that is then persisted to the SD card.
 #include <desknx/HomeNXWorkspaceProvider.hpp>
+#include <desknx/WorkspaceOps.hpp>
 
 #include <cassert>
 #include <cstdio>
@@ -96,16 +97,29 @@ void testResizeInPlace() {
     assert(!overlap(clock, desk.tiles[1]));
 }
 
-void testResizeToUnsupportedShapeIsRefused() {
-    WorkspaceProvider provider = makeProvider();
-    const Workspace before = *provider.activeWorkspace();
+void testResizeSupportsPortraitShapeButRejectsUnsupportedWidth() {
+    Workspace desk{"Portrait", {}};
+    desk.tiles.push_back(makeTile(Kind::Game, "Portrait", "0100000000002000", 4, 0, 2, 1));
+    WorkspaceProvider provider;
+    assert(provider.load(std::vector<Workspace>{desk}, 0));
 
-    // 4x1 and 2x3 are not part of the native shape set (1x1, 2x1, 3x1, 2x2, 3x2).
-    assert(!provider.resizeTile(0, 0, 0, 4, 1));
-    assert(!provider.resizeTile(0, 0, 0, 2, 3));
+    // 4x1 remains unsupported, while portrait 2x3 is now a supported game tile.
+    assert(!provider.resizeTile(0, 4, 0, 4, 1));
+    assert(provider.resizeTile(0, 4, 0, 2, 3));
+    assert(provider.activeWorkspace()->tiles[0].w == 2);
+    assert(provider.activeWorkspace()->tiles[0].h == 3);
+}
 
-    assert(provider.activeWorkspace()->tiles[0].w == before.tiles[0].w);
-    assert(provider.activeWorkspace()->tiles[0].h == before.tiles[0].h);
+void testResizeStepRestoresPortraitTwoByThree() {
+    Workspace desk{"Portrait",{}};
+    desk.tiles.push_back(makeTile(Kind::Game,"Portrait","0100000000003000",0,0,3,2));
+    int selectedX=0,selectedY=0;
+    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
+    assert(desk.tiles[0].w==2&&desk.tiles[0].h==3);
+    // The 2x3 portrait format is supported, but 3x3 is outside the 6x3 tile-size set.
+    assert(!desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
+    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,false));
+    assert(desk.tiles[0].w==2&&desk.tiles[0].h==2);
 }
 
 void testResizeWithoutRoomIsRefused() {
@@ -212,7 +226,8 @@ int main() {
     testMoveToSameCellIsNotAnEdit();
     testMoveOfUnknownTileIsRefused();
     testResizeInPlace();
-    testResizeToUnsupportedShapeIsRefused();
+    testResizeSupportsPortraitShapeButRejectsUnsupportedWidth();
+    testResizeStepRestoresPortraitTwoByThree();
     testResizeWithoutRoomIsRefused();
     testResizeThenMoveKeepsGeometryValid();
     testRemoveTile();
