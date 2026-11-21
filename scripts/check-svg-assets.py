@@ -7,7 +7,8 @@ import xml.etree.ElementTree as ET
 EXPECTED = {
     "settings.svg", "gamepad.svg", "gallery.svg", "power.svg",
     "library.svg", "home.svg", "recent.svg", "user.svg", "sliders.svg",
-    "battery.svg", "calendar.svg",
+    "battery.svg", "calendar.svg", "clock.svg", "monitor.svg",
+    "storage.svg", "network.svg", "heart.svg",
 }
 
 
