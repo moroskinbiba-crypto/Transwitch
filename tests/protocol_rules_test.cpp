@@ -38,6 +38,9 @@ int main() {
         LaunchFlagsForTitle(true, true, true), true, true));
     static_assert(!ShouldPushPreselectedUser(
         LaunchFlagsForTitle(true, true, true), true, false));
+    // Even if the UI sent HasUser after a failed/stale metadata read,
+    // backend NACP=None is authoritative and must not create a selector loop.
+    static_assert(!ShouldPushPreselectedUser(LaunchFlagHasUser, false, true));
     static_assert(ShouldPushPreselectedUser(0, true, true)); // legacy backend default
     static_assert(!ShouldPushPreselectedUser(0, false, true));
 
@@ -60,6 +63,7 @@ int main() {
     assert(!ShouldPushPreselectedUser(LaunchFlagNoPreuser, false, true));
     assert(ShouldPushPreselectedUser(LaunchFlagHasUser, true, true));
     assert(!ShouldPushPreselectedUser(LaunchFlagHasUser, true, false));
+    assert(!ShouldPushPreselectedUser(LaunchFlagHasUser, false, true));
 
     // AppletId values from libnx. 0x0A..0x0D are Auth/Cabinet/Controller/DataErase,
     // not Web/Shop/PhotoViewer/Settings.
