@@ -3127,7 +3127,7 @@ void drawScreen() {
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE","STEAMGRIDDB API KEY"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
         for(int i=0;i<11;++i) {
             const int yy=214+i*31;
@@ -3135,6 +3135,8 @@ void drawScreen() {
             text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
             if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
             if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
+            if(i==11)text(steamGridDbApiKey.empty()?"NOT CONFIGURED":"CONFIGURED",
+                755,yy+8,1,steamGridDbApiKey.empty()?MUTED:GREEN,920);
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -3144,7 +3146,7 @@ void drawScreen() {
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
         text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
+        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS / STEAMGRIDDB",
              346,592,1,MUTED,930);
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
     }
