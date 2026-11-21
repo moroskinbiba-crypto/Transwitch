@@ -4,6 +4,8 @@
 #include <SDL2/SDL_image.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <deque>
