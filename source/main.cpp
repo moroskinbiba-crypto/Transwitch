@@ -7470,7 +7470,8 @@ void touchInput(const SDL_Event&e) {
             }
             return;
         }
-    } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive) {
+    } else if(e.type==SDL_FINGERMOTION&&listOpen&&catalogueTouchActive&&
+              gSurfaceManager.isTop(SurfaceId::Library)) {
         const int y=static_cast<int>(e.tfinger.y*SH);
         if(std::abs(y-catalogueTouchStartY)>=10) catalogueTouchMoved=true;
         if(catalogueTouchMoved) {
@@ -7486,27 +7487,14 @@ void touchInput(const SDL_Event&e) {
             }
         }
     } else if(e.type==SDL_FINGERUP&&listOpen&&catalogueTouchActive&&
+              gSurfaceManager.isTop(SurfaceId::Library)&&
               e.tfinger.fingerId==catalogueTouchFingerId) {
         if(catalogueTouchMoved) lastCatalogueTap=-1;
         catalogueTouchActive=false;
         catalogueTouchMoved=false;
         catalogueTouchFingerId=0;
-    // Any surface other than the library has now had first refusal above.
-    // Never allow its unhandled motion/up events to fall through into a desktop
-    // drag or selection that started before the surface became active.
-    if(gSurfaceManager.hasBlockingSurface()&&
-       !gSurfaceManager.isTop(SurfaceId::Library)) {
-        if(e.type==SDL_FINGERUP&&touchPressActive) {
-            touchPressActive=false;
-            touchPressFingerId=0;
-            touchDragging=false;
-            dragging=false;
-            touchDragOffsetX=touchDragOffsetY=0;
-            touchDragTabStart=-1;
-        }
-        return;
-    }
-    } else if(e.type==SDL_FINGERMOTION&&touchPressActive&&!touchDragging) {
+    } else if(e.type==SDL_FINGERMOTION&&touchPressActive&&!touchDragging&&
+              !gSurfaceManager.hasBlockingSurface()) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(std::abs(x-touchPressStartX)+std::abs(y-touchPressStartY)>=12) {
             dragging=true;
@@ -7524,7 +7512,8 @@ void touchInput(const SDL_Event&e) {
                 (void)touchSelect(x,y);
             }
         }
-    } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
+    } else if(e.type==SDL_FINGERMOTION&&touchDragging&&
+              !gSurfaceManager.hasBlockingSurface()) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=638&&y<=694&&x>=DeskTabX) {
             const int start=tabStart();
@@ -7546,7 +7535,8 @@ void touchInput(const SDL_Event&e) {
         touchDragTabStart=-1;
         if(moved) {
             dragging=false;
-            if(saveNow())setStatus("POSITION SAVED");
+            if(!gSurfaceManager.hasBlockingSurface()&&saveNow())
+                setStatus("POSITION SAVED");
         }
     }
 }
