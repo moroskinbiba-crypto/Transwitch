@@ -50,6 +50,24 @@ public:
         return ok;
     }
 
+    // Shared shell for every workspace widget. Content stays widget-specific,
+    // while elevation, border, accent rail and opacity remain theme-owned.
+    bool widgetSurface(const SDL_Rect& bounds, SDL_Color fill, SDL_Color edge,
+                       SDL_Color accent, bool focused, int opacity = 255) {
+        if (!surface(bounds,fill,edge,tokens_.cornerRadius,true,opacity))
+            return false;
+        accent.a = scaleAlpha(accent.a,focused ? 220 : 112);
+        const int railWidth = std::min(bounds.w - 28,focused ? 42 : 30);
+        if (railWidth <= 0 || bounds.h < 14) return true;
+        return fillRounded(bounds.x + 14,bounds.y + 10,railWidth,3,2,accent);
+    }
+
+    bool widgetDivider(int x, int y, int width, SDL_Color color,
+                       int opacity = 255) {
+        color.a = scaleAlpha(color.a,opacity);
+        return width > 0 && fillRect(x,y,width,1,color);
+    }
+
     bool button(const SDL_Rect& bounds, ButtonVariant variant,
                 ButtonState state, SDL_Color fill, SDL_Color edge,
                 int radius = 10, SDL_Color accent = SDL_Color{0,0,0,0}) {
