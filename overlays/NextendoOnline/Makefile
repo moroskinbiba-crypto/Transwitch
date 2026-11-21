@@ -20,7 +20,7 @@ NO_ICON     := 1
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections $(ARCH) -D__SWITCH__
-CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-exceptions
+CXXFLAGS    := $(CFLAGS) -std=gnu++20 -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,--gc-sections
 CURL_LIBS   := $(shell pkg-config --static --libs libcurl 2>/dev/null)
