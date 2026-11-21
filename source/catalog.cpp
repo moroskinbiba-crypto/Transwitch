@@ -138,8 +138,10 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
         return records;
     }
 
-    // SLaunch sequence: enumerate every installed record, then query the
-    // matching live views. View flags are presentation metadata, never filters.
+    // Enumerate only installed application records. Transwitch no longer
+    // asks NS for ApplicationViews/NeedsUpdate metadata: online compatibility
+    // and update recommendations come exclusively from the signed Nextendo
+    // game catalogue, not eShop-derived presentation flags.
     std::vector<NsApplicationRecord> installed;
     LogDiagnostic("ns_list begin");
     const Result listRc = desknx::slaunch::EnumerateInstalled(installed);
@@ -160,24 +162,11 @@ std::vector<GameRecord> ReadGameRecords(bool nsReady, std::uint32_t& errorCode) 
                       listedCount - installed.size());
     }
 
-    std::vector<u64> titleIds;
-    titleIds.reserve(installed.size());
-    for (const auto& record : installed) titleIds.push_back(record.application_id);
-
-    std::vector<NsApplicationView> views;
-    const Result viewsRc = desknx::slaunch::QueryApplicationViews(titleIds, views);
-    LogDiagnostic("ns_views rc=0x%08X requested=%zu returned=%zu",
-                  static_cast<unsigned int>(viewsRc), titleIds.size(), views.size());
-    if (R_FAILED(viewsRc)) views.clear();
-
     records.reserve(installed.size());
-    for (size_t i = 0; i < installed.size(); ++i) {
-        u32 flags = 0;
-        if (i < views.size()) {
-            flags = views[i].flags;
-        }
-        records.push_back({installed[i].application_id,
-                           installed[i].last_updated, flags, i < views.size()});
+    for (const auto& record : installed) {
+        // Keep the persisted record shape backward-compatible with catalogue
+        // cache files, but intentionally clear all legacy eShop view flags.
+        records.push_back({record.application_id, record.last_updated, 0u, false});
     }
 
     // Play statistics are loaded lazily for the selected library entry.
