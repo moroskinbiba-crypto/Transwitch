@@ -109,6 +109,8 @@ bool motionEffects=false; // optional low-cost screen fade and selection pulse
 Uint32 uiTransitionStart=0;
 std::uint32_t lastUiScreenState=UINT32_MAX;
 std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
+std::unordered_map<std::string,std::string> gameNameOverrides;
+std::string pendingGameIconTitleId;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
 SDL_Texture* roundedCornerMaskTexture=nullptr;
@@ -264,6 +266,11 @@ uint64_t sdFreeBytes=0, sdTotalBytes=0;
 uint64_t processRamUsed=0,processRamTotal=0;
 size_t installedGameCount=0,installedHomebrewCount=0;
 bool storageStatsAvailable=false,processRamStatsAvailable=false;
+SDL_Thread* storageStatsThread=nullptr;
+SDL_mutex* storageStatsMutex=nullptr;
+SDL_atomic_t storageStatsStop{};
+uint64_t backgroundSdFreeBytes=0,backgroundSdTotalBytes=0;
+bool backgroundStorageStatsAvailable=false;
 
 bool tsServiceReady=false, tsInternalOpen=false, tsSocOpen=false;
 TsSession tsInternalSession{}, tsSocSession{};
@@ -2925,20 +2932,10 @@ void refreshStorageStats() {
 void refreshDiagnosticsSnapshot(bool force=false) {
     const Uint32 now=SDL_GetTicks();
     const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Storage))*1000u;
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<interval)return;
+    if(!force&&lastStorageUpdate!=0&&now-lastStorageUpdate<interval)return;
     lastStorageUpdate=now;
 
-    struct statvfs fs{};
-    if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
-        const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
-        sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
-        sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0&&sdFreeBytes<=sdTotalBytes;
-    } else {
-        sdTotalBytes=0;
-        sdFreeBytes=0;
-        storageStatsAvailable=false;
-    }
+    refreshStorageStats();
 
     const auto items=catalogueSnapshot();
     installedGameCount=static_cast<size_t>(std::count_if(items.begin(),items.end(),
@@ -3399,13 +3396,18 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         }
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
-        const bool compact=t.w==1&&t.h==1;
+        const auto metrics=desknx::widget_layout::measure(
+            r.x,r.y,r.w,r.h,t.w,t.h);
+        const bool compact=metrics.compact();
+        const bool banner=metrics.banner();
+        const bool portrait=metrics.portrait();
         const bool wide=t.h==1&&t.w>=2;
         const auto config=widgetConfig(t);
         const bool dataA=desknx::widgets::enabled(config,0);
         const bool dataB=desknx::widgets::enabled(config,1);
-        const int left=r.x+18, right=r.x+r.w-14;
-        const int innerWidth=std::max(1,r.w-36);
+        const int left=metrics.left,right=metrics.right,center=metrics.center;
+        const int bodyTop=metrics.bodyTop,bottom=metrics.bodyBottom;
+        const int innerWidth=std::max(1,right-left);
         auto label=[&](const std::string& value,int y) {
             textCentered(value,center,metrics.clampY(y,8),1,MUTED,left,right);
         };
@@ -7440,6 +7442,11 @@ int main(int,char**) {
     gSteamGridDbService.shutdown();
     SDL_AtomicSet(&nextendoStop,1);
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
+    // The storage worker only publishes a small snapshot, but it still owns
+    // an SD read path and the shared mutex. Stop/join it before destroying
+    // that mutex or unmounting SDMC.
+    SDL_AtomicSet(&storageStatsStop,1);
+    if(storageStatsThread){SDL_WaitThread(storageStatsThread,nullptr);storageStatsThread=nullptr;}
 
     // Always retire async SD writers before destroying SDL, unmounting SDMC,
     // or returning to the caller. On first run layoutLoaded can still be false

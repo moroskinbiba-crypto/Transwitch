@@ -96,16 +96,17 @@ void testResizeInPlace() {
     assert(!overlap(clock, desk.tiles[1]));
 }
 
-void testResizeToUnsupportedShapeIsRefused() {
-    WorkspaceProvider provider = makeProvider();
-    const Workspace before = *provider.activeWorkspace();
+void testResizeSupportsPortraitShapeButRejectsUnsupportedWidth() {
+    Workspace desk{"Portrait", {}};
+    desk.tiles.push_back(makeTile(Kind::Game, "Portrait", "0100000000002000", 4, 0, 2, 1));
+    WorkspaceProvider provider;
+    assert(provider.load(std::vector<Workspace>{desk}, 0));
 
-    // 4x1 and 2x3 are not part of the native shape set (1x1, 2x1, 3x1, 2x2, 3x2).
-    assert(!provider.resizeTile(0, 0, 0, 4, 1));
-    assert(!provider.resizeTile(0, 0, 0, 2, 3));
-
-    assert(provider.activeWorkspace()->tiles[0].w == before.tiles[0].w);
-    assert(provider.activeWorkspace()->tiles[0].h == before.tiles[0].h);
+    // 4x1 remains unsupported, while portrait 2x3 is now a supported game tile.
+    assert(!provider.resizeTile(0, 4, 0, 4, 1));
+    assert(provider.resizeTile(0, 4, 0, 2, 3));
+    assert(provider.activeWorkspace()->tiles[0].w == 2);
+    assert(provider.activeWorkspace()->tiles[0].h == 3);
 }
 
 void testResizeWithoutRoomIsRefused() {
@@ -212,7 +213,7 @@ int main() {
     testMoveToSameCellIsNotAnEdit();
     testMoveOfUnknownTileIsRefused();
     testResizeInPlace();
-    testResizeToUnsupportedShapeIsRefused();
+    testResizeSupportsPortraitShapeButRejectsUnsupportedWidth();
     testResizeWithoutRoomIsRefused();
     testResizeThenMoveKeepsGeometryValid();
     testRemoveTile();

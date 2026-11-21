@@ -33,7 +33,7 @@ bool validKindCode(const std::string& code) {
 }
 
 int nearestAllowedDimension(int w, int h, bool wantWidth) {
-    const std::array<std::pair<int,int>,5> allowed{{{1,1},{2,1},{3,1},{2,2},{3,2}}};
+    const std::array<std::pair<int,int>,6> allowed{{{1,1},{2,1},{3,1},{2,2},{3,2},{2,3}}};
     size_t best = 0;
     int bestDistance = 1000;
     for (size_t i=0;i<allowed.size();++i) {

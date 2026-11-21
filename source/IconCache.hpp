@@ -152,6 +152,23 @@ public:
 
     // Call after a persistent artwork override is applied or removed. Pending
     // decodes are invalidated so an older system icon cannot replace the new art.
+    void invalidate() {
+        if (mutex_) {
+            SDL_LockMutex(mutex_);
+            ++generation_;
+            requests_.clear();
+            completed_.clear();
+            pendingKeys_.clear();
+            SDL_CondBroadcast(condition_);
+            SDL_UnlockMutex(mutex_);
+        } else {
+            ++generation_;
+            pendingKeys_.clear();
+        }
+        failedUntil_.clear();
+        clearTextures();
+    }
+
     void invalidate(desknx::model::Kind kind, const std::string& data) {
         const std::string key = makeKey(kind, data);
         if (mutex_) {
