@@ -3090,6 +3090,7 @@ void refreshAtmosphereVersion() {
 
 void refreshBattery() {
     if(!hasWidgetKind(Kind::Battery))return;
+    refreshJoyconBattery();
     const Uint32 now=SDL_GetTicks();
     const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Battery))*1000u;
     if(lastBatteryTick!=0&&now-lastBatteryTick<interval)return;
@@ -3674,12 +3675,12 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             return std::string(value);
         };
         std::vector<HistoryEntry> recentGames;
-        for(const auto& entry:recentLaunches)
-            if(entry.kind==Kind::Game)recentGames.push_back(entry);
+        recentGames.reserve(recentLaunches.size());
+        for(const auto& entry:recentLaunches)recentGames.push_back(entry);
         auto recentGameLine=[&](size_t index,int y,int iconSize) {
             if(index>=recentGames.size())return;
             const auto& entry=recentGames[index];
-            Tile iconTile{Kind::Game,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
+            Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,static_cast<int>(index)};
             if(dataB)drawTileIcon(iconTile,left,y,iconSize);
             text(entry.title,left+(dataB?iconSize+8:0),y+(iconSize>28?6:4),1,WHITE,right);
         };
@@ -3746,18 +3747,21 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 return value;
             };
             widgetHeader(desknx::ui::IconId::Battery,batteryHeading,r.y+9);
+            const std::string joycons=joyconLabel(joyconLeft,"L")+"   "+
+                joyconLabel(joyconRight,"R");
             if(compact) {
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+34,3,WHITE,right);
                 if(dataA)progress(r.y+82,battery);
-                if(dataB)label(powerLabel,r.y+92);
+                if(dataB)label(joycons,r.y+104);
             } else if(wide) {
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+33,3,WHITE,right-70);
                 if(dataA)progress(r.y+82,battery);
                 drawSystemIcon(desknx::ui::IconId::Battery,r.x+r.w-62,r.y+28,38,
                     config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
-                if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
+                if(dataB)text(joycons,left,r.y+91,1,WHITE,right);
+                else text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
                 drawSystemIcon(desknx::ui::IconId::Battery,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
@@ -3767,7 +3771,10 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                      battery>=80?"HIGH CHARGE":
                      battery>=20?"NORMAL":"LOW BATTERY",
                      left,r.y+172,2,battery>=20?GREEN:RED,right);
-                if(dataB)label(powerLabel,r.y+208);
+                if(dataB) {
+                    label(powerLabel,r.y+208);
+                    label(joycons,r.y+230);
+                }
             }
         } else if(t.kind==Kind::System) {
             const u32 firmware=hosversionGet();
@@ -3871,9 +3878,10 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             }
         } else if(t.kind==Kind::Storage) {
             const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
-            const int percent=storageStatsAvailable
+            const int percentUsed=storageStatsAvailable
                 ?static_cast<int>(std::min<uint64_t>(100,(used*100)/std::max<uint64_t>(1,sdTotalBytes)))
                 :-1;
+            const int percent=dataA&&percentUsed>=0?100-percentUsed:percentUsed;
             char usedText[48]{},totalText[48]{};
             std::snprintf(usedText,sizeof(usedText),"%.1f GB USED",
                 static_cast<double>(used)/(1024.0*1024.0*1024.0));
@@ -3881,20 +3889,20 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
             const std::string mainValue=!storageStatsAvailable?"N/A":
                 (config.style==2?freeSpaceText()+" / "+std::string(totalText):
-                 (dataA?std::string(usedText):freeSpaceText()+" FREE"));
+                 (dataA?freeSpaceText()+" FREE":std::string(usedText)));
             widgetHeader(desknx::ui::IconId::Storage,"SD STORAGE",r.y+9);
             if(config.style==1&&storageStatsAvailable&&!compact) {
                 text(std::to_string(percent)+"%",left,r.y+34,4,WHITE,right);
-                if(dataA)text(usedText,left,r.y+(wide?78:92),1,MUTED,right);
-                else text(freeSpaceText()+" FREE",left,r.y+(wide?78:92),1,MUTED,right);
+                if(dataA)text(freeSpaceText()+" FREE",left,r.y+(wide?78:92),1,MUTED,right);
+                else text(usedText,left,r.y+(wide?78:92),1,MUTED,right);
                 if(dataB)progress(r.y+(wide?100:122),percent);
             } else if(compact) {
                 text(mainValue,left,r.y+39,2,WHITE,right);
                 if(dataB)progress(r.y+82,percent);
             } else if(wide) {
                 text(mainValue,left,r.y+34,2,WHITE,right-78);
-                if(dataB&&percent>=0)text(std::to_string(percent)+"% USED",
-                    right-70,r.y+49,1,MUTED,right);
+                if(dataB&&percent>=0)text(std::to_string(percent)+
+                    (dataA?"% FREE":"% USED"),right-70,r.y+49,1,MUTED,right);
                 if(dataB)progress(r.y+83,percent);
                 else if(dataA)label(totalText,r.y+83);
             } else {
@@ -3903,7 +3911,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     if(dataA)text(totalText,left,r.y+112,2,MUTED,right);
                     if(dataB) {
                         progress(r.y+157,percent);
-                        text(std::to_string(percent)+"% USED",left,r.y+184,1,BLUE,right);
+                        text(std::to_string(percent)+(dataA?"% FREE":"% USED"),
+                             left,r.y+184,1,BLUE,right);
                     }
                 } else text("SD CARD UNAVAILABLE",left,r.y+90,2,RED,right);
             }
@@ -3982,33 +3991,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(languageRussian?"ТЕКУЩАЯ ДАТА":"CURRENT DATE",
                      left,metrics.clampY(bottom-12,8),1,accent,right);
             }
-        } else if(t.kind==Kind::Nextendo) {
-            const auto online=nextendoWidgetSnapshot();
-            widgetHeader(desknx::ui::IconId::Network,
-                config.style==2?"NEXTENDO  /  NETWORK":"NEXTENDO  /  ACTIVITY",r.y+9);
-            if(!online.fresh) {
-                text("WAITING FOR SYNC",left,r.y+39,2,WHITE,right);
-                label("STATUS UNKNOWN",r.y+78);
-            } else if(config.style==1&&wide) {
-                if(dataB&&!online.topGame.empty()) {
-                    text(online.topGame,left,r.y+34,2,WHITE,right);
-                    label(std::to_string(online.topPlayers)+" PLAYERS ACTIVE",r.y+68);
-                } else {
-                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
-                }
-                if(dataA)label(std::to_string(online.activeTitles)+" ACTIVE TITLES",r.y+95);
-            } else {
-                if(dataA) {
-                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
-                    label(std::to_string(online.activeTitles)+" ACTIVE GAMES",r.y+76);
-                } else text("SERVICE SYNCED",left,r.y+40,2,GREEN,right);
-                if(dataB) {
-                    if(!online.topGame.empty())
-                        text(online.topGame+"  /  "+std::to_string(online.topPlayers),
-                             left,r.y+93,1,BLUE,right);
-                    else label("NO ACTIVE TITLE DATA",r.y+93);
-                }
-            }
         } else if(t.kind==Kind::Favorites || t.kind==Kind::GameLibrary) {
             const std::vector<Tile> games=t.kind==Kind::Favorites?
                 favoriteTiles():gameLibraryTiles(static_cast<std::size_t>(config.itemCount),dataA);
@@ -4033,7 +4015,10 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else {
                 const int iconSize=wide?(config.style==2?18:24):(config.style==2?24:32);
                 const int rowStep=wide?(config.style==2?22:27):(config.style==2?32:42);
-                const int maxRows=wide?(config.style==2?3:2):std::min<int>(4,config.itemCount);
+                const int availableRows=std::max(1,
+                    (metrics.bodyBottom-(r.y+48))/std::max(1,rowStep)+1);
+                const int maxRows=wide?(config.style==2?3:2):
+                    ((compact||(t.w==1&&t.h==1))?1:std::min(4,availableRows));
                 const int count=std::min<int>(
                     std::min<int>(config.itemCount,maxRows),static_cast<int>(games.size()));
                 for(int i=0;i<count;++i) {
@@ -4887,12 +4872,20 @@ void drawScreen() {
             const std::string sizeValue=std::to_string(tile->w)+" x "+std::to_string(tile->h);
             const std::string refreshValue=std::to_string(config.refreshSeconds)+" SEC";
             const std::string itemValue=std::to_string(config.itemCount)+" ITEMS";
-            const std::string values[]={
-                sizeValue,widgetEditorStyleLabel(tile->kind,config.style),
-                desknx::widgets::enabled(config,0)?"ON":"OFF",
-                desknx::widgets::enabled(config,1)?"ON":"OFF",
-                refreshValue,itemValue,"DONE"
-            };
+            const int optionCount=widgetEditorRowCount(tile->kind)-5;
+            const int refreshRow=2+optionCount;
+            const int itemCountRow=refreshRow+1;
+            const int finishRow=itemCountRow+1;
+            std::string values[8]{};
+            values[0]=sizeValue;
+            values[1]=widgetEditorStyleLabel(tile->kind,config.style);
+            for(int bit=0;bit<optionCount;++bit)
+                values[2+bit]=desknx::widgets::enabled(config,
+                    static_cast<unsigned>(bit))?"ON":"OFF";
+            values[refreshRow]=refreshValue;
+            values[itemCountRow]=itemValue;
+            values[finishRow]="DONE";
+            const int rowCount=widgetEditorRowCount(tile->kind);
     
             softCard(260,82,760,548,Color{17,24,36,255},Color{255,255,255,28});
             text("WIDGET EDITOR",300,110,3,WHITE,970);
@@ -4900,18 +4893,22 @@ void drawScreen() {
                  302,150,1,MUTED,970);
             roundRect(900,108,88,34,10,Color{52,61,74,255});
             text("B BACK",916,119,1,WHITE,980);
-            for(int row=0;row<7;++row) {
+            for(int row=0;row<rowCount;++row) {
                 const int y=188+row*52;
                 const bool selected=row==widgetEditorRow;
                 roundRect(294,y,692,44,10,selected?
                     Color{39,69,103,255}:Color{24,34,49,255});
-                const std::string label=row==0?"SIZE":
-                    row==1?"STYLE":row==2?widgetEditorDataLabel(0):
-                    row==3?widgetEditorDataLabel(1):row==4?"REFRESH RATE":
-                    row==5?"ITEM COUNT":"FINISH";
+                std::string label;
+                if(row==0)label="SIZE";
+                else if(row==1)label="STYLE";
+                else if(row>=2&&row<2+optionCount)
+                    label=widgetEditorDataLabel(static_cast<unsigned>(row-2));
+                else if(row==refreshRow)label="REFRESH RATE";
+                else if(row==itemCountRow)label="ITEM COUNT";
+                else label="FINISH";
                 text(label,316,y+15,1,selected?WHITE:MUTED,660);
                 text(values[row],700,y+14,1,selected?GREEN:BLUE,876);
-                if(row<6) {
+                if(row<finishRow) {
                     roundRect(896,y+6,38,32,8,Color{46,58,75,255});
                     text("−",908,y+13,2,WHITE,932);
                     roundRect(940,y+6,38,32,8,Color{46,58,75,255});
@@ -5559,6 +5556,9 @@ void openWidgetEditor() {
 void closeWidgetEditor() {
     widgetEditorOpen=false;
 }
+int widgetEditorRowCount(Kind kind) {
+    return kind==Kind::GameLibrary?8:7;
+}
 std::string widgetEditorStyleLabel(Kind kind,int style) {
     static const char* clock[]={"DIGITAL 24H","DIGITAL 12H","ANALOG"};
     static const char* generic[]={"STANDARD","MINIMAL","DETAILED"};
@@ -5579,14 +5579,15 @@ std::string widgetEditorStyleLabel(Kind kind,int style) {
 std::string widgetEditorDataLabel(unsigned bit) {
     switch(widgetEditorKind) {
         case Kind::Clock: return bit==0?"SECONDS":"SHOW DATE";
-        case Kind::Battery: return bit==0?"CHARGE BAR":"POWER STATE";
+        case Kind::Battery: return bit==0?"CHARGE BAR":"JOY-CON LEVELS";
         case Kind::System: return bit==0?"TEMPERATURES":"CPU / GPU CLOCKS";
         case Kind::Recent: return bit==0?"MORE ENTRIES":"GAME COVERS";
-        case Kind::Storage: return bit==0?"USED OR FREE":"USAGE BAR";
+        case Kind::Storage: return bit==0?"FREE OR USED":"USAGE BAR";
         case Kind::Calendar: return bit==0?"SHOW WEEKDAY":"SHOW TIME";
         case Kind::Nextendo: return bit==0?"ONLINE TOTAL":"TOP ACTIVITY";
         case Kind::Favorites: return bit==0?"SHOW COVER ICONS":"SAVED COUNT";
-        case Kind::GameLibrary: return bit==0?"RECENT FIRST":"SHOW COVER ICONS";
+        case Kind::GameLibrary:
+            return bit==0?"RECENT FIRST":bit==1?"SHOW COVER ICONS":"RANDOM GAME ON OPEN";
         case Kind::QuickSettings: return bit==0?"SHOW BRIGHTNESS":"SHOW NETWORK STATE";
         default:return bit==0?"DATA A":"DATA B";
     }
@@ -5614,6 +5615,10 @@ void adjustWidgetEditor(int direction) {
     if(!tile){closeWidgetEditor();return;}
     auto config=widgetConfig(*tile);
     if(direction==0)direction=1;
+    const int optionCount=tile->kind==Kind::GameLibrary?3:2;
+    const int refreshRow=2+optionCount;
+    const int itemCountRow=refreshRow+1;
+    const int finishRow=itemCountRow+1;
     switch(widgetEditorRow) {
         case 0: {
             static constexpr int sizes[][2]={{1,1},{2,1},{3,1},{2,2},{3,2},{2,3}};
@@ -5628,32 +5633,27 @@ void adjustWidgetEditor(int direction) {
         case 1:
             config.style=(config.style+direction+3)%3;
             break;
-        case 2:
-            desknx::widgets::toggle(config,0);
+        default:
+            if(widgetEditorRow>=2&&widgetEditorRow<2+optionCount) {
+                desknx::widgets::toggle(config,
+                    static_cast<unsigned>(widgetEditorRow-2));
+            } else if(widgetEditorRow==refreshRow) {
+                static constexpr int rates[]={5,15,30,60,180};
+                int index=0;
+                for(int i=0;i<5;++i)if(rates[i]==config.refreshSeconds)index=i;
+                index=(index+direction+5)%5;
+                config.refreshSeconds=rates[index];
+            } else if(widgetEditorRow==itemCountRow) {
+                static constexpr int counts[]={2,3,4,6};
+                int index=0;
+                for(int i=0;i<4;++i)if(counts[i]==config.itemCount)index=i;
+                index=(index+direction+4)%4;
+                config.itemCount=counts[index];
+            } else if(widgetEditorRow==finishRow) {
+                closeWidgetEditor();
+                return;
+            } else return;
             break;
-        case 3:
-            desknx::widgets::toggle(config,1);
-            break;
-        case 4: {
-            static constexpr int rates[]={5,15,30,60,180};
-            int index=0;
-            for(int i=0;i<5;++i)if(rates[i]==config.refreshSeconds)index=i;
-            index=(index+direction+5)%5;
-            config.refreshSeconds=rates[index];
-            break;
-        }
-        case 5: {
-            static constexpr int counts[]={2,3,4,6};
-            int index=0;
-            for(int i=0;i<4;++i)if(counts[i]==config.itemCount)index=i;
-            index=(index+direction+4)%4;
-            config.itemCount=counts[index];
-            break;
-        }
-        case 6:
-            closeWidgetEditor();
-            return;
-        default:return;
     }
     tile->data=desknx::widgets::serialize(config);
     if(tile->kind==Kind::Nextendo)
@@ -6236,6 +6236,7 @@ void activateAppSettings(int action) {
         default: break;
     }
 }
+void launch(const Tile& t);
 void activateWidget(const Tile& t) {
     desknx::diag::Write("widgets","activate_begin",
         "kind=%s title=%s width=%d height=%d",
@@ -6275,6 +6276,38 @@ void activateWidget(const Tile& t) {
             if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
             else {recentIndex=0;recentOpen=true;}
             break;
+        case Kind::Favorites:
+            openFavorites();
+            break;
+        case Kind::GameLibrary: {
+            const auto config=widgetConfig(t);
+            if(desknx::widgets::enabled(config,2)) {
+                const auto all=catalogueSnapshot();
+                const std::size_t gameCount=static_cast<std::size_t>(
+                    std::count_if(all.begin(),all.end(),[](const Candidate& item) {
+                        return item.kind==Kind::Game;
+                    }));
+                const auto games=gameLibraryTiles(gameCount,
+                    desknx::widgets::enabled(config,0));
+                if(games.empty()) {
+                    setStatus(languageRussian?"НЕТ УСТАНОВЛЕННЫХ ИГР":
+                        "NO INSTALLED GAMES");
+                } else {
+                    static std::uint32_t randomState=0xA341316Cu;
+                    randomState^=static_cast<std::uint32_t>(SDL_GetTicks64());
+                    randomState^=randomState<<13;
+                    randomState^=randomState>>17;
+                    randomState^=randomState<<5;
+                    const Tile selected=games[randomState%games.size()];
+                    setStatus(std::string(languageRussian?"СЛУЧАЙНАЯ ИГРА: ":"RANDOM GAME: ")+
+                        selected.title,2200);
+                    launch(selected);
+                }
+            } else {
+                openGameLibraryCatalogue();
+            }
+            break;
+        }
         default:
             setStatus("WIDGET ACTION UNAVAILABLE");
             break;
@@ -6472,8 +6505,9 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(gSurfaceManager.isTop(SurfaceId::WidgetEditor)) {
         if(keys&HidNpadButton_B){closeWidgetEditor();return;}
-        if(keys&HidNpadButton_Up)widgetEditorRow=(widgetEditorRow+6)%7;
-        if(keys&HidNpadButton_Down)widgetEditorRow=(widgetEditorRow+1)%7;
+        const int rows=widgetEditorRowCount(widgetEditorKind);
+        if(keys&HidNpadButton_Up)widgetEditorRow=(widgetEditorRow+rows-1)%rows;
+        if(keys&HidNpadButton_Down)widgetEditorRow=(widgetEditorRow+1)%rows;
         if(keys&HidNpadButton_Left)adjustWidgetEditor(-1);
         if(keys&HidNpadButton_Right)adjustWidgetEditor(1);
         if(keys&HidNpadButton_A)adjustWidgetEditor(1);
@@ -6988,11 +7022,12 @@ void touchInput(const SDL_Event&e) {
                 closeWidgetEditor();
                 return;
             }
-            if(y>=188&&y<552) {
+            const int rowCount=widgetEditorRowCount(widgetEditorKind);
+            if(y>=188&&y<188+rowCount*52) {
                 const int row=(y-188)/52;
-                if(row>=0&&row<7) {
+                if(row>=0&&row<rowCount) {
                     widgetEditorRow=row;
-                    if(row==6)closeWidgetEditor();
+                    if(row==rowCount-1)closeWidgetEditor();
                     else if(x>=896&&x<=934)adjustWidgetEditor(-1);
                     else if(x>=940&&x<=978)adjustWidgetEditor(1);
                 }
