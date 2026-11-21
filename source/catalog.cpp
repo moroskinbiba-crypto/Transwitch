@@ -563,7 +563,13 @@ void CollectNrosIncremental(const std::string& root,int depth,
     ++stats.enumeratedDirectories;
     freshDirectories[root]=currentStamp;
     dirent* entry=nullptr;
-    while((entry=readdir(dir))) {
+    for(;;) {
+        errno=0;
+        entry=readdir(dir);
+        if(!entry) {
+            if(errno!=0)stats.complete=false;
+            break;
+        }
         if(stats.entriesVisited>=desknx::nro_scan::MaxEntries) {
             stats.complete=false;stats.truncated=true;break;
         }
