@@ -3132,10 +3132,10 @@ void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
     }
 }
 
-void drawTileIcon(const Tile&t,int x,int y,int size) {
+void drawTileIcon(const Tile&t,int x,int y,int size,bool highPriority=false) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     roundRect(x,y,size,size,std::max(8,size/5),Color{255,255,255,12});
-    if(SDL_Texture* texture=gIconCache.get(t)) {
+    if(SDL_Texture* texture=gIconCache.get(t,highPriority)) {
         int width=0,height=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)==0) {
             const int inset=std::max(3,size/24),inner=std::max(1,size-inset*2);
@@ -4218,7 +4218,7 @@ void drawScreen() {
                         selectedCard?Color{36,60,91,255}:Color{20,29,43,255},
                         selectedCard?Color{106,175,255,190}:Color{255,255,255,20});
                     Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                    drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66);
+                    drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66,selectedCard);
                     if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,focusAccent());
                     textCentered(candidate.title,x+cardW/2,y+79,2,
                         selectedCard?WHITE:Color{201,211,225,255},x+8,x+cardW-8);
@@ -4241,7 +4241,7 @@ void drawScreen() {
             const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
             Tile preview{selected.kind,selected.title,selected.data,0,0,1,1,selected.color};
-            drawTileIcon(preview,mx+866,my+128,78);
+            drawTileIcon(preview,mx+866,my+128,78,true);
             text(selected.title,mx+798,my+218,2,WHITE,mx+mw-30);
             std::string detailType=typeName(selected.kind);
             Color detailColor=BLUE;
@@ -4450,7 +4450,7 @@ void drawScreen() {
                 const int yy=190+row*39;
                 if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
                 Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
-                drawTileIcon(iconTile,290,yy+4,27);
+                drawTileIcon(iconTile,290,yy+4,27,row==recentIndex);
                 text(entry.title,330,yy+8,2,row==recentIndex?WHITE:MUTED,850);
                 text(entry.kind==Kind::Game?"GAME":"HOMEBREW",870,yy+11,1,
                      row==recentIndex?BLUE:MUTED,990);
@@ -4480,7 +4480,7 @@ void drawScreen() {
                 const auto& game=favoritesView[static_cast<std::size_t>(index)];
                 const int yy=190+row*39;
                 if(index==favoritesIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
-                drawTileIcon(game,290,yy+4,27);
+                drawTileIcon(game,290,yy+4,27,index==favoritesIndex);
                 text(game.title,330,yy+8,2,index==favoritesIndex?WHITE:MUTED,950);
                 text("★",970,yy+8,2,GREEN,996);
             }
