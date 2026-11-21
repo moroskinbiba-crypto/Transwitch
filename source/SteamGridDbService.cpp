@@ -30,7 +30,7 @@ bool SteamGridDbService::search(std::uint64_t id,const std::string& title,const 
  state_=ServiceSnapshot{};state_.status=ServiceStatus::Searching;state_.message="Searching SteamGridDB...";
  state_.titleId=id;state_.title=title;state_.kind=ArtworkKind::Grid;state_.revision=revision_;jobs_.clear();
  const std::uint64_t mapped=cache_.mappedGameId(id);
- if(mapped){job.type=JobType::Assets;job.gameId=mapped;job.gameName=title;}
+ if(mapped){job.type=JobType::Assets;job.gameId=mapped;job.gameName=title;job.mappedLookup=true;}
  SDL_UnlockMutex(mutex_);
  if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB worker could not queue request");return false;}return true;
 }
@@ -53,6 +53,15 @@ bool SteamGridDbService::selectAsset(int index){
  state_.selectedAsset=index;state_.message="Loading preview...";job.type=JobType::Preview;job.revision=revision_;
  job.titleId=state_.titleId;job.assetIndex=index;job.asset=state_.assets[static_cast<size_t>(index)];
  ++state_.revision;SDL_UnlockMutex(mutex_);return enqueue(std::move(job));
+}
+bool SteamGridDbService::pruneCache(std::uint64_t maximumBytes,
+        const std::vector<std::uint64_t>& installedTitleIds) {
+ if(!ensureWorker())return false;
+ Job job;
+ job.type=JobType::Cleanup;
+ job.maximumCacheBytes=maximumBytes;
+ job.installedTitleIds=installedTitleIds;
+ return enqueue(std::move(job));
 }
 bool SteamGridDbService::applySelected(){
  if(!mutex_)return false;Job job;SDL_LockMutex(mutex_);
@@ -85,6 +94,10 @@ int SteamGridDbService::workerLoop(){
  for(;;){
   Job j;SDL_LockMutex(mutex_);while(!stopWorker_&&jobs_.empty())SDL_CondWait(condition_,mutex_);
   if(stopWorker_){SDL_UnlockMutex(mutex_);break;}j=std::move(jobs_.front());jobs_.pop_front();SDL_UnlockMutex(mutex_);
+  if(j.type==JobType::Cleanup) {
+   (void)cache_.prune(j.maximumCacheBytes,j.installedTitleIds);
+   continue;
+  }
   if(!networkReady_)networkReady_=desknx::network::acquire();
   if(!networkReady_){publishError(j.revision,"Network service unavailable; check Wi-Fi");continue;}
   std::string error;
@@ -95,7 +108,29 @@ int SteamGridDbService::workerLoop(){
    SDL_UnlockMutex(mutex_);continue;
   }
   if(j.type==JobType::Assets){
-   std::vector<ArtworkAsset> assets;if(!fetchAssets(j.apiKey,j.gameId,j.kind,assets,error)){publishError(j.revision,error);continue;}
+   std::vector<ArtworkAsset> assets;
+   if(!fetchAssets(j.apiKey,j.gameId,j.kind,assets,error)) {
+    if(j.mappedLookup) {
+     // Saved SGDB mappings can become stale; fall back to a fresh title search.
+     std::vector<GameResult> games;
+     std::string searchError;
+     if(searchGames(j.apiKey,j.title,games,searchError)) {
+      SDL_LockMutex(mutex_);
+      if(j.revision==revision_) {
+       state_.games=std::move(games);
+       state_.gameId=0;
+       state_.gameName.clear();
+       state_.status=ServiceStatus::MatchesReady;
+       state_.message=state_.games.empty()?
+          "Saved mapping expired; no title matches found":
+          "Saved mapping expired; choose the correct SteamGridDB game";
+       ++state_.revision;
+      }
+      SDL_UnlockMutex(mutex_);
+     } else publishError(j.revision,searchError);
+    } else publishError(j.revision,error);
+    continue;
+   }
    SDL_LockMutex(mutex_);bool current=j.revision==revision_;
    if(current){state_.gameId=j.gameId;state_.gameName=j.gameName;state_.kind=j.kind;state_.assets=std::move(assets);
     state_.selectedAsset=0;state_.previewAsset=-1;state_.previewPath.clear();state_.status=ServiceStatus::Browsing;
