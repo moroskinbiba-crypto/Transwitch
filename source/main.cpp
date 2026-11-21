@@ -4659,6 +4659,36 @@ void keyInput(u64 keys, bool fromRepeat) {
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
+    if(widgetEditorOpen) {
+        if(keys&HidNpadButton_B){closeWidgetEditor();return;}
+        if(keys&HidNpadButton_Up)widgetEditorRow=(widgetEditorRow+6)%7;
+        if(keys&HidNpadButton_Down)widgetEditorRow=(widgetEditorRow+1)%7;
+        if(keys&HidNpadButton_Left)adjustWidgetEditor(-1);
+        if(keys&HidNpadButton_Right)adjustWidgetEditor(1);
+        if(keys&HidNpadButton_A)adjustWidgetEditor(1);
+        return;
+    }
+    if(favoritesOpen) {
+        if(keys&HidNpadButton_B){favoritesOpen=false;return;}
+        favoritesView=favoriteTiles();
+        const int count=static_cast<int>(favoritesView.size());
+        if(count<=0){favoritesOpen=false;return;}
+        favoritesIndex=std::max(0,std::min(favoritesIndex,count-1));
+        if(keys&HidNpadButton_Up)favoritesIndex=(favoritesIndex-1+count)%count;
+        if(keys&HidNpadButton_Down)favoritesIndex=(favoritesIndex+1)%count;
+        if(keys&HidNpadButton_Minus) {
+            const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+            (void)toggleFavorite(selected);
+            favoritesView=favoriteTiles();
+            favoritesIndex=std::min(favoritesIndex,std::max(0,static_cast<int>(favoritesView.size())-1));
+        }
+        if(keys&HidNpadButton_A&&favoritesIndex<count) {
+            const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
+            favoritesOpen=false;
+            launch(selected);
+        }
+        return;
+    }
     if(steamGridDbPickerOpen) {
         if(keys&HidNpadButton_B){steamGridDbClosePicker();return;}
         if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
@@ -4757,7 +4787,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             const int action=systemMenuIndex;
             systemMenu=false;
             if(action==0)openList();
-            else if(action==1){recentIndex=0;recentOpen=true;}
+            else if(action==1)openRecentAll();
             else if(action==2){powerMenu=true;powerIndex=0;}
             else if(action==3) {
                 editing=!editing;
@@ -4796,16 +4826,18 @@ void keyInput(u64 keys, bool fromRepeat) {
         return;
     }
     if(recentOpen) {
-        if(keys&HidNpadButton_B){recentOpen=false;return;}
-        if(recentLaunches.empty())return;
-        recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+        if(keys&HidNpadButton_B){recentOpen=false;recentGamesOnly=false;return;}
+        const auto entries=recentEntriesForModal();
+        if(entries.empty()){recentOpen=false;recentGamesOnly=false;return;}
+        recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
         if(keys&HidNpadButton_Up)
-            recentIndex=(recentIndex-1+static_cast<int>(recentLaunches.size()))%static_cast<int>(recentLaunches.size());
+            recentIndex=(recentIndex-1+static_cast<int>(entries.size()))%static_cast<int>(entries.size());
         if(keys&HidNpadButton_Down)
-            recentIndex=(recentIndex+1)%static_cast<int>(recentLaunches.size());
+            recentIndex=(recentIndex+1)%static_cast<int>(entries.size());
         if(keys&HidNpadButton_A) {
-            const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
+            const HistoryEntry entry=entries[static_cast<size_t>(recentIndex)];
             recentOpen=false;
+            recentGamesOnly=false;
             launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
         }
         return;
@@ -4944,8 +4976,24 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_Right){if(dragging)moveTile(1,0);else updateCursor(1,0);}
     if(keys&HidNpadButton_Up){if(dragging)moveTile(0,-1);else updateCursor(0,-1);}
     if(keys&HidNpadButton_Down){if(dragging)moveTile(0,1);else updateCursor(0,1);}
+    if(!editing&&!dragging&&(keys&HidNpadButton_ZL)) {
+        Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+        const int index=itemAt(desk,selectedX,selectedY);
+        if(index>=0&&desk.tiles[static_cast<size_t>(index)].kind==Kind::Game)
+            (void)toggleFavorite(desk.tiles[static_cast<size_t>(index)]);
+        else setStatus("SELECT A GAME TO ADD TO FAVORITES",1800);
+        return;
+    }
     if(!editing&&!dragging&&(keys&HidNpadButton_ZR)) {
-        steamGridDbOpenPicker();
+        Tile* widget=selectedWidgetTile();
+        if(widget)openWidgetEditor();
+        else {
+            Workspace& desk=desks[static_cast<size_t>(deskIndex)];
+            const int index=itemAt(desk,selectedX,selectedY);
+            if(index>=0&&desk.tiles[static_cast<size_t>(index)].kind==Kind::Game)
+                steamGridDbOpenPicker();
+            else setStatus("SELECT A GAME OR WIDGET",1800);
+        }
         return;
     }
     if(editing&&(keys&HidNpadButton_ZL))resizeTile(false);
