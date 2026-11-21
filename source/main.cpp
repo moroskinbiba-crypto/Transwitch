@@ -4174,7 +4174,7 @@ void drawScreen() {
         const bool active=index==deskIndex;
         if(dockStyle==1) {
             uiButton(x,642,DeskTabWidth,42,6,desknx::ui::ButtonVariant::Solid,
-                Color{35,53,78,static_cast<Uint8>(active?255:0)},
+                Color{themeIndex==8?27:35,53,themeIndex==8?68:78,static_cast<Uint8>(active?255:0)},
                 Color{0,0,0,0},active,false,themeIndex==8?COLORS[3]:BLUE);
             if(active)gUiComponents.divider(x+12,685,DeskTabWidth-24,
                 SDL_Color{(themeIndex==8?COLORS[3]:BLUE).r,
