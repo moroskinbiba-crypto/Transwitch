@@ -74,6 +74,7 @@ bool SteamGridDbService::loadAssets(std::uint64_t id,std::uint64_t gameId,const 
  state_.status=ServiceStatus::LoadingAssets;state_.message=std::string("Loading ")+artworkKindName(kind)+" artwork...";
  state_.titleId=id;state_.gameId=gameId;state_.title=title;state_.gameName=gameName;state_.kind=kind;
  state_.games.clear();state_.assets.clear();state_.selectedAsset=0;state_.previewAsset=-1;state_.previewPath.clear();
+ state_.previewApplied=false;state_.fullResolutionApplied=false;
  state_.previewRevision=0;state_.revision=revision_;
  jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
      [](const Job& queued){return queued.type!=JobType::Cleanup;}),jobs_.end());
@@ -113,11 +114,14 @@ bool SteamGridDbService::applySelected(){
     state_.selectedAsset>=static_cast<int>(state_.assets.size())){SDL_UnlockMutex(mutex_);return false;}
  job.type=JobType::Apply;job.titleId=state_.titleId;job.gameId=state_.gameId;
  job.kind=state_.kind;job.assetIndex=state_.selectedAsset;job.asset=state_.assets[static_cast<size_t>(state_.selectedAsset)];
- job.title=state_.title;job.gameName=state_.gameName;++revision_;job.revision=revision_;
+ job.title=state_.title;job.gameName=state_.gameName;
+ if(state_.previewAsset==state_.selectedAsset)job.previewPath=state_.previewPath;
+ ++revision_;job.revision=revision_;
  jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
      [](const Job& queued){return queued.type==JobType::Preview;}),jobs_.end());
+ state_.previewApplied=false;state_.fullResolutionApplied=false;
  state_.status=ServiceStatus::Applying;
- state_.message="Downloading selected artwork...";state_.revision=revision_;
+ state_.message=job.previewPath.empty()?"Downloading selected artwork...":"Applying preview, then loading full-resolution artwork...";state_.revision=revision_;
  const auto requestRevision=job.revision;
  SDL_UnlockMutex(mutex_);
  if(!enqueue(std::move(job))){publishError(requestRevision,"SteamGridDB apply queue is busy");return false;}
@@ -242,14 +246,47 @@ int SteamGridDbService::workerLoop(){
    publishPreview(j.revision,j.assetIndex,path);continue;
   }
   if(j.type==JobType::Apply){
-   cache_.ensureDirectories();const std::string temp=std::string(SteamGridDbCache::kCacheRoot)+"/.download.tmp";
-   if(!downloadImage(j.asset.url,temp,error,&SteamGridDbService::cancelNetwork,&cancelContext)){publishError(j.revision,error);continue;}
-   bool saved=cache_.saveArtworkFromFile(j.titleId,
+   cache_.ensureDirectories();
+   bool previewSaved=false;
+   if(!j.previewPath.empty()){
+    previewSaved=cache_.saveArtworkFromFile(j.titleId,
+     static_cast<SteamGridDbCache::ArtworkKind>(j.kind),j.previewPath,
+     j.gameId,j.asset.id,j.gameName,true);
+    if(previewSaved){
+     SDL_LockMutex(mutex_);
+     if(j.revision==revision_){
+      state_.previewApplied=true;
+      state_.message="Preview applied; downloading full-resolution artwork...";
+      ++state_.revision;
+     }
+     SDL_UnlockMutex(mutex_);
+    }
+   }
+   const std::string temp=std::string(SteamGridDbCache::kCacheRoot)+"/.download.tmp";
+   if(!downloadImage(j.asset.url,temp,error,&SteamGridDbService::cancelNetwork,&cancelContext)){
+    SDL_LockMutex(mutex_);
+    if(j.revision==revision_){
+     state_.status=previewSaved?ServiceStatus::Applied:ServiceStatus::Error;
+     state_.fullResolutionApplied=false;
+     state_.message=previewSaved?"Preview saved; full-resolution download failed":error;
+     ++state_.revision;
+    }
+    SDL_UnlockMutex(mutex_);
+    continue;
+   }
+   const bool saved=cache_.saveArtworkFromFile(j.titleId,
     static_cast<SteamGridDbCache::ArtworkKind>(j.kind),temp,
     j.gameId,j.asset.id,j.gameName,true);
-   std::remove(temp.c_str());SDL_LockMutex(mutex_);
-   if(j.revision==revision_){state_.status=saved?ServiceStatus::Applied:ServiceStatus::Error;
-    state_.message=saved?"Artwork saved to the SD card":"Downloaded image could not be committed to cache";++state_.revision;}
+   std::remove(temp.c_str());
+   SDL_LockMutex(mutex_);
+   if(j.revision==revision_){
+    state_.status=saved||previewSaved?ServiceStatus::Applied:ServiceStatus::Error;
+    state_.fullResolutionApplied=saved;
+    state_.message=saved?"Full-resolution artwork saved":
+     (previewSaved?"Preview saved; full-resolution artwork could not be committed":
+      "Downloaded image could not be committed to cache");
+    ++state_.revision;
+   }
    SDL_UnlockMutex(mutex_);
   }
  }
