@@ -42,12 +42,19 @@ jobs:
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev
+          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev pkg-config
 
       - name: Test compressed NACP title normalization
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/nacp_title_block_test.cpp -lz -o /tmp/desknx-nacp-test
           /tmp/desknx-nacp-test
+
+      - name: Test SteamGridDB title matching and cache behavior
+        run: |
+          c++ -std=c++17 -Iinclude tests/steamgriddb_client_test.cpp source/SteamGridDbClient.cpp $(pkg-config --cflags --libs libcurl) -o /tmp/desknx-steamgriddb-client-test
+          /tmp/desknx-steamgriddb-client-test
+          c++ -std=c++17 -Isource tests/steamgriddb_cache_test.cpp source/SteamGridDbCache.cpp -o /tmp/desknx-steamgriddb-cache-test
+          /tmp/desknx-steamgriddb-cache-test
 
       - name: Test IPC protocol validation boundaries
         run: |
