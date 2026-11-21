@@ -1982,8 +1982,6 @@ int nextendoThreadMain(void*) {
                 publishNextendoCatalog(std::move(cached),"sd-cache");
                 const std::int64_t remaining=std::max<std::int64_t>(
                     60000,expires-static_cast<std::int64_t>(std::time(nullptr)));
-                nextCatalogAttempt=now+static_cast<std::uint64_t>(
-                    std::min<std::int64_t>(remaining/2,6*60*60));
                 nextCatalogAttempt=now+std::min<std::uint64_t>(
                     6u*60u*60u*1000u,
                     static_cast<std::uint64_t>(remaining/2)*1000u);
@@ -2382,7 +2380,9 @@ void editNextendoClientId() {
         setStatus(languageRussian?"НЕКОРРЕКТНЫЙ CLIENT ID":"INVALID CLIENT ID",3000);
         return;
     }
+    if(nextendoMutex)SDL_LockMutex(nextendoMutex);
     nextendoClientId=value;
+    if(nextendoMutex)SDL_UnlockMutex(nextendoMutex);
     scheduleLauncherSettingsSave(0);
     SDL_AtomicSet(&nextendoCatalogRefreshRequested,1);
     setStatus(languageRussian?
@@ -4085,7 +4085,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             auto joyconLabel=[&](const JoyconBatteryState& joy,const char* side) {
                 if(!joy.connected)return std::string(side)+"  --";
                 std::string value=std::string(side)+"  "+
-                    std::to_string(joy.level)+"/4";
+                    std::to_string(std::max(0,std::min(100,joy.level*25)))+"%";
                 if(joy.charging)value+="  CHG";
                 return value;
             };
@@ -4933,9 +4933,26 @@ void drawScreen() {
                         appBadge=candidate.displayVersion.empty()
                             ?(languageRussian?"ВЕРСИЯ Н/Д":"VERSION N/A")
                             :"v"+candidate.displayVersion;
-                        // The eShop update flag is not a Nextendo compatibility
-                        // verdict. Keep the installed version neutral until the
-                        // signed Nextendo catalogue supplies a verified result.
+                        const auto verdict=nextendoVersionVerdict(
+                            candidate.data,candidate.displayVersion);
+                        switch(verdict.state) {
+                            case desknx::nextendo::CompatibilityState::Accepted:
+                                badgeColor=GREEN;
+                                break;
+                            case desknx::nextendo::CompatibilityState::UpdateRequired:
+                                appBadge=verdict.recommended.empty()?"UPDATE REQUIRED":
+                                    "UPDATE  v"+verdict.recommended;
+                                badgeColor=Color{255,190,82,255};
+                                break;
+                            case desknx::nextendo::CompatibilityState::Disabled:
+                                appBadge="NEXTENDO OFF";
+                                badgeColor=RED;
+                                break;
+                            case desknx::nextendo::CompatibilityState::NotListed:
+                            case desknx::nextendo::CompatibilityState::Unknown:
+                                badgeColor=MUTED;
+                                break;
+                        }
                     }
                     textCentered(appBadge,x+cardW/2,y+101,1,badgeColor,x+8,x+cardW-8);
                 }
@@ -4973,16 +4990,42 @@ void drawScreen() {
                 } else {
                     text("INSTALLED SIZE  --",mx+800,my+318,1,MUTED,mx+mw-30);
                 }
+                const auto compatibility=nextendoVersionVerdict(
+                    selected.data,selected.displayVersion);
+                std::string compatibilityLabel="NEXTENDO  /  UNKNOWN";
+                Color compatibilityColor=MUTED;
+                switch(compatibility.state) {
+                    case desknx::nextendo::CompatibilityState::Accepted:
+                        compatibilityLabel="NEXTENDO  /  ONLINE VERSION";
+                        compatibilityColor=GREEN;
+                        break;
+                    case desknx::nextendo::CompatibilityState::UpdateRequired:
+                        compatibilityLabel=compatibility.recommended.empty()
+                            ?"NEXTENDO  /  UPDATE REQUIRED":
+                            "NEXTENDO  /  UPDATE TO v"+compatibility.recommended;
+                        compatibilityColor=Color{255,190,82,255};
+                        break;
+                    case desknx::nextendo::CompatibilityState::Disabled:
+                        compatibilityLabel="NEXTENDO  /  ONLINE DISABLED";
+                        compatibilityColor=RED;
+                        break;
+                    case desknx::nextendo::CompatibilityState::NotListed:
+                        compatibilityLabel="NEXTENDO  /  NOT LISTED";
+                        break;
+                    case desknx::nextendo::CompatibilityState::Unknown:
+                        break;
+                }
+                text(compatibilityLabel,mx+800,my+340,1,compatibilityColor,mx+mw-30);
                 unsigned onlinePlayers=0;
                 const bool onlineFresh=nextendoPlayersSnapshotForTitle(selected.data,onlinePlayers);
                 char onlineLabel[64]{};
                 if(onlineFresh)std::snprintf(onlineLabel,sizeof(onlineLabel),"ONLINE  %u PLAYERS",onlinePlayers);
                 else std::snprintf(onlineLabel,sizeof(onlineLabel),"ONLINE  UNKNOWN (NEXTENDO)");
-                text(onlineLabel,mx+800,my+340,1,onlineFresh?(onlinePlayers?GREEN:MUTED):MUTED,mx+mw-30);
+                text(onlineLabel,mx+800,my+362,1,onlineFresh?(onlinePlayers?GREEN:MUTED):MUTED,mx+mw-30);
                 if(!selected.playStatsQueried) {
-                    text("PLAY STATS NOT LOADED",mx+800,my+362,1,MUTED,mx+mw-30);
+                    text("PLAY STATS NOT LOADED",mx+800,my+384,1,MUTED,mx+mw-30);
                 } else if(!selected.playStatsAvailable) {
-                    text("PLAY STATS UNAVAILABLE",mx+800,my+362,1,RED,mx+mw-30);
+                    text("PLAY STATS UNAVAILABLE",mx+800,my+384,1,RED,mx+mw-30);
                 } else {
                     char playLabel[48]{};
                     const unsigned long long minutes=
@@ -4992,19 +5035,19 @@ void drawScreen() {
                     else
                         std::snprintf(playLabel,sizeof(playLabel),"PLAY TIME  %lluH %02lluM",
                                       minutes/60,minutes%60);
-                    text(playLabel,mx+800,my+362,1,MUTED,mx+mw-30);
+                    text(playLabel,mx+800,my+384,1,MUTED,mx+mw-30);
                 }
                 char launchLabel[48]{};
                 std::snprintf(launchLabel,sizeof(launchLabel),"LAUNCHES  %u",selected.launchCount);
-                text(launchLabel,mx+800,my+384,1,MUTED,mx+mw-30);
+                text(launchLabel,mx+800,my+406,1,MUTED,mx+mw-30);
                 if(selected.lastPlayed!=0) {
                     const std::time_t stamp=static_cast<std::time_t>(selected.lastPlayed);
                     std::tm local{};char dateLabel[48]{};
                     if(localtime_r(&stamp,&local)&&
                        std::strftime(dateLabel,sizeof(dateLabel),"LAST PLAYED  %d.%m.%Y",&local))
-                        text(dateLabel,mx+800,my+406,1,MUTED,mx+mw-30);
+                        text(dateLabel,mx+800,my+428,1,MUTED,mx+mw-30);
                 } else {
-                    text("NOT PLAYED YET",mx+800,my+406,1,MUTED,mx+mw-30);
+                    text("NOT PLAYED YET",mx+800,my+428,1,MUTED,mx+mw-30);
                 }
             } else if(selected.kind==Kind::Nro) {
                 std::string fileName=selected.data;
