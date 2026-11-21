@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 #include <desknx/VisualGeometry.hpp>
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdint>
 #include <string>
