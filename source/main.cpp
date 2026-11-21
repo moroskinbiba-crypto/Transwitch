@@ -851,11 +851,35 @@ std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
 }
+desknx::widgets::Config widgetConfig(const Tile& tile) {
+    return desknx::widgets::parse(tile.kind,tile.data);
+}
+int configuredWidgetRefresh(Kind kind) {
+    int seconds=180;
+    bool found=false;
+    for(const auto& workspace:desks)for(const auto& tile:workspace.tiles) {
+        if(tile.kind!=kind)continue;
+        seconds=found?std::min(seconds,widgetConfig(tile).refreshSeconds):
+                       widgetConfig(tile).refreshSeconds;
+        found=true;
+    }
+    return found?seconds:desknx::widgets::defaults(kind).refreshSeconds;
+}
 std::string typeName(Kind k) {
-    switch(k) { case Kind::Game:return "GAME"; case Kind::Nro:return "HOMEBREW"; case Kind::Clock:return "WIDGET / CLOCK";
-        case Kind::Battery:return "WIDGET / BATTERY"; case Kind::System:return "WIDGET / SYSTEM"; case Kind::Recent:return "WIDGET / RECENT";
-        case Kind::Storage:return "WIDGET / STORAGE"; case Kind::Calendar:return "WIDGET / CALENDAR";
-        case Kind::Unsupported:return "UNSUPPORTED"; }
+    switch(k) {
+        case Kind::Game:return "GAME";
+        case Kind::Nro:return "HOMEBREW";
+        case Kind::Clock:return "WIDGET / CLOCK";
+        case Kind::Battery:return "WIDGET / BATTERY";
+        case Kind::System:return "WIDGET / SYSTEM MONITOR";
+        case Kind::Recent:return "WIDGET / RECENT GAMES";
+        case Kind::Storage:return "WIDGET / STORAGE";
+        case Kind::Calendar:return "WIDGET / CALENDAR";
+        case Kind::Nextendo:return "WIDGET / NEXTENDO";
+        case Kind::Favorites:return "WIDGET / FAVORITES";
+        case Kind::GameLibrary:return "WIDGET / GAME LIBRARY";
+        case Kind::Unsupported:return "UNSUPPORTED";
+    }
     return "ITEM";
 }
 
@@ -1633,6 +1657,124 @@ void recordRecentLaunch(const Tile& tile) {
     ++recentLaunchRevision;
     if(recentLaunches.size()>10)recentLaunches.resize(10);
     lastLaunched=tile.title;saveHistory();
+}
+
+bool readFavoritesFile(const char* path,std::vector<std::string>& output) {
+    struct stat st{};
+    constexpr std::uint64_t MaxFavoritesBytes=32u*1024u;
+    if(!path||stat(path,&st)!=0||!S_ISREG(st.st_mode)||
+       st.st_size<=0||static_cast<std::uint64_t>(st.st_size)>MaxFavoritesBytes)return false;
+    std::ifstream input(path,std::ios::binary);
+    std::string line;
+    if(!input||!std::getline(input,line)||line!="DESKNXF1")return false;
+    std::vector<std::string> parsed;
+    while(std::getline(input,line)&&parsed.size()<256) {
+        if(line.size()!=16||!desknx::model::isTitleId(line))continue;
+        if(std::find(parsed.begin(),parsed.end(),line)==parsed.end())
+            parsed.push_back(line);
+    }
+    if(input.bad())return false;
+    output=std::move(parsed);
+    return true;
+}
+void loadFavorites() {
+    if(!sdMounted)return;
+    std::vector<std::string> loaded;
+    if(readFavoritesFile(FAVORITES_FILE,loaded)) {
+        favoriteTitleIds=std::move(loaded);
+    } else if(readFavoritesFile(FAVORITES_BAK,loaded)) {
+        favoriteTitleIds=std::move(loaded);
+        setStatus("FAVORITES RESTORED FROM BACKUP",3500);
+    }
+}
+bool saveFavorites() {
+    if(!sdMounted)return false;
+    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
+    std::ofstream out(FAVORITES_TMP,std::ios::binary|std::ios::trunc);
+    if(!out){setStatus("FAVORITES SAVE FAILED",3000);return false;}
+    out<<"DESKNXF1\\n";
+    for(const auto& id:favoriteTitleIds)
+        if(desknx::model::isTitleId(id))out<<id<<"\\n";
+    out.flush();
+    bool good=out.good();
+    out.close();
+    if(!good){std::remove(FAVORITES_TMP);setStatus("FAVORITES WRITE FAILED",3000);return false;}
+    if(!commitSdCard("favorites-temp")) {
+        std::remove(FAVORITES_TMP);
+        setStatus("FAVORITES SD COMMIT FAILED",3000);
+        return false;
+    }
+    const auto result=desknx::safeio::replaceFilePreservingOnFailure(
+        FAVORITES_TMP,FAVORITES_FILE,FAVORITES_BAK,true);
+    if(result!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(FAVORITES_TMP);
+        setStatus("FAVORITES RENAME FAILED; BACKUP KEPT",3500);
+        return false;
+    }
+    if(!commitSdCard("favorites-publish")) {
+        setStatus("FAVORITES COMMIT FAILED; BACKUP KEPT",3500);
+        return false;
+    }
+    return true;
+}
+bool isFavorite(const std::string& titleId) {
+    return std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),titleId)!=favoriteTitleIds.end();
+}
+bool toggleFavorite(const Tile& tile) {
+    if(tile.kind!=Kind::Game||!desknx::model::isTitleId(tile.data)) {
+        setStatus("FAVORITES SUPPORT INSTALLED GAMES",2200);
+        return false;
+    }
+    const auto found=std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),tile.data);
+    if(found!=favoriteTitleIds.end()) {
+        favoriteTitleIds.erase(found);
+        if(saveFavorites())setStatus("REMOVED FROM FAVORITES: "+tile.title);
+        return true;
+    }
+    if(favoriteTitleIds.size()>=256) {
+        setStatus("FAVORITES LIMIT REACHED",2500);
+        return false;
+    }
+    favoriteTitleIds.insert(favoriteTitleIds.begin(),tile.data);
+    if(saveFavorites())setStatus("ADDED TO FAVORITES: "+tile.title);
+    return true;
+}
+std::vector<Tile> favoriteTiles() {
+    const auto all=catalogueSnapshot();
+    std::vector<Tile> result;
+    result.reserve(favoriteTitleIds.size());
+    for(const auto& id:favoriteTitleIds) {
+        const auto it=std::find_if(all.begin(),all.end(),[&](const Candidate& entry) {
+            return entry.kind==Kind::Game&&entry.data==id;
+        });
+        if(it!=all.end())result.push_back(Tile{Kind::Game,it->title,it->data,0,0,1,1,it->color});
+    }
+    return result;
+}
+void openFavorites() {
+    favoritesView=favoriteTiles();
+    favoritesIndex=0;
+    if(favoritesView.empty()) {
+        setStatus(favoriteTitleIds.empty()?"NO FAVORITE GAMES YET":"FAVORITE GAMES ARE NOT IN THE CURRENT CATALOGUE");
+        return;
+    }
+    favoritesOpen=true;
+}
+std::vector<HistoryEntry> recentEntriesForModal() {
+    if(!recentGamesOnly)return recentLaunches;
+    std::vector<HistoryEntry> games;
+    for(const auto& entry:recentLaunches)if(entry.kind==Kind::Game)games.push_back(entry);
+    return games;
+}
+void openRecentGames() {
+    recentGamesOnly=true;
+    recentIndex=0;
+    recentOpen=true;
+}
+void openRecentAll() {
+    recentGamesOnly=false;
+    recentIndex=0;
+    recentOpen=true;
 }
 bool backupBrokenLayout() {
     struct stat st{};
