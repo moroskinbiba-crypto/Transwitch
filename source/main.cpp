@@ -1263,7 +1263,7 @@ bool steamGridDbGetSelectedGame(Tile& selected,std::uint64_t& titleId) {
         if(listIndex<0||static_cast<size_t>(listIndex)>=available.size())return false;
         const Candidate& candidate=available[static_cast<size_t>(listIndex)];
         if(candidate.kind!=Kind::Game||!desknx::model::isTitleId(candidate.data))return false;
-        selected=Tile{candidate.kind,candidate.title,candidate.data,0,0,candidate.w,candidate.h,candidate.color};
+        selected=Tile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
     } else {
         if(desks.empty()||deskIndex<0||deskIndex>=static_cast<int>(desks.size()))return false;
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
