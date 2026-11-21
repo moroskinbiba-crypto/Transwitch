@@ -20,6 +20,7 @@
 #include "../include/desknx/Diagnostics.hpp"
 #include "../include/desknx/Localization.hpp"
 #include "../include/desknx/NextendoPlayers.hpp"
+#include "../include/desknx/NextendoGameCatalog.hpp"
 #include "../include/desknx/WidgetLayout.hpp"
 #include "../include/desknx/WidgetSensors.hpp"
 #include "catalog_view.hpp"
@@ -89,6 +90,9 @@ constexpr const char* CALENDAR_NOTES_BAK = "sdmc:/switch/DeskNX/calendar-notes.b
 constexpr const char* FAVORITES_FILE = "sdmc:/switch/DeskNX/favorites.tsv";
 constexpr const char* FAVORITES_TMP = "sdmc:/switch/DeskNX/favorites.tmp";
 constexpr const char* FAVORITES_BAK = "sdmc:/switch/DeskNX/favorites.bak";
+constexpr const char* NEXTENDO_CATALOG_FILE = "sdmc:/switch/DeskNX/nextendo-game-catalog.json";
+constexpr const char* NEXTENDO_CATALOG_TMP = "sdmc:/switch/DeskNX/nextendo-game-catalog.tmp";
+constexpr const char* NEXTENDO_CATALOG_BAK = "sdmc:/switch/DeskNX/nextendo-game-catalog.bak";
 constexpr const char* SETTINGS_FILE = "sdmc:/switch/DeskNX/settings.ini";
 constexpr const char* SETTINGS_TMP = "sdmc:/switch/DeskNX/settings.tmp";
 constexpr const char* SETTINGS_BAK = "sdmc:/switch/DeskNX/settings.bak";
@@ -121,6 +125,7 @@ bool motionEffects=false; // optional low-cost screen fade and selection pulse
 Uint32 uiTransitionStart=0;
 std::uint32_t lastUiScreenState=UINT32_MAX;
 std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
+std::string nextendoClientId;
 bool launcherSettingsSavePending=false;
 Uint32 launcherSettingsSaveDue=0;
 struct LauncherSettingsSaveJob { std::string contents; };
@@ -163,7 +168,11 @@ SDL_atomic_t nextendoConfiguredRefreshMs{};
 SDL_atomic_t nextendoNetworkReady{};
 SDL_atomic_t nextendoConsecutiveFailures{};
 SDL_atomic_t nextendoLastSuccessTick{};
+SDL_atomic_t nextendoCatalogRefreshRequested{};
 desknx::nextendo::PresenceFeed nextendoFeed;
+desknx::nextendo::GameCatalog nextendoGameCatalog;
+bool nextendoCatalogAvailable=false;
+std::string nextendoCatalogStatus="NOT CONFIGURED";
 desknx::nextendo::PopularGames nextendoPopularCache{};
 struct CatalogueScanRequest { bool forceRefresh; bool reinitializeNs; };
 const CatalogueScanRequest catalogueRefreshRequest{true, true};
@@ -724,6 +733,11 @@ void loadLauncherSettings() {
             const long parsed=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&parsed>=-1&&parsed<static_cast<long>(COLORS.size()))
                 accentColorIndex=static_cast<int>(parsed);
+        } else if(key=="nextendo_client_id") {
+            bool valid=!value.empty()&&value.size()<=128;
+            for(unsigned char ch:value)
+                if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
+            if(valid)nextendoClientId=value;
         } else if(key=="steamgriddb_key") {
             modernSteamGridKeySeen=true;
             bool valid=value.size()<=64;
@@ -783,6 +797,7 @@ std::string serializeLauncherSettingsSnapshot() {
        <<"effects="<<(motionEffects?1:0)<<"\n"
        <<"accent="<<accentColorIndex<<"\n"
        <<"steamgriddb_key="<<steamGridDbApiKey<<"\n"
+       <<"nextendo_client_id="<<nextendoClientId<<"\n"
        <<"wallpaper="<<safeField(wallpaperPath)<<"\n"
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
@@ -1857,6 +1872,96 @@ void catalogueProgress(const desknx::catalog::ScanResult& snapshot, void*) {
 bool nextendoCancelRequested(void*) {
     return SDL_AtomicGet(&nextendoStop) != 0;
 }
+
+void publishNextendoCatalog(desknx::nextendo::GameCatalog&& catalog,
+                            const char* source) {
+    const std::uint64_t revision=catalog.revision;
+    const std::size_t count=catalog.games.size();
+    if(!nextendoMutex)return;
+    SDL_LockMutex(nextendoMutex);
+    nextendoGameCatalog=std::move(catalog);
+    nextendoCatalogAvailable=true;
+    nextendoCatalogStatus="VERIFIED";
+    SDL_UnlockMutex(nextendoMutex);
+    desknx::diag::Write("nextendo_catalog","verified",
+        "source=%s revision=%llu titles=%zu",source,
+        static_cast<unsigned long long>(revision),count);
+}
+
+bool loadNextendoCatalogCache(desknx::nextendo::GameCatalog& catalog,
+                              std::string& error) {
+    const char* paths[]={NEXTENDO_CATALOG_FILE,NEXTENDO_CATALOG_BAK};
+    for(const char* path:paths) {
+        struct stat st{};
+        if(stat(path,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||
+           static_cast<std::uint64_t>(st.st_size)>512u*1024u)continue;
+        std::ifstream input(path,std::ios::binary);
+        if(!input)continue;
+        std::string envelope((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+        if(input.bad()||envelope.size()!=static_cast<std::size_t>(st.st_size))continue;
+        if(!desknx::nextendo::parseSignedGameCatalog(envelope,
+            static_cast<std::int64_t>(std::time(nullptr)),catalog,error))continue;
+        if(path!=NEXTENDO_CATALOG_FILE)
+            setStatus("NEXTENDO CATALOG RESTORED FROM BACKUP",3000);
+        return true;
+    }
+    if(error.empty())error="NO VERIFIED CATALOG CACHE";
+    return false;
+}
+
+bool saveNextendoCatalogCache(const std::string& envelope) {
+    if(!sdMounted||envelope.empty()||envelope.size()>512u*1024u)return false;
+    mkdir("sdmc:/switch",0777);
+    mkdir(CFG_DIR,0777);
+    std::ofstream output(NEXTENDO_CATALOG_TMP,std::ios::binary|std::ios::trunc);
+    if(!output)return false;
+    output.write(envelope.data(),static_cast<std::streamsize>(envelope.size()));
+    output.flush();
+    const bool good=output.good();
+    output.close();
+    if(!good||!commitSdCard("nextendo-catalog-temp")) {
+        std::remove(NEXTENDO_CATALOG_TMP);
+        return false;
+    }
+    const auto result=desknx::safeio::replaceFilePreservingOnFailure(
+        NEXTENDO_CATALOG_TMP,NEXTENDO_CATALOG_FILE,NEXTENDO_CATALOG_BAK,true);
+    if(result!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(NEXTENDO_CATALOG_TMP);
+        return false;
+    }
+    return commitSdCard("nextendo-catalog-publish");
+}
+
+desknx::nextendo::VersionVerdict nextendoVersionVerdict(
+    const std::string& titleId,const std::string& installedVersion) {
+    if(!nextendoMutex||!desknx::model::isTitleId(titleId))
+        return {desknx::nextendo::CompatibilityState::Unknown,{}};
+    char* end=nullptr;
+    const unsigned long long id=std::strtoull(titleId.c_str(),&end,16);
+    if(end!=titleId.c_str()+titleId.size()||id==0)
+        return {desknx::nextendo::CompatibilityState::Unknown,{}};
+    SDL_LockMutex(nextendoMutex);
+    const std::int64_t now=static_cast<std::int64_t>(std::time(nullptr));
+    const bool fresh=nextendoCatalogAvailable&&nextendoGameCatalog.fresh(now);
+    const auto verdict=fresh?
+        nextendoGameCatalog.check(static_cast<std::uint64_t>(id),installedVersion):
+        desknx::nextendo::VersionVerdict{};
+    SDL_UnlockMutex(nextendoMutex);
+    return verdict;
+}
+
+std::string nextendoCatalogStatusText() {
+    if(!nextendoMutex)return "NEXTENDO CATALOG UNAVAILABLE";
+    SDL_LockMutex(nextendoMutex);
+    std::string value=nextendoCatalogStatus;
+    if(nextendoCatalogAvailable&&
+       !nextendoGameCatalog.fresh(static_cast<std::int64_t>(std::time(nullptr))))
+        value="CATALOG EXPIRED";
+    SDL_UnlockMutex(nextendoMutex);
+    return value;
+}
+
 int nextendoThreadMain(void*) {
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     bool networkReady = false;
@@ -1864,8 +1969,33 @@ int nextendoThreadMain(void*) {
     SDL_AtomicSet(&nextendoNetworkReady,0);
     SDL_AtomicSet(&nextendoConsecutiveFailures,0);
     std::uint64_t nextAttempt = SDL_GetTicks64() + 8000;
+    std::uint64_t nextCatalogAttempt = 0;
+    bool catalogCacheLoaded = false;
     while (!SDL_AtomicGet(&nextendoStop)) {
         const std::uint64_t now = SDL_GetTicks64();
+        if(!catalogCacheLoaded) {
+            catalogCacheLoaded=true;
+            desknx::nextendo::GameCatalog cached;
+            std::string cacheError;
+            if(loadNextendoCatalogCache(cached,cacheError)) {
+                const std::int64_t expires=cached.expiresAt;
+                publishNextendoCatalog(std::move(cached),"sd-cache");
+                const std::int64_t remaining=std::max<std::int64_t>(
+                    60000,expires-static_cast<std::int64_t>(std::time(nullptr)));
+                nextCatalogAttempt=now+static_cast<std::uint64_t>(
+                    std::min<std::int64_t>(remaining/2,6*60*60));
+                nextCatalogAttempt=now+std::min<std::uint64_t>(
+                    6u*60u*60u*1000u,
+                    static_cast<std::uint64_t>(remaining/2)*1000u);
+            } else {
+                SDL_LockMutex(nextendoMutex);
+                nextendoCatalogStatus=nextendoClientId.empty()?
+                    "CLIENT ID REQUIRED":"CATALOGUE NOT AVAILABLE";
+                SDL_UnlockMutex(nextendoMutex);
+                desknx::diag::Write("nextendo_catalog","cache_unavailable",
+                    "reason=%s",cacheError.c_str());
+            }
+        }
         if (now >= nextAttempt) {
             if (!networkReady) {
                 networkReady = desknx::nextendo::initializeNetwork();
@@ -1921,6 +2051,50 @@ int nextendoThreadMain(void*) {
                 static_cast<std::uint32_t>(configuredMs):
                 static_cast<std::uint32_t>(desknx::nextendo::RefreshIntervalMs);
             nextAttempt = now + refreshMs;
+        }
+        if(networkReady) {
+            std::string clientId;
+            SDL_LockMutex(nextendoMutex);
+            clientId=nextendoClientId;
+            SDL_UnlockMutex(nextendoMutex);
+            const bool forceRefresh=SDL_AtomicGet(&nextendoCatalogRefreshRequested)!=0;
+            if(forceRefresh)SDL_AtomicSet(&nextendoCatalogRefreshRequested,0);
+            if(!clientId.empty()&&(forceRefresh||now>=nextCatalogAttempt)) {
+                std::string envelope,fetchError;
+                desknx::nextendo::GameCatalog catalog;
+                if(desknx::nextendo::fetchGameCatalog(clientId,envelope,fetchError,
+                    nextendoCancelRequested,nullptr)) {
+                    std::string parseError;
+                    if(desknx::nextendo::parseSignedGameCatalog(envelope,
+                        static_cast<std::int64_t>(std::time(nullptr)),catalog,parseError)) {
+                        const std::int64_t expires=catalog.expiresAt;
+                        publishNextendoCatalog(std::move(catalog),"network");
+                        if(!saveNextendoCatalogCache(envelope))
+                            desknx::diag::Write("nextendo_catalog","cache_save_failed",
+                                "verified_in_memory=1");
+                        const std::int64_t remaining=std::max<std::int64_t>(
+                            60000,expires-static_cast<std::int64_t>(std::time(nullptr)));
+                        nextCatalogAttempt=now+std::min<std::uint64_t>(
+                            6u*60u*60u*1000u,
+                            static_cast<std::uint64_t>(remaining/2)*1000u);
+                    } else {
+                        SDL_LockMutex(nextendoMutex);
+                        nextendoCatalogStatus="SIGNATURE OR SCHEMA REJECTED";
+                        SDL_UnlockMutex(nextendoMutex);
+                        desknx::diag::Write("nextendo_catalog","rejected",
+                            "reason=%s",parseError.c_str());
+                        nextCatalogAttempt=now+5u*60u*1000u;
+                    }
+                } else {
+                    SDL_LockMutex(nextendoMutex);
+                    if(!nextendoCatalogAvailable)
+                        nextendoCatalogStatus="CATALOGUE UNAVAILABLE";
+                    SDL_UnlockMutex(nextendoMutex);
+                    desknx::diag::Write("nextendo_catalog","fetch_failed",
+                        "reason=%s",fetchError.c_str());
+                    nextCatalogAttempt=now+5u*60u*1000u;
+                }
+            }
         }
         SDL_Delay(250);
     }
@@ -2178,6 +2352,43 @@ Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize) {
     return rc;
 }
 #endif
+
+void editNextendoClientId() {
+    if(!sdMounted) {
+        setStatus(languageRussian?"ТРЕБУЕТСЯ SD ДЛЯ СОХРАНЕНИЯ":"SD CARD REQUIRED TO SAVE CLIENT ID",3000);
+        return;
+    }
+    SwkbdConfig config{};
+    if(R_FAILED(swkbdCreate(&config,0))) {
+        setStatus("KEYBOARD UNAVAILABLE",2500);
+        return;
+    }
+    swkbdConfigMakePresetDefault(&config);
+    swkbdConfigSetHeaderText(&config,
+        languageRussian?"Nextendo Client ID":"Nextendo Client ID");
+    swkbdConfigSetInitialText(&config,nextendoClientId.c_str());
+    char value[129]{};
+    std::snprintf(value,sizeof(value),"%s",nextendoClientId.c_str());
+    const Result rc=showKeyboard(&config,value,sizeof(value));
+    swkbdClose(&config);
+    if(R_FAILED(rc))return;
+    const std::size_t length=std::strlen(value);
+    bool valid=length>0&&length<=128;
+    for(std::size_t i=0;i<length;++i) {
+        const unsigned char ch=static_cast<unsigned char>(value[i]);
+        if(!(std::isalnum(ch)||ch=='_'||ch=='-'))valid=false;
+    }
+    if(!valid) {
+        setStatus(languageRussian?"НЕКОРРЕКТНЫЙ CLIENT ID":"INVALID CLIENT ID",3000);
+        return;
+    }
+    nextendoClientId=value;
+    scheduleLauncherSettingsSave(0);
+    SDL_AtomicSet(&nextendoCatalogRefreshRequested,1);
+    setStatus(languageRussian?
+        "CLIENT ID СОХРАНЁН — КАТАЛОГ NEXTENDO ОБНОВИТСЯ":
+        "CLIENT ID SAVED — NEXTENDO CATALOG WILL REFRESH",4000);
+}
 bool isSafeNroPath(const std::string& path) {
     constexpr char prefix[] = "sdmc:/switch/";
     if (path.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
@@ -5087,10 +5298,16 @@ void drawScreen() {
                      908,yy+10,1,GREEN,996);
             }
         }
-        text(languageRussian?"ДАННЫЕ NEXTENDO ОБНОВЛЯЮТСЯ АВТОМАТИЧЕСКИ":
-            "NEXTENDO LIVE DATA REFRESHES AUTOMATICALLY",
-            270,584,1,MUTED,990);
-        text("A / B  CLOSE     UP / DOWN  SELECT",270,600,1,BLUE,990);
+        const std::string catalogStatus=nextendoCatalogStatusText();
+        text("CATALOG  /  "+catalogStatus,270,574,1,MUTED,990);
+        text(languageRussian?
+            "Y  CLIENT ID     A / B  CLOSE     UP / DOWN  SELECT":
+            "Y  CLIENT ID     A / B  CLOSE     UP / DOWN  SELECT",
+            270,600,1,BLUE,990);
+        // The friends endpoint is account-scoped; never show a fabricated
+        // zero or an anonymous list until OAuth PKCE + friends scope is granted.
+        text("FRIENDS ONLINE  /  OAUTH FRIENDS SCOPE REQUIRED",
+            270,616,1,MUTED,990);
     }
     if(gSurfaceManager.isTop(SurfaceId::SystemMenu)) {
 
@@ -6719,6 +6936,10 @@ void keyInput(u64 keys, bool fromRepeat) {
         return;
     }
     if(gSurfaceManager.isTop(SurfaceId::Nextendo)) {
+        if(keys&HidNpadButton_Y) {
+            editNextendoClientId();
+            return;
+        }
         if(keys&HidNpadButton_B || keys&HidNpadButton_A) {
             nextendoOpen=false;
             return;
