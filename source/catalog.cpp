@@ -417,7 +417,7 @@ DirectoryStampCache ReadNroDirectoryStampCache(bool* validOut=nullptr) {
     std::ifstream input(NroDirectoryCacheFile,std::ios::binary);
     if(!input)return cache;
     std::string line;
-    if(!std::getline(input,line)||line!="DESKNXDIR1")return {};
+    if(!std::getline(input,line)||line!="DESKNXDIR2")return {};
     size_t count=0;
     while(std::getline(input,line)) {
         if(line.size()>1200||++count>MaxCachedDirectories)return {};
@@ -445,7 +445,7 @@ bool WriteNroDirectoryStampCache(const DirectoryStampCache& cache) {
     EnsureCacheDirectories();
     std::ofstream output(NroDirectoryCacheTemp,std::ios::binary|std::ios::trunc);
     if(!output)return false;
-    output<<"DESKNXDIR1\n";
+    output<<"DESKNXDIR2\n";
     for(const auto& entry:cache) {
         output<<encodeHex(entry.first)<<'\t'<<entry.second.mtime<<'\t'
               <<entry.second.ctime<<'\t'<<entry.second.size<<'\n';
