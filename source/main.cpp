@@ -4582,10 +4582,14 @@ void drawScreen() {
                         selectedCard?Color{106,175,255,190}:Color{255,255,255,20});
                     Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
                     drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66,selectedCard);
-                    if(candidate.kind==Kind::Game&&isFavoriteTitleId(candidate.data)) {
-                        roundRect(x+cardW-36,y+8,28,28,8,Color{35,31,23,238});
-                        drawSystemIcon(desknx::ui::IconId::StarFilled,
-                            x+cardW-30,y+14,16,Color{255,207,112,255});
+                    if(candidate.kind==Kind::Game) {
+                        const bool favorite=isFavoriteTitleId(candidate.data);
+                        roundRect(x+cardW-36,y+8,28,28,8,
+                            favorite?Color{52,42,27,242}:Color{14,22,34,218});
+                        drawSystemIcon(favorite?desknx::ui::IconId::StarFilled:
+                            desknx::ui::IconId::StarOutline,
+                            x+cardW-30,y+14,16,
+                            favorite?Color{255,207,112,255}:Color{183,197,215,230});
                     }
                     if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,focusAccent());
                     textCentered(candidate.title,x+cardW/2,y+79,2,
@@ -7392,6 +7396,18 @@ void touchInput(const SDL_Event&e) {
                         const int index=desknx::library_grid::indexAt(
                             listOffset,row,column,static_cast<int>(available.size()));
                         if(index>=0) {
+                            const Candidate& candidate=available[static_cast<size_t>(index)];
+                            const bool starTapped=candidate.kind==Kind::Game&&
+                                x>=cardX+cardW-38&&x<cardX+cardW-4&&
+                                y>=cardY+6&&y<cardY+40;
+                            if(starTapped) {
+                                (void)toggleFavorite(Tile{candidate.kind,candidate.title,
+                                    candidate.data,0,0,1,1,candidate.color});
+                                lastCatalogueTap=-1;
+                                catalogueTouchActive=false;
+                                catalogueTouchFingerId=0;
+                                return;
+                            }
                             const Uint32 now=SDL_GetTicks();
                             if(lastCatalogueTap==index&&now-lastCatalogueTapTick<=500) {
                                 listIndex=index;addSelected();lastCatalogueTap=-1;
