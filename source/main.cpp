@@ -4163,15 +4163,30 @@ void closeList() {
     catalogueTouchActive=false;
     catalogueTouchMoved=false;
     catalogueTouchFingerId=0;
-    if(widgetPickerMode) {
+    if(widgetPickerMode||gameLibraryMode) {
         catalogueFilter=widgetPickerPreviousFilter;
         catalogueSort=widgetPickerPreviousSort;
         catalogueQuery=widgetPickerPreviousQuery;
         widgetPickerMode=false;
+        gameLibraryMode=false;
         ++catalogueViewRevision;
         listIndex=0;
         listOffset=0;
     }
+}
+void openGameLibraryCatalogue() {
+    widgetPickerPreviousFilter=catalogueFilter;
+    widgetPickerPreviousSort=catalogueSort;
+    widgetPickerPreviousQuery=catalogueQuery;
+    gameLibraryMode=true;
+    catalogueFilter=desknx::catalog_view::FilterMode::Games;
+    catalogueSort=desknx::catalog_view::SortMode::Name;
+    catalogueQuery.clear();
+    ++catalogueViewRevision;
+    listIndex=0;
+    listOffset=0;
+    openList();
+    setStatus("GAME LIBRARY",1800);
 }
 void newDesk() {
     if(dragging || touchDragging) {
@@ -4606,20 +4621,37 @@ void launch(const Tile& t) {
 #endif
         return;
     }
-    if(t.kind==Kind::Battery)setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
-    else if(t.kind==Kind::Storage)setStatus("SD STORAGE WIDGET");
-    else if(t.kind==Kind::Calendar)setStatus("CALENDAR WIDGET");
-    else if(t.kind==Kind::System) {
+    if(t.kind==Kind::Battery) {
+        setStatus(battery>=0?"BATTERY: "+std::to_string(battery)+"%":"BATTERY STATUS UNAVAILABLE");
+    } else if(t.kind==Kind::Storage) {
+        setStatus(storageStatsAvailable?"SD STORAGE: "+std::to_string(sdFreeBytes/(1024u*1024u))+" MB FREE":"SD STORAGE UNAVAILABLE");
+    } else if(t.kind==Kind::Calendar) {
+        setStatus(clockText(true),3000);
+    } else if(t.kind==Kind::System) {
         const u32 firmware=hosversionGet();
-        char detail[64]{};
-        std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
-            HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
+        char detail[128]{};
+        std::snprintf(detail,sizeof(detail),"SYSTEM %.1f C  CPU %u MHz  GPU %u MHz",
+            systemSocTemperatureAvailable?systemSocTemperature:0.0f,
+            systemCpuClockAvailable?systemCpuClockHz/1000000u:0u,
+            systemGpuClockAvailable?systemGpuClockHz/1000000u:0u);
+        if(!systemSocTemperatureAvailable&& !systemCpuClockAvailable && !systemGpuClockAvailable)
+            std::snprintf(detail,sizeof(detail),"SYSTEM FIRMWARE %u.%u.%u",
+                HOSVER_MAJOR(firmware),HOSVER_MINOR(firmware),HOSVER_MICRO(firmware));
         setStatus(detail,3500);
-    }
-    else if(t.kind==Kind::Clock)setStatus("CLOCK WIDGET");
-    else if(t.kind==Kind::Recent) {
-        if(recentLaunches.empty())setStatus("NO RECENT LAUNCHES YET");
-        else {recentIndex=0;recentOpen=true;}
+    } else if(t.kind==Kind::Clock) {
+        setStatus("LOCAL TIME: "+clockText(),2500);
+    } else if(t.kind==Kind::Recent) {
+        if(recentEntriesForModal().empty())setStatus("NO RECENT GAMES YET");
+        else openRecentGames();
+    } else if(t.kind==Kind::Favorites) {
+        openFavorites();
+    } else if(t.kind==Kind::GameLibrary) {
+        openGameLibraryCatalogue();
+    } else if(t.kind==Kind::Nextendo) {
+        const auto snapshot=nextendoWidgetSnapshot();
+        setStatus(snapshot.fresh?"NEXTENDO: "+std::to_string(snapshot.total)+
+            " ONLINE / "+std::to_string(snapshot.activeTitles)+" ACTIVE GAMES":
+            "NEXTENDO STATUS UNKNOWN",3000);
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
