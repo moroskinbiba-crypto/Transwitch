@@ -1457,6 +1457,13 @@ void steamGridDbMoveAsset(int direction) {
     }
 }
 void steamGridDbRestoreSystem() {
+    // Restoring the system cover must not race an already-confirmed artwork
+    // apply that is still committing its file and metadata.
+    if(gSteamGridDbService.snapshot().status==
+       desknx::steamgriddb::ServiceStatus::Applying) {
+        setStatus("WAIT FOR THE CURRENT ARTWORK SAVE TO FINISH",2600);
+        return;
+    }
     Tile tile;
     std::uint64_t id=0;
     if(!steamGridDbGetSelectedGame(tile,id))return;
