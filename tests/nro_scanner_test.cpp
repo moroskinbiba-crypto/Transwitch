@@ -63,6 +63,16 @@ int main() {
     assert(!report.complete && report.directoriesBeyondDepth > 0);
     assert(!hasPath(files, deep / "too-deep.nro"));
 
+    // Large folders stop at a fixed entry budget instead of consuming an
+    // unbounded amount of time on removable storage.
+    const fs::path crowded = root / "crowded";
+    fs::create_directories(crowded);
+    for (std::size_t i=0; i<=desknx::nro_scan::MaxEntries; ++i)
+        writeFile(crowded / ("entry-" + std::to_string(i) + ".txt"));
+    report = desknx::nro_scan::Collect(crowded.string(), files);
+    assert(report.rootOpened && !report.complete && report.limitReached);
+    assert(report.entriesVisited == desknx::nro_scan::MaxEntries);
+
     // An unavailable root is not a successful empty scan.
     report = desknx::nro_scan::Collect((root / "missing").string(), files);
     assert(!report.rootOpened && !report.complete);
