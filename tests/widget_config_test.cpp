@@ -17,6 +17,12 @@ int main() {
 
     const auto legacy = desknx::widgets::parse(Kind::Battery, "");
     assert(legacy.refreshSeconds == 15 && legacy.flags == 3u);
+    assert(desknx::model::parseKind("X") == Kind::Nextendo);
+    assert(desknx::model::parseKind("F") == Kind::Favorites);
+    assert(desknx::model::parseKind("L") == Kind::GameLibrary);
+    assert(desknx::model::typeCode(Kind::Nextendo) == "X");
+    assert(desknx::model::typeCode(Kind::Favorites) == "F");
+    assert(desknx::model::typeCode(Kind::GameLibrary) == "L");
     const auto clamped = desknx::widgets::parse(Kind::Storage, "W1;S=99;R=7;F=255;N=99");
     assert(clamped.style == 2 && clamped.refreshSeconds == 5);
     assert(clamped.flags == 3u && clamped.itemCount == 6);
