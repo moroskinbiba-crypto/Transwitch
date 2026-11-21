@@ -3624,7 +3624,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         if(selected)
             drawSelectionFrame(r.x,r.y,r.w,r.h,focusAccent());
     } else {
-        roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
         const auto metrics=desknx::widget_layout::measure(
             r.x,r.y,r.w,r.h,t.w,t.h);
         const bool compact=metrics.compact();
@@ -3639,6 +3638,13 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         const int innerWidth=std::max(1,right-left);
         auto label=[&](const std::string& value,int y) {
             textCentered(value,center,metrics.clampY(y,8),1,MUTED,left,right);
+        };
+        auto widgetHeader=[&](desknx::ui::IconId icon,const std::string& title,int y) {
+            const int headerY=metrics.clampY(y,18);
+            drawSystemIcon(icon,left,headerY,18,accent);
+            text(title,left+25,headerY+5,1,MUTED,right);
+            gUiComponents.widgetDivider(left,headerY+23,right-left,
+                SDL_Color{accent.r,accent.g,accent.b,accent.a},surfaceOpacity);
         };
         auto progress=[&](int y,int percent) {
             const int barWidth=std::max(12,right-left);
@@ -3726,14 +3732,13 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 if(joy.charging)value+="  CHG";
                 return value;
             };
+            widgetHeader(desknx::ui::IconId::Battery,batteryHeading,r.y+9);
             if(compact) {
-                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+34,3,WHITE,right);
                 if(dataA)progress(r.y+82,battery);
                 if(dataB)label(powerLabel,r.y+92);
             } else if(wide) {
-                label(batteryHeading,r.y+13);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+33,3,WHITE,right-70);
                 if(dataA)progress(r.y+82,battery);
@@ -3741,7 +3746,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
                 if(dataB)text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
             } else {
-                label(batteryHeading+" STATUS",r.y+14);
                 drawSystemIcon(desknx::ui::IconId::Battery,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+50,6,WHITE,right-70);
@@ -3768,17 +3772,16 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             else std::snprintf(gpuText,sizeof(gpuText),"N/A");
             const std::string atmosphereText=atmosphereVersionAvailable
                 ?"AMS "+atmosphereVersion:"AMS N/A";
+            const std::string systemHeading=config.style==1?"THERMAL MONITOR":
+                (config.style==2?"CLOCK MONITOR":"SYSTEM MONITOR");
+            widgetHeader(desknx::ui::IconId::Monitor,systemHeading,r.y+9);
             if(compact) {
-                label(config.style==1?"THERMAL MONITOR":
-                    (config.style==2?"CLOCK MONITOR":"SYSTEM MONITOR"),r.y+13);
                 if(config.style==2&&dataB)
                     text(cpuText,left,r.y+38,2,WHITE,right);
                 else text(dataA?socText:"HOS "+std::string(firmwareText),left,r.y+38,2,WHITE,right);
                 if(dataB)label("GPU "+std::string(gpuText),r.y+78);
                 else if(dataA)label("PCB "+std::string(pcbText),r.y+78);
             } else if(wide) {
-                label(config.style==1?"THERMAL / SYSTEM":
-                    (config.style==2?"CLOCK / SYSTEM":"SYSTEM MONITOR"),r.y+12);
                 if(config.style==2) {
                     if(dataB) {
                         text("CPU "+std::string(cpuText),left,r.y+35,2,WHITE,right);
@@ -3795,9 +3798,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 }
                 if(!dataA&&!dataB)text("HOS "+std::string(firmwareText),left,r.y+43,2,WHITE,right);
             } else {
-                label(config.style==1?"THERMAL  /  HOS "+std::string(firmwareText):
-                    (config.style==2?"FREQUENCIES  /  HOS "+std::string(firmwareText):
-                     "SYSTEM MONITOR  /  HOS "+std::string(firmwareText)),r.y+14);
                 if(config.style==2) {
                     if(dataB) {
                         text("CPU  "+std::string(cpuText),left,r.y+48,3,WHITE,right);
@@ -3820,12 +3820,11 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             }
         } else if(t.kind==Kind::Recent) {
             const auto& entries=recentGames;
+            widgetHeader(desknx::ui::IconId::Recent,"RECENT GAMES",r.y+9);
             if(compact) {
-                label("RECENT GAMES",r.y+13);
                 if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
                 else recentGameLine(0,r.y+42,26);
             } else if(wide&&config.style==1&&dataB) {
-                label("RECENT GAMES",r.y+12);
                 if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
                     const int count=std::min<int>(
@@ -3841,7 +3840,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     }
                 }
             } else if(wide) {
-                label("RECENT GAMES",r.y+12);
                 if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
                 else {
                     const size_t count=std::min<std::size_t>(
@@ -3852,7 +3850,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                             config.style==2?32:25);
                 }
             } else {
-                label("RECENT GAMES",r.y+17);
                 if(entries.empty())text("NO GAMES YET",left,r.y+86,2,WHITE,right);
                 else {
                     const size_t count=std::min<std::size_t>(config.itemCount,entries.size());
@@ -3874,25 +3871,22 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const std::string mainValue=!storageStatsAvailable?"N/A":
                 (config.style==2?freeSpaceText()+" / "+std::string(totalText):
                  (dataA?std::string(usedText):freeSpaceText()+" FREE"));
+            widgetHeader(desknx::ui::IconId::Storage,"SD STORAGE",r.y+9);
             if(config.style==1&&storageStatsAvailable&&!compact) {
-                label("SD CAPACITY",r.y+13);
                 text(std::to_string(percent)+"%",left,r.y+34,4,WHITE,right);
                 if(dataA)text(usedText,left,r.y+(wide?78:92),1,MUTED,right);
                 else text(freeSpaceText()+" FREE",left,r.y+(wide?78:92),1,MUTED,right);
                 if(dataB)progress(r.y+(wide?100:122),percent);
             } else if(compact) {
-                label("SD STORAGE",r.y+13);
                 text(mainValue,left,r.y+39,2,WHITE,right);
                 if(dataB)progress(r.y+82,percent);
             } else if(wide) {
-                label("SD CARD STORAGE",r.y+12);
                 text(mainValue,left,r.y+34,2,WHITE,right-78);
                 if(dataB&&percent>=0)text(std::to_string(percent)+"% USED",
                     right-70,r.y+49,1,MUTED,right);
                 if(dataB)progress(r.y+83,percent);
                 else if(dataA)label(totalText,r.y+83);
             } else {
-                label("SD CARD STORAGE",r.y+18);
                 if(storageStatsAvailable) {
                     text(mainValue,left,r.y+50,4,WHITE,right);
                     if(dataA)text(totalText,left,r.y+112,2,MUTED,right);
@@ -3979,7 +3973,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             }
         } else if(t.kind==Kind::Nextendo) {
             const auto online=nextendoWidgetSnapshot();
-            label(config.style==2?"NEXTENDO  /  NETWORK":"NEXTENDO  /  ACTIVITY",r.y+12);
+            widgetHeader(desknx::ui::IconId::Network,
+                config.style==2?"NEXTENDO  /  NETWORK":"NEXTENDO  /  ACTIVITY",r.y+9);
             if(!online.fresh) {
                 text("WAITING FOR SYNC",left,r.y+39,2,WHITE,right);
                 label("STATUS UNKNOWN",r.y+78);
@@ -4007,7 +4002,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const std::vector<Tile> games=t.kind==Kind::Favorites?
                 favoriteTiles():gameLibraryTiles(static_cast<std::size_t>(config.itemCount),dataA);
             const bool favoritesWidget=t.kind==Kind::Favorites;
-            label(favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+12);
+            widgetHeader(favoritesWidget?desknx::ui::IconId::Heart:desknx::ui::IconId::Library,
+                favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+9);
             if(games.empty()) {
                 text(favoritesWidget
                     ?(languageRussian?"НЕТ ИЗБРАННЫХ ИГР":"NO FAVORITES SAVED")
