@@ -228,6 +228,7 @@ WorkspaceBackgroundCache gWorkspaceBackgroundCache;
 desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
 enum class SteamGridDbPickerView { Matches, Assets };
 bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false, steamGridDbStartupPruned=false;
+bool steamGridDbPreviewAppliedNotified=false;
 bool steamGridDbTouchTracking=false, steamGridDbTouchDragged=false;
 int steamGridDbTouchStartX=0, steamGridDbTouchStartY=0;
 int steamGridDbMatchIndex=0, steamGridDbMatchOffset=0;
@@ -351,7 +352,8 @@ Uint32 statusUntil=0, lastBatteryTick=0;
 // everything here comes from the initial block or live events.
 AccountUid g_backendUser{};         // zero uid = backend decides (LNC-03)
 bool g_backendHasUser=false;
-u64 g_backendAppTitle=0;            // suspended/foreground title id
+u64 g_backendAppTitle=0;            // current foreground/suspended title id
+bool g_backendAppSuspended=false;   // true only after a confirmed app_state == 3 snapshot
 desknx::ipc::InitialState g_initialState{};
 #endif
 
@@ -1485,7 +1487,15 @@ void steamGridDbClosePicker() {
     steamGridDbApplyPending=
         gSteamGridDbService.snapshot().status==desknx::steamgriddb::ServiceStatus::Applying;
     if(!steamGridDbApplyPending)gSteamGridDbService.cancelBrowsing();
-    steamGridDbDestroyPreview();
+    if(!steamGridDbApplyPending) {
+        steamGridDbDestroyPreview();
+    } else {
+        // The worker still needs this preview file as its fast first-stage
+        // artwork. Drop only the GPU texture while keeping the file alive.
+        if(steamGridDbPreviewTexture)SDL_DestroyTexture(steamGridDbPreviewTexture);
+        steamGridDbPreviewTexture=nullptr;
+        steamGridDbPreviewRevision=UINT64_MAX;
+    }
 }
 void steamGridDbEditApiKey() {
     // Reuse the validated Settings editor so both entry points accept exactly
@@ -1532,6 +1542,7 @@ void steamGridDbOpenPicker() {
     steamGridDbCurrentGameData=tile.data;
     steamGridDbPickerOpen=true;
     steamGridDbApplyPending=false;
+    steamGridDbPreviewAppliedNotified=false;
     steamGridDbOfflineFallback=false;
     steamGridDbPickerView=SteamGridDbPickerView::Matches;
     steamGridDbKindIndex=1;
@@ -1718,9 +1729,21 @@ void pumpSteamGridDbPicker() {
             steamGridDbUpdatePreview(steamGridDbPreviewLoadedPath,0);
     }
 
+    if(steamGridDbApplyPending&&state.status==desknx::steamgriddb::ServiceStatus::Applying&&
+       state.previewApplied&&!steamGridDbPreviewAppliedNotified) {
+        steamGridDbPreviewAppliedNotified=true;
+        if(!steamGridDbCurrentGameData.empty())
+            gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
+        setStatus(languageRussian?"МИНИАТЮРА ПРИМЕНЕНА — ЗАГРУЖАЕТСЯ ОРИГИНАЛ":
+            "PREVIEW APPLIED — FULL ARTWORK IS DOWNLOADING",4200);
+        if(steamGridDbPickerOpen)steamGridDbClosePicker();
+    }
+
     if(steamGridDbApplyPending&&state.status==desknx::steamgriddb::ServiceStatus::Error) {
         steamGridDbApplyPending=false;
-        setStatus("STEAMGRIDDB DOWNLOAD FAILED",3500);
+        setStatus(languageRussian?"НЕ УДАЛОСЬ ПРИМЕНИТЬ ОБЛОЖКУ":
+            "STEAMGRIDDB DOWNLOAD FAILED",3500);
+        steamGridDbDestroyPreview();
     }
 
     if(state.status==desknx::steamgriddb::ServiceStatus::Applied&&steamGridDbApplyPending) {
@@ -1744,8 +1767,13 @@ void pumpSteamGridDbPicker() {
                 desknx::steamgriddb::SteamGridDbCache::kDefaultMaximumBytes,installed);
         }
         steamGridDbApplyPending=false;
-        setStatus("STEAMGRIDDB ARTWORK SAVED OFFLINE",3500);
+        setStatus(state.fullResolutionApplied
+            ?(languageRussian?"ОБЛОЖКА ПРИМЕНЕНА":"ARTWORK APPLIED")
+            :(languageRussian?"МИНИАТЮРА СОХРАНЕНА — ОРИГИНАЛ НЕ ЗАГРУЗИЛСЯ":
+                "PREVIEW SAVED — FULL-RES DOWNLOAD FAILED"),4000);
         if(steamGridDbPickerOpen)steamGridDbClosePicker();
+        else steamGridDbDestroyPreview();
+        steamGridDbPreviewAppliedNotified=false;
     }
 }
 
@@ -2044,6 +2072,7 @@ void consumeInitialState() {
     }
     if(state.app_state>=2&&state.app_title_id!=0) g_backendAppTitle=state.app_title_id;
     else g_backendAppTitle=0;
+    g_backendAppSuspended=state.app_state==3&&state.app_title_id!=0;
     if(state.degraded) setStatus("DEGRADED MODE: SD UNAVAILABLE",6000); // REC-04
     if(state.last_launch_rc!=0) {
         char detail[96]{};
@@ -2078,7 +2107,10 @@ void pollBackendEvents() {
        hdr.payload_size==sizeof(desknx::ipc::AppExitedEvent)) {
         desknx::ipc::AppExitedEvent payload{};
         if(R_SUCCEEDED(appletStorageRead(&storage,sizeof(hdr),&payload,sizeof(payload)))) {
-            if(payload.title_id==g_backendAppTitle) g_backendAppTitle=0;
+            if(payload.title_id==g_backendAppTitle) {
+                g_backendAppTitle=0;
+                g_backendAppSuspended=false;
+            }
             setStatus(payload.reason?"GAME CLOSED BY SYSTEM":"GAME EXITED",4000);
         }
     } else if(command==static_cast<u32>(desknx::ipc::Event::AppLaunchFailed)&&
@@ -2273,9 +2305,6 @@ bool saveFavorites() {
         return false;
     }
     return true;
-}
-bool isFavorite(const std::string& titleId) {
-    return std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),titleId)!=favoriteTitleIds.end();
 }
 bool toggleFavorite(const Tile& tile) {
     if(tile.kind!=Kind::Game||!desknx::model::isTitleId(tile.data)) {
@@ -3471,6 +3500,19 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
     SDL_SetTextureAlphaMod(mask,255);
 }
 
+bool isBackendSuspendedTile(const Tile& tile) {
+#ifdef DESKNX_SYSTEM_APPLET
+    if(tile.kind!=Kind::Game||!g_backendAppSuspended||g_backendAppTitle==0||
+       !desknx::model::isTitleId(tile.data))return false;
+    char* end=nullptr;
+    const auto id=std::strtoull(tile.data.c_str(),&end,16);
+    return id==g_backendAppTitle&&end==tile.data.c_str()+tile.data.size();
+#else
+    (void)tile;
+    return false;
+#endif
+}
+
 void drawTileCover(const Tile& tile,const Workspace& workspace,
                    const SDL_Rect& bounds,Color cornerFill,bool selected) {
     const Color fallback=workspace.accentColor>=0
@@ -3529,6 +3571,13 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
     // wedges afterwards so the actual game artwork follows the tile's 10px
     // rounded silhouette rather than exposing square image corners.
     maskRoundedImageCorners(viewport,UiCornerRadius,cornerFill);
+    if(isBackendSuspendedTile(tile)) {
+        const int badgeW=languageRussian?82:78;
+        const int badgeX=viewport.x+viewport.w-badgeW-8;
+        roundRect(badgeX,viewport.y+8,badgeW,24,12,Color{86,58,22,238});
+        text(languageRussian?"ВОЗВРАТ":"RESUME",badgeX+8,viewport.y+16,1,
+             Color{255,220,158,255},badgeX+badgeW-5);
+    }
     if (tile.kind == Kind::Game) {
         const unsigned online = nextendoPlayersForTitle(tile.data);
         if (online > 0) {
@@ -3950,7 +3999,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const bool favoritesWidget=t.kind==Kind::Favorites;
             label(favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+12);
             if(games.empty()) {
-                text(favoritesWidget?"ADD FAVORITES WITH ZL":"NO INSTALLED GAMES",
+                text(favoritesWidget
+                    ?(languageRussian?"НЕТ ИЗБРАННЫХ ИГР":"NO FAVORITES SAVED")
+                    :(languageRussian?"НЕТ УСТАНОВЛЕННЫХ ИГР":"NO INSTALLED GAMES"),
                      left,r.y+48,1,MUTED,right);
             } else if(wide&&config.style==1) {
                 const int count=std::min<int>(
@@ -4281,6 +4332,7 @@ void drawScreen() {
          68,575,1,show?WHITE:MUTED,620);
     struct Hint { const char* key; const char* action; };
     const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L3","QUICK MENU"}};
+    const Hint resumeHints[]={{"A","RESUME"},{"Y","ADD"},{"X","EDIT"},{"L3","QUICK MENU"}};
     const Hint editHints[]={{"A","MOVE / ADD"},{"D-PAD","POSITION"},{"ZL/ZR","SIZE"},{"-","REMOVE"}};
     const Hint dragHints[]={{"D-PAD","MOVE"},{"L/R","CHANGE DESK"},{"A / B","DROP"},{"-","REMOVE"}};
     const int selectedTileIndex=itemAt(d,selectedX,selectedY);
@@ -4303,7 +4355,11 @@ void drawScreen() {
             uiButton(hx,571,48,28,8,desknx::ui::ButtonVariant::Chip,
                 Color{34,45,63,255},Color{255,255,255,12});
             text(normalHints[i].key,hx+5,581,1,BLUE,hx+43);
-            text(normalHints[i].action,hx+56,581,1,MUTED,hx+144);
+            const bool resumeSelected=isBackendSuspendedTile(
+                d.tiles[static_cast<size_t>(selectedTileIndex)]);
+            text((resumeSelected?resumeHints:normalHints)[i].action,
+                 hx+56,581,1,resumeSelected&&i==0?Color{255,203,117,255}:MUTED,
+                 hx+144);
         }
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               isWidgetKind(d.tiles[static_cast<size_t>(selectedTileIndex)].kind)) {
@@ -6181,6 +6237,19 @@ void launch(const Tile& t) {
         const u64 id=std::strtoull(t.data.c_str(),nullptr,16);
         if(id==0){setStatus("INVALID TITLE ID");return;}
 #ifdef DESKNX_SYSTEM_APPLET
+        if(g_backendAppSuspended&&g_backendAppTitle==id) {
+            if(!saveLayout())return;
+            const Result resumeRc=sendIpc([]{
+                return desknx::ipc::Send(desknx::ipc::Command::ReturnToGame);
+            });
+            if(R_FAILED(resumeRc)) {
+                setStatus("RETURN TO GAME FAILED",3500);
+                return;
+            }
+            appletRequestExitToSelf();
+            running=false;
+            return;
+        }
         // Persist the user's workspace before sending a launch request that
         // closes this HOME applet. Never discard unsaved edits on the way out.
         if(!saveLayout())return;
