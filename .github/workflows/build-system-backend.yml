@@ -52,6 +52,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install host-test development headers
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends zlib1g-dev
+
       - name: Verify Switch curl dependency
         run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
 
