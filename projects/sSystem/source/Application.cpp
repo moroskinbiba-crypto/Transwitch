@@ -207,19 +207,30 @@ namespace desknx::system::app {
                           app_id, saveRc);
             return saveRc;
         }
-        // NACP controls save-data policy above, but an explicit profile
-        // selected in DeskNX is a separate launch decision. In particular,
-        // StartupUserAccount=None must not discard a valid menu-selected UID.
+        // NACP controls whether the title expects a system-selected
+        // account. Titles with StartupUserAccount=None own their player picker;
+        // passing a preselected user to them can cause a selector loop.
+        const bool user_valid = accountUidIsValid(&user);
         const bool push_preselected_user =
             desknx::ipc::rules::ShouldPushPreselectedUser(
-                flags, wants_user, accountUidIsValid(&user));
+                flags, wants_user, user_valid);
+        DaemonLog("launch: app=0x%016lx uid_valid=%d nacp_wants_user=%d flags=0x%lx preselect=%d",
+                  app_id, user_valid ? 1 : 0, wants_user ? 1 : 0,
+                  flags, push_preselected_user ? 1 : 0);
 
         Result rc = appletCreateApplication(&g_AppHolder, app_id);
-        if (rc != 0) return rc;
+        if (rc != 0) {
+            DaemonLog("launch: appletCreateApplication failed rc=0x%08X",
+                      static_cast<unsigned int>(rc));
+            return rc;
+        }
 
-        // Never push a zero UID. When there is no explicit menu choice, retain
-        // NACP/legacy behavior and let the title present its own selector.
+        // Never push a zero UID. NACP=None deliberately lets the title own
+        // player selection; an explicitly selected profile is sent for titles
+        // that request a Nintendo user.
         rc = push_preselected_user ? PushUserParam(user) : 0;
+        DaemonLog("launch: preselected-user parameter rc=0x%08X",
+                  static_cast<unsigned int>(rc));
         if (rc == 0) {
             // Release foreground so the app can acquire it. Do not start
             // the title if AM refused the handoff.
