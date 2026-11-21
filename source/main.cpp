@@ -5973,7 +5973,7 @@ std::string widgetEditorStyleLabel(Kind kind,int style) {
         case Kind::Battery:return generic[std::max(0,std::min(2,style))];
         case Kind::System:return style==0?"OVERVIEW":style==1?"THERMAL":"FREQUENCIES";
         case Kind::Recent:return style==0?"LIST":style==1?"COVERS":"COMPACT";
-        case Kind::Storage:return style==0?"FREE SPACE":style==1?"USED SPACE":"CAPACITY";
+        case Kind::Storage:return style==0?"FREE SPACE":style==1?"SPACE USAGE":"CAPACITY";
         case Kind::Calendar:return style==0?"MONTH":style==1?"DAY CARD":"AGENDA";
         case Kind::Nextendo:return style==0?"ONLINE SUMMARY":style==1?"ACTIVITY FIRST":"NETWORK STATUS";
         case Kind::Favorites:return style==0?"LIST":style==1?"COVER STRIP":"COMPACT";
@@ -6655,6 +6655,7 @@ void activateWidget(const Tile& t) {
                 "NEXTENDO POPULAR GAMES");
             break;
         case Kind::Battery:
+            refreshBattery();
             refreshJoyconBattery();
             diagnosticsOpen=true;
             refreshDiagnosticsSnapshot(true);
@@ -6672,7 +6673,7 @@ void activateWidget(const Tile& t) {
             refreshDiagnosticsSnapshot(true);
             break;
         case Kind::Clock:
-            setStatus("CLOCK WIDGET");
+            setStatus(clockText(true),3500);
             break;
         case Kind::QuickSettings:
             openQuickSettings();
