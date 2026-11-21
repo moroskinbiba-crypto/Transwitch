@@ -116,7 +116,6 @@ int surfaceOpacity=255; // 0..255; scales all soft surfaces and widget cards
 int selectionStyle=0;   // 0 outline, 1 accent rail, 2 pulse, 3 corner brackets
 bool motionEffects=false; // optional low-cost screen fade and selection pulse
 Uint32 uiTransitionStart=0;
-desknx::ui::ModalLayer gModalLayer;
 std::uint32_t lastUiScreenState=UINT32_MAX;
 std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
 bool launcherSettingsSavePending=false;
