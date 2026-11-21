@@ -31,6 +31,7 @@ public:
  bool selectAsset(int index);
  bool applySelected();
  bool pruneCache(std::uint64_t maximumBytes,const std::vector<std::uint64_t>& installedTitleIds);
+ void cancelBrowsing();
  ServiceSnapshot snapshot() const;
  void shutdown();
  SteamGridDbCache& cache(){return cache_;}
