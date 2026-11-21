@@ -3,6 +3,7 @@
 // leave the workspace exactly as it was - a half-applied drag corrupts a layout
 // that is then persisted to the SD card.
 #include <desknx/HomeNXWorkspaceProvider.hpp>
+#include <desknx/WorkspaceOps.hpp>
 
 #include <cassert>
 #include <cstdio>
@@ -107,6 +108,18 @@ void testResizeSupportsPortraitShapeButRejectsUnsupportedWidth() {
     assert(provider.resizeTile(0, 4, 0, 2, 3));
     assert(provider.activeWorkspace()->tiles[0].w == 2);
     assert(provider.activeWorkspace()->tiles[0].h == 3);
+}
+
+void testResizeStepRestoresPortraitTwoByThree() {
+    Workspace desk{"Portrait",{}};
+    desk.tiles.push_back(makeTile(Kind::Game,"Portrait","0100000000003000",0,0,3,2));
+    int selectedX=0,selectedY=0;
+    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
+    assert(desk.tiles[0].w==2&&desk.tiles[0].h==3);
+    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
+    assert(desk.tiles[0].w==3&&desk.tiles[0].h==3);
+    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,false));
+    assert(desk.tiles[0].w==2&&desk.tiles[0].h==3);
 }
 
 void testResizeWithoutRoomIsRefused() {
@@ -214,6 +227,7 @@ int main() {
     testMoveOfUnknownTileIsRefused();
     testResizeInPlace();
     testResizeSupportsPortraitShapeButRejectsUnsupportedWidth();
+    testResizeStepRestoresPortraitTwoByThree();
     testResizeWithoutRoomIsRefused();
     testResizeThenMoveKeepsGeometryValid();
     testRemoveTile();
