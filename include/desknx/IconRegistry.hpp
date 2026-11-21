@@ -30,6 +30,8 @@ enum class IconId : std::uint8_t {
     Storage,
     Network,
     Heart,
+    StarOutline,
+    StarFilled,
     Count,
 };
 
@@ -56,6 +58,8 @@ inline constexpr std::array<IconInfo, static_cast<std::size_t>(IconId::Count)>
         {"storage.svg", IconCategory::Widget},
         {"network.svg", IconCategory::Widget},
         {"heart.svg", IconCategory::Widget},
+        {"star-outline.svg", IconCategory::Status},
+        {"star-filled.svg", IconCategory::Status},
     }};
 
 constexpr std::size_t iconIndex(IconId id) noexcept {
