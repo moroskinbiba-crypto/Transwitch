@@ -1369,6 +1369,7 @@ const std::vector<Candidate>& visibleCatalogueSnapshot() {
     return visibleCatalogueCache;
 }
 Result showKeyboard(SwkbdConfig* config, char* output, size_t outputSize);
+int widgetEditorRowCount(Kind kind);
 void cycleTheme(int direction) {
     themeIndex=(themeIndex+direction+2)%2;
     applyThemePalette();
