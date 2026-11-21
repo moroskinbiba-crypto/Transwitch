@@ -7146,7 +7146,7 @@ void touchInput(const SDL_Event&e) {
         const bool emptyDeskVisible=!desks.empty()&&deskIndex>=0&&
             deskIndex<static_cast<int>(desks.size())&&
             desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
-            !editing&&!systemMenu&&!appSettingsMenu&&!workspaceMenu&&
+            !systemMenu&&!appSettingsMenu&&!workspaceMenu&&
             !workspaceSettingsMenu&&!workspacePicker&&!powerMenu&&!diagnosticsOpen;
         if(emptyDeskVisible&&y>=376&&y<=424) {
             if(x>=386&&x<592) {
