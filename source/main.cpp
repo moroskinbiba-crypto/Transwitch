@@ -4106,34 +4106,42 @@ void drawScreen() {
     if(editing&&!dragging&&selectedTileIndex>=0) {
         // Touchscreen users need the same tile-management actions as controller
         // users. Keep these real, generous hit targets in the persistent footer.
-        roundRect(650,571,165,28,8,Color{35,57,83,255});
+        uiButton(650,571,165,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{35,57,83,255},Color{255,255,255,12});
         text("SIZE -  /  ZL",665,581,1,WHITE,808);
-        roundRect(826,571,165,28,8,Color{35,57,83,255});
+        uiButton(826,571,165,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{35,57,83,255},Color{255,255,255,12});
         text("SIZE +  /  ZR",841,581,1,WHITE,984);
-        roundRect(1002,571,228,28,8,Color{91,39,48,255});
+        uiButton(1002,571,228,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{91,39,48,255},Color{255,255,255,12});
         text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
         const Tile& selectedGame=d.tiles[static_cast<size_t>(selectedTileIndex)];
-        roundRect(642,571,96,28,8,isFavorite(selectedGame.data)?
-            Color{69,83,48,255}:Color{35,57,76,255});
+        uiButton(642,571,96,28,8,desknx::ui::ButtonVariant::Chip,
+            isFavorite(selectedGame.data)?Color{69,83,48,255}:Color{35,57,76,255},
+            Color{255,255,255,12},isFavorite(selectedGame.data));
         text(isFavorite(selectedGame.data)?"SAVED  /  ZL":"FAV  /  ZL",
              650,581,1,isFavorite(selectedGame.data)?GREEN:WHITE,734);
-        roundRect(744,571,96,28,8,Color{35,68,101,255});
+        uiButton(744,571,96,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{35,68,101,255},Color{255,255,255,12});
         text("ART  /  ZR",756,581,1,WHITE,832);
         for(int i=0;i<3;++i) {
             const int hx=850+i*126;
-            roundRect(hx,571,43,28,8,Color{34,45,63,255});
+            uiButton(hx,571,43,28,8,desknx::ui::ButtonVariant::Chip,
+                Color{34,45,63,255},Color{255,255,255,12});
             text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
             text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
         }
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               isWidgetKind(d.tiles[static_cast<size_t>(selectedTileIndex)].kind)) {
-        roundRect(642,571,190,28,8,Color{35,68,101,255});
+        uiButton(642,571,190,28,8,desknx::ui::ButtonVariant::Chip,
+            Color{35,68,101,255},Color{255,255,255,12});
         text("WIDGET SETTINGS / ZR",654,581,1,WHITE,828);
         for(int i=0;i<3;++i) {
             const int hx=850+i*126;
-            roundRect(hx,571,43,28,8,Color{34,45,63,255});
+            uiButton(hx,571,43,28,8,desknx::ui::ButtonVariant::Chip,
+                Color{34,45,63,255},Color{255,255,255,12});
             text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
             text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
         }
@@ -4141,7 +4149,8 @@ void drawScreen() {
         const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
         for(int i=0;i<4;++i) {
             const int hx=642+i*148;
-            roundRect(hx,571,48,28,8,Color{34,45,63,255});
+            uiButton(hx,571,48,28,8,desknx::ui::ButtonVariant::Chip,
+                Color{34,45,63,255},Color{255,255,255,12});
             text(hints[i].key,hx+5,581,1,BLUE,hx+43);
             text(hints[i].action,hx+56,581,1,MUTED,hx+144);
         }
