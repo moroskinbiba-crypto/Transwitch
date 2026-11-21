@@ -70,7 +70,6 @@ constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarBu
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
 constexpr u32 NsViewFlagIsGameCard = BIT(6);
-constexpr u32 NsViewFlagNeedsUpdate = BIT(9);
 constexpr const char* CFG_DIR = "sdmc:/switch/DeskNX";
 constexpr const char* CFG_FILE = "sdmc:/switch/DeskNX/layout.tsv";
 constexpr const char* CFG_TMP = "sdmc:/switch/DeskNX/layout.tmp";
@@ -4723,9 +4722,9 @@ void drawScreen() {
                         appBadge=candidate.displayVersion.empty()
                             ?(languageRussian?"ВЕРСИЯ Н/Д":"VERSION N/A")
                             :"v"+candidate.displayVersion;
-                        badgeColor=!candidate.updateStatusAvailable?MUTED:
-                            (candidate.viewFlags&NsViewFlagNeedsUpdate)
-                                ?Color{255,196,87,255}:GREEN;
+                        // The eShop update flag is not a Nextendo compatibility
+                        // verdict. Keep the installed version neutral until the
+                        // signed Nextendo catalogue supplies a verified result.
                     }
                     textCentered(appBadge,x+cardW/2,y+101,1,badgeColor,x+8,x+cardW-8);
                 }
@@ -4744,9 +4743,10 @@ void drawScreen() {
                 detailType=selected.displayVersion.empty()
                     ?(languageRussian?"УСТАНОВЛЕНА: Н/Д":"INSTALLED: N/A")
                     :(languageRussian?"УСТАНОВЛЕНА: ":"INSTALLED: ")+selected.displayVersion;
-                detailColor=!selected.updateStatusAvailable?MUTED:
-                    (selected.viewFlags&NsViewFlagNeedsUpdate)
-                        ?Color{255,196,87,255}:GREEN;
+                // Do not present Nintendo's eShop update state as an online
+                // compatibility signal. Nextendo's signed catalogue will own
+                // the green/amber verdict once the app has a registered client ID.
+                detailColor=BLUE;
             }
             text(detailType,mx+800,my+252,1,detailColor,mx+mw-30);
             if(selected.kind==Kind::Game) {
