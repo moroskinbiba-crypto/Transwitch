@@ -103,6 +103,7 @@ public:
         }
         failedUntil_.clear();
         requestRetryAt_.clear();
+        priorityRetryAt_.clear();
         clearTextures();
     }
 
@@ -147,7 +148,17 @@ void setGameIconOverridesDir(const std::string& path) {
         // Cooldown is cleared as soon as a decoded result is consumed.
         const auto retry = requestRetryAt_.find(key);
         if (retry != requestRetryAt_.end()) {
-            if (static_cast<Sint32>(now - retry->second) < 0) return nullptr;
+            if (static_cast<Sint32>(now - retry->second) < 0) {
+                if (!highPriority) return nullptr;
+                const auto promotion=priorityRetryAt_.find(key);
+                if (promotion!=priorityRetryAt_.end() &&
+                    static_cast<Sint32>(now-promotion->second)<0)
+                    return nullptr;
+                const bool promoted=enqueue(tile,key,2);
+                priorityRetryAt_[key]=now+PromotionRetryThrottleMs;
+                if (!promoted) requestRetryAt_[key]=now+QueueRetryThrottleMs;
+                return nullptr;
+            }
             requestRetryAt_.erase(retry);
         }
         const auto failed = failedUntil_.find(key);
@@ -224,6 +235,7 @@ void setGameIconOverridesDir(const std::string& path) {
         }
         failedUntil_.erase(key);
         requestRetryAt_.erase(key);
+        priorityRetryAt_.erase(key);
         for (auto it = entries_.begin(); it != entries_.end();) {
             if (it->kind == kind && it->data == data) {
                 if (it->texture) SDL_DestroyTexture(it->texture);
@@ -308,6 +320,7 @@ private:
     static constexpr Uint32 CachePruneIntervalMs = 5000;
     static constexpr Uint32 RequestRetryThrottleMs = 1500;
     static constexpr Uint32 QueueRetryThrottleMs = 180;
+    static constexpr Uint32 PromotionRetryThrottleMs = 220;
     static constexpr std::size_t MaxPrunePerFrame = 8;
     static constexpr std::size_t MaxCompressedIconBytes = 16u * 1024u * 1024u;
     static constexpr std::size_t MaxQueuedRequests = 48;
@@ -540,6 +553,7 @@ private:
 
             pendingKeys_.erase(decoded.key);
             requestRetryAt_.erase(decoded.key);
+            priorityRetryAt_.erase(decoded.key);
             if (!currentGeneration) continue;
 
             if (!decoded.success || decoded.rgba.empty() ||
@@ -895,6 +909,7 @@ private:
     std::unordered_map<std::string, Uint32> failedUntil_;
     // The cooldown is read/written only on the render thread.
     std::unordered_map<std::string, Uint32> requestRetryAt_;
+    std::unordered_map<std::string, Uint32> priorityRetryAt_; // render-thread only
     // Protected by mutex_: cancel one in-flight title without flushing the queue.
     std::unordered_map<std::string, std::uint64_t> keyGenerations_;
     std::unordered_set<std::string> pendingKeys_;
