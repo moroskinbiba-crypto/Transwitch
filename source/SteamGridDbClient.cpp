@@ -103,11 +103,13 @@ bool safeUrl(const std::string& u){
 }
 bool supported(const std::string& mime,const std::string& url){
  std::string m=mime;for(char& c:m)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
- if(m=="image/png"||m=="image/jpeg"||m=="image/jpg")return true;if(!m.empty())return false;
+ if(m=="image/png"||m=="image/jpeg"||m=="image/jpg"||
+    m=="image/x-icon"||m=="image/vnd.microsoft.icon")return true;
+ if(!m.empty())return false;
  std::string u=url;size_t q=u.find('?');if(q!=std::string::npos)u.resize(q);
  for(char& c:u)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
  return u.size()>=4&&(u.compare(u.size()-4,4,".png")==0||u.compare(u.size()-4,4,".jpg")==0||
-  (u.size()>=5&&u.compare(u.size()-5,5,".jpeg")==0));
+  u.compare(u.size()-4,4,".ico")==0||(u.size()>=5&&u.compare(u.size()-5,5,".jpeg")==0));
 }
 } // namespace
 const char* artworkKindName(ArtworkKind k){switch(k){case ArtworkKind::Hero:return "Hero";case ArtworkKind::Grid:return "Grid";case ArtworkKind::Logo:return "Logo";case ArtworkKind::Icon:return "Icon";}return "Grid";}
