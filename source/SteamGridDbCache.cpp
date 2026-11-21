@@ -100,7 +100,22 @@ SteamGridDbCache::ArtworkKind SteamGridDbCache::selectedKind(std::uint64_t id)co
  if(m.active=="logo"&&hasLogo(id))return ArtworkKind::Logo;if(m.active=="icon"&&hasIcon(id))return ArtworkKind::Icon;
  if(hasGrid(id))return ArtworkKind::Grid;if(hasHero(id))return ArtworkKind::Hero;if(hasIcon(id))return ArtworkKind::Icon;return ArtworkKind::Logo;
 }
-std::string SteamGridDbCache::selectedPath(std::uint64_t id)const{if(!id)return {};auto p=pathFor(id,selectedKind(id));return regular(p)?p:std::string();}
+std::string SteamGridDbCache::selectedPath(std::uint64_t id)const{
+ if(!id)return {};
+ const auto p=pathFor(id,selectedKind(id));
+ if(!regular(p))return {};
+ Meta metadata;
+ if(readMeta(metadataPath(id),metadata)) {
+  const auto now=static_cast<std::uint64_t>(std::time(nullptr));
+  // Avoid writing to the SD card more than once per minute during icon-cache
+  // refreshes, but retain a true last-used timestamp for LRU pruning.
+  if(now>metadata.lastAccess+60u) {
+   metadata.lastAccess=now;
+   (void)writeMeta(metadataPath(id),metadata);
+  }
+ }
+ return p;
+}
 std::uint64_t SteamGridDbCache::mappedGameId(std::uint64_t id)const{Meta m;return readMeta(metadataPath(id),m)?m.gameId:0;}
 bool SteamGridDbCache::saveGameMapping(std::uint64_t id,std::uint64_t gameId,const std::string& name){
  if(!id||!gameId||!ensureDirectories())return false;std::error_code ec;std::filesystem::create_directories(titleDirectory(id),ec);if(ec)return false;
@@ -138,7 +153,10 @@ std::uint64_t SteamGridDbCache::prune(std::uint64_t max,const std::vector<std::u
  for(std::filesystem::directory_iterator it(kCacheRoot,ec),end;!ec&&it!=end;it.increment(ec)){
   std::error_code e;if(!it->is_directory(e)||e)continue;std::uint64_t id=0;if(!titleFolder(it->path().filename().string(),id))continue;
   const auto size=bytesIn(it->path());if(keep.find(id)==keep.end()){std::error_code rm;std::filesystem::remove_all(it->path(),rm);continue;}
-  entries.push_back({it->path(),size,stampOf(it->path())});
+  Meta metadata;
+  const std::uint64_t lastUsed=readMeta(metadataPath(id),metadata)&&metadata.lastAccess?
+      metadata.lastAccess:stampOf(it->path());
+  entries.push_back({it->path(),size,lastUsed});
  }
  auto total=cacheBytes();if(total<=max)return total;
  std::sort(entries.begin(),entries.end(),[](const Entry&a,const Entry&b){return a.stamp<b.stamp;});
