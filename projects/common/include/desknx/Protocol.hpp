@@ -69,8 +69,8 @@ static_assert(sizeof(LaunchTitleV2Payload) == 32);
 // LaunchTitle flag bits (LNC-02): "uid supplied by menu" tells the backend to
 // honour the preselected user even when NACP would otherwise decide; "game
 // picks players itself" suppresses the preselection parameter entirely.
-constexpr u64 LaunchFlagHasUser   = 1u << 0;
-constexpr u64 LaunchFlagNoPreuser = 1u << 1;
+constexpr u64 LaunchFlagHasUser   = rules::LaunchFlagHasUser;
+constexpr u64 LaunchFlagNoPreuser = rules::LaunchFlagNoPreuser;
 
 constexpr size_t MaxHomebrewPath = 512;
 constexpr size_t MaxHomebrewArgv = 512;
