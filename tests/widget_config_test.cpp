@@ -7,6 +7,8 @@ int main() {
     using desknx::model::Kind;
     const auto defaults = desknx::widgets::defaults(Kind::Clock);
     assert(defaults.style == 0 && defaults.refreshSeconds == 5 && defaults.flags == 3u);
+    const auto calendarDefaults = desknx::widgets::defaults(Kind::Calendar);
+    assert(calendarDefaults.style == 0);
     const auto quickDefaults = desknx::widgets::defaults(Kind::QuickSettings);
     assert(quickDefaults.style == 0 && quickDefaults.refreshSeconds == 15 &&
            quickDefaults.flags == 3u && quickDefaults.itemCount == 4);
@@ -32,13 +34,18 @@ int main() {
     assert(desknx::model::typeCode(Kind::GameLibrary) == "L");
     const auto clamped = desknx::widgets::parse(Kind::Storage, "W1;S=99;R=7;F=255;N=99");
     assert(clamped.style == 2 && clamped.refreshSeconds == 5);
-    assert(clamped.flags == 3u && clamped.itemCount == 6);
+    assert(clamped.flags == 7u && clamped.itemCount == 6);
 
     desknx::widgets::Config toggled{};
     desknx::widgets::toggle(toggled, 0);
     assert(!desknx::widgets::enabled(toggled, 0));
     desknx::widgets::toggle(toggled, 1);
     assert(!desknx::widgets::enabled(toggled, 1));
+    desknx::widgets::toggle(toggled, 2);
+    assert(desknx::widgets::enabled(toggled, 2));
+    const auto thirdFlag = desknx::widgets::parse(Kind::GameLibrary,
+        desknx::widgets::serialize(desknx::widgets::Config{1, 30, 7u, 4}));
+    assert(desknx::widgets::enabled(thirdFlag, 2));
     std::puts("widget_config_test: ok");
     return 0;
 }
