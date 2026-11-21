@@ -1083,6 +1083,17 @@ void steamGridDbUpdatePreview(const std::string& path,std::uint64_t revision) {
         steamGridDbPreviewRevision=revision;
     }
 }
+void steamGridDbApplyCurrentCached() {
+    if(!steamGridDbCurrentTitleId)return;
+    const auto kind=steamGridDbCacheKind(steamGridDbKindIndex);
+    if(gSteamGridDbService.cache().activateCachedArtwork(steamGridDbCurrentTitleId,kind)) {
+        Tile tile;
+        std::uint64_t id=0;
+        if(steamGridDbGetSelectedGame(tile,id))gIconCache.invalidate(Kind::Game,tile.data);
+        setStatus("CACHED "+std::string(steamGridDbKindLabel(steamGridDbKindIndex))+" ARTWORK SELECTED",3000);
+        steamGridDbClosePicker();
+    } else setStatus("THIS ARTWORK TYPE IS NOT CACHED",2200);
+}
 void pumpSteamGridDbPicker() {
     if(!steamGridDbPickerOpen)return;
     const auto state=gSteamGridDbService.snapshot();
