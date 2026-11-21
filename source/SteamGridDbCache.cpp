@@ -39,8 +39,13 @@ std::string str(const std::string& s,const char* k){
 std::string escape(const std::string& s){std::string o;for(unsigned char c:s){if(c=='"'||c=='\\'){o.push_back('\\');o.push_back(static_cast<char>(c));}
  else if(c>=32&&c!='\r'&&c!='\n'&&c!='\t')o.push_back(static_cast<char>(c));if(o.size()>=512)break;}return o;}
 bool readMeta(const std::string& path,Meta& m){
- std::ifstream f(path,std::ios::binary);if(!f)return false;std::string s((std::istreambuf_iterator<char>(f)),{});
- if(f.bad()||s.size()>16384)return false;
+ struct stat st{};
+ if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||
+    st.st_size<=0||st.st_size>16384)return false;
+ std::ifstream f(path,std::ios::binary);if(!f)return false;
+ std::string s(static_cast<std::size_t>(st.st_size),'\\0');
+ f.read(&s[0],static_cast<std::streamsize>(s.size()));
+ if(!f||f.gcount()!=static_cast<std::streamsize>(s.size()))return false;
  m.titleId=number(s,"titleId");m.gameId=number(s,"gameId");m.heroId=number(s,"heroId");m.gridId=number(s,"gridId");
  m.logoId=number(s,"logoId");m.iconId=number(s,"iconId");m.lastAccess=number(s,"lastAccess");
  m.hero=boolean(s,"hero");m.grid=boolean(s,"grid");m.logo=boolean(s,"logo");m.icon=boolean(s,"icon");
@@ -58,7 +63,11 @@ bool writeMeta(const std::string& path,const Meta& m){
  if(std::rename(tmp.c_str(),path.c_str())!=0){std::remove(tmp.c_str());return false;}return true;
 }
 bool copyToTemp(const std::string& source,const std::string& dest){
- std::ifstream in(source,std::ios::binary);if(!in)return false;std::ofstream out(dest,std::ios::binary|std::ios::trunc);if(!out)return false;
+ struct stat st{};
+ if(stat(source.c_str(),&st)!=0||!S_ISREG(st.st_mode)||
+    st.st_size<=0||st.st_size>16LL*1024LL*1024LL)return false;
+ std::ifstream in(source,std::ios::binary);if(!in)return false;
+ std::ofstream out(dest,std::ios::binary|std::ios::trunc);if(!out)return false;
  char buf[64*1024];while(in){in.read(buf,sizeof(buf));auto n=in.gcount();if(n>0)out.write(buf,n);if(!out.good())break;}
  bool ok=!in.bad()&&out.good();out.close();if(!ok)std::remove(dest.c_str());return ok&&out.good();
 }
