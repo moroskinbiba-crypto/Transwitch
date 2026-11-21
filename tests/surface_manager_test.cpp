@@ -51,7 +51,8 @@ int main() {
         assert(surfaces.push(id, true, false));
     }
     assert(surfaces.size() == SurfaceManager::Capacity);
-    assert(!surfaces.push(SurfaceId::QuickSettings, true, true));
+    // A fresh id beyond the reserved surface range must fail at capacity.
+    assert(!surfaces.push(static_cast<SurfaceId>(SurfaceManager::Capacity), true, true));
     assert(surfaces.size() == SurfaceManager::Capacity);
 
     std::cout << "Surface manager tests passed\n";
