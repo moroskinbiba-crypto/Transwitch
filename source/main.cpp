@@ -4018,24 +4018,33 @@ void drawScreen() {
         const int x=toolbarButtonX(i);
         const Color activeColor=themeIndex==8?Color{35,75,94,255}:Color{48,82,124,255};
         if(headerStyle==0) {
-            roundRect(x,24,ToolbarButtonWidth,48,13,
-                item.active?activeColor:Color{37,47,62,230});
-            if(item.active)outline(x,24,ToolbarButtonWidth,48,
-                Color{120,174,235,150});
+            uiButton(x,24,ToolbarButtonWidth,48,13,
+                desknx::ui::ButtonVariant::Glass,
+                item.active?activeColor:Color{37,47,62,230},
+                Color{120,174,235,150},item.active,false,
+                themeIndex==8?COLORS[3]:BLUE);
         } else if(headerStyle==1) {
-            if(item.active)rect(x,76,ToolbarButtonWidth,3,
-                themeIndex==8?COLORS[3]:BLUE);
-            if(item.active)roundRect(x,22,ToolbarButtonWidth,46,9,
+            if(item.active)uiButton(x,22,ToolbarButtonWidth,46,9,
+                desknx::ui::ButtonVariant::Solid,
                 Color{static_cast<Uint8>(activeColor.r/2),
                       static_cast<Uint8>(activeColor.g/2),
-                      static_cast<Uint8>(activeColor.b/2),180});
+                      static_cast<Uint8>(activeColor.b/2),180},
+                Color{0,0,0,0},true,false,themeIndex==8?COLORS[3]:BLUE);
+            if(item.active)gUiComponents.divider(x,76,ToolbarButtonWidth,
+                SDL_Color{(themeIndex==8?COLORS[3]:BLUE).r,
+                          (themeIndex==8?COLORS[3]:BLUE).g,
+                          (themeIndex==8?COLORS[3]:BLUE).b,255});
         } else {
-            if(item.active)roundRect(x,22,ToolbarButtonWidth,46,14,
+            if(item.active)uiButton(x,22,ToolbarButtonWidth,46,14,
+                desknx::ui::ButtonVariant::Solid,
                 Color{static_cast<Uint8>(activeColor.r/2),
                       static_cast<Uint8>(activeColor.g/2),
-                      static_cast<Uint8>(activeColor.b/2),130});
-            if(item.active)rect(x+18,72,ToolbarButtonWidth-36,2,
-                themeIndex==8?COLORS[3]:BLUE);
+                      static_cast<Uint8>(activeColor.b/2),130},
+                Color{0,0,0,0},true,false,themeIndex==8?COLORS[3]:BLUE);
+            if(item.active)gUiComponents.divider(x+18,72,ToolbarButtonWidth-36,
+                SDL_Color{(themeIndex==8?COLORS[3]:BLUE).r,
+                          (themeIndex==8?COLORS[3]:BLUE).g,
+                          (themeIndex==8?COLORS[3]:BLUE).b,255});
         }
         drawSystemIcon(item.icon,x+12,31,24,item.active?WHITE:Color{204,214,228,255});
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
@@ -4044,15 +4053,18 @@ void drawScreen() {
     }
     // Compact overflow button keeps the quick tools reachable by touch without
     // restoring a fourth top-level navigation destination.
-    roundRect(392,24,44,48,14,Color{37,47,62,230});
+    uiButton(392,24,44,48,14,desknx::ui::ButtonVariant::Chip,
+        Color{37,47,62,230},Color{255,255,255,24});
     text("...",403,42,2,WHITE,431);
     softCard(448,24,374,48,Color{32,43,59,235},Color{255,255,255,24});
     drawSystemIcon(7,464,34,27,Color{215,228,246,255});
     text(selectedUserLabel,504,41,2,WHITE,710);
     text("CHANGE",732,43,1,BLUE,806);
-    roundRect(832,24,170,48,18,Color{32,43,59,235});
+    uiButton(832,24,170,48,18,desknx::ui::ButtonVariant::Chip,
+        Color{32,43,59,235},Color{255,255,255,18});
     text(nextendoTotalLabel(),846,43,1,GREEN,990);
-    roundRect(1012,24,190,48,18,Color{32,43,59,235});
+    uiButton(1012,24,190,48,18,desknx::ui::ButtonVariant::Chip,
+        Color{32,43,59,235},Color{255,255,255,18});
     text(clockText(),1040,37,3,WHITE,1136);
     rect(1148,34,1,26,Color{255,255,255,30});
     text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
