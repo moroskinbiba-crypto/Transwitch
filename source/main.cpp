@@ -3770,8 +3770,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             else std::snprintf(cpuText,sizeof(cpuText),"N/A");
             if(systemGpuClockAvailable)std::snprintf(gpuText,sizeof(gpuText),"%u MHz",systemGpuClockHz/1000000u);
             else std::snprintf(gpuText,sizeof(gpuText),"N/A");
-            const std::string atmosphereText=atmosphereVersionAvailable
-                ?"AMS "+atmosphereVersion:"AMS N/A";
             const std::string systemHeading=config.style==1?"THERMAL MONITOR":
                 (config.style==2?"CLOCK MONITOR":"SYSTEM MONITOR");
             widgetHeader(desknx::ui::IconId::Monitor,systemHeading,r.y+9);
