@@ -1740,8 +1740,16 @@ bool toggleFavorite(const Tile& tile) {
     }
     const auto found=std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),tile.data);
     if(found!=favoriteTitleIds.end()) {
+        const std::size_t oldIndex=static_cast<std::size_t>(
+            std::distance(favoriteTitleIds.begin(),found));
         favoriteTitleIds.erase(found);
-        if(saveFavorites())setStatus("REMOVED FROM FAVORITES: "+tile.title);
+        if(saveFavorites()) {
+            setStatus("REMOVED FROM FAVORITES: "+tile.title);
+        } else {
+            favoriteTitleIds.insert(favoriteTitleIds.begin()+
+                static_cast<std::ptrdiff_t>(std::min(oldIndex,favoriteTitleIds.size())),tile.data);
+            return false;
+        }
         return true;
     }
     if(favoriteTitleIds.size()>=256) {
@@ -1749,8 +1757,13 @@ bool toggleFavorite(const Tile& tile) {
         return false;
     }
     favoriteTitleIds.insert(favoriteTitleIds.begin(),tile.data);
-    if(saveFavorites())setStatus("ADDED TO FAVORITES: "+tile.title);
-    return true;
+    if(saveFavorites()) {
+        setStatus("ADDED TO FAVORITES: "+tile.title);
+        return true;
+    }
+    favoriteTitleIds.erase(std::remove(favoriteTitleIds.begin(),
+        favoriteTitleIds.end(),tile.data),favoriteTitleIds.end());
+    return false;
 }
 std::vector<Tile> favoriteTiles() {
     const auto all=catalogueSnapshot();
@@ -3112,17 +3125,24 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7];
             if(config.style==1) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
-                text(std::to_string(current.tm_mday),left,r.y+(wide?25:30),wide?4:5,WHITE,right);
+                const bool compactCalendar=wide||compact;
+                text(std::to_string(current.tm_mday),left,r.y+(compactCalendar?22:30),
+                     compactCalendar?4:5,WHITE,right);
                 text(monthName+"  "+std::to_string(current.tm_year+1900),
-                     left,r.y+(wide?77:100),wide?1:2,BLUE,right);
-                if(dataA)label(weekday,r.y+(wide?94:142));
-                if(dataB)label(clockText(),r.y+(wide?104:169));
+                     left,r.y+(compactCalendar?68:100),compactCalendar?1:2,BLUE,right);
+                const bool compactCalendar=wide||compact;
+                if(dataA)label(weekday,r.y+(compactCalendar?94:142));
+                if(dataB)label(clockText(),r.y+(compactCalendar?104:169));
             } else if(config.style==2) {
                 label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
-                text(weekday,left,r.y+40,wide?1:2,BLUE,right);
-                text(std::to_string(current.tm_mday)+" "+monthName,left,r.y+68,wide?2:3,WHITE,right);
-                if(dataA)text(std::to_string(current.tm_year+1900),left,r.y+(wide?95:122),1,MUTED,right);
-                if(dataB)text(clockText(),left,r.y+(wide?104:158),wide?1:2,WHITE,right);
+                const bool compactCalendar=wide||compact;
+                text(weekday,left,r.y+(compactCalendar?34:40),compactCalendar?1:2,BLUE,right);
+                text(std::to_string(current.tm_mday)+" "+monthName,left,
+                    r.y+(compactCalendar?58:68),compactCalendar?1:2,WHITE,right);
+                if(dataA)text(std::to_string(current.tm_year+1900),left,
+                    r.y+(compactCalendar?82:122),1,MUTED,right);
+                if(dataB)text(clockText(),left,r.y+(compactCalendar?96:158),
+                    compactCalendar?1:2,WHITE,right);
             } else if(compact) {
                 text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
                 text(monthName,left,r.y+78,1,BLUE,right);
@@ -3221,9 +3241,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                          1,WHITE,right);
                 }
             }
-            if(!wide&&dataB)label(
-                std::to_string(favoritesWidget?favoriteTitleIds.size():games.size())+
-                (favoritesWidget?" SAVED":" IN LIBRARY"),r.y+r.h-22);
+            if(!wide&&favoritesWidget&&dataB)
+                label(std::to_string(favoriteTitleIds.size())+" SAVED",r.y+r.h-22);
         } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,r.w-6,r.h-6,14,Color{39,46,58,255});
             text("UNSUPPORTED ITEM",r.x+14,r.y+18,2,WHITE,right);
@@ -4880,6 +4899,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             (void)toggleFavorite(selected);
             favoritesView=favoriteTiles();
             favoritesIndex=std::min(favoritesIndex,std::max(0,static_cast<int>(favoritesView.size())-1));
+            return;
         }
         if(keys&HidNpadButton_A&&favoritesIndex<count) {
             const Tile selected=favoritesView[static_cast<std::size_t>(favoritesIndex)];
