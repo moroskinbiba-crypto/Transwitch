@@ -100,8 +100,9 @@ bool SteamGridDbService::applySelected(){
 ServiceSnapshot SteamGridDbService::snapshot()const{
  if(!mutex_)return state_;SDL_LockMutex(mutex_);ServiceSnapshot s=state_;SDL_UnlockMutex(mutex_);return s;
 }
-std::string SteamGridDbService::previewPath(std::uint64_t)const{
- return std::string(SteamGridDbCache::kCacheRoot)+"/.preview.tmp";
+std::string SteamGridDbService::previewPath(std::uint64_t titleId,std::uint64_t assetId)const{
+ return std::string(SteamGridDbCache::kCacheRoot)+"/.preview-"+
+     std::to_string(titleId)+"-"+std::to_string(assetId)+".tmp";
 }
 void SteamGridDbService::publishError(std::uint64_t rev,const std::string& message){
  if(!mutex_)return;SDL_LockMutex(mutex_);if(rev==revision_){state_.status=ServiceStatus::Error;state_.message=message;++state_.revision;}SDL_UnlockMutex(mutex_);
@@ -188,13 +189,13 @@ int SteamGridDbService::workerLoop(){
     state_.message=state_.assets.empty()?"No static PNG/JPEG artwork found for this type":"Artwork list loaded";++state_.revision;}
    bool has=current&&!state_.assets.empty();ArtworkAsset first;if(has)first=state_.assets.front();SDL_UnlockMutex(mutex_);
    if(current)cache_.saveGameMapping(j.titleId,j.gameId,j.gameName.empty()?j.title:j.gameName);
-   if(has){cache_.ensureDirectories();const std::string path=previewPath(j.titleId);
+   if(has){cache_.ensureDirectories();const std::string path=previewPath(j.titleId,first.id);
     if(downloadImage(first.thumb,path,error,&SteamGridDbService::cancelNetwork,this))publishPreview(j.revision,0,path);
     else{SDL_LockMutex(mutex_);if(j.revision==revision_){state_.message="Preview unavailable; full image can still be applied";++state_.revision;}SDL_UnlockMutex(mutex_);}}
    continue;
   }
   if(j.type==JobType::Preview){
-   cache_.ensureDirectories();const std::string path=previewPath(j.titleId);
+   cache_.ensureDirectories();const std::string path=previewPath(j.titleId,j.asset.id);
    if(!downloadImage(j.asset.thumb,path,error,&SteamGridDbService::cancelNetwork,this)){publishError(j.revision,error);continue;}
    publishPreview(j.revision,j.assetIndex,path);continue;
   }
@@ -218,6 +219,16 @@ void SteamGridDbService::shutdown(){
  if(worker_){SDL_WaitThread(worker_,nullptr);worker_=nullptr;}
  if(condition_){SDL_DestroyCond(condition_);condition_=nullptr;}
  if(mutex_){SDL_DestroyMutex(mutex_);mutex_=nullptr;}
- jobs_.clear();std::remove((std::string(SteamGridDbCache::kCacheRoot)+"/.preview.tmp").c_str());
+ jobs_.clear();
+ std::error_code cleanupError;
+ for(std::filesystem::directory_iterator it(SteamGridDbCache::kCacheRoot,cleanupError),end;
+     !cleanupError&&it!=end;it.increment(cleanupError)) {
+  const std::string name=it->path().filename().string();
+  if(name.rfind(".preview-",0)==0) {
+   std::error_code removeError;
+   std::filesystem::remove(it->path(),removeError);
+  }
+ }
+ std::remove((std::string(SteamGridDbCache::kCacheRoot)+"/.preview.tmp").c_str());
 }
 } // namespace desknx::steamgriddb
