@@ -54,14 +54,15 @@ public:
         for (std::size_t i = 0; i < count_; ++i) {
             if (entries_[i].id == id) {
                 entries_[i] = SurfaceEntry{id, ownsInput, dimsBackground,
-                                           dimsBackground ? dimAlpha : 0};
+                                           static_cast<std::uint8_t>(dimsBackground ? dimAlpha : 0)};
                 refreshFlags();
                 return true;
             }
         }
         if (count_ >= entries_.size()) return false;
         entries_[count_++] = SurfaceEntry{
-            id, ownsInput, dimsBackground, dimsBackground ? dimAlpha : 0
+            id, ownsInput, dimsBackground,
+            static_cast<std::uint8_t>(dimsBackground ? dimAlpha : 0)
         };
         refreshFlags();
         return true;
