@@ -97,6 +97,9 @@ private:
         color.a = scaleAlpha(color.a,scale);
         return color;
     }
+    int boundedRadius(int radius) const {
+        return std::max(0,std::min(radius,tokens_.cornerRadius));
+    }
 
     bool fillRect(int x, int y, int width, int height, SDL_Color color) {
         if (!renderer_ || width <= 0 || height <= 0) return false;
@@ -110,11 +113,12 @@ private:
     bool fillRounded(int x, int y, int width, int height,
                      int radius, SDL_Color color) {
         if (!renderer_ || width <= 0 || height <= 0) return false;
+        const int safeRadius = boundedRadius(radius);
         if (engine_ && engine_->ready() &&
-            engine_->fillRoundedRect(x,y,width,height,radius,color)) return true;
+            engine_->fillRoundedRect(x,y,width,height,safeRadius,color)) return true;
 
         const int corner = std::max(0,std::min(
-            radius,std::min(width,height)/2));
+            safeRadius,std::min(width,height)/2));
         SDL_SetRenderDrawColor(renderer_,color.r,color.g,color.b,color.a);
         if (corner == 0) {
             const SDL_Rect rect{x,y,width,height};
@@ -141,11 +145,12 @@ private:
     bool outlineRounded(int x, int y, int width, int height,
                         int radius, SDL_Color color) {
         if (!renderer_ || width <= 0 || height <= 0) return false;
+        const int safeRadius = boundedRadius(radius);
         if (engine_ && engine_->ready() &&
-            engine_->drawRoundedOutline(x,y,width,height,radius,color)) return true;
+            engine_->drawRoundedOutline(x,y,width,height,safeRadius,color)) return true;
 
         const int corner=std::max(0,std::min(
-            radius,std::min(width,height)/2));
+            safeRadius,std::min(width,height)/2));
         SDL_SetRenderDrawColor(renderer_,color.r,color.g,color.b,color.a);
         if (corner==0) {
             const SDL_Rect rect{x,y,width,height};
