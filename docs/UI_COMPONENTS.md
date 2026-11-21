@@ -22,6 +22,12 @@ Game artwork remains on the existing asynchronous IconCache and rounded-image ma
 
 The existing v0.1 and SOCOMA theme palettes remain source data. Components receive the active accent/focus/edge tokens each frame, so changing theme or appearance settings does not recreate the component system or invalidate artwork caches.
 
+## Motion
+
+`include/desknx/UiMotion.hpp` provides bounded cubic easing, wrap-safe transition progress, fade alpha and a low-cost ping-pong pulse. These are time-based helpers; they allocate no memory and create no threads.
+
+The existing screen transition keeps its 150 ms duration but now uses eased alpha. Selected game/NRO tiles now use the existing selection-style setting: outline, accent rail, pulse ring or corner brackets. When motion effects are enabled, the selection pulse is smoothed and remains bounded; when disabled, the selected-state alpha is static.
+
 ## Tests
 
 Host tests cover pure button-state resolution: active, focused, disabled and each visual variant. SDL drawing itself remains covered by the native Switch build and requires a hardware visual pass for final confirmation.
