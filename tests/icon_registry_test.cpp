@@ -56,7 +56,7 @@ int main() {
     assert(iconIdFromLegacyIndex(0) == IconId::Settings);
     assert(iconIdFromLegacyIndex(8) == IconId::Sliders);
     assert(iconIdFromLegacyIndex(-1) == IconId::Count);
-    assert(iconIdFromLegacyIndex(8) == IconId::Sliders);
+    assert(iconIdFromLegacyIndex(9) == IconId::Count);
     assert(iconIdFromLegacyIndex(16) == IconId::Count);
 
     std::cout << "Icon registry tests passed\n";
