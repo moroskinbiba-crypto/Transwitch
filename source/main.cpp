@@ -6791,13 +6791,14 @@ void launch(const Tile& t) {
         u64 launchControlSize=0;
         const Result launchControlRc=desknx::slaunch::ReadControlData(
             id,launchControl,launchControlSize);
-        const bool nacpRequestsUser=R_FAILED(launchControlRc)||
+        const bool nacpPolicyAvailable=R_SUCCEEDED(launchControlRc);
+        const bool nacpRequestsUser=!nacpPolicyAvailable||
             launchControl.nacp.startup_user_account!=0;
         const bool hasChosenUser=accountUidIsValid(&uid);
-        // An explicit profile choice must win over NACP's default selector
-        // policy. Otherwise titles with StartupUserAccount=None show their
-        // own player picker even though DeskNX already has a selected UID.
-        const u64 flags=desknx::ipc::rules::LaunchFlagsForSelectedUser(hasChosenUser);
+        // Respect games that intentionally own their player selector. For
+        // titles requesting a Nintendo user, pass the selected DeskNX profile.
+        const u64 flags=desknx::ipc::rules::LaunchFlagsForTitle(
+            nacpPolicyAvailable,nacpRequestsUser,hasChosenUser);
         desknx::diag::Write("launch","player_policy",
             "title_id=%016llX nacp_rc=0x%08X startup_user=%u has_user=%d flags=0x%llX",
             static_cast<unsigned long long>(id),
@@ -6805,8 +6806,10 @@ void launch(const Tile& t) {
             R_SUCCEEDED(launchControlRc)?launchControl.nacp.startup_user_account:255,
             hasChosenUser?1:0,static_cast<unsigned long long>(flags));
         desknx::diag::Write("launch","player_policy_result",
-            "nacp_requests_user=%d selected_user_preselected=%d",
-            nacpRequestsUser?1:0,hasChosenUser?1:0);
+            "nacp_known=%d nacp_requests_user=%d selected_uid_valid=%d preselection=%s",
+            nacpPolicyAvailable?1:0,nacpRequestsUser?1:0,hasChosenUser?1:0,
+            (flags&desknx::ipc::LaunchFlagNoPreuser)?"game_owned":
+            ((flags&desknx::ipc::LaunchFlagHasUser)?"launcher_user":"backend_default"));
         desknx::diag::Write("launch", "game_ipc_begin", "title_id=%016llX",
                             static_cast<unsigned long long>(id));
         const Result rc=sendIpc([&]{return desknx::ipc::SendLaunchTitle(id,flags,uid);});
