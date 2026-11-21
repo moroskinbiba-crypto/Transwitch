@@ -2775,6 +2775,16 @@ void drawScreen() {
         text("SIZE +  /  ZR",841,581,1,WHITE,984);
         roundRect(1002,571,228,28,8,Color{91,39,48,255});
         text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
+    } else if(!editing&&!dragging&&selectedTileIndex>=0&&
+              d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
+        roundRect(642,571,190,28,8,Color{35,68,101,255});
+        text("ARTWORK  /  ZR",660,581,1,WHITE,822);
+        for(int i=0;i<3;++i) {
+            const int hx=850+i*126;
+            roundRect(hx,571,43,28,8,Color{34,45,63,255});
+            text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
+            text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
+        }
     } else {
         const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
         for(int i=0;i<4;++i) {
