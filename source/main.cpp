@@ -2970,6 +2970,22 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 label("RECENT GAMES",r.y+13);
                 if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
                 else recentGameLine(0,r.y+42,26);
+            } else if(wide&&config.style==1) {
+                label("RECENT GAMES",r.y+12);
+                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
+                else {
+                    const int count=std::min<int>(
+                        std::min<int>(config.itemCount,t.w>=3?4:2),
+                        static_cast<int>(entries.size()));
+                    const int cellWidth=std::max(1,innerWidth/std::max(1,count));
+                    for(int i=0;i<count;++i) {
+                        const int x=left+i*cellWidth;
+                        const auto& entry=entries[static_cast<std::size_t>(i)];
+                        Tile game{Kind::Game,entry.title,entry.data,0,0,1,1,i};
+                        drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+30,42);
+                        text(entry.title,x+2,r.y+78,1,WHITE,x+cellWidth-2);
+                    }
+                }
             } else if(wide) {
                 label("RECENT GAMES",r.y+12);
                 if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
@@ -3000,8 +3016,15 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             std::snprintf(totalText,sizeof(totalText),"%.1f GB TOTAL",
                 static_cast<double>(sdTotalBytes)/(1024.0*1024.0*1024.0));
             const std::string mainValue=!storageStatsAvailable?"N/A":
-                (dataA?std::string(usedText):freeSpaceText()+" FREE");
-            if(compact) {
+                (config.style==2?freeSpaceText()+" / "+std::string(totalText):
+                 (dataA?std::string(usedText):freeSpaceText()+" FREE"));
+            if(config.style==1&&storageStatsAvailable&&!compact) {
+                label("SD CAPACITY",r.y+13);
+                text(std::to_string(percent)+"%",left,r.y+34,4,WHITE,right);
+                if(dataA)text(usedText,left,r.y+92,1,MUTED,right);
+                else text(freeSpaceText()+" FREE",left,r.y+92,1,MUTED,right);
+                if(dataB)progress(r.y+122,percent);
+            } else if(compact) {
                 label("SD STORAGE",r.y+13);
                 text(mainValue,left,r.y+39,2,WHITE,right);
                 if(dataB)progress(r.y+82,percent);
@@ -3036,15 +3059,29 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             static const char* ruWeek[]={"Пн","Вт","Ср","Чт","Пт","Сб","Вс"};
             const int month=std::max(0,std::min(11,current.tm_mon));
             const char* monthName=languageRussian?ruMonths[month]:enMonths[month];
-            if(compact) {
+            const std::string weekday=languageRussian?
+                ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7];
+            if(config.style==1) {
+                label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
+                text(std::to_string(current.tm_mday),left,r.y+30,5,WHITE,right);
+                text(monthName+"  "+std::to_string(current.tm_year+1900),
+                     left,r.y+100,2,BLUE,right);
+                if(dataA)label(weekday,r.y+142);
+                if(dataB)label(clockText(),r.y+169);
+            } else if(config.style==2) {
+                label(languageRussian?"ПЛАН НА СЕГОДНЯ":"TODAY / AGENDA",r.y+14);
+                text(weekday,left,r.y+42,2,BLUE,right);
+                text(std::to_string(current.tm_mday)+" "+monthName,left,r.y+77,3,WHITE,right);
+                if(dataA)text(std::to_string(current.tm_year+1900),left,r.y+122,2,MUTED,right);
+                if(dataB)text(clockText(),left,r.y+158,2,WHITE,right);
+            } else if(compact) {
                 text(std::to_string(current.tm_mday),left,r.y+17,5,WHITE,right);
                 text(monthName,left,r.y+78,1,BLUE,right);
             } else if(wide) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
                 text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
                      left,r.y+42,3,WHITE,right);
-                if(dataB)text(languageRussian?ruWeek[(current.tm_wday+6)%7]:enWeek[(current.tm_wday+6)%7],
-                     left,r.y+83,1,BLUE,right);
+                if(dataB)text(weekday,left,r.y+83,1,BLUE,right);
                 drawSystemIcon(6,right-34,r.y+38,26,accent);
             } else {
                 std::tm first=current;
@@ -3078,17 +3115,23 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             }
         } else if(t.kind==Kind::Nextendo) {
             const auto online=nextendoWidgetSnapshot();
-            label("NEXTENDO  /  ACTIVITY",r.y+12);
+            label(config.style==2?"NEXTENDO  /  NETWORK":"NEXTENDO  /  ACTIVITY",r.y+12);
             if(!online.fresh) {
                 text("WAITING FOR SYNC",left,r.y+39,2,WHITE,right);
                 label("STATUS UNKNOWN",r.y+78);
+            } else if(config.style==1&&wide) {
+                if(dataB&&!online.topGame.empty()) {
+                    text(online.topGame,left,r.y+34,2,WHITE,right);
+                    label(std::to_string(online.topPlayers)+" PLAYERS ACTIVE",r.y+68);
+                } else {
+                    text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
+                }
+                if(dataA)label(std::to_string(online.activeTitles)+" ACTIVE TITLES",r.y+95);
             } else {
                 if(dataA) {
                     text(std::to_string(online.total)+" ONLINE",left,r.y+34,3,WHITE,right);
                     label(std::to_string(online.activeTitles)+" ACTIVE GAMES",r.y+76);
-                } else {
-                    text("SERVICE SYNCED",left,r.y+40,2,GREEN,right);
-                }
+                } else text("SERVICE SYNCED",left,r.y+40,2,GREEN,right);
                 if(dataB) {
                     if(!online.topGame.empty())
                         text(online.topGame+"  /  "+std::to_string(online.topPlayers),
@@ -4039,7 +4082,7 @@ std::string widgetEditorDataLabel(unsigned bit) {
         case Kind::Battery: return bit==0?"CHARGE BAR":"POWER STATE";
         case Kind::System: return bit==0?"TEMPERATURES":"CPU / GPU CLOCKS";
         case Kind::Recent: return bit==0?"MORE ENTRIES":"GAME COVERS";
-        case Kind::Storage: return bit==0?"USED / TOTAL":"USAGE BAR";
+        case Kind::Storage: return bit==0?"USED OR FREE":"USAGE BAR";
         case Kind::Calendar: return bit==0?"WEEKDAY":"FULL CALENDAR";
         case Kind::Nextendo: return bit==0?"ONLINE TOTAL":"TOP ACTIVITY";
         case Kind::Favorites: return bit==0?"COVER STRIP":"SAVED COUNT";
