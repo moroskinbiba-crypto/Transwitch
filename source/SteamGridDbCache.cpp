@@ -66,6 +66,9 @@ bool regular(const std::string& p){struct stat s{};return stat(p.c_str(),&s)==0&
 std::uint64_t bytesIn(const std::filesystem::path& root){
  std::uint64_t n=0;std::error_code ec;
  for(std::filesystem::recursive_directory_iterator it(root,ec),end;!ec&&it!=end;it.increment(ec)){
+  const std::string name=it->path().filename().string();
+  // Preview/download staging files are transient and excluded from the persistent cache budget.
+  if(!name.empty()&&name[0]=='.')continue;
   std::error_code e;if(it->is_regular_file(e)&&!e){auto s=it->file_size(e);if(!e&&s<=UINT64_MAX-n)n+=s;}
  }return n;
 }
