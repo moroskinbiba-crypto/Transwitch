@@ -3250,8 +3250,23 @@ void drawScreen() {
         text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
+        const Tile& selectedGame=d.tiles[static_cast<size_t>(selectedTileIndex)];
+        roundRect(642,571,96,28,8,isFavorite(selectedGame.data)?
+            Color{69,83,48,255}:Color{35,57,76,255});
+        text(isFavorite(selectedGame.data)?"SAVED  /  ZL":"FAV  /  ZL",
+             650,581,1,isFavorite(selectedGame.data)?GREEN:WHITE,734);
+        roundRect(744,571,96,28,8,Color{35,68,101,255});
+        text("ART  /  ZR",756,581,1,WHITE,832);
+        for(int i=0;i<3;++i) {
+            const int hx=850+i*126;
+            roundRect(hx,571,43,28,8,Color{34,45,63,255});
+            text(normalHints[i].key,hx+4,581,1,BLUE,hx+40);
+            text(normalHints[i].action,hx+49,581,1,MUTED,hx+120);
+        }
+    } else if(!editing&&!dragging&&selectedTileIndex>=0&&
+              isWidgetKind(d.tiles[static_cast<size_t>(selectedTileIndex)].kind)) {
         roundRect(642,571,190,28,8,Color{35,68,101,255});
-        text("ARTWORK  /  ZR",660,581,1,WHITE,822);
+        text("WIDGET SETTINGS / ZR",654,581,1,WHITE,828);
         for(int i=0;i<3;++i) {
             const int hx=850+i*126;
             roundRect(hx,571,43,28,8,Color{34,45,63,255});
@@ -3533,22 +3548,23 @@ void drawScreen() {
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(recentOpen) {
+        const auto entries=recentEntriesForModal();
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
-        text("RECENTLY OPENED",266,104,3,WHITE,850);
+        text(recentGamesOnly?"RECENT GAMES":"RECENTLY OPENED",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
         text("B BACK",850,118,1,WHITE,912);
         roundRect(924,108,88,30,9,Color{10,132,255,255});
         text("LAUNCH",936,118,1,WHITE,1006);
         text("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,1,MUTED,850);
-        if(recentLaunches.empty()) {
-            text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
-            text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
+        if(entries.empty()) {
+            text(recentGamesOnly?"NO RECENT GAMES YET":"NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
+            text("LAUNCH AN APP TO SEE IT HERE",310,280,1,MUTED,970);
         } else {
-            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-            const int visible=std::min(10,static_cast<int>(recentLaunches.size()));
+            recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(entries.size())-1));
+            const int visible=std::min(10,static_cast<int>(entries.size()));
             for(int row=0;row<visible;++row) {
-                const auto& entry=recentLaunches[static_cast<size_t>(row)];
+                const auto& entry=entries[static_cast<size_t>(row)];
                 const int yy=190+row*39;
                 if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
                 Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
@@ -3559,6 +3575,77 @@ void drawScreen() {
             }
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
+    }
+    if(favoritesOpen) {
+        favoritesView=favoriteTiles();
+        if(favoritesView.empty())favoritesOpen=false;
+        else {
+            favoritesIndex=std::max(0,std::min(favoritesIndex,
+                static_cast<int>(favoritesView.size())-1));
+            rect(0,0,SW,SH,Color{3,7,14,190});
+            softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+            text("FAVORITE GAMES",266,104,3,WHITE,850);
+            roundRect(838,108,78,30,9,Color{49,52,61,255});
+            text("B BACK",850,118,1,WHITE,912);
+            roundRect(924,108,88,30,9,Color{10,132,255,255});
+            text("LAUNCH",936,118,1,WHITE,1006);
+            text("A  LAUNCH     MINUS  REMOVE FROM FAVORITES",282,153,1,MUTED,850);
+            const int visible=std::min(10,static_cast<int>(favoritesView.size()));
+            for(int row=0;row<visible;++row) {
+                const auto& game=favoritesView[static_cast<std::size_t>(row)];
+                const int yy=190+row*39;
+                if(row==favoritesIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                drawTileIcon(game,290,yy+4,27);
+                text(game.title,330,yy+8,2,row==favoritesIndex?WHITE:MUTED,950);
+                text("★",970,yy+8,2,GREEN,996);
+            }
+            text(std::to_string(favoritesView.size())+" FAVORITES SAVED",
+                 282,594,1,BLUE,850);
+        }
+    }
+    if(widgetEditorOpen) {
+        Tile* tile=selectedWidgetTile();
+        if(!tile)widgetEditorOpen=false;
+        else {
+            const auto config=widgetConfig(*tile);
+            const char* styles[]={"DIGITAL","MINIMAL","ANALOG"};
+            const std::string sizeValue=std::to_string(tile->w)+" x "+std::to_string(tile->h);
+            const std::string refreshValue=std::to_string(config.refreshSeconds)+" SEC";
+            const std::string itemValue=std::to_string(config.itemCount)+" ITEMS";
+            const std::string values[]={
+                sizeValue,styles[std::max(0,std::min(2,config.style))],
+                desknx::widgets::enabled(config,0)?"ON":"OFF",
+                desknx::widgets::enabled(config,1)?"ON":"OFF",
+                refreshValue,itemValue,"DONE"
+            };
+            rect(0,0,SW,SH,Color{3,7,14,204});
+            softCard(260,82,760,548,Color{17,24,36,255},Color{255,255,255,28});
+            text("WIDGET EDITOR",300,110,3,WHITE,970);
+            text(typeName(widgetEditorKind)+"  /  CHANGES SAVE AUTOMATICALLY",
+                 302,150,1,MUTED,970);
+            roundRect(900,108,88,34,10,Color{52,61,74,255});
+            text("B BACK",916,119,1,WHITE,980);
+            for(int row=0;row<7;++row) {
+                const int y=188+row*52;
+                const bool selected=row==widgetEditorRow;
+                roundRect(294,y,692,44,10,selected?
+                    Color{39,69,103,255}:Color{24,34,49,255});
+                const std::string label=row==0?"SIZE":
+                    row==1?"STYLE":row==2?widgetEditorDataLabel(0):
+                    row==3?widgetEditorDataLabel(1):row==4?"REFRESH RATE":
+                    row==5?"ITEM COUNT":"FINISH";
+                text(label,316,y+15,1,selected?WHITE:MUTED,660);
+                text(values[row],700,y+14,1,selected?GREEN:BLUE,876);
+                if(row<6) {
+                    roundRect(896,y+6,38,32,8,Color{46,58,75,255});
+                    text("−",908,y+13,2,WHITE,932);
+                    roundRect(940,y+6,38,32,8,Color{46,58,75,255});
+                    text("+",952,y+13,2,WHITE,976);
+                }
+            }
+            text("UP / DOWN  ROW     LEFT / RIGHT  CHANGE     A  APPLY",
+                 302,600,1,BLUE,970);
+        }
     }
     if(systemMenu) {
         rect(0,0,SW,SH,Color{3,7,14,190});
