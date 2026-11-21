@@ -52,7 +52,9 @@ enum class Presence : unsigned char {
 // Network transport is kept separate from the feed model so the latter remains host-testable.
 bool initializeNetwork();
 void shutdownNetwork();
-bool fetchSnapshot(PlayerSnapshot& snapshot);
+using CancelCheck = bool (*)(void*);
+bool fetchSnapshot(PlayerSnapshot& snapshot, CancelCheck shouldCancel = nullptr,
+                   void* cancelContext = nullptr);
 
 class PresenceFeed final {
 public:
