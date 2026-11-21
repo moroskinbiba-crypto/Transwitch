@@ -74,6 +74,11 @@ public:
     // uploaded to the GPU per frame, so a large desktop cannot monopolise draw.
     void beginFrame() {
         loadBudget_ = 1;
+        const Uint32 now = SDL_GetTicks();
+        if (lastPruneTick_ == 0 || now - lastPruneTick_ >= CachePruneIntervalMs) {
+            pruneUnused(now);
+            lastPruneTick_ = now;
+        }
         uploadCompleted();
     }
 
@@ -128,6 +133,7 @@ public:
         for (auto& entry : entries_) {
             if (entry.kind == tile.kind && entry.data == tile.data) {
                 entry.lastUse = ++clock_;
+                entry.lastUseMs = now;
                 return entry.texture;
             }
         }
@@ -256,11 +262,15 @@ private:
         std::string path;
         SDL_Texture* texture;
         std::uint64_t lastUse;
+        Uint32 lastUseMs;
         std::size_t bytes;
     };
 
     static constexpr std::size_t MaxEntries = 64;
     static constexpr std::size_t MaxTextureBytes = 32u * 1024u * 1024u;
+    static constexpr Uint32 CacheIdleLifetimeMs = 45000;
+    static constexpr Uint32 CachePruneIntervalMs = 5000;
+    static constexpr std::size_t MaxPrunePerFrame = 8;
     static constexpr std::size_t MaxCompressedIconBytes = 16u * 1024u * 1024u;
     static constexpr std::size_t MaxQueuedRequests = 48;
     // Bound decoded CPU-side pixels while the renderer is busy. One 1024x1024
@@ -497,7 +507,8 @@ private:
 
             SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
             entries_.push_back({decoded.kind, std::move(decoded.data),
-                                std::move(decoded.path), texture, ++clock_, bytes});
+                                std::move(decoded.path), texture, ++clock_,
+                                SDL_GetTicks(), bytes});
             textureBytes_ += bytes;
             failedUntil_.erase(decoded.key);
             --loadBudget_;
@@ -526,6 +537,21 @@ private:
         }
         return entries_.size() < MaxEntries &&
                textureBytes_ <= MaxTextureBytes - requiredBytes;
+    }
+
+    void pruneUnused(Uint32 now) {
+        std::size_t removed = 0;
+        for (auto it = entries_.begin();
+             it != entries_.end() && removed < MaxPrunePerFrame;) {
+            if (now - it->lastUseMs <= CacheIdleLifetimeMs) {
+                ++it;
+                continue;
+            }
+            if (it->texture) SDL_DestroyTexture(it->texture);
+            textureBytes_ -= std::min(textureBytes_, it->bytes);
+            it = entries_.erase(it);
+            ++removed;
+        }
     }
 
     void clearTextures() {
@@ -808,6 +834,7 @@ private:
     std::deque<Decoded> completed_;
 
     std::uint64_t clock_{0};
+    Uint32 lastPruneTick_{0};
     std::size_t loadBudget_{1};
     std::size_t textureBytes_{0};
     std::vector<Entry> entries_;
