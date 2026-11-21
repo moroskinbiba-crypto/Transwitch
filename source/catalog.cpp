@@ -1192,7 +1192,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         directoryScanStats.checkedNroFiles,inventoryCacheUsable?1:0,
         directoryScanStats.truncated?1:0);
     result.nroCount = nros.size();
-    LogDiagnostic("nro_scan root=switch depth_limit=3 count=%zu", nros.size());
+    LogDiagnostic("nro_scan root=switch depth_limit=8 count=%zu", nros.size());
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
         return a.path < b.path;
     });
@@ -1236,6 +1236,15 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     const bool catalogueCacheHit =
         !forceRefresh && nsReady && result.nsErrorCode == 0 &&
         ReadCache(sig, result);
+    // Keep valid game metadata from a cache hit even when the NRO directory
+    // manifest needs repair; the game signature is independent of that manifest.
+    std::unordered_map<std::string, Candidate> cachedGameMetadata;
+    if (catalogueCacheHit) {
+        for (const auto& cached : result.items) {
+            if (cached.kind == Kind::Game && isHexTitleId(cached.data))
+                cachedGameMetadata.emplace(cached.data, cached);
+        }
+    }
     if (catalogueCacheHit && nroMetadataMatchesInventory) {
         if (directoryScanStats.complete && !directoryScanStats.truncated &&
             (!directoryCacheValid ||
@@ -1312,11 +1321,11 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         std::string displayVersion;
         std::uint64_t occupiedSizeBytes = 0;
         bool occupiedSizeAvailable = false;
-        if (i < result.items.size() &&
-            result.items[i].kind == Kind::Game && result.items[i].data == hex) {
-            displayVersion = result.items[i].displayVersion;
-            occupiedSizeBytes = result.items[i].occupiedSizeBytes;
-            occupiedSizeAvailable = result.items[i].occupiedSizeAvailable;
+        const auto cachedMetadata = cachedGameMetadata.find(hex);
+        if (cachedMetadata != cachedGameMetadata.end()) {
+            displayVersion = cachedMetadata->second.displayVersion;
+            occupiedSizeBytes = cachedMetadata->second.occupiedSizeBytes;
+            occupiedSizeAvailable = cachedMetadata->second.occupiedSizeAvailable;
         }
         const bool skipMetadataRead = !forceRefresh && appUnchanged &&
             !displayVersion.empty() && occupiedSizeAvailable;
