@@ -28,8 +28,9 @@ constexpr bool ShouldPushPreselectedUser(std::uint64_t flags,
                                          bool has_valid_user) {
     if (!has_valid_user) return false;
     if ((flags & LaunchFlagNoPreuser) != 0) return false;
-    if ((flags & LaunchFlagHasUser) != 0) return true;
-    // Legacy/no-override requests retain the NACP-driven behavior.
+    // The backend's own NACP read is authoritative. HasUser carries the
+    // selected UID, but must not override StartupUserAccount=None if the
+    // menu's metadata read was stale or unavailable.
     return nacp_wants_user;
 }
 
