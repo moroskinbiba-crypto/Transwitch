@@ -826,6 +826,7 @@ void mediaPickerBack() {
     refreshMediaPicker();
 }
 bool saveLayout();
+bool saveNow();
 
 void applyMediaPickerSelection(int index) {
     if(index<0||index>=static_cast<int>(mediaPickerEntries.size()))return;
@@ -905,7 +906,7 @@ void applyMediaPickerSelection(int index) {
         Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         desk.backgroundPath=selected.path;
         layoutUserModified=true;
-        if(saveLayout())setStatus("DESKTOP BACKGROUND APPLIED");
+        if(saveNow())setStatus("DESKTOP BACKGROUND SAVE QUEUED");
         mediaPickerOpen=false;
         return;
     }
@@ -7369,7 +7370,7 @@ int main(int,char**) {
             // catalogue is ready. Saving an active workspace switch must not
             // cancel this population; actual content edits must be preserved.
             if(!layoutUserModified)defaultLayout();
-            const bool saved=saveLayout();
+            const bool saved=saveNow();
             // Finalize the first-run decision even if SD is read-only. Keep the
             // in-memory desks intact and do not rebuild them every frame.
             layoutLoaded=true;
