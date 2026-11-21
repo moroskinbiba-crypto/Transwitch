@@ -52,6 +52,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/surface_manager_test.cpp -o /tmp/desknx-surface-manager-test
           /tmp/desknx-surface-manager-test
 
+      - name: Test semantic icon manifest and legacy mapping
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/icon_registry_test.cpp -o /tmp/desknx-icon-registry-test
+          /tmp/desknx-icon-registry-test
+
       - name: Test modal surface stack ownership and backdrop rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/surface_manager_test.cpp -o /tmp/desknx-surface-manager-test
