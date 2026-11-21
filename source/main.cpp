@@ -28,6 +28,7 @@
 #include "SvgIconCache.hpp"
 #include "VisualEngine.hpp"
 #include "UiComponents.hpp"
+#include "../include/desknx/UiMotion.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -3178,10 +3179,10 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
     }
 }
 void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
-    const Uint32 phase=SDL_GetTicks()%1000u;
-    const Uint32 ramp=phase<500u?phase:1000u-phase;
-    const int pulse=motionEffects?150+static_cast<int>(ramp*95u/500u):220;
-    accent.a=static_cast<Uint8>(pulse);
+    const float pulse=motionEffects
+        ?desknx::ui::motion::pingPongEase(SDL_GetTicks(),1000u)
+        :static_cast<float>(70.0f/95.0f);
+    accent.a=static_cast<Uint8>(150.0f+pulse*95.0f+0.5f);
     switch(selectionStyle) {
         case 1:
             rect(x,y,4,h,accent);
@@ -3447,10 +3448,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
 
     if(artworkTile) {
         drawTileCover(t,workspace,r,fill,selected);
-        if(selected) {
-            outline(r.x,r.y,r.w,r.h,focusAccent());
-            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
-        }
+        if(selected)
+            drawSelectionFrame(r.x,r.y,r.w,r.h,focusAccent());
     } else {
         roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
         const auto metrics=desknx::widget_layout::measure(
@@ -5064,8 +5063,8 @@ void drawScreen() {
         const Uint32 elapsed=SDL_GetTicks()-uiTransitionStart;
         constexpr Uint32 TransitionDurationMs=150;
         if(elapsed<TransitionDurationMs) {
-            const Uint8 alpha=static_cast<Uint8>(
-                (TransitionDurationMs-elapsed)*70u/TransitionDurationMs);
+            const Uint8 alpha=desknx::ui::motion::fadeAlpha(
+                elapsed,TransitionDurationMs,70);
             rect(0,0,SW,SH,Color{0,0,0,alpha});
         } else {
             uiTransitionStart=0;
