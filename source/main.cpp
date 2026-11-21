@@ -4008,39 +4008,67 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         } else if(t.kind==Kind::QuickSettings) {
             if(!quickSettingsSnapshotLoaded)refreshQuickSettingsSnapshot(true);
             label("QUICK SETTINGS",metrics.headerY);
-            const int gap=7;
-            const int cellW=std::max(1,(right-left-gap)/2);
-            const int cellH=std::max(30,std::min(52,(metrics.bodyBottom-metrics.bodyTop-gap)/2));
-            const int gridY=metrics.bodyTop+2;
-            struct QuickCell { const char* name; const char* value; bool enabled; };
+            const std::string brightnessValue=quickBrightnessAvailable
+                ?std::to_string(static_cast<int>(std::lround(
+                    std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%"
+                :"N/A";
+            const char* networkValue=quickInternetConnected?"ONLINE":
+                (quickAirplaneMode?"AIRPLANE":
+                    (quickWifiEnabled?"CONNECTING":"OFFLINE"));
+            struct QuickCell {
+                const char* name;
+                std::string value;
+                bool available;
+                bool active;
+            };
             const QuickCell cells[]={
                 {"SOUND",quickSoundAvailable?(quickSoundMuted?"MUTED":"ON"):"N/A",
-                    quickSoundAvailable&&!quickSoundMuted},
+                    quickSoundAvailable,quickSoundAvailable&&!quickSoundMuted},
                 {"AIRPLANE",quickAirplaneAvailable?(quickAirplaneMode?"ON":"OFF"):"N/A",
-                    quickAirplaneAvailable&&quickAirplaneMode},
+                    quickAirplaneAvailable,quickAirplaneMode},
                 {"WI-FI",quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"N/A",
-                    quickWifiAvailable&&quickWifiEnabled&&!quickAirplaneMode},
+                    quickWifiAvailable,quickWifiEnabled&&!quickAirplaneMode},
                 {"BLUETOOTH",quickBluetoothAvailable?(quickBluetoothEnabled?"ON":"OFF"):"N/A",
-                    quickBluetoothAvailable&&quickBluetoothEnabled}
+                    quickBluetoothAvailable,quickBluetoothEnabled},
+                {"BRIGHTNESS",brightnessValue,quickBrightnessAvailable,
+                    quickBrightnessAvailable&&quickBrightness>=0.5f},
+                {"NETWORK",networkValue,quickAirplaneAvailable||quickWifiAvailable,
+                    quickInternetConnected}
             };
-            for(int i=0;i<4;++i) {
-                const int col=i%2,row=i/2;
-                const int x=left+col*(cellW+gap),y=gridY+row*(cellH+gap);
-                const Color stateColor=cells[i].enabled?GREEN:
-                    (std::string(cells[i].value)=="N/A"?MUTED:Color{190,153,112,255});
-                roundRect(x,y,cellW,cellH,9,Color{31,43,59,245});
-                roundRect(x+7,y+8,4,std::max(12,cellH-16),2,stateColor);
-                text(cells[i].name,x+17,y+7,1,MUTED,right);
-                text(cells[i].value,x+17,y+23,1,stateColor,right);
+            if(t.h<=1||t.w<=1) {
+                const std::string summary=
+                    "SOUND "+std::string(quickSoundAvailable?(quickSoundMuted?"MUTED":"ON"):"N/A")+
+                    "   WI-FI "+(quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"N/A");
+                label(summary,metrics.clampY(metrics.bodyTop+8,8));
+            } else {
+                const int count=std::max(2,std::min(6,config.itemCount));
+                const int rows=(count+1)/2;
+                const int gap=6;
+                const int availableHeight=std::max(rows*24,
+                    metrics.bodyBottom-metrics.bodyTop-4-gap*(rows-1));
+                const int cellH=std::max(24,std::min(42,availableHeight/rows));
+                const int cellW=std::max(1,(right-left-gap)/2);
+                const int gridY=metrics.bodyTop+2;
+                for(int i=0;i<count;++i) {
+                    const int col=i%2,row=i/2;
+                    const int x=left+col*(cellW+gap),y=gridY+row*(cellH+gap);
+                    const QuickCell& cell=cells[i];
+                    const Color stateColor=!cell.available?MUTED:
+                        (cell.active?GREEN:Color{185,157,122,255});
+                    const bool compact=config.style==1;
+                    const Color surface=config.style==2
+                        ?Color{19,31,47,245}:Color{31,43,59,245};
+                    roundRect(x,y,cellW,cellH,9,compact?Color{25,38,54,230}:surface);
+                    if(config.style==2) {
+                        roundRect(x+7,y+7,5,std::max(10,cellH-14),2,stateColor);
+                    } else {
+                        roundRect(x+7,y+7,4,std::max(10,cellH-14),2,stateColor);
+                    }
+                    text(cell.name,x+15,y+5,1,MUTED,right);
+                    text(cell.value,x+15,y+cellH/2,1,stateColor,right);
+                }
             }
-            if(desknx::widgets::enabled(config,0)&&quickBrightnessAvailable) {
-                const int percent=static_cast<int>(std::lround(
-                    std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f));
-                label("BRIGHTNESS  "+std::to_string(percent)+"%",metrics.clampY(metrics.bodyBottom-10,8));
-            } else if(desknx::widgets::enabled(config,1)) {
-                label(quickNetworkStatus,metrics.clampY(metrics.bodyBottom-10,8));
-            }
-        } else if(t.kind==Kind::Unsupported) {
+        }        } else if(t.kind==Kind::Unsupported) {
             roundRect(r.x+3,r.y+3,std::max(1,r.w-6),std::max(1,r.h-6),14,
                       Color{39,46,58,255});
             textCentered("UNSUPPORTED ITEM",center,metrics.clampY(r.y+18,14),
