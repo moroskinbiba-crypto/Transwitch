@@ -4,6 +4,7 @@
 #include "../include/desknx/StrictParse.hpp"
 #include "../include/desknx/CatalogPagination.hpp"
 #include "../include/desknx/ApplicationSize.hpp"
+#include "../include/desknx/NroScanner.hpp"
 #include <desknx/SafeReplace.hpp>
 
 #include <switch.h>
@@ -475,6 +476,8 @@ bool SameNroDirectoryStampCache(const DirectoryStampCache& a,
 struct NroDirectoryScanStats {
     size_t reusedDirectories{0};
     size_t enumeratedDirectories{0};
+    size_t directoriesVisited{0};
+    size_t entriesVisited{0};
     size_t checkedNroFiles{0};
     bool complete{true};
     bool truncated{false};
@@ -484,8 +487,16 @@ void CollectNrosIncremental(const std::string& root,int depth,
     std::vector<NroFile>& out,const DirectoryStampCache& oldDirectories,
     const NroMetadataCache& oldNros,DirectoryStampCache& freshDirectories,
     bool allowCache,NroDirectoryScanStats& stats) {
-    if(depth>8)return;
-    if(out.size()>=MaxItems){stats.truncated=true;return;}
+    if(depth>desknx::nro_scan::MaxDepth) {
+        stats.complete=false;stats.truncated=true;return;
+    }
+    if(out.size()>=MaxItems) {
+        stats.complete=false;stats.truncated=true;return;
+    }
+    if(stats.directoriesVisited>=desknx::nro_scan::MaxDirectories) {
+        stats.complete=false;stats.truncated=true;return;
+    }
+    ++stats.directoriesVisited;
     struct stat rootStat{};
     if(stat(root.c_str(),&rootStat)!=0||!S_ISDIR(rootStat.st_mode)) {
         stats.complete=false;
@@ -526,6 +537,11 @@ void CollectNrosIncremental(const std::string& root,int depth,
         }
     }
     if(reusable) {
+        if(stats.directoriesVisited+cachedSubdirectories.size()>
+           desknx::nro_scan::MaxDirectories) {
+            stats.complete=false;stats.truncated=true;return;
+        }
+        stats.directoriesVisited+=cachedSubdirectories.size();
         freshDirectories[root]=currentStamp;
         for(const auto& entry:cachedSubdirectories)
             freshDirectories[entry.first]=entry.second;
@@ -547,7 +563,14 @@ void CollectNrosIncremental(const std::string& root,int depth,
     ++stats.enumeratedDirectories;
     freshDirectories[root]=currentStamp;
     dirent* entry=nullptr;
-    while((entry=readdir(dir))&&out.size()<MaxItems) {
+    while((entry=readdir(dir))) {
+        if(stats.entriesVisited>=desknx::nro_scan::MaxEntries) {
+            stats.complete=false;stats.truncated=true;break;
+        }
+        ++stats.entriesVisited;
+        if(out.size()>=MaxItems) {
+            stats.complete=false;stats.truncated=true;break;
+        }
         const std::string name=entry->d_name;
         if(name=="."||name==".."||(!name.empty()&&name[0]=='.'))continue;
         if(depth==0&&name=="DeskNX")continue;
@@ -558,9 +581,13 @@ void CollectNrosIncremental(const std::string& root,int depth,
             continue;
         }
         if(S_ISDIR(childStat.st_mode)) {
-            if(depth<3)
+            if(depth<desknx::nro_scan::MaxDepth)
                 CollectNrosIncremental(path,depth+1,out,oldDirectories,
                     oldNros,freshDirectories,allowCache,stats);
+            else {
+                stats.complete=false;
+                stats.truncated=true;
+            }
         } else if(S_ISREG(childStat.st_mode)&&name.size()>4) {
             std::string extension=name.substr(name.size()-4);
             for(char& c:extension)
@@ -570,8 +597,11 @@ void CollectNrosIncremental(const std::string& root,int depth,
                                static_cast<u64>(childStat.st_mtime)});
         }
     }
-    if(out.size()>=MaxItems)stats.truncated=true;
-    closedir(dir);
+    if(out.size()>=MaxItems) {
+        stats.complete=false;
+        stats.truncated=true;
+    }
+    if(closedir(dir)!=0)stats.complete=false;
 }
 
 bool isCachedNroPath(const std::string& path) {
@@ -1187,10 +1217,11 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         report(true);
         return result;
     }
-    LogDiagnostic("nro_inventory directories_reused=%zu directories_enumerated=%zu nro_stat_checks=%zu cache_usable=%d truncated=%d",
+    LogDiagnostic("nro_inventory directories_reused=%zu directories_enumerated=%zu directories_visited=%zu entries_visited=%zu nro_stat_checks=%zu cache_usable=%d complete=%d truncated=%d",
         directoryScanStats.reusedDirectories,directoryScanStats.enumeratedDirectories,
+        directoryScanStats.directoriesVisited,directoryScanStats.entriesVisited,
         directoryScanStats.checkedNroFiles,inventoryCacheUsable?1:0,
-        directoryScanStats.truncated?1:0);
+        directoryScanStats.complete?1:0,directoryScanStats.truncated?1:0);
     result.nroCount = nros.size();
     LogDiagnostic("nro_scan root=switch depth_limit=8 count=%zu", nros.size());
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
@@ -1526,16 +1557,21 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         LogDiagnostic("nro_directory_cache_write ok=%d entries=%zu",
             saved?1:0,freshDirectoryStamps.size());
     }
-    if (games.size() > gameLimit || nros.size() >= MaxItems) result.truncated = true;
+    if (games.size() > gameLimit || nros.size() >= MaxItems ||
+        !directoryScanStats.complete || directoryScanStats.truncated)
+        result.truncated = true;
     (void)EnsureBuiltinWidgets(result.items);
-    // Preserve the last known-good catalogue if NS enumeration failed.
-    if (nsReady && result.nsErrorCode == 0) WriteCache(sig, result);
+    const bool scanComplete=directoryScanStats.complete &&
+        !directoryScanStats.truncated && !result.truncated;
+    // Do not persist a partial SD inventory as the new last-known-good cache.
+    if (nsReady && result.nsErrorCode == 0 && scanComplete)
+        WriteCache(sig, result);
     LogDiagnostic("scan_done games=%zu nros=%zu items=%zu truncated=%d ns_error=0x%08X elapsed=%llds",
                   result.gameCount, result.nroCount, result.items.size(),
                   result.truncated ? 1 : 0,
                   static_cast<unsigned int>(result.nsErrorCode),
                   static_cast<long long>(std::time(nullptr) - scanStarted));
-    report(true);
+    report(scanComplete);
     return result;
 }
 
