@@ -1692,9 +1692,9 @@ bool saveFavorites() {
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
     std::ofstream out(FAVORITES_TMP,std::ios::binary|std::ios::trunc);
     if(!out){setStatus("FAVORITES SAVE FAILED",3000);return false;}
-    out<<"DESKNXF1\\n";
+    out<<"DESKNXF1\n";
     for(const auto& id:favoriteTitleIds)
-        if(desknx::model::isTitleId(id))out<<id<<"\\n";
+        if(desknx::model::isTitleId(id))out<<id<<"\n";
     out.flush();
     bool good=out.good();
     out.close();
@@ -2427,38 +2427,38 @@ void refreshSystemMonitor() {
     systemCpuClockAvailable=false;
     systemGpuClockAvailable=false;
 
-    if(hosversionGet()>=MAKEHOSVERSION(10,0,0)) {
-        if(!tsServiceReady&&R_SUCCEEDED(tsInitialize()))tsServiceReady=true;
-        if(tsServiceReady) {
-            if(!tsInternalOpen&&R_SUCCEEDED(tsOpenSession(&tsInternalSession,TsDeviceCode_LocationInternal)))
-                tsInternalOpen=true;
-            if(!tsSocOpen&&R_SUCCEEDED(tsOpenSession(&tsSocSession,TsDeviceCode_LocationExternal)))
-                tsSocOpen=true;
+    if(!tsServiceReady&&R_SUCCEEDED(tsInitialize()))tsServiceReady=true;
+    if(tsServiceReady) {
+        if(hosversionGet()>=MAKEHOSVERSION(10,0,0)) {
+            if(!tsInternalOpen&&R_SUCCEEDED(tsOpenSession(
+                &tsInternalSession,TsDeviceCode_LocationInternal)))tsInternalOpen=true;
+            if(!tsSocOpen&&R_SUCCEEDED(tsOpenSession(
+                &tsSocSession,TsDeviceCode_LocationExternal)))tsSocOpen=true;
             float temperature=0.0f;
-            if(tsInternalOpen&&R_SUCCEEDED(tsSessionGetTemperature(&tsInternalSession,&temperature))&&
-               temperature>=-20.0f&&temperature<=120.0f) {
+            if(tsInternalOpen&&R_SUCCEEDED(tsSessionGetTemperature(
+                &tsInternalSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
                 systemPcbTemperature=temperature;
                 systemPcbTemperatureAvailable=true;
             }
             temperature=0.0f;
-            if(tsSocOpen&&R_SUCCEEDED(tsSessionGetTemperature(&tsSocSession,&temperature))&&
-               temperature>=-20.0f&&temperature<=120.0f) {
+            if(tsSocOpen&&R_SUCCEEDED(tsSessionGetTemperature(
+                &tsSocSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
                 systemSocTemperature=temperature;
                 systemSocTemperatureAvailable=true;
             }
-        }
-    } else {
-        s32 temperature=0;
-        if(R_SUCCEEDED(tsGetTemperature(TsLocation_Internal,&temperature))&&
-           temperature>=-20&&temperature<=120) {
-            systemPcbTemperature=static_cast<float>(temperature);
-            systemPcbTemperatureAvailable=true;
-        }
-        temperature=0;
-        if(R_SUCCEEDED(tsGetTemperature(TsLocation_External,&temperature))&&
-           temperature>=-20&&temperature<=120) {
-            systemSocTemperature=static_cast<float>(temperature);
-            systemSocTemperatureAvailable=true;
+        } else {
+            s32 temperature=0;
+            if(R_SUCCEEDED(tsGetTemperature(TsLocation_Internal,&temperature))&&
+               temperature>=-20&&temperature<=120) {
+                systemPcbTemperature=static_cast<float>(temperature);
+                systemPcbTemperatureAvailable=true;
+            }
+            temperature=0;
+            if(R_SUCCEEDED(tsGetTemperature(TsLocation_External,&temperature))&&
+               temperature>=-20&&temperature<=120) {
+                systemSocTemperature=static_cast<float>(temperature);
+                systemSocTemperatureAvailable=true;
+            }
         }
     }
 
