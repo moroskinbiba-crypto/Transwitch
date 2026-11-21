@@ -448,14 +448,15 @@ void adjustQuickBrightness(int direction) {
     if(R_FAILED(rc))setStatus("BRIGHTNESS CHANGE FAILED",2500);
     else {
         quickBrightness=next;
-        quickSettingsSnapshotLoaded=false;
-        refreshQuickSettingsSnapshot(true);
+        quickBrightnessAvailable=true;
+        quickSettingsSnapshotLoaded=true;
+        quickSettingsSnapshotTick=SDL_GetTicks();
         setStatus("BRIGHTNESS  "+std::to_string(static_cast<int>(std::lround(next*100.0f)))+"%",1600);
     }
 }
 
 void toggleQuickSetting(int index) {
-    refreshQuickSettingsSnapshot(true);
+    refreshQuickSettingsSnapshot();
     Result rc=0;
     if(index==0) {
         if(!quickSoundAvailable) {
@@ -3989,9 +3990,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(languageRussian?"ИГРЫ С МАКСИМАЛЬНЫМ ОНЛАЙНОМ":
                     "MOST PLAYED RIGHT NOW",left,metrics.clampY(bottom-11,8),1,MUTED,right);
         } else if(t.kind==Kind::QuickSettings) {
-            if(quickSettingsSnapshotTick==0 ||
-               SDL_GetTicks()-quickSettingsSnapshotTick>=3500)
-                refreshQuickSettingsSnapshot();
+            if(!quickSettingsSnapshotLoaded)refreshQuickSettingsSnapshot(true);
             label("QUICK SETTINGS",metrics.headerY);
             const int gap=7;
             const int cellW=std::max(1,(right-left-gap)/2);
@@ -4080,8 +4079,7 @@ void drawScreen() {
     gWorkspaceBackgroundCache.beginFrame();
     gIconCache.beginFrame();
     gFontRenderer.beginFrame();
-    if(quickSettingsOpen||hasWidgetKind(Kind::QuickSettings))
-        refreshQuickSettingsSnapshot();
+    if(quickSettingsOpen)refreshQuickSettingsSnapshot();
     gModalLayer.beginFrame(renderer,modalSurfaceActive,SW,SH);
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
@@ -7131,6 +7129,21 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        const bool emptyDeskVisible=!desks.empty()&&deskIndex>=0&&
+            deskIndex<static_cast<int>(desks.size())&&
+            desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
+            !editing&&!systemMenu&&!appSettingsMenu&&!workspaceMenu&&
+            !workspaceSettingsMenu&&!workspacePicker&&!powerMenu&&!diagnosticsOpen;
+        if(emptyDeskVisible&&y>=376&&y<=424) {
+            if(x>=386&&x<592) {
+                openList();
+                return;
+            }
+            if(x>=604&&x<888) {
+                newDesk();
+                return;
+            }
+        }
         if(listOpen) {
             if(y>=122&&y<=151) {
                 if(x>=138&&x<234) searchCatalogue();
