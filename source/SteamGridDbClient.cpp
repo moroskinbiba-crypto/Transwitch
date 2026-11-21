@@ -199,9 +199,9 @@ bool downloadImage(const std::string& url,const std::string& destination,std::st
   std::remove(destination.c_str());
   if(shouldCancel&&shouldCancel(cancelContext))error="Request cancelled";
   else if(sink.overflow)error="Image exceeds 16 MiB";
-  else if(!validImage)error="Server did not return a valid PNG/JPEG/ICO image";
   else if(rc!=CURLE_OK)error=std::string("Download failed: ")+curl_easy_strerror(rc);
-  else error="Image server returned HTTP "+std::to_string(status);
+  else if(status!=200)error="Image server returned HTTP "+std::to_string(status);
+  else error="Server did not return a valid PNG/JPEG/ICO image";
   return false;
  }return true;
 }
