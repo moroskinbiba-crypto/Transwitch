@@ -27,6 +27,7 @@
 #include "desknx/WidgetConfig.hpp"
 #include "SvgIconCache.hpp"
 #include "VisualEngine.hpp"
+#include "UiComponents.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -138,6 +139,7 @@ int mediaPickerIndex=0, mediaPickerOffset=0;
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 desknx::visual::VisualEngine gVisualEngine;
+desknx::ui::UiComponents gUiComponents;
 bool rendererVsync=false;
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
@@ -1055,6 +1057,11 @@ void roundRect(int x,int y,int w,int h,int radius,Color c) {
     }
 }
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
+    const SDL_Rect bounds{x,y,w,h};
+    if(gUiComponents.surface(bounds,
+        SDL_Color{fill.r,fill.g,fill.b,fill.a},
+        SDL_Color{edge.r,edge.g,edge.b,edge.a},
+        UiCornerRadius,true,surfaceOpacity)) return;
     const int opacity=std::max(0,std::min(255,surfaceOpacity));
     fill.a=static_cast<Uint8>((static_cast<unsigned int>(fill.a)*opacity)/255u);
     edge.a=static_cast<Uint8>((static_cast<unsigned int>(edge.a)*opacity)/255u);
@@ -1062,6 +1069,16 @@ void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20
               Color{0,0,0,static_cast<Uint8>((54u*static_cast<unsigned int>(opacity))/255u)});
     roundRect(x,y,w,h,UiCornerRadius,fill);
     roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
+}
+void uiButton(int x,int y,int w,int h,int radius,
+              desknx::ui::ButtonVariant variant,Color fill,Color edge,
+              bool active=false,bool focused=false,Color accent=BLUE) {
+    const SDL_Rect bounds{x,y,w,h};
+    (void)gUiComponents.button(bounds,variant,
+        desknx::ui::ButtonState{active,focused,false},
+        SDL_Color{fill.r,fill.g,fill.b,fill.a},
+        SDL_Color{edge.r,edge.g,edge.b,edge.a},radius,
+        SDL_Color{accent.r,accent.g,accent.b,accent.a});
 }
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
