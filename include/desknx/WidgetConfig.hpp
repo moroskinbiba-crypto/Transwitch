@@ -44,6 +44,7 @@ inline Config defaults(model::Kind kind) {
         case model::Kind::Nextendo:    return {0, 180, 3u, 4};
         case model::Kind::Favorites:   return {1, 30, 3u, 4};
         case model::Kind::GameLibrary: return {1, 30, 3u, 4};
+        case model::Kind::QuickSettings: return {0, 15, 3u, 4};
         default: return {};
     }
 }
