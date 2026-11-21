@@ -359,21 +359,19 @@ bool commitSdCard(const char* operation) {
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
 void rect(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
-    if(gVisualEngine.ready()) {
-        (void)gVisualEngine.fillRect(x,y,w,h,SDL_Color{c.r,c.g,c.b,c.a});
+    if(gVisualEngine.ready() &&
+       gVisualEngine.fillRect(x,y,w,h,SDL_Color{c.r,c.g,c.b,c.a}))
         return;
-    }
     color(c);
     SDL_Rect r{x,y,w,h};
     SDL_RenderFillRect(renderer,&r);
 }
 void outline(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
-    if(gVisualEngine.ready()) {
-        (void)gVisualEngine.drawRoundedOutline(
-            x,y,w,h,UiCornerRadius,SDL_Color{c.r,c.g,c.b,c.a});
+    if(gVisualEngine.ready() &&
+       gVisualEngine.drawRoundedOutline(
+           x,y,w,h,UiCornerRadius,SDL_Color{c.r,c.g,c.b,c.a}))
         return;
-    }
     const int r=std::max(0,std::min(UiCornerRadius,std::min(w,h)/2));
     color(c);
     if(r==0) {
@@ -1028,11 +1026,10 @@ void applyMediaPickerSelection(int index) {
 
 void roundRect(int x,int y,int w,int h,int radius,Color c) {
     if(w<=0||h<=0) return;
-    if(gVisualEngine.ready()) {
-        (void)gVisualEngine.fillRoundedRect(
-            x,y,w,h,radius,SDL_Color{c.r,c.g,c.b,c.a});
+    if(gVisualEngine.ready() &&
+       gVisualEngine.fillRoundedRect(
+           x,y,w,h,radius,SDL_Color{c.r,c.g,c.b,c.a}))
         return;
-    }
     // One consistent 10 px corner radius across cards, tiles, controls and modals.
     const int r=std::max(0,std::min(UiCornerRadius,std::min(radius,std::min(w,h)/2)));
     color(c);
