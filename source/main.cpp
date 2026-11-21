@@ -519,7 +519,9 @@ void toggleQuickSetting(int index) {
             quickNetworkStatus=quickAirplaneMode?"AIRPLANE MODE ON":
                 (quickWifiEnabled?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED");
         } else if(index==2) {
-            quickWifiEnabled=!quickWifiEnabled;
+            const bool enablingWifi=!quickWifiEnabled;
+            quickWifiEnabled=enablingWifi;
+            if(enablingWifi&&quickAirplaneMode)quickAirplaneMode=false;
             quickInternetConnected=false;
             quickNetworkStatus=quickWifiEnabled&&!quickAirplaneMode
                 ?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED";
@@ -6969,19 +6971,23 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && quickSettingsOpen) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=922&&x<=1024&&y>=92&&y<=132)closeQuickSettings();
-        else if(x>=330&&x<=950&&y>=178&&y<518) {
-            const int row=(y-178)/68;
-            quickSettingsIndex=std::max(0,std::min(4,row));
-            if(quickSettingsIndex==4) {
-                const float ratio=std::max(0.0f,std::min(1.0f,
-                    static_cast<float>(x-360)/520.0f));
-                if(quickBrightnessAvailable) {
-                    const int target=static_cast<int>(std::lround(10.0f+ratio*90.0f));
-                    const int current=static_cast<int>(std::lround(quickBrightness*100.0f));
-                    adjustQuickBrightness(target>current?1:(target<current?-1:0));
-                }
-            } else toggleQuickSetting(quickSettingsIndex);
+        if(x>=878&&x<=962&&y>=94&&y<=130)closeQuickSettings();
+        else if(x>=326&&x<=954&&y>=194&&y<524) {
+            const int relativeY=y-194;
+            const int row=relativeY/68;
+            const int withinRow=relativeY%68;
+            if(row>=0&&row<5&&withinRow<58) {
+                quickSettingsIndex=row;
+                if(row==4) {
+                    const float ratio=std::max(0.0f,std::min(1.0f,
+                        static_cast<float>(x-770)/150.0f));
+                    if(quickBrightnessAvailable) {
+                        const int target=static_cast<int>(std::lround(10.0f+ratio*90.0f));
+                        const int current=static_cast<int>(std::lround(quickBrightness*100.0f));
+                        adjustQuickBrightness(target>current?1:(target<current?-1:0));
+                    }
+                } else toggleQuickSetting(quickSettingsIndex);
+            }
         }
         return;
     }
