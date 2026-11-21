@@ -1317,6 +1317,9 @@ bool steamGridDbGetSelectedGame(Tile& selected,std::uint64_t& titleId) {
 void steamGridDbDestroyPreview() {
     if(steamGridDbPreviewTexture)SDL_DestroyTexture(steamGridDbPreviewTexture);
     steamGridDbPreviewTexture=nullptr;
+    // Cached artwork is persistent; only per-request preview files are disposable.
+    if(steamGridDbPreviewLoadedPath.find("/.preview-")!=std::string::npos)
+        std::remove(steamGridDbPreviewLoadedPath.c_str());
     steamGridDbPreviewLoadedPath.clear();
     steamGridDbPreviewRevision=UINT64_MAX;
 }
