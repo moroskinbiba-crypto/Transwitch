@@ -389,19 +389,16 @@ private:
         return 0;
     }
 
-    void enqueue(const desknx::model::Tile& tile, const std::string& key,
+    bool enqueue(const desknx::model::Tile& tile, const std::string& key,
                  int priority) {
-        if (!ensureWorker()) return;
+        if (!ensureWorker()) return false;
 
         SDL_LockMutex(mutex_);
         if (stopWorker_) {
             SDL_UnlockMutex(mutex_);
-            return;
+            return false;
         }
 
-        // Most repeated lookups are for keys that were already prefetched.
-        // Only scan the short queue when the key is pending; do not construct
-        // or copy request strings again on every rendered frame.
         if (pendingKeys_.find(key) != pendingKeys_.end()) {
             const auto queued = std::find_if(requests_.begin(), requests_.end(),
                 [&](const Request& item) { return item.key == key; });
@@ -415,16 +412,15 @@ private:
                 requests_.insert(position, std::move(promoted));
                 SDL_CondSignal(condition_);
             }
-            // A matching key not in the queue is already being decoded.
+            // The same key is either queued or currently being decoded.
             SDL_UnlockMutex(mutex_);
-            return;
+            return true;
         }
+
         if (requests_.size() >= MaxQueuedRequests) {
-            // Keep the queue bounded while allowing the focused/selected tile
-            // to replace an unstarted background prefetch.
             if (requests_.empty() || priority <= requests_.back().priority) {
                 SDL_UnlockMutex(mutex_);
-                return;
+                return false;
             }
             pendingKeys_.erase(requests_.back().key);
             requests_.pop_back();
@@ -447,6 +443,7 @@ private:
         pendingKeys_.insert(key);
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
+        return true;
     }
 
     static Decoded decode(const Request& request) {
