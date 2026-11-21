@@ -4329,8 +4329,8 @@ void drawScreen() {
                  mx+800,my+438,1,MUTED,mx+mw-30);
             roundRect(mx+792,my+462,228,38,11,Color{49,119,199,255});
             text("A  ADD TO WORKSPACE",mx+823,my+475,1,WHITE,mx+mw-30);
+            const int actionY=my+508;
             if(selected.kind==Kind::Game&&editing) {
-                const int actionY=my+508;
                 uiButton(mx+790,actionY,68,32,9,desknx::ui::ButtonVariant::Chip,Color{43,61,85,255},Color{255,255,255,18});
                 text("NAME",mx+811,actionY+11,1,WHITE,mx+858);
                 uiButton(mx+864,actionY,70,32,9,desknx::ui::ButtonVariant::Chip,Color{39,83,119,255},Color{106,175,255,80},false,false,BLUE);
