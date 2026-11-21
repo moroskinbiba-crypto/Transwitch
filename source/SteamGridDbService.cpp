@@ -84,6 +84,8 @@ bool SteamGridDbService::selectAsset(int index){
   SDL_UnlockMutex(mutex_);return false;}
  if(state_.selectedAsset==index&&state_.previewAsset==index){SDL_UnlockMutex(mutex_);return true;}
  ++revision_;
+ jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
+     [](const Job& queued){return queued.type==JobType::Preview;}),jobs_.end());
  state_.selectedAsset=index;state_.message="Loading preview...";job.type=JobType::Preview;job.revision=revision_;
  state_.revision=revision_;
  job.titleId=state_.titleId;job.assetIndex=index;job.asset=state_.assets[static_cast<size_t>(index)];
@@ -105,6 +107,8 @@ bool SteamGridDbService::applySelected(){
  job.type=JobType::Apply;job.revision=revision_;job.titleId=state_.titleId;job.gameId=state_.gameId;
  job.kind=state_.kind;job.assetIndex=state_.selectedAsset;job.asset=state_.assets[static_cast<size_t>(state_.selectedAsset)];
  job.title=state_.title;job.gameName=state_.gameName;++revision_;job.revision=revision_;
+ jobs_.erase(std::remove_if(jobs_.begin(),jobs_.end(),
+     [](const Job& queued){return queued.type==JobType::Preview;}),jobs_.end());
  state_.status=ServiceStatus::Applying;
  state_.message="Downloading selected artwork...";state_.revision=revision_;SDL_UnlockMutex(mutex_);
  if(!enqueue(std::move(job))){publishError(revision_,"SteamGridDB apply queue is busy");return false;}return true;
