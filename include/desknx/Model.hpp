@@ -14,7 +14,7 @@ constexpr int Rows = 3;
 constexpr int MaxItems = 600;
 constexpr int MaxDesks = 12;
 
-enum class Kind { Game, Nro, Clock, Battery, System, Recent, Storage, Calendar, Nextendo, Favorites, GameLibrary, Unsupported };
+enum class Kind { Game, Nro, Clock, Battery, System, Recent, Storage, Calendar, Nextendo, Favorites, GameLibrary, QuickSettings, Unsupported };
 
 struct Tile {
     Kind kind{Kind::Game};
@@ -73,6 +73,7 @@ inline std::string typeCode(Kind kind) {
         case Kind::Nextendo: return "X";
         case Kind::Favorites: return "F";
         case Kind::GameLibrary: return "L";
+        case Kind::QuickSettings: return "Q";
         case Kind::Unsupported: return "U";
     }
     return "U";
@@ -90,6 +91,7 @@ inline Kind parseKind(const std::string& value) {
     if (value == "X" || value == "P") return Kind::Nextendo;
     if (value == "F") return Kind::Favorites;
     if (value == "L") return Kind::GameLibrary;
+    if (value == "Q") return Kind::QuickSettings;
     return Kind::Unsupported;
 }
 
