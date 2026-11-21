@@ -56,7 +56,7 @@ private:
  int workerLoop();
  void publishError(std::uint64_t revision,const std::string& message);
  void publishPreview(std::uint64_t revision,int index,const std::string& path);
- std::string previewPath(std::uint64_t titleId) const;
+ std::string previewPath(std::uint64_t titleId,std::uint64_t assetId) const;
  mutable SDL_mutex* mutex_{nullptr};
  SDL_cond* condition_{nullptr};
  SDL_Thread* worker_{nullptr};
