@@ -7,7 +7,7 @@ This document describes the production native SDL2/C++ UI in `source/main.cpp` a
 | Build | Purpose | Game launch behavior |
 |---|---|---|
 | Standalone `DeskNX.nro` | Homebrew launched from Homebrew Menu | Launches through Horizon's public application-launch API and uses the profile preselected by the system. It cannot override that UID from the launcher's profile button. |
-| HOME library applet + `projects/sSystem` backend | Experimental qlaunch replacement | The UI sends the explicitly selected `AccountUid` to the system backend. The backend pushes the PreselectedUser launch parameter before starting the title. This is the mode that supports choosing a player inside DeskNX. |
+| HOME library applet + `projects/sSystem` backend | Experimental qlaunch replacement | The UI sends the explicitly selected `AccountUid` to the system backend. For titles whose NACP requests a startup user, the backend pushes the PreselectedUser launch parameter before starting the title. Titles with `StartupUserAccount=None` keep their own player-selection flow. |
 
 The HOME integration is separate from the standalone NRO. Successful compilation does not prove runtime compatibility with a particular HOS/Atmosphère version; follow the recovery and hardware-test guidance in [HOME_INTEGRATION.md](HOME_INTEGRATION.md).
 
@@ -37,7 +37,7 @@ The HOME integration is separate from the standalone NRO. Successful compilation
 
 - The Nextendo friends list is not implemented yet. It requires a user-consented OAuth flow with the `friends` scope; the expanded widget currently explains this requirement rather than showing fabricated entries.
 - Donor-title Homebrew Application Mode is intentionally disabled. Homebrew NRO launch uses the supported library-applet route in HOME mode or the standalone chain-load path where available.
-- Standalone mode uses the profile already selected by Horizon. The in-launcher player selector is available only in HOME system-applet mode, where the backend can pass a selected UID.
+- Standalone mode uses the profile already selected by Horizon. The in-launcher player selector is available only in HOME system-applet mode; the selected UID is preselected for titles whose NACP requests a system user, while titles with `StartupUserAccount=None` retain their own player-selection flow.
 - MP4/video wallpaper, achievements, MTP, Discord, Spotify/music and a theme shop are not complete features and are not included in the production feature claims.
 
 ## 4. Validation boundaries
