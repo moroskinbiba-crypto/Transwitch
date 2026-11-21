@@ -18,6 +18,7 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "SteamGridDbService.hpp"
 
 #include <algorithm>
 #include <array>
@@ -84,7 +85,7 @@ std::array<Color,12> COLORS{{
 int themeIndex=1;
 bool languageRussian=true;
 int iconStyle=0; // 0 classic, 1 Tabler-inspired outline, 2 filled material-style
-std::string wallpaperPath, fontPath, iconPackPath;
+std::string wallpaperPath, fontPath, iconPackPath, steamGridDbApiKey;
 SDL_Texture* wallpaperTexture=nullptr;
 int wallpaperWidth=0, wallpaperHeight=0;
 SDL_Texture* roundedCornerMaskTexture=nullptr;
@@ -182,6 +183,15 @@ std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
+enum class SteamGridDbPickerView { Matches, Assets };
+bool steamGridDbPickerOpen=false, steamGridDbOfflineFallback=false, steamGridDbApplyPending=false;
+int steamGridDbMatchIndex=0, steamGridDbMatchOffset=0;
+int steamGridDbKindIndex=1, steamGridDbAssetOffset=0;
+std::string steamGridDbPreviewLoadedPath;
+SDL_Texture* steamGridDbPreviewTexture=nullptr;
+uint64_t steamGridDbPreviewRevision=UINT64_MAX;
+SteamGridDbPickerView steamGridDbPickerView=SteamGridDbPickerView::Matches;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
 struct PdmQuerySnapshot {
