@@ -22,6 +22,8 @@ int main() {
     assert(parseKind("X") == Kind::Nextendo);
     assert(parseKind("P") == Kind::Nextendo); // legacy Nextendo tile code
     assert(typeCode(Kind::Nextendo) == "X");
+    assert(parseKind("Q") == Kind::QuickSettings);
+    assert(typeCode(Kind::QuickSettings) == "Q");
     int parsedInt = 0;
     assert(desknx::strict::parseInt32("0", parsedInt) && parsedInt == 0);
     assert(desknx::strict::parseInt32("-2147483648", parsedInt) && parsedInt == (-2147483647 - 1));
