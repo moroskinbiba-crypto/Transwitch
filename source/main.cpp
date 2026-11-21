@@ -4174,7 +4174,7 @@ void drawScreen() {
         const bool active=index==deskIndex;
         if(dockStyle==1) {
             uiButton(x,642,DeskTabWidth,42,6,desknx::ui::ButtonVariant::Solid,
-                Color{active?35:27,active?53:53,active?78:68,255},
+                Color{35,53,78,static_cast<Uint8>(active?255:0)},
                 Color{0,0,0,0},active,false,themeIndex==8?COLORS[3]:BLUE);
             if(active)gUiComponents.divider(x+12,685,DeskTabWidth-24,
                 SDL_Color{(themeIndex==8?COLORS[3]:BLUE).r,
@@ -4232,11 +4232,12 @@ void drawScreen() {
             {mx+646,72,"A  ADD"}};
         const int chipY=my+(themeIndex==8?64:52);
         for(const auto& chip:chips) {
-            roundRect(chip.x,chipY,chip.w,25,
-                themeIndex==8?7:9,
-                themeIndex==8?Color{22,43,56,255}:Color{31,43,61,255});
-            if(themeIndex==8)outline(chip.x,chipY,chip.w,25,
-                Color{93,143,166,90});
+            uiButton(chip.x,chipY,chip.w,25,themeIndex==8?7:9,
+                themeIndex==8?desknx::ui::ButtonVariant::Chip:
+                              desknx::ui::ButtonVariant::Solid,
+                themeIndex==8?Color{22,43,56,255}:Color{31,43,61,255},
+                Color{93,143,166,90},false,false,
+                themeIndex==8?COLORS[3]:BLUE);
             text(chip.label,chip.x+7,chipY+8,1,WHITE,chip.x+chip.w-5);
         }
         std::string viewLabel=std::string("FILTER: ")+
