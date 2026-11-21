@@ -998,8 +998,15 @@ void steamGridDbOpenPicker() {
     steamGridDbMatchIndex=steamGridDbMatchOffset=steamGridDbAssetOffset=0;
     steamGridDbDestroyPreview();
     (void)gSteamGridDbService.cache().ensureDirectories();
-    const std::string cached=gSteamGridDbService.cache().selectedPath(id);
+    std::string cached=gSteamGridDbService.cache().selectedPath(id);
     if(steamGridDbApiKey.empty()) {
+        if(cached.empty()) {
+            const auto fallbackKind=gSteamGridDbService.cache().selectedKind(id);
+            if(gSteamGridDbService.cache().hasArtwork(id,fallbackKind)) {
+                steamGridDbKindIndex=static_cast<int>(fallbackKind);
+                cached=gSteamGridDbService.cache().pathFor(id,fallbackKind);
+            }
+        }
         if(cached.empty()) {
             steamGridDbClosePicker();
             steamGridDbEditApiKey();
@@ -1012,7 +1019,6 @@ void steamGridDbOpenPicker() {
         setStatus("OFFLINE - CACHED ARTWORK",2500);
         return;
     }
-    if(!cached.empty())steamGridDbPreviewLoadedPath=cached;
     steamGridDbSearch(tile.title);
 }
 void steamGridDbChooseMatch(int index) {
