@@ -14,13 +14,17 @@ struct ArtworkAsset {
     std::string url,thumb,mime;
     int width{0},height{0},score{0};
 };
+using CancelCheck = bool (*)(void*);
 const char* artworkKindName(ArtworkKind kind);
 float titleMatchScore(const std::string& query,const std::string& candidate);
 bool searchGames(const std::string& apiKey,const std::string& title,
-                 std::vector<GameResult>& results,std::string& error);
+                 std::vector<GameResult>& results,std::string& error,
+                 CancelCheck shouldCancel = nullptr,void* cancelContext = nullptr);
 bool fetchAssets(const std::string& apiKey,std::uint64_t gameId,
                  ArtworkKind kind,std::vector<ArtworkAsset>& assets,
-                 std::string& error);
+                 std::string& error,CancelCheck shouldCancel = nullptr,
+                 void* cancelContext = nullptr);
 bool downloadImage(const std::string& url,const std::string& destination,
-                   std::string& error);
+                   std::string& error,CancelCheck shouldCancel = nullptr,
+                   void* cancelContext = nullptr);
 } // namespace desknx::steamgriddb
