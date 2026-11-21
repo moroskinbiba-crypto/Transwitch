@@ -129,11 +129,9 @@ inline bool resizeSelectedTile(model::Workspace& desk, int& selectedX,
         if (bigger) { nextW = 2; nextH = 3; }
         else { nextW = 2; nextH = 2; }
     } else if (tile.w == 2 && tile.h == 3) {
-        if (bigger) { nextW = 3; nextH = 3; }
-        else { nextW = 3; nextH = 2; }
-    } else if (tile.w == 3 && tile.h == 3) {
+        // 2x3 is the largest supported portrait tile in the six-column grid.
         if (bigger) return false;
-        nextW = 2; nextH = 3;
+        nextW = 2; nextH = 2;
     } else if (tile.w == 3 && tile.h == 1) {
         if (bigger) { nextW = 3; nextH = 2; }
         else { nextW = 2; nextH = 1; }
