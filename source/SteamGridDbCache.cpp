@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <sys/stat.h>
@@ -14,6 +15,7 @@
 #include <vector>
 namespace desknx::steamgriddb {
 namespace {
+std::recursive_mutex gMetadataMutex;
 struct Meta{
  std::uint64_t titleId{0},gameId{0},heroId{0},gridId{0},logoId{0},iconId{0},lastAccess{0};
  bool hero{false},grid{false},logo{false},icon{false};
@@ -39,6 +41,7 @@ std::string str(const std::string& s,const char* k){
 std::string escape(const std::string& s){std::string o;for(unsigned char c:s){if(c=='"'||c=='\\'){o.push_back('\\');o.push_back(static_cast<char>(c));}
  else if(c>=32&&c!='\r'&&c!='\n'&&c!='\t')o.push_back(static_cast<char>(c));if(o.size()>=512)break;}return o;}
 bool readMeta(const std::string& path,Meta& m){
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  struct stat st{};
  if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||
     st.st_size<=0||st.st_size>16384)return false;
@@ -52,6 +55,7 @@ bool readMeta(const std::string& path,Meta& m){
  m.active=str(s,"active");m.gameName=str(s,"gameName");return true;
 }
 bool writeMeta(const std::string& path,const Meta& m){
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  const std::string tmp=path+".tmp";std::ofstream f(tmp,std::ios::binary|std::ios::trunc);if(!f)return false;
  f<<"{\n  \"titleId\": "<<m.titleId<<",\n  \"gameId\": "<<m.gameId
   <<",\n  \"gameName\": \""<<escape(m.gameName)<<"\",\n  \"active\": \""<<m.active<<"\",\n"
@@ -107,12 +111,14 @@ bool SteamGridDbCache::hasGrid(std::uint64_t id)const{return hasArtwork(id,Artwo
 bool SteamGridDbCache::hasLogo(std::uint64_t id)const{return hasArtwork(id,ArtworkKind::Logo);}
 bool SteamGridDbCache::hasIcon(std::uint64_t id)const{return hasArtwork(id,ArtworkKind::Icon);}
 SteamGridDbCache::ArtworkKind SteamGridDbCache::selectedKind(std::uint64_t id)const{
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  Meta m;readMeta(metadataPath(id),m);
  if(m.active=="hero"&&hasHero(id))return ArtworkKind::Hero;if(m.active=="grid"&&hasGrid(id))return ArtworkKind::Grid;
  if(m.active=="logo"&&hasLogo(id))return ArtworkKind::Logo;if(m.active=="icon"&&hasIcon(id))return ArtworkKind::Icon;
  if(hasGrid(id))return ArtworkKind::Grid;if(hasHero(id))return ArtworkKind::Hero;if(hasIcon(id))return ArtworkKind::Icon;return ArtworkKind::Logo;
 }
 std::string SteamGridDbCache::selectedPath(std::uint64_t id)const{
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  if(!id)return {};
  Meta metadata;
  const bool haveMetadata=readMeta(metadataPath(id),metadata);
@@ -126,12 +132,15 @@ std::string SteamGridDbCache::selectedPath(std::uint64_t id)const{
  // metadata file from a render-triggered lookup races atomic cache commits.
  return p;
 }
-std::uint64_t SteamGridDbCache::mappedGameId(std::uint64_t id)const{Meta m;return readMeta(metadataPath(id),m)?m.gameId:0;}
+std::uint64_t SteamGridDbCache::mappedGameId(std::uint64_t id)const{
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);Meta m;return readMeta(metadataPath(id),m)?m.gameId:0;}
 bool SteamGridDbCache::saveGameMapping(std::uint64_t id,std::uint64_t gameId,const std::string& name){
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  if(!id||!gameId||!ensureDirectories())return false;std::error_code ec;std::filesystem::create_directories(titleDirectory(id),ec);if(ec)return false;
  Meta m;readMeta(metadataPath(id),m);m.titleId=id;m.gameId=gameId;m.gameName=name;m.lastAccess=static_cast<std::uint64_t>(std::time(nullptr));return writeMeta(metadataPath(id),m);
 }
 bool SteamGridDbCache::activateCachedArtwork(std::uint64_t id,ArtworkKind kind){
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  if(!id||!hasArtwork(id,kind))return false;
  Meta m;readMeta(metadataPath(id),m);m.titleId=id;m.active=kindKey(kind);
  m.lastAccess=static_cast<std::uint64_t>(std::time(nullptr));
@@ -149,6 +158,7 @@ bool SteamGridDbCache::saveArtworkFromFile(std::uint64_t id,ArtworkKind kind,con
  return writeMeta(metadataPath(id),m);
 }
 bool SteamGridDbCache::clearArtwork(std::uint64_t id,ArtworkKind kind){
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  if(!id)return false;Meta m;readMeta(metadataPath(id),m);bool removed=std::remove(pathFor(id,kind).c_str())==0;
  if(kind==ArtworkKind::Hero){m.hero=false;m.heroId=0;}else if(kind==ArtworkKind::Grid){m.grid=false;m.gridId=0;}
  else if(kind==ArtworkKind::Logo){m.logo=false;m.logoId=0;}else{m.icon=false;m.iconId=0;}
@@ -156,6 +166,7 @@ bool SteamGridDbCache::clearArtwork(std::uint64_t id,ArtworkKind kind){
  if(m.hero||m.grid||m.logo||m.icon)writeMeta(metadataPath(id),m);else std::remove(metadataPath(id).c_str());return removed;
 }
 bool SteamGridDbCache::restoreSystemArtwork(std::uint64_t id){
+ std::lock_guard<std::recursive_mutex> guard(gMetadataMutex);
  if(!id||!ensureDirectories())return false;
  std::error_code ec;
  std::filesystem::create_directories(titleDirectory(id),ec);
