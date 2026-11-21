@@ -438,7 +438,9 @@ private:
         // A selected SteamGridDB image takes precedence; a corrupt override
         // gracefully falls back to custom pack art and then the system icon.
         if(tryLoad(gameOverridePath,true))return result;
-        if(tryLoad(steamGridPath,true))return result;
+        // SteamGridDB files are cache-owned, not user originals: remove a
+        // corrupt download once so every future frame does not retry it.
+        if(tryLoad(steamGridPath,false))return result;
         if(tryLoad(customPath,true))return result;
         (void)tryLoad(defaultPath,false);
         return result;
