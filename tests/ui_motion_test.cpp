@@ -24,7 +24,7 @@ int main() {
     assert(near(transitionProgress(100,100,150),0.0f));
     assert(near(transitionProgress(175,100,150),0.5f));
     assert(near(transitionProgress(250,100,150),1.0f));
-    assert(near(transitionProgress(25,0xFFFFFFF0u,64),0.5f));
+    assert(near(transitionProgress(16,0xFFFFFFF0u,64),0.5f));
     assert(near(transitionProgress(42,42,0),1.0f));
 
     assert(fadeAlpha(0,150,70)==70);
