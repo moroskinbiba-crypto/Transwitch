@@ -3234,6 +3234,136 @@ void drawScreen() {
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
     }
+
+    if(steamGridDbPickerOpen) {
+        const auto sgdb=gSteamGridDbService.snapshot();
+        rect(0,0,SW,SH,Color{2,6,12,224});
+        softCard(64,34,1152,652,Color{15,23,36,255},Color{255,255,255,38});
+        text("STEAMGRIDDB  /  GAME ARTWORK",108,62,3,WHITE,900);
+        text(steamGridDbCurrentTitle,110,105,2,MUTED,820);
+        char sgdbIdText[48]{};
+        std::snprintf(sgdbIdText,sizeof(sgdbIdText),"TITLE ID  %016llX",
+            static_cast<unsigned long long>(steamGridDbCurrentTitleId));
+        text(sgdbIdText,110,133,1,MUTED,650);
+        roundRect(1082,62,94,38,10,Color{52,61,74,255});
+        text("B  BACK",1098,75,1,WHITE,1168);
+
+        if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
+            text("CHOOSE THE CORRECT GAME ENTRY",112,171,1,BLUE,850);
+            if(sgdb.status==desknx::steamgriddb::ServiceStatus::Searching) {
+                roundRect(132,235,1016,86,14,Color{24,38,56,255});
+                text("SEARCHING STEAMGRIDDB...",164,266,2,WHITE,1090);
+            } else if(sgdb.games.empty()) {
+                roundRect(132,235,1016,86,14,Color{24,38,56,255});
+                text(sgdb.message.empty()?"NO MATCHES FOUND":sgdb.message,164,266,2,WHITE,1100);
+            } else {
+                const int count=std::min(8,static_cast<int>(sgdb.games.size())-steamGridDbMatchOffset);
+                for(int row=0;row<count;++row) {
+                    const int index=steamGridDbMatchOffset+row;
+                    const int y=198+row*47;
+                    const bool selected=index==steamGridDbMatchIndex;
+                    roundRect(126,y,1028,40,10,selected?Color{40,72,111,255}:Color{25,35,49,255});
+                    text(sgdb.games[static_cast<size_t>(index)].name,150,y+12,1,
+                        selected?WHITE:MUTED,880);
+                    char score[24]{};
+                    std::snprintf(score,sizeof(score),"%u%%",
+                        static_cast<unsigned>(std::max(0.0f,std::min(1.0f,
+                            sgdb.games[static_cast<size_t>(index)].matchScore))*100.0f));
+                    text(score,1046,y+12,1,selected?GREEN:BLUE,1126);
+                }
+            }
+            text(sgdb.message,130,590,1,MUTED,780);
+            roundRect(842,574,160,42,11,Color{37,80,128,255});
+            text("A  SELECT",878,588,1,WHITE,990);
+            roundRect(1016,574,136,42,11,Color{34,45,62,255});
+            text("Y  SEARCH",1040,588,1,WHITE,1140);
+            text("UP / DOWN  SELECT MATCH",132,635,1,BLUE,520);
+        } else {
+            text(steamGridDbOfflineFallback?"OFFLINE LIBRARY  /  CACHED ARTWORK":
+                (sgdb.message.empty()?"CHOOSE ARTWORK TYPE AND IMAGE":sgdb.message),
+                112,164,1,steamGridDbOfflineFallback?GREEN:BLUE,900);
+            static const int tabX[]={116,374,632,890};
+            for(int i=0;i<4;++i) {
+                const int x=tabX[i];
+                const auto kind=steamGridDbCacheKind(i);
+                const bool cached=gSteamGridDbService.cache().hasArtwork(steamGridDbCurrentTitleId,kind);
+                roundRect(x,188,238,38,10,i==steamGridDbKindIndex?
+                    Color{42,82,126,255}:Color{29,39,54,255});
+                text(steamGridDbKindLabel(i),x+18,200,1,
+                    i==steamGridDbKindIndex?WHITE:(cached?GREEN:MUTED),x+220);
+                if(cached)roundRect(x+208,202,8,8,4,GREEN);
+            }
+            roundRect(108,238,382,316,14,Color{22,31,45,255});
+            if(steamGridDbOfflineFallback) {
+                text("CACHED FILES",132,260,1,BLUE,465);
+                for(int i=0;i<4;++i) {
+                    const bool cached=gSteamGridDbService.cache().hasArtwork(
+                        steamGridDbCurrentTitleId,steamGridDbCacheKind(i));
+                    const int y=295+i*48;
+                    if(i==steamGridDbKindIndex)
+                        roundRect(126,y-5,340,38,9,Color{40,68,101,255});
+                    text(steamGridDbKindLabel(i),148,y+7,1,
+                        i==steamGridDbKindIndex?WHITE:(cached?GREEN:MUTED),290);
+                    text(cached?"DOWNLOADED":"NOT CACHED",312,y+7,1,
+                        cached?GREEN:MUTED,456);
+                }
+                text("SELECT A TYPE TO USE ITS SAVED IMAGE",132,512,1,MUTED,470);
+            } else if(sgdb.status==desknx::steamgriddb::ServiceStatus::LoadingAssets) {
+                text("LOADING ARTWORK...",138,365,2,WHITE,460);
+            } else if(sgdb.assets.empty()) {
+                text(sgdb.message.empty()?"NO ARTWORK FOUND":sgdb.message,132,360,1,MUTED,466);
+            } else {
+                text("AVAILABLE IMAGES",132,260,1,BLUE,465);
+                const int count=std::min(7,static_cast<int>(sgdb.assets.size())-steamGridDbAssetOffset);
+                for(int row=0;row<count;++row) {
+                    const int index=steamGridDbAssetOffset+row;
+                    const auto& asset=sgdb.assets[static_cast<size_t>(index)];
+                    const int y=289+row*36;
+                    const bool selected=index==sgdb.selectedAsset;
+                    roundRect(124,y,350,31,8,selected?
+                        Color{40,72,111,255}:Color{28,38,52,255});
+                    char dimensions[48]{};
+                    std::snprintf(dimensions,sizeof(dimensions),"%dx%d",
+                        asset.width,asset.height);
+                    text(dimensions,141,y+9,1,selected?WHITE:MUTED,225);
+                    text(std::to_string(asset.score),385,y+9,1,
+                        selected?GREEN:MUTED,458);
+                }
+                text("UP / DOWN TO BROWSE",132,542,1,MUTED,470);
+            }
+            roundRect(510,238,662,316,14,Color{22,31,45,255});
+            if(steamGridDbPreviewTexture) {
+                int width=0,height=0;
+                if(SDL_QueryTexture(steamGridDbPreviewTexture,nullptr,nullptr,&width,&height)==0&&width>0&&height>0) {
+                    const auto fit=desknx::artwork::containDestination(
+                        530,254,622,284,width,height);
+                    SDL_Rect target{fit.x,fit.y,fit.w,fit.h};
+                    SDL_RenderCopy(renderer,steamGridDbPreviewTexture,nullptr,&target);
+                }
+            } else {
+                text("LARGE PREVIEW",714,372,2,MUTED,970);
+                text("SELECT AN IMAGE TO PREVIEW",682,410,1,MUTED,970);
+            }
+            if(!steamGridDbOfflineFallback&&sgdb.selectedAsset>=0&&
+               sgdb.selectedAsset<static_cast<int>(sgdb.assets.size())) {
+                const auto& asset=sgdb.assets[static_cast<size_t>(sgdb.selectedAsset)];
+                text(std::to_string(asset.width)+" x "+std::to_string(asset.height)+
+                    "   /   SCORE "+std::to_string(asset.score),530,526,1,BLUE,1150);
+            } else if(steamGridDbOfflineFallback) {
+                text("SAVED ON SD CARD  /  AVAILABLE WITHOUT INTERNET",530,526,1,GREEN,1150);
+            }
+            roundRect(108,574,236,42,11,Color{48,52,65,255});
+            text("Y  RESTORE SYSTEM",126,588,1,WHITE,330);
+            roundRect(358,574,178,42,11,Color{34,45,62,255});
+            text("X  SEARCH TITLE",374,588,1,WHITE,525);
+            roundRect(854,574,318,42,11,
+                steamGridDbOfflineFallback?Color{30,105,79,255}:Color{37,80,128,255});
+            text(steamGridDbOfflineFallback?"A  USE CACHED TYPE":"A  APPLY SELECTED",
+                steamGridDbOfflineFallback?886:884,588,1,WHITE,1150);
+            text("LEFT / RIGHT  ART TYPE     UP / DOWN  IMAGE",112,635,1,BLUE,700);
+        }
+    }
+
     SDL_RenderPresent(renderer);
 }
 bool saveNow(){return enqueueLayoutSave(false);}
