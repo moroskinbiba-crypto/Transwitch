@@ -23,6 +23,15 @@
 // used by HomeNX's IconStreamer, adapted to DeskNX's SDL2 renderer.
 class IconCache {
 public:
+    // Validate dimensions from image headers before asking SDL_image to decode.
+    // Used by the large preview path as well as by the asynchronous tile cache.
+    static bool validateImagePath(const std::string& path) {
+        struct stat st{};
+        return !path.empty() && stat(path.c_str(),&st)==0 && S_ISREG(st.st_mode) &&
+            st.st_size>0 && static_cast<std::uint64_t>(st.st_size)<=MaxCompressedIconBytes &&
+            imageDimensionsWithinLimit(path);
+    }
+
     void setRenderer(SDL_Renderer* renderer) {
         renderer_ = renderer;
         if (renderer_ && !ensureWorker())
