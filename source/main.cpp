@@ -6417,11 +6417,13 @@ void launch(const Tile& t) {
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    using desknx::ui::SurfaceId;
+    refreshSurfaceManager();
     // A live touch gesture owns focus until its initiating finger is released.
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
-    if(quickSettingsOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::QuickSettings)) {
         if(keys&HidNpadButton_B){closeQuickSettings();return;}
         if(keys&HidNpadButton_Up)quickSettingsIndex=(quickSettingsIndex+4)%5;
         if(keys&HidNpadButton_Down)quickSettingsIndex=(quickSettingsIndex+1)%5;
@@ -6432,7 +6434,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         } else if(keys&HidNpadButton_A)toggleQuickSetting(quickSettingsIndex);
         return;
     }
-    if(widgetEditorOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::WidgetEditor)) {
         if(keys&HidNpadButton_B){closeWidgetEditor();return;}
         if(keys&HidNpadButton_Up)widgetEditorRow=(widgetEditorRow+6)%7;
         if(keys&HidNpadButton_Down)widgetEditorRow=(widgetEditorRow+1)%7;
@@ -6441,7 +6443,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A)adjustWidgetEditor(1);
         return;
     }
-    if(favoritesOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::Favorites)) {
         if(keys&HidNpadButton_B){favoritesOpen=false;return;}
         favoritesView=favoriteTiles();
         const int count=static_cast<int>(favoritesView.size());
@@ -6467,7 +6469,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(steamGridDbPickerOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::SteamGridDb)) {
         if(keys&HidNpadButton_B){steamGridDbClosePicker();return;}
         if(steamGridDbPickerView==SteamGridDbPickerView::Matches) {
             const auto state=gSteamGridDbService.snapshot();
@@ -6501,7 +6503,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(nextendoOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::Nextendo)) {
         if(keys&HidNpadButton_B || keys&HidNpadButton_A) {
             nextendoOpen=false;
             return;
@@ -6514,7 +6516,7 @@ void keyInput(u64 keys, bool fromRepeat) {
             nextendoSelected=(nextendoSelected+1)%count;
         return;
     }
-    if(userPickerOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::UserPicker)) {
         if(keys&HidNpadButton_B){userPickerOpen=false;return;}
         if(!consoleUsers.empty()) {
             if(keys&HidNpadButton_Up)
@@ -6526,7 +6528,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(mediaPickerOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::MediaPicker)) {
         if(keys&HidNpadButton_B){mediaPickerBack();return;}
         if((keys&HidNpadButton_X)&&
            mediaPickerType==MediaPickerType::WorkspaceBackground) {
@@ -6551,7 +6553,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(appSettingsMenu) {
+    if(gSurfaceManager.isTop(SurfaceId::LauncherSettings)) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
         appSettingsIndex=std::max(0,std::min(18,appSettingsIndex));
         if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+18)%19;
@@ -6584,20 +6586,20 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
-    if(diagnosticsOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::Diagnostics)) {
         if(keys&HidNpadButton_B){diagnosticsOpen=false;return;}
         if(keys&(HidNpadButton_A|HidNpadButton_X))
             refreshDiagnosticsSnapshot(true);
         return;
     }
-    if(workspaceSettingsMenu) {
+    if(gSurfaceManager.isTop(SurfaceId::WorkspaceSettings)) {
         if(keys&HidNpadButton_B){workspaceSettingsMenu=false;return;}
         if(keys&HidNpadButton_Up)workspaceSettingsIndex=(workspaceSettingsIndex+6)%7;
         if(keys&HidNpadButton_Down)workspaceSettingsIndex=(workspaceSettingsIndex+1)%7;
         if(keys&HidNpadButton_A)activateWorkspaceAppearance(workspaceSettingsIndex);
         return;
     }
-    if(systemMenu) {
+    if(gSurfaceManager.isTop(SurfaceId::SystemMenu)) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
         if(systemMenuIndex<0||systemMenuIndex>5)systemMenuIndex=0;
         int row=systemMenuIndex/3;
@@ -6621,7 +6623,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(workspacePicker) {
+    if(gSurfaceManager.isTop(SurfaceId::WorkspacePicker)) {
         const int count=static_cast<int>(desks.size());
         if(keys&HidNpadButton_B){workspacePicker=false;return;}
         if(count>0&&keys&HidNpadButton_Up)
@@ -6631,7 +6633,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A)selectWorkspace(workspacePickerIndex);
         return;
     }
-    if(workspaceMenu) {
+    if(gSurfaceManager.isTop(SurfaceId::WorkspaceMenu)) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
         if(keys&HidNpadButton_Up)
             workspaceMenuIndex=(workspaceMenuIndex+5)%6;
@@ -6648,7 +6650,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(recentOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::RecentGames)) {
         if(keys&HidNpadButton_B){recentOpen=false;recentGamesOnly=false;return;}
         const auto entries=recentEntriesForModal();
         if(entries.empty()){recentOpen=false;recentGamesOnly=false;return;}
@@ -6665,7 +6667,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(powerMenu) {
+    if(gSurfaceManager.isTop(SurfaceId::PowerMenu)) {
         if(keys&HidNpadButton_B){powerMenu=false;return;}
         if(keys&HidNpadButton_Up)powerIndex=(powerIndex+2)%3;
         if(keys&HidNpadButton_Down)powerIndex=(powerIndex+1)%3;
@@ -6694,7 +6696,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(deletePrompt) {
+    if(gSurfaceManager.isTop(SurfaceId::DeleteConfirmation)) {
         if(keys&HidNpadButton_B){deletePrompt=false;return;}
         if(keys&HidNpadButton_A) {
             deletePrompt=false;
@@ -6713,7 +6715,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(listOpen) {
+    if(gSurfaceManager.isTop(SurfaceId::Library)) {
         const auto& available=visibleCatalogueSnapshot();
         if(keys&HidNpadButton_B){closeList();return;}
         if(keys&HidNpadButton_ZL){if(editing)renameSelectedGame();return;}
