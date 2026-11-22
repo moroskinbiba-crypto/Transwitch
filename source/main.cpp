@@ -976,7 +976,7 @@ void drawValueField(const desknx::ui::ValueFieldControl& field,
         controlColor(style.border));
     if(style.drawFocusRing)
         outline(bounds.x-2,bounds.y-2,bounds.width+4,bounds.height+4,
-            Color{83,157,255,150});
+            controlColor(style.focusRing));
     textRole(value,bounds.x+8,bounds.y+std::max(1,(bounds.height-10)/2),
         desknx::ui::TextRole::Metadata,controlColor(style.foreground),
         bounds.x+bounds.width-6);

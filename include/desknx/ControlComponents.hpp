@@ -220,6 +220,7 @@ struct ValueFieldStyle {
     ControlColor background;
     ControlColor border;
     ControlColor foreground;
+    ControlColor focusRing;
     bool drawFocusRing{false};
 };
 
@@ -227,12 +228,15 @@ constexpr ValueFieldStyle ResolveValueFieldStyle(
     FieldVisualState state) noexcept {
     switch(state) {
         case FieldVisualState::Focused:
-            return {{30,47,69,255},{101,166,232,220},{187,216,250,255},true};
+            return {{30,47,69,255},{101,166,232,220},{187,216,250,255},
+                    {83,157,255,150},true};
         case FieldVisualState::Disabled:
-            return {{28,33,42,255},{62,71,84,150},{103,113,128,255},false};
+            return {{28,33,42,255},{62,71,84,150},{103,113,128,255},
+                    {0,0,0,0},false};
         case FieldVisualState::Normal:
         default:
-            return {{27,38,54,255},{255,255,255,30},{145,177,213,255},false};
+            return {{27,38,54,255},{255,255,255,30},{145,177,213,255},
+                    {0,0,0,0},false};
     }
 }
 

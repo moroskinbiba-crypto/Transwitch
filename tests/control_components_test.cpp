@@ -65,11 +65,12 @@ int main() {
 
     const ModalRect toggleBounds{20,30,44,22};
     const ToggleControl onToggle{toggleBounds,true,{}};
-    const ToggleControl offToggle{toggleBounds,false,{}};
     assert(onToggle.hitTest(20,30)&&onToggle.hitTest(63,51));
     assert(!onToggle.hitTest(64,51));
     assert(ResolveToggleStyle(true,{}).track.g==132);
     assert(ResolveToggleStyle(false,{}).track.r==48);
+    assert(ResolveToggleStyle(true,ControlState{true,false,false}).drawFocusRing);
+    assert(ResolveToggleStyle(false,ControlState{false,true,false}).track.r==39);
     const ToggleControl disabledToggle{
         toggleBounds,true,ControlState{false,false,true}};
     assert(!disabledToggle.hitTest(30,40));
@@ -77,7 +78,8 @@ int main() {
 
     const ValueFieldControl field{{100,100,120,24},FieldVisualState::Focused};
     assert(field.hitTest(100,100)&&!field.hitTest(220,100));
-    assert(ResolveValueFieldStyle(FieldVisualState::Focused).drawFocusRing);
+    const auto focusedFieldStyle=ResolveValueFieldStyle(FieldVisualState::Focused);
+    assert(focusedFieldStyle.drawFocusRing&&focusedFieldStyle.focusRing.r==83);
     assert(!ResolveValueFieldStyle(FieldVisualState::Disabled).drawFocusRing);
     const ValueFieldControl disabledField{{100,100,120,24},FieldVisualState::Disabled};
     assert(!disabledField.hitTest(110,110));
