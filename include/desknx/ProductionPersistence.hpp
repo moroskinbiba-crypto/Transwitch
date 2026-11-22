@@ -65,6 +65,24 @@ inline WriteStatus writeTemporaryFile(void*, const char* path,
     return written ? WriteStatus::Success : WriteStatus::WriteFailed;
 }
 
+
+// Called only after the authoritative layout file has been durably published.
+// Its active-workspace marker is now redundant: leaving a previous marker
+// backup would let startup restore an older desk over the committed layout.
+inline bool discardFallbackPairAfterAuthoritativeCommit(
+    const char* primary, const char* backup) {
+    if(!primary||!primary[0]||!backup||!backup[0]||
+       std::string(primary)==std::string(backup)) {
+        errno=EINVAL;
+        return false;
+    }
+    bool primaryOk=true;
+    bool backupOk=true;
+    if(std::remove(primary)!=0&&errno!=ENOENT)primaryOk=false;
+    if(std::remove(backup)!=0&&errno!=ENOENT)backupOk=false;
+    return primaryOk&&backupOk;
+}
+
 inline WriteStatus writeAtomically(
     const char* temporary, const char* destination, const char* backup,
     const std::string& contents, CommitCallback commit, void* context,

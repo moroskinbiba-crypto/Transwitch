@@ -347,6 +347,19 @@ int main() {
     assert(readFile(backup) == "published-new-state");
     assert(success.calls == 2);
 
+    // Once a full layout is durably committed, both marker copies become
+    // obsolete. Leaving an old .bak could override the new active index at boot.
+    const std::string markerPrimary=root+"/active.dat";
+    const std::string markerBackup=root+"/active.bak";
+    writeFile(markerPrimary,"stale-current");
+    writeFile(markerBackup,"stale-backup");
+    assert(desknx::persist::discardFallbackPairAfterAuthoritativeCommit(
+        markerPrimary.c_str(),markerBackup.c_str()));
+    assert(!exists(markerPrimary));
+    assert(!exists(markerBackup));
+    assert(!desknx::persist::discardFallbackPairAfterAuthoritativeCommit(
+        markerPrimary.c_str(),markerPrimary.c_str()));
+
     // Active marker policy intentionally uses one post-publication commit.
     CommitPlan markerCommitFailure{0, 1, {}};
     writeStatus = desknx::persist::writeAtomically(

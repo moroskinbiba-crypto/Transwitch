@@ -3370,7 +3370,10 @@ bool saveLayout() {
     if(!saveActiveWorkspaceState()) {
         desknx::diag::Write("layout","active_workspace_marker_write_failed",
                             "index=%d",deskIndex);
-        (void)std::remove(ACTIVE_WORKSPACE_FILE);
+        if(!desknx::persist::discardFallbackPairAfterAuthoritativeCommit(
+            ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK))
+            desknx::diag::Write("layout","active_workspace_marker_invalidation_failed",
+                "primary=%s backup=%s",ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK);
     }
     layoutLoaded=true;
     size_t tileCount=0;for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
@@ -3511,8 +3514,11 @@ int layoutSaveThreadMain(void* context) {
         // A full layout snapshot already carries the active index. If its
         // small marker cannot be published, remove the stale marker so it
         // cannot override the just-published layout during the next boot.
-        if(job->rewritePrimary&&!outcome.markerWritten)
-            (void)std::remove(ACTIVE_WORKSPACE_FILE);
+        if(job->rewritePrimary&&!outcome.markerWritten&&
+           !desknx::persist::discardFallbackPairAfterAuthoritativeCommit(
+               ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK))
+            desknx::diag::Write("layout","active_workspace_marker_invalidation_failed",
+                "primary=%s backup=%s",ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK);
         outcome.success=outcome.primaryWritten||outcome.markerWritten;
         if(outcome.success) {
             std::snprintf(outcome.message,sizeof(outcome.message),
