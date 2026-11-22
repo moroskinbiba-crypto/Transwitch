@@ -18,7 +18,9 @@ grep -Fq 'CPPFILES := $(COMMON_CPPFILES) $(MENU_CPPFILES)' "$makefile" ||
 for symbol in 'DESKNX_SYSTEM_APPLET' 'SendMenuReady' 'SendHeartbeat' \
               'SendLaunchTitle' 'SendLaunchHomebrew' 'heartbeatThreadMain' \
               'touchInput(const SDL_Event' 'void keyInput' \
-              'fsdevCommitDevice("sdmc")' 'readHistoryFile(HISTORY_BAK_FILE' \
+              'fsdevCommitDevice("sdmc")' 'readValidatedWithBackup(' \
+              'validateHistorySnapshot' 'HISTORY_FILE,HISTORY_BAK_FILE' \
+              'writeAtomically(' 'ProductionPersistence.hpp' \
               'ACTIVE_WORKSPACE_BAK'; do
   grep -Fq "$symbol" "$main" || fail "production HOME UI is missing $symbol"
 done
