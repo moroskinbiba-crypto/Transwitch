@@ -187,38 +187,47 @@ int main() {
     assert(partialRecovery.parsed.workspaces[0].name == "Games edited");
     assert(partialRecovery.parsed.activeWorkspace == 0);
 
-    // Commit the newer generation normally, producing aligned backups. Then
-    // simulate a truncated primary layout: the newer sidecar is rejected
-    // against the backup layout and the matching previous sidecar is restored.
-    CommitPlan thirdCommit{};
+    // Exercise a separate full backup cycle after the partial-publish test.
+    // The helper must also create a missing storage directory on first launch.
+    const auto backupPaths = workspace_storage::Paths::under(root + "/backup");
+    CommitPlan backupFirstCommit{};
     written = workspace_storage::writeSnapshot(
-        paths, thirdGeneration, 1, commit, &thirdCommit,
+        backupPaths, workspaces, 1, commit, &backupFirstCommit,
         "layout-temp", "layout-publish");
     assert(written.success());
-    writeFile(paths.layout, "DESKNX4\ntruncated\n");
+    CommitPlan backupSecondCommit{};
+    written = workspace_storage::writeSnapshot(
+        backupPaths, edited, 0, commit, &backupSecondCommit,
+        "layout-temp", "layout-publish");
+    assert(written.success());
+    assert(std::filesystem::exists(backupPaths.layout));
+
+    // Simulate a truncated primary layout. The newer sidecar is rejected
+    // against the backup layout and the matching previous sidecar is restored.
+    writeFile(backupPaths.layout, "DESKNX4\ntruncated\n");
     workspace_storage::Snapshot recovered{};
-    assert(workspace_storage::loadSnapshot(paths, recovered));
+    assert(workspace_storage::loadSnapshot(backupPaths, recovered));
     assert(recovered.layoutSource == persist::FileSource::Backup);
     assert(recovered.activeSource == persist::FileSource::Backup);
-    assert(recovered.parsed.workspaces[0].name == "Games edited");
-    assert(recovered.parsed.activeWorkspace == 0);
+    assert(recovered.parsed.workspaces[0].name == "Games");
+    assert(recovered.parsed.activeWorkspace == 1);
     assert(recovered.parsed.workspaces[1].name == "Homebrew");
 
     // Active-desk changes are marker-only writes: the full tile layout remains
     // byte-identical while the new selection is restored on the next load.
-    const std::string layoutBeforeMarker = readFile(paths.layoutBackup);
+    const std::string layoutBeforeMarker = readFile(backupPaths.layoutBackup);
     CommitPlan markerCommit{};
     const auto markerStatus = workspace_storage::writeActiveWorkspace(
-        paths, recovered.parsed.workspaces, 0, commit, &markerCommit,
+        backupPaths, recovered.parsed.workspaces, 0, commit, &markerCommit,
         "active-temp", "active-publish", true);
     assert(markerStatus == persist::WriteStatus::Success);
     assert(markerCommit.calls == 2);
-    assert(readFile(paths.layoutBackup) == layoutBeforeMarker);
+    assert(readFile(backupPaths.layoutBackup) == layoutBeforeMarker);
 
-    // The marker references the selected layout generation; when loading the
-    // recovered primary layout, the independent marker is validated against it.
+    // The marker references the selected backup layout generation, and the
+    // independent marker is validated against that exact workspace snapshot.
     const auto markerSource = workspace_storage::readActiveWorkspace(
-        paths, recovered.parsed.workspaces, recovered.parsed.activeWorkspace);
+        backupPaths, recovered.parsed.workspaces, recovered.parsed.activeWorkspace);
     assert(markerSource == persist::FileSource::Primary);
     assert(recovered.parsed.activeWorkspace == 0);
 
@@ -228,13 +237,13 @@ int main() {
         layout::serializeActiveWorkspaceState(recovered.parsed.workspaces, 1);
     CommitPlan compactCommit{};
     const auto compactStatus = workspace_storage::writeActiveWorkspaceBytes(
-        paths, compactMarker, commit, &compactCommit,
+        backupPaths, compactMarker, commit, &compactCommit,
         "marker-temp", "marker-publish", false);
     assert(compactStatus == persist::WriteStatus::Success);
     assert(compactCommit.calls == 1);
     int compactActive = 0;
     assert(workspace_storage::readActiveWorkspace(
-        paths, recovered.parsed.workspaces, compactActive) ==
+        backupPaths, recovered.parsed.workspaces, compactActive) ==
         persist::FileSource::Primary);
     assert(compactActive == 1);
 
