@@ -38,7 +38,7 @@ inline bool migrateSettingsV1ToV2(const std::string& input,
 inline bool validateSettingsV2(const std::string& contents, void*) {
     std::vector<settings_file::Entry> parsed;
     return settings_file::parse(contents, parsed) &&
-           contents.compare(0, 11, "DESKNXSET2") == 0;
+           contents.rfind("DESKNXSET2\\n", 0) == 0;
 }
 
 // Layout versions 1–3 are converted directly to the canonical v4 serializer.
