@@ -6,9 +6,9 @@
 
 namespace desknx::ui {
 
-// Draws a lightweight translucent scrim between the desktop and modal content.
-// It deliberately avoids SDL render-target textures: those are inconsistently
-// supported by Switch SDL renderers and are unnecessary for modal correctness.
+// Composes the modal scrim directly on the launcher's logical window target.
+// It never switches render targets, changes the viewport or scale, or allocates
+// textures. Only draw color/blend and the temporary clip are saved and restored.
 class ModalLayer {
 public:
     ModalLayer() = default;
@@ -23,41 +23,41 @@ public:
         return active_;
     }
 
-    // Called after the desktop and before modal contents. The renderer remains
-    // on its normal window target for the entire frame; only draw state changes.
-    void compose(std::uint8_t dimAlpha = 174) noexcept {
-        if (!renderer_ || !active_) return;
+    // Called after the desktop and before modal contents. The SDL logical-size
+    // mapping remains untouched: the full scrim is expressed in the same 1280x720
+    // coordinates as all of the launcher's other drawing calls.
+    bool compose(std::uint8_t dimAlpha = 174) noexcept {
+        if (!renderer_ || !active_) return true;
 
         SDL_BlendMode savedBlendMode = SDL_BLENDMODE_BLEND;
         Uint8 savedR = 0, savedG = 0, savedB = 0, savedA = 255;
-        SDL_Rect savedViewport{};
         SDL_Rect savedClip{};
-        float savedScaleX = 1.0f, savedScaleY = 1.0f;
+        if (SDL_GetRenderDrawBlendMode(renderer_, &savedBlendMode) != 0 ||
+            SDL_GetRenderDrawColor(renderer_, &savedR, &savedG, &savedB, &savedA) != 0)
+            return false;
 
-        (void)SDL_GetRenderDrawBlendMode(renderer_, &savedBlendMode);
-        (void)SDL_GetRenderDrawColor(renderer_, &savedR, &savedG, &savedB, &savedA);
-        SDL_RenderGetViewport(renderer_, &savedViewport);
-        SDL_RenderGetScale(renderer_, &savedScaleX, &savedScaleY);
         const bool savedClipEnabled = SDL_RenderIsClipEnabled(renderer_) == SDL_TRUE;
         SDL_RenderGetClipRect(renderer_, &savedClip);
 
-        // Use physical renderer coordinates so the scrim always covers the
-        // entire display, independent of a control's temporary clip or scale.
-        (void)SDL_RenderSetScale(renderer_, 1.0f, 1.0f);
-        (void)SDL_RenderSetViewport(renderer_, nullptr);
-        (void)SDL_RenderSetClipRect(renderer_, nullptr);
-        (void)SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-        (void)SDL_SetRenderDrawColor(renderer_, 3, 8, 15, dimAlpha);
-        const SDL_Rect full{0, 0, width_, height_};
-        (void)SDL_RenderFillRect(renderer_, &full);
+        bool ok = SDL_RenderSetClipRect(renderer_, nullptr) == 0;
+        if (ok) ok = SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND) == 0;
+        if (ok) ok = SDL_SetRenderDrawColor(renderer_, 3, 8, 15, dimAlpha) == 0;
+        if (ok) {
+            const SDL_Rect full{0, 0, width_, height_};
+            ok = SDL_RenderFillRect(renderer_, &full) == 0;
+        }
 
-        // Restore the exact state so the modal's own glass cards and text keep
-        // their normal alpha blending and clipping behavior.
-        (void)SDL_RenderSetScale(renderer_, savedScaleX, savedScaleY);
-        (void)SDL_RenderSetViewport(renderer_, &savedViewport);
-        (void)SDL_RenderSetClipRect(renderer_, savedClipEnabled ? &savedClip : nullptr);
-        (void)SDL_SetRenderDrawColor(renderer_, savedR, savedG, savedB, savedA);
-        (void)SDL_SetRenderDrawBlendMode(renderer_, savedBlendMode);
+        // Restore in reverse order even when the fill fails. Do not reset the
+        // viewport or scale here: with SDL_RenderSetLogicalSize active, those
+        // values are renderer-owned and changing them can desynchronize later
+        // modal/card draws on Switch renderers.
+        const bool colorRestored =
+            SDL_SetRenderDrawColor(renderer_, savedR, savedG, savedB, savedA) == 0;
+        const bool blendRestored =
+            SDL_SetRenderDrawBlendMode(renderer_, savedBlendMode) == 0;
+        const bool clipRestored =
+            SDL_RenderSetClipRect(renderer_, savedClipEnabled ? &savedClip : nullptr) == 0;
+        return ok && colorRestored && blendRestored && clipRestored;
     }
 
     void shutdown() noexcept {
