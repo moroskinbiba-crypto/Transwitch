@@ -6459,7 +6459,7 @@ bool moveTile(int dx,int dy) {
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(!desknx::workspace_ops::moveSelectedTile(d,selectedX,selectedY,dx,dy)) {
         if(itemAt(d,selectedX,selectedY)>=0)
-            setStatus("MOVE BLOCKED: CELL OCCUPIED");
+            setStatus("MOVE BLOCKED: NO VALID DESTINATION");
         return false;
     }
     layoutUserModified=true;
