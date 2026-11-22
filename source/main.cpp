@@ -18,6 +18,7 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "../include/desknx/ArtworkRequestPolicy.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1944,7 +1945,7 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
 void drawTileIcon(const Tile&t,int x,int y,int size) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     roundRect(x,y,size,size,std::max(8,size/5),Color{255,255,255,12});
-    if(SDL_Texture* texture=gIconCache.get(t)) {
+    if(SDL_Texture* texture=gIconCache.get(t,desknx::artwork::LibraryIconPriority)) {
         int width=0,height=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)==0) {
             const int inset=std::max(3,size/24),inner=std::max(1,size-inset*2);
@@ -2091,7 +2092,7 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
 }
 
 void drawTileCover(const Tile& tile,const Workspace& workspace,
-                   const SDL_Rect& bounds,Color cornerFill) {
+                   const SDL_Rect& bounds,Color cornerFill,bool focused) {
     const Color fallback=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
@@ -2099,7 +2100,8 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
         std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
     roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
 
-    SDL_Texture* texture=gIconCache.get(tile);
+    SDL_Texture* texture=gIconCache.get(tile,
+        desknx::artwork::tileRenderPriority(focused));
     if(texture) {
         int sourceWidth=0,sourceHeight=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&sourceWidth,&sourceHeight)==0 &&
@@ -2170,7 +2172,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
              selected?Color{92,164,255,210}:Color{255,255,255,18});
 
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
-        drawTileCover(t,workspace,r,fill);
+        drawTileCover(t,workspace,r,fill,selected);
         if(selected) {
             outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
             outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
@@ -4545,7 +4547,9 @@ int main(int,char**) {
     if(!consoleUsersLoaded) loadConsoleUsers();
     Uint32 previousFrameTick = SDL_GetTicks();
     Uint32 lastSlowFrameLog = 0;
+    int lastPrefetchedWorkspace=-1;
     while(running&&appletMainLoop()) {
+        const int workspaceAtFrameStart=deskIndex;
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
         const Uint32 frameNow = SDL_GetTicks();
@@ -4619,6 +4623,14 @@ int main(int,char**) {
         pumpAsyncLayoutSaver();
         pumpPlayStatsQuery();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        if(layoutLoaded&&!defaultLayoutPending&&
+           deskIndex>=0&&deskIndex<static_cast<int>(desks.size())&&
+           lastPrefetchedWorkspace!=deskIndex) {
+            gIconCache.cancelQueuedPrefetches();
+            gIconCache.prefetchWorkspace(
+                desks[static_cast<size_t>(deskIndex)],selectedX,selectedY);
+            lastPrefetchedWorkspace=deskIndex;
+        }
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
