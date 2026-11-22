@@ -206,7 +206,8 @@ private:
         SDL_LockMutex(mutex_);
         // Always yield between polling cycles, even while one or more widgets
         // are visible. Otherwise a nonzero demand mask would create a busy loop.
-        if (!stop_ && queueCount_ == 0 && !forceQuick_ && !forceDiagnostics_)
+        if (!stop_ && queueCount_ == 0 && oneShotDemandMask_ == 0 &&
+            !forceQuick_ && !forceDiagnostics_)
             (void)SDL_CondWaitTimeout(condition_, mutex_, 250);
         if (stop_) {
             SDL_UnlockMutex(mutex_);
