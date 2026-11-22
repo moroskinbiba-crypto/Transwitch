@@ -95,9 +95,25 @@ inline bool moveSelectedTile(model::Workspace& desk, int& selectedX,
     const int index = model::itemAt(desk, selectedX, selectedY);
     if (index < 0 || (dx == 0 && dy == 0)) return false;
     auto& tile = desk.tiles[static_cast<size_t>(index)];
-    const int nextX = tile.x + dx;
-    const int nextY = tile.y + dy;
-    if (!model::placeable(desk, tile, nextX, nextY, index)) return false;
+    const int requestedX = tile.x + dx;
+    const int requestedY = tile.y + dy;
+    // A collision can be resolved automatically, but a destination outside
+    // the grid remains an invalid input rather than silently relocating the
+    // tile somewhere unrelated.
+    if (requestedX < 0 || requestedY < 0 ||
+        requestedX >= model::Columns || requestedY >= model::Rows ||
+        tile.w > model::Columns - requestedX ||
+        tile.h > model::Rows - requestedY)
+        return false;
+    int nextX = requestedX;
+    int nextY = requestedY;
+    // Prefer the requested origin. When occupied, scan forward in reading
+    // order and wrap once. Exclude the current origin so a full workspace
+    // cannot report a no-op relocation as a successful move.
+    if (!model::placeable(desk, tile, requestedX, requestedY, index) &&
+        !model::firstFreeFrom(desk, tile, requestedX, requestedY,
+                              nextX, nextY, index, tile.x, tile.y))
+        return false;
     tile.x = nextX;
     tile.y = nextY;
     selectedX = nextX;

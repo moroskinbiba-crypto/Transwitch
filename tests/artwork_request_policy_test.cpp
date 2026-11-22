@@ -17,5 +17,31 @@ int main() {
     assert(tileRenderPriority(false)>pFocus);
     assert(pFar>=24);
     assert(workspacePrefetchPriority(focus,3,1)==pFocus);
+
+    using desknx::artwork::PrefetchContext;
+    using desknx::artwork::shouldRebuildPrefetchContext;
+    const PrefetchContext initial{};
+    const PrefetchContext desktop{true,false,0,10,20};
+    assert(shouldRebuildPrefetchContext(initial,desktop));
+    assert(!shouldRebuildPrefetchContext(desktop,desktop));
+
+    PrefetchContext switched=desktop;
+    switched.workspace=1;
+    assert(shouldRebuildPrefetchContext(desktop,switched));
+
+    PrefetchContext library=desktop;
+    library.listOpen=true;
+    assert(shouldRebuildPrefetchContext(desktop,library));
+
+    PrefetchContext catalogueChanged=desktop;
+    ++catalogueChanged.catalogueRevision;
+    assert(shouldRebuildPrefetchContext(desktop,catalogueChanged));
+
+    PrefetchContext layoutChanged=desktop;
+    ++layoutChanged.layoutRevision;
+    assert(shouldRebuildPrefetchContext(desktop,layoutChanged));
+
+    // Focus coordinates are deliberately absent from PrefetchContext:
+    // moving selection does not restart/cancel the background decode queue.
     return 0;
 }

@@ -4936,17 +4936,21 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
-    static bool prefetchValid=false,previousListOpen=false;
-    static int previousDesk=-1,previousX=-1,previousY=-1,previousList=-1;
-    static std::uint64_t previousCatalogue=UINT64_MAX,previousLayout=UINT64_MAX;
-    const std::uint64_t currentCatalogue=visibleCacheCatalogueRevision^(catalogueViewRevision*0x9E3779B97F4A7C15ull);
-    const bool changed=!prefetchValid||previousListOpen!=listOpen||previousDesk!=deskIndex||
-        previousX!=selectedX||previousY!=selectedY||previousList!=listIndex||
-        previousCatalogue!=currentCatalogue||previousLayout!=layoutMutationRevision;
-    if(changed) {
-        gIconCache.cancelQueuedPrefetches();
+    static desknx::artwork::PrefetchContext previousPrefetchContext{};
+    const std::uint64_t currentCatalogue=visibleCacheCatalogueRevision^
+        (catalogueViewRevision*0x9E3779B97F4A7C15ull);
+    const desknx::artwork::PrefetchContext currentPrefetchContext{
+        true,listOpen,deskIndex,currentCatalogue,layoutMutationRevision};
+    if(desknx::artwork::shouldRebuildPrefetchContext(
+           previousPrefetchContext,currentPrefetchContext)) {
+        // Do not cancel the decoder queue on focus movement or desktop changes.
+        // The tile draw path requests visible images at a higher priority and
+        // IconCache promotes a matching queued/in-flight decode. Old desktop
+        // work may finish into the bounded LRU cache, avoiding a decode cycle
+        // every time the user returns to a previous workspace.
         if(listOpen&&!available.empty()) {
-            const int first=std::max(0,listIndex-2),last=std::min(static_cast<int>(available.size())-1,listIndex+2);
+            const int first=std::max(0,listIndex-2);
+            const int last=std::min(static_cast<int>(available.size())-1,listIndex+2);
             for(int index=first;index<=last;++index) {
                 const Candidate& candidate=available[static_cast<std::size_t>(index)];
                 Tile tile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
@@ -4959,9 +4963,7 @@ void drawScreen() {
                 std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
             gIconCache.prefetchWorkspace(activeDesk,selectedX,selectedY);
         }
-        prefetchValid=true;previousListOpen=listOpen;previousDesk=deskIndex;
-        previousX=selectedX;previousY=selectedY;previousList=listIndex;
-        previousCatalogue=currentCatalogue;previousLayout=layoutMutationRevision;
+        previousPrefetchContext=currentPrefetchContext;
     }
     gIconCache.beginFrame();
     refreshStorageStats();
@@ -6457,7 +6459,7 @@ bool moveTile(int dx,int dy) {
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(!desknx::workspace_ops::moveSelectedTile(d,selectedX,selectedY,dx,dy)) {
         if(itemAt(d,selectedX,selectedY)>=0)
-            setStatus("MOVE BLOCKED: CELL OCCUPIED");
+            setStatus("MOVE BLOCKED: NO VALID DESTINATION");
         return false;
     }
     layoutUserModified=true;
