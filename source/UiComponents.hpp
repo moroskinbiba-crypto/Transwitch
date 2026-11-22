@@ -95,7 +95,7 @@ public:
     bool modalSurface(const SDL_Rect& bounds, SDL_Color fill, SDL_Color edge,
                       int opacity = 255) {
         if (!valid(bounds)) return false;
-        return surface(bounds, fill, edge, tokens_.radiusXl, true, opacity);
+        return surface(bounds, fill, edge, tokens_.radiusLg, true, opacity);
     }
 
     bool dialogSurface(const SDL_Rect& bounds, SDL_Color fill, SDL_Color edge,
