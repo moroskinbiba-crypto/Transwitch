@@ -20,6 +20,7 @@
 #include "../include/desknx/ProductionPersistence.hpp"
 #include "../include/desknx/WorkspaceStorage.hpp"
 #include "../include/desknx/StorageControlPlane.hpp"
+#include "../include/desknx/StorageMigration.hpp"
 #include "../include/desknx/SettingsFile.hpp"
 #include "../include/desknx/LaunchHistory.hpp"
 #include "catalog.hpp"
@@ -1047,6 +1048,12 @@ void loadLauncherSettings() {
         applyThemePalette();
         return;
     }
+    const auto settingsSchema=desknx::migration::inspect(
+        serialized,desknx::migration::SettingsSchema);
+    desknx::diag::Write("migration","schema_inspected",
+        "domain=settings source_version=%u target_version=%u status=%u",
+        settingsSchema.sourceVersion,settingsSchema.targetVersion,
+        static_cast<unsigned int>(settingsSchema.status));
     if(source==desknx::persist::FileSource::Backup) {
         desknx::diag::Write("settings","backup_restored","path=%s",SETTINGS_BAK);
         setStatus("APPEARANCE SETTINGS RESTORED FROM BACKUP",4000);
@@ -2880,6 +2887,12 @@ void loadHistory() {
             HISTORY_FILE,HISTORY_BAK_FILE);
         return;
     }
+    const auto historySchema=desknx::migration::inspect(
+        serialized,desknx::migration::LaunchHistorySchema);
+    desknx::diag::Write("migration","schema_inspected",
+        "domain=launch_history source_version=%u target_version=%u status=%u",
+        historySchema.sourceVersion,historySchema.targetVersion,
+        static_cast<unsigned int>(historySchema.status));
     recentLaunches=std::move(loaded);
     if(source==desknx::persist::FileSource::Backup) {
         desknx::diag::Write("history","backup_restored","path=%s entries=%zu",
@@ -3718,11 +3731,18 @@ void drainAsyncLayoutSaver() {
 bool loadLayoutFrom(const char* path) {
     const Uint64 started=SDL_GetTicks64();
     desknx::layout::LoadResult loaded{};
-    if(!desknx::workspace_storage::readLayoutFile(path,loaded)) {
+    std::string rawLayout;
+    if(!desknx::workspace_storage::readLayoutFile(path,loaded,&rawLayout)) {
         desknx::diag::Write("layout","load_failed","path=%s reason=stat_read_or_parse",
             path?path:"null");
         return false;
     }
+    const auto layoutSchema=desknx::migration::inspect(
+        rawLayout,desknx::migration::WorkspaceSchema);
+    desknx::diag::Write("migration","schema_inspected",
+        "domain=workspace source_version=%u target_version=%u status=%u",
+        layoutSchema.sourceVersion,layoutSchema.targetVersion,
+        static_cast<unsigned int>(layoutSchema.status));
     struct stat layoutStat{};
     const size_t bytes=(path&&stat(path,&layoutStat)==0&&layoutStat.st_size>0)
         ?static_cast<size_t>(layoutStat.st_size):0u;
