@@ -1459,6 +1459,17 @@ void modalCard(int x,int y,int w,int h,Color fill,
         :gUiComponents.modalSurface(bounds,fillColor,edgeColor,surfaceOpacity);
     if(!drawn)softCard(x,y,w,h,fill,edge);
 }
+
+void sidePanelCard(int x,int y,int w,int h,Color fill,
+                   Color edge=Color{255,255,255,20}) {
+    fill=themeSurfaceTint(fill);
+    edge=themeEdgeTint(edge);
+    const SDL_Rect bounds{x,y,w,h};
+    const bool drawn=gUiComponents.sidePanelSurface(bounds,
+        SDL_Color{fill.r,fill.g,fill.b,fill.a},
+        SDL_Color{edge.r,edge.g,edge.b,edge.a},surfaceOpacity);
+    if(!drawn)softCard(x,y,w,h,fill,edge);
+}
 void uiButton(int x,int y,int w,int h,int radius,
               desknx::ui::ButtonVariant variant,Color fill,Color edge,
               bool active=false,bool focused=false,Color accent=BLUE) {
@@ -5153,7 +5164,7 @@ void drawScreen() {
                 }
             }
         }
-        roundRect(mx+780,my+110,252,438,16,Color{22,31,45,255});
+        sidePanelCard(mx+780,my+110,252,438,Color{22,31,45,255},Color{255,255,255,18});
         if(!available.empty()) {
             const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
@@ -5932,7 +5943,7 @@ void drawScreen() {
                     i==steamGridDbKindIndex?WHITE:(cached?GREEN:MUTED),x+220);
                 if(cached)roundRect(x+208,202,8,8,4,GREEN);
             }
-            roundRect(108,238,382,316,14,Color{22,31,45,255});
+            sidePanelCard(108,238,382,316,Color{22,31,45,255},Color{255,255,255,18});
             if(steamGridDbOfflineFallback) {
                 text("CACHED FILES",132,260,1,BLUE,465);
                 for(int i=0;i<4;++i) {
@@ -5970,7 +5981,7 @@ void drawScreen() {
                 }
                 text("UP / DOWN TO BROWSE",132,542,1,MUTED,470);
             }
-            roundRect(510,238,662,316,14,Color{22,31,45,255});
+            sidePanelCard(510,238,662,316,Color{22,31,45,255},Color{255,255,255,18});
             if(steamGridDbPreviewTexture) {
                 int width=0,height=0;
                 if(SDL_QueryTexture(steamGridDbPreviewTexture,nullptr,nullptr,&width,&height)==0&&width>0&&height>0) {
