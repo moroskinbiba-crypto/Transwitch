@@ -5,6 +5,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <algorithm>
+#include <cstddef>
 #include <climits>
 #include <string>
 #include <unordered_map>
@@ -224,7 +225,7 @@ private:
 
     static constexpr size_t CacheLimit = 384;
     static constexpr size_t FitCacheLimit = 512;
-    static constexpr size::size_type MaxPendingRasterJobs = 192;
+    static constexpr std::size_t MaxPendingRasterJobs = 192;
     static constexpr size_t MaxTextBytes = 2048;
     static constexpr int NewTextureBudget = 2;
     static constexpr int MaxRasterJobsPerFrame = 2;
@@ -335,16 +336,22 @@ private:
         return false;
     }
 
-    TTF_Font* fontForScale(int scale) {
-        const int index = std::max(0, std::min(7, scale - 1));
-        if (customFonts_[index]) return customFonts_[index];
+    TTF_Font* systemFontForScale(int index) {
+        if (index < 0 || index >= 8) return nullptr;
         if (fonts_[index]) return fonts_[index];
-        if (!sharedFont_.address || sharedFont_.size > static_cast<u32>(INT_MAX)) return nullptr;
+        if (!sharedFont_.address ||
+            sharedFont_.size > static_cast<u32>(INT_MAX)) return nullptr;
         SDL_RWops* rw = SDL_RWFromConstMem(
             sharedFont_.address, static_cast<int>(sharedFont_.size));
         if (!rw) return nullptr;
         fonts_[index] = TTF_OpenFontRW(rw, 1, fontPixelSize(index));
         return fonts_[index];
+    }
+
+    TTF_Font* fontForScale(int scale) {
+        const int index = std::max(0, std::min(7, scale - 1));
+        if (customFonts_[index]) return customFonts_[index];
+        return systemFontForScale(index);
     }
 
     double elapsedMs(Uint64 start, Uint64 finish) const noexcept {
@@ -368,13 +375,11 @@ private:
         const Uint64 prepareStarted = SDL_GetPerformanceCounter();
         std::string key = makeKey(value, scale, color, maxWidth, customReady);
         CacheEntry* entry = find(key);
-
-        // A cached system-face label remains a valid temporary fallback while
-        // a newly selected custom face is warming up or its texture is queued.
+        CacheEntry* fallbackEntry = nullptr;
         if (!entry && customReady) {
             const std::string systemKey =
                 makeKey(value, scale, color, maxWidth, false);
-            entry = find(systemKey);
+            fallbackEntry = find(systemKey);
         }
 
         frameStats_.textPreparationMs +=
@@ -383,7 +388,8 @@ private:
             ++frameStats_.cacheMisses;
             if (!enqueueRaster(key, value, scale, maxWidth, color, customReady))
                 ++frameStats_.deferredByBudget;
-            return false;
+            entry = fallbackEntry;
+            if (!entry) return false;
         }
 
         ++frameStats_.cacheHits;
@@ -439,13 +445,12 @@ private:
             const int fontIndex = std::max(0, std::min(7, job.scale - 1));
             TTF_Font* font = job.customFace
                 ? customFonts_[fontIndex] : fonts_[fontIndex];
-            if (!font && !openedFontThisFrame) {
+            if (!font && !job.customFace && !openedFontThisFrame) {
                 // Font opening is also kept out of drawImpl. At most one new
                 // system face is opened in a frame; unavailable faces are
-                // deferred until the font warm-up/loader makes them available.
-                font = fontForScale(job.scale);
+                // deferred until the next frame's raster pump.
+                font = systemFontForScale(fontIndex);
                 openedFontThisFrame = font != nullptr;
-                if (job.customFace && font == fonts_[fontIndex]) font = nullptr;
             }
             if (!font) {
                 rasterQueue_.push_front(std::move(job));
