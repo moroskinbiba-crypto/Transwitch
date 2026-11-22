@@ -395,6 +395,7 @@ struct RuntimeFrameMetrics {
     double maximumFrameMs{0.0};
     double averageInputMs{0.0};
     double averagePresentWaitMs{0.0};
+    double p95FrameMs{0.0};
     double maximumInputMs{0.0};
     double maximumPresentWaitMs{0.0};
     double lastWorkspaceSwitchMs{0.0};
@@ -5758,13 +5759,14 @@ void drawScreen() {
         std::snprintf(perfText,sizeof(perfText),"INPUT %.2f MS  /  PRESENT WAIT %.2f MS",
             runtimeFrameMetrics.averageInputMs,runtimeFrameMetrics.averagePresentWaitMs);
         text(perfText,652,530,1,BLUE,1050);
-        std::snprintf(perfText,sizeof(perfText),"LAST SWITCH %.2F MS  /  PEAK %.2F MS",
+        std::snprintf(perfText,sizeof(perfText),"LAST SWITCH %.2F MS  /  PEAK %.2F MS  /  COUNT %llu",
             runtimeFrameMetrics.lastWorkspaceSwitchMs,
-            runtimeFrameMetrics.maximumWorkspaceSwitchMs);
-        text(perfText,652,554,1,warnColor,1050);
-        std::snprintf(perfText,sizeof(perfText),"SLOW FRAMES %llu  /  SWITCHES %llu",
-            static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames),
+            runtimeFrameMetrics.maximumWorkspaceSwitchMs,
             static_cast<unsigned long long>(runtimeFrameMetrics.workspaceSwitches));
+        text(perfText,652,554,1,warnColor,1050);
+        std::snprintf(perfText,sizeof(perfText),"FRAME P95 %.2F MS  /  SLOW %llu",
+            runtimeFrameMetrics.p95FrameMs,
+            static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
         text(perfText,652,578,1,MUTED,1050);
         text("LIVE SNAPSHOT UPDATES EVERY 5 SECONDS  /  A OR X TO REFRESH",
              176,604,1,MUTED,1060);
@@ -8619,6 +8621,8 @@ int main(int,char**) {
     double metricsFrameSumMs=0.0,metricsRenderSumMs=0.0,metricsMaximumFrameMs=0.0;
     double metricsInputSumMs=0.0,metricsPresentSumMs=0.0;
     double metricsMaximumInputMs=0.0,metricsMaximumPresentMs=0.0;
+    std::array<double,128> frameTimeSamples{};
+    std::size_t frameTimeSampleCount=0;
     while(running&&appletMainLoop()) {
         const Uint64 frameStartCounter=SDL_GetPerformanceCounter();
         bool ready=false,complete=false,truncated=false;
@@ -8741,6 +8745,8 @@ int main(int,char**) {
             ?static_cast<double>(frameEndCounter-frameStartCounter)*1000.0/
                 static_cast<double>(performanceFrequency):0.0;
         ++metricsFrames;
+        frameTimeSamples[frameTimeSampleCount%frameTimeSamples.size()]=frameMs;
+        if(frameTimeSampleCount<frameTimeSamples.size())++frameTimeSampleCount;
         metricsFrameSumMs+=frameMs;
         metricsRenderSumMs+=renderMs;
         metricsInputSumMs+=inputMs;
@@ -8765,6 +8771,15 @@ int main(int,char**) {
             runtimeFrameMetrics.averagePresentWaitMs=metricsFrames
                 ?metricsPresentSumMs/static_cast<double>(metricsFrames):0.0;
             runtimeFrameMetrics.maximumFrameMs=metricsMaximumFrameMs;
+            if(frameTimeSampleCount>0) {
+                auto sortedSamples=frameTimeSamples;
+                std::sort(sortedSamples.begin(),
+                    sortedSamples.begin()+static_cast<std::ptrdiff_t>(frameTimeSampleCount));
+                const std::size_t p95Index=std::min(frameTimeSampleCount-1,
+                    static_cast<std::size_t>(std::ceil(
+                        static_cast<double>(frameTimeSampleCount)*0.95))-1);
+                runtimeFrameMetrics.p95FrameMs=sortedSamples[p95Index];
+            }
             runtimeFrameMetrics.maximumInputMs=metricsMaximumInputMs;
             runtimeFrameMetrics.maximumPresentWaitMs=metricsMaximumPresentMs;
             runtimeFrameMetrics.slowFrames=metricsSlowFrames;
@@ -8788,6 +8803,7 @@ int main(int,char**) {
             metricsFrames=metricsSlowFrames=0;
             metricsFrameSumMs=metricsRenderSumMs=metricsInputSumMs=metricsPresentSumMs=0.0;
             metricsMaximumFrameMs=metricsMaximumInputMs=metricsMaximumPresentMs=0.0;
+            frameTimeSampleCount=0;
         }
     }
 #ifdef DESKNX_SYSTEM_APPLET
