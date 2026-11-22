@@ -53,6 +53,10 @@ int main() {
     assert(current.background.r==30&&current.foreground.b==255);
     assert(focused.background.r==45&&focused.foreground.r==246);
     assert(disabledRow.background.a==0&&disabledRow.foreground.r==91);
+    assert(IsSelectableRowInteractive(SelectableRowState::Normal));
+    assert(IsSelectableRowInteractive(SelectableRowState::Current));
+    assert(IsSelectableRowInteractive(SelectableRowState::Focused));
+    assert(!IsSelectableRowInteractive(SelectableRowState::Disabled));
 
     return 0;
 }

@@ -147,3 +147,10 @@ This does not yet complete the entire control library: badges, toggles, fields,
 cards and indicators remain open. It also does not address the synchronous text-cache
 miss path; the new control adapter deliberately performs no allocation or file/network
 work of its own.
+
+```text
+Disabled selectable rows are now non-interactive in both gamepad and touch
+dispatch. The workspace "Move selected tile" action remains in the menu when
+unavailable and reports why it cannot be activated; the visual Disabled state
+and activation policy use the same shared predicate.
+```

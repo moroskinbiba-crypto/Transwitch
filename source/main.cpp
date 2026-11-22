@@ -4010,6 +4010,16 @@ void keyInput(u64 keys, bool fromRepeat) {
             workspaceMenuIndex=(workspaceMenuIndex+1)%itemCount;
         if(keys&HidNpadButton_A) {
             const int action=workspaceMenuIndex;
+            const bool canMoveTile=editing&&deskIndex>=0&&
+                deskIndex<static_cast<int>(desks.size())&&
+                itemAt(desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0;
+            const auto rowState=(action==1&&!canMoveTile)
+                ?desknx::ui::SelectableRowState::Disabled
+                :desknx::ui::SelectableRowState::Normal;
+            if(!desknx::ui::IsSelectableRowInteractive(rowState)) {
+                setStatus("SELECT A TILE TO MOVE FIRST",1800);
+                return;
+            }
             workspaceMenu=false;
             if(action==0)openWorkspacePicker(false);
             else if(action==1)openWorkspacePicker(true);
@@ -4331,6 +4341,16 @@ void touchInput(const SDL_Event&e) {
         const auto& layout=desknx::ui::WorkspaceOptionsContextMenuLayout;
         const int row=layout.items.itemAt(x,y);
         if(row>=0) {
+            const bool canMoveTile=editing&&deskIndex>=0&&
+                deskIndex<static_cast<int>(desks.size())&&
+                itemAt(desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0;
+            const auto rowState=(row==1&&!canMoveTile)
+                ?desknx::ui::SelectableRowState::Disabled
+                :desknx::ui::SelectableRowState::Normal;
+            if(!desknx::ui::IsSelectableRowInteractive(rowState)) {
+                setStatus("SELECT A TILE TO MOVE FIRST",1800);
+                return;
+            }
             workspaceMenu=false;
             if(row==0)openWorkspacePicker(false);
             else if(row==1)openWorkspacePicker(true);

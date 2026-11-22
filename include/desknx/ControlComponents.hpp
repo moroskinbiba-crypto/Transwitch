@@ -107,6 +107,11 @@ enum class SelectableRowState : std::uint8_t {
     Disabled
 };
 
+constexpr bool IsSelectableRowInteractive(
+    SelectableRowState state) noexcept {
+    return state!=SelectableRowState::Disabled;
+}
+
 struct SelectableRowStyle {
     ControlColor background;
     ControlColor foreground;
