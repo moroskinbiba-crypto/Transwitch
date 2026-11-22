@@ -277,8 +277,7 @@ private:
             u32 percent = 0;
             const Result batteryRc = psmGetBatteryChargePercentage(&percent);
             const bool batteryOk = R_SUCCEEDED(batteryRc) && percent <= 100u;
-            if (batteryOk)
-                out.battery = static_cast<int>(percent);
+            out.battery = batteryOk ? static_cast<int>(percent) : -1;
             PsmChargerType charger = PsmChargerType_Unconnected;
             const Result chargerRc = psmGetChargerType(&charger);
             const bool chargerOk = R_SUCCEEDED(chargerRc);
