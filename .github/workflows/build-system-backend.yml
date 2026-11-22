@@ -149,6 +149,12 @@ jobs:
             tests/application_lifecycle_policy_test.cpp -o /tmp/desknx-application-lifecycle-test
           /tmp/desknx-application-lifecycle-test
 
+      - name: Test sleep and wake recovery policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/sleep_recovery_policy_test.cpp -o /tmp/desknx-sleep-recovery-test
+          /tmp/desknx-sleep-recovery-test
+
       - name: Test installer and uninstaller rollback with injected rename failures
         run: bash tests/test-recovery.sh
 
