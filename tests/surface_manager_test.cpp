@@ -13,12 +13,12 @@ int main() {
     assert(surfaces.top() == nullptr);
 
     surfaces.beginFrame();
-    assert(surfaces.push(SurfaceId::EmptyDesktop, false, true, 174));
+    assert(surfaces.push(SurfaceId::EmptyDesktop, false, false, 0));
     assert(surfaces.contains(SurfaceId::EmptyDesktop));
-    assert(surfaces.backdropActive());
+    assert(!surfaces.backdropActive());
     assert(!surfaces.hasBlockingSurface());
     assert(surfaces.top() == nullptr);
-    assert(surfaces.dimAlpha() == 174);
+    assert(surfaces.dimAlpha() == 0);
 
     // The last registered modal owns input; a lower surface cannot steal it.
     assert(surfaces.push(SurfaceId::Library, true, true, 120));
@@ -35,7 +35,7 @@ int main() {
     assert(surfaces.dimAlpha() == 190);
 
     // Updating an existing non-input surface does not duplicate it or steal focus.
-    assert(surfaces.push(SurfaceId::EmptyDesktop, false, true, 174));
+    assert(surfaces.push(SurfaceId::EmptyDesktop, false, false, 0));
     assert(surfaces.size() == 3);
     assert(surfaces.isTop(SurfaceId::QuickSettings));
 
