@@ -396,3 +396,22 @@ The workspace-delete confirmation now reads its surface, button, footer and text
 positions from one tested geometry contract. Rendering and touch hit-testing share
 the same half-open rectangles, replacing duplicated numeric bounds without changing
 the established visual appearance or controller-button behavior.
+
+
+## Complete Repository Audit — 22 November 2026
+
+- Audited baseline: `recovered/unified-best-20261122`, commit `888898f70aec3cd7973e35912bebb0fc3ae0494b`; `main` remains unchanged.
+- Repository inventory: 72 branches, 58 pull requests (11 open), 233 files in the recovered tree, 46 host test files and four GitHub Actions workflows.
+- The recovered baseline is 489 commits ahead of `main`, zero commits behind; the GitHub comparison reports 138 changed files, 18,208 additions and 2,251 deletions.
+- Added `docs/REPOSITORY_AUDIT_2026-11-22.md` with production-path findings, branch/PR disposition, risk register, CI evidence and next-stage sequencing.
+- Added `docs/UNIFIED_FEATURE_MATRIX.md` separating production features from partial integrations, helper/domain modules, unimplemented features and hardware-only acceptance gates.
+- Confirmed: current catalogue contains completeness/truncation/manifest protections equivalent to or stronger than the four unique catalogue commits in `perf-stability-iteration`; do not replay that branch wholesale.
+- Confirmed: PR #56 `SensorService` and `ModalStack` duplicate the broader current `SystemTelemetry`/SD stats worker and `SurfaceManager`; they are not to be copied as parallel owners. Motion policy and delete-confirmation geometry have been integrated selectively.
+- Confirmed P0 gap: production persistence remains directly implemented in `source/main.cpp`; the standalone JSON `PersistenceStore` test does not exercise those live settings/layout/history transaction paths. The separate production-persistence test suite in `feat/theme-socoma` is not in this branch and must be adapted to the current formats/entry points, not copied blindly.
+- Confirmed P1 gaps: duplicate workspace model/store ownership; artwork paths not yet coordinated by one manager; reusable window geometry/control contracts only partially migrated; `source/main.cpp` remains 9,199 lines; devkitPro container remains floating at `latest`.
+- CI on this exact SHA: DeskNX run 45052223734, Native NRO 45052223784, Nextendo overlay 45052223827 and experimental HOME backend 45052223789 all succeeded. These are compile/host-test results, not physical Switch runtime validation.
+- Hardware acceptance remains NOT RUN. Do not claim qlaunch replacement, suspend/resume or game launch/return are physically validated.
+
+### Audit scope note
+
+All branch names and PR metadata were inventoried. Feature-bearing divergent refs were compared by GitHub commit/file metadata and their distinctive source files were inspected. Historical branches whose code is an ancestor, superseded prototype or web-only implementation were classified accordingly. This is not a line-by-line review of every historical commit in every branch; any newly discovered distinct behavior should be added to the feature matrix before implementation.
