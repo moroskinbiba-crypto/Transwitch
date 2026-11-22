@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 using desknx::runtime::Metric;
 using desknx::runtime::RollingMetrics;
@@ -19,7 +20,7 @@ int main() {
     assert(summary.maximumMs == 10.0);
 
     metrics.record(Metric::RenderTime, -1.0);
-    metrics.record(Metric::RenderTime, 1.0 / 0.0);
+    metrics.record(Metric::RenderTime, std::numeric_limits<double>::infinity());
     assert(metrics.summarize(Metric::RenderTime).samples == 0);
 
     for (std::size_t value = 0; value < RollingMetrics::Capacity + 20; ++value)
