@@ -130,7 +130,7 @@ int main() {
     assert(dock.workspaceAt(181,694,2,8)==2);
     assert(dock.workspaceAt(182,660,2,8)==-1);
     assert(dock.workspaceAt(618,694,2,8)==6);
-    assert(dock.workspaceAt(749,660,2,7)==-1);
+    assert(dock.workspaceAt(749,660,2,6)==-1);
     assert(dock.workspaceAt(50,695,2,8)==-1);
     assert(dock.actionAt(770,638)==WorkspaceDockAction::AddWorkspace);
     assert(dock.actionAt(821,694)==WorkspaceDockAction::AddWorkspace);
