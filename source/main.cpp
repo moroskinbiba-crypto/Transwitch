@@ -4651,9 +4651,7 @@ void drawScreen() {
         previousX=selectedX;previousY=selectedY;previousList=listIndex;
         previousCatalogue=currentCatalogue;previousLayout=layoutMutationRevision;
     }
-    refreshBattery();
     refreshStorageStats();
-    refreshSystemMonitor();
     rect(0,0,SW,SH,BG);
     const SDL_Color gradientTop{
         THEME_TOP.r,THEME_TOP.g,THEME_TOP.b,THEME_TOP.a};
@@ -6744,7 +6742,6 @@ void activateWidget(const Tile& t) {
             break;
         case Kind::Battery:
             refreshBattery();
-            refreshJoyconBattery();
             diagnosticsOpen=true;
             refreshDiagnosticsSnapshot(true);
             break;
@@ -8657,18 +8654,12 @@ int main(int,char**) {
         accountServiceReady=false;
     }
     if (setsysReady) {setsysExit();setsysServiceReady=false;}
-    if(tsInternalOpen){tsSessionClose(&tsInternalSession);tsInternalOpen=false;}
-    if(tsSocOpen){tsSessionClose(&tsSocSession);tsSocOpen=false;}
-    if(tsServiceReady){tsExit();tsServiceReady=false;}
-    if(cpuClockOpen){clkrstCloseSession(&cpuClockSession);cpuClockOpen=false;}
-    if(gpuClockOpen){clkrstCloseSession(&gpuClockSession);gpuClockOpen=false;}
-    if(clkrstServiceReady){clkrstExit();clkrstServiceReady=false;}
+
     steamGridDbDestroyPreview();
     gWorkspaceBackgroundCache.shutdown();
     gModalLayer.shutdown();
     gIconCache.shutdown();gVectorIconCache.shutdown();gFontRenderer.shutdown();
     IMG_Quit();
-    if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (nextendoMutex) SDL_DestroyMutex(nextendoMutex);
     if (storageStatsMutex) SDL_DestroyMutex(storageStatsMutex);
