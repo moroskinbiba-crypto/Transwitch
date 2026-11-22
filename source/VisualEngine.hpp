@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 
 namespace desknx::visual {
@@ -29,6 +30,8 @@ public:
 
     struct FrameStats {
         std::uint32_t filledRectCalls{0};
+        std::uint32_t filledRectBatches{0};
+        std::uint32_t batchedRectPrimitives{0};
         std::uint32_t roundedRectCalls{0};
         std::uint32_t roundedFillBatches{0};
         std::uint32_t outlineCalls{0};
@@ -108,6 +111,21 @@ public:
         if (SDL_RenderFillRect(renderer_, &bounds) != 0) {
             fail();
             return false;
+        }
+        return true;
+    }
+
+    // Emit a caller-owned rectangle list with one SDL draw call; no render
+    // target textures or additional GPU resource lifetimes are required.
+    bool fillRects(const SDL_Rect* rectangles,std::size_t count,SDL_Color color) {
+        if(!ready()||!rectangles||count==0||
+           count>static_cast<std::size_t>(std::numeric_limits<int>::max()))return false;
+        if(!setDrawColor(color))return false;
+        ++frameStats_.filledRectBatches;
+        frameStats_.batchedRectPrimitives+=static_cast<std::uint32_t>(
+            std::min<std::size_t>(count,std::numeric_limits<std::uint32_t>::max()));
+        if(SDL_RenderFillRects(renderer_,rectangles,static_cast<int>(count))!=0) {
+            fail();return false;
         }
         return true;
     }

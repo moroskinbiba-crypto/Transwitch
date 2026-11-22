@@ -11,6 +11,7 @@
 #include <desknx/SafeReplace.hpp>
 #include "../include/desknx/Model.hpp"
 #include "../include/desknx/LibraryGrid.hpp"
+#include "../include/desknx/DottedGrid.hpp"
 #include "../include/desknx/WorkspaceOps.hpp"
 #include "../include/desknx/HomeNXGridAdapter.hpp"
 #include "../include/desknx/ShutdownPersistence.hpp"
@@ -571,10 +572,19 @@ void toggleQuickSetting(int index) {
 }
 
 bool commitSdCard(const char* operation) {
-    if (!sdMounted) return false;
-    if(storageCommitMutex) SDL_LockMutex(storageCommitMutex);
-    const Result rc = fsdevCommitDevice("sdmc");
-    if(storageCommitMutex) SDL_UnlockMutex(storageCommitMutex);
+    if(!sdMounted)return false;
+    const Uint64 frequency=SDL_GetPerformanceFrequency();
+    const Uint64 lockStarted=SDL_GetPerformanceCounter();
+    if(storageCommitMutex)SDL_LockMutex(storageCommitMutex);
+    const Uint64 lockAcquired=SDL_GetPerformanceCounter();
+    const Result rc=fsdevCommitDevice("sdmc");
+    const Uint64 commitFinished=SDL_GetPerformanceCounter();
+    if(storageCommitMutex)SDL_UnlockMutex(storageCommitMutex);
+    const double lockWaitMs=frequency>0?static_cast<double>(lockAcquired-lockStarted)*1000.0/static_cast<double>(frequency):0.0;
+    const double commitMs=frequency>0?static_cast<double>(commitFinished-lockAcquired)*1000.0/static_cast<double>(frequency):0.0;
+    if(lockWaitMs>=0.5||commitMs>=3.0)
+        desknx::diag::Write("storage","commit_timing","operation=%s mutex_wait_ms=%.3f commit_ms=%.3f",
+            operation?operation:"unknown",lockWaitMs,commitMs);
     if (R_FAILED(rc)) {
         desknx::diag::Write("storage", "commit_failed",
             "operation=%s rc=0x%08X", operation ? operation : "unknown",
@@ -3627,7 +3637,7 @@ bool loadLayoutFrom(const char* path) {
         desknx::model::stableHash(shape):0;
     // A backup restore or legacy format must be published back to layout.tsv,
     // even when the restored workspace contents themselves have not changed.
-    layoutPrimaryNeedsRewrite=(std::string(path)!=CFG_FILE)||layoutNeedsMigration;
+    layoutPrimaryNeedsRewrite=desknx::layout::shouldRewritePrimaryAfterLoad(std::string(path)==CFG_FILE,loaded);
     selectedX = selectedY = 0;
     size_t tileCount=0;
     for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
@@ -4595,10 +4605,6 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         }
     }
 }
-void drawDotted(int x,int y,int w,int h) {
-    for(int xx=x;xx<x+w;xx+=12){rect(xx,y,6,2,Color{67,79,98,180});rect(xx,y+h-2,6,2,Color{67,79,98,180});}
-    for(int yy=y;yy<y+h;yy+=12){rect(x,yy,2,6,Color{67,79,98,180});rect(x+w-2,yy,2,6,Color{67,79,98,180});}
-}
 int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
@@ -4837,9 +4843,23 @@ void drawScreen() {
     // Single desktop surface under the tiles and widgets.
     softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
-    if(editing)for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
-        int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);drawDotted(px,py,CW,CH);
-        if(x==selectedX&&y==selectedY) {
+    if(editing) {
+        std::array<SDL_Rect,2048> dottedRects{};
+        std::size_t dottedRectCount=0;
+        for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
+            const int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);
+            desknx::ui::forEachDottedCellRect(px,py,CW,CH,[&](int rx,int ry,int rw,int rh) {
+                if(dottedRectCount<dottedRects.size())dottedRects[dottedRectCount++]={rx,ry,rw,rh};
+            });
+        }
+        const SDL_Color dottedColor{67,79,98,180};
+        if(dottedRectCount>0&&(!gVisualEngine.ready()||
+           !gVisualEngine.fillRects(dottedRects.data(),dottedRectCount,dottedColor))) {
+            SDL_SetRenderDrawColor(renderer,dottedColor.r,dottedColor.g,dottedColor.b,dottedColor.a);
+            (void)SDL_RenderFillRects(renderer,dottedRects.data(),static_cast<int>(dottedRectCount));
+        }
+        if(selectedX>=0&&selectedX<COLS&&selectedY>=0&&selectedY<ROWS&&itemAt(d,selectedX,selectedY)<0) {
+            const int px=LEFT+selectedX*(CW+GX),py=TOP+selectedY*(CH+GY);
             roundRect(px+2,py+2,CW-4,CH-4,16,Color{34,63,99,100});
             outline(px+2,py+2,CW-4,CH-4,focusAccent());
             text("+",px+CW/2-4,py+CH/2-10,2,WHITE,px+CW-3);
@@ -8557,6 +8577,15 @@ int main(int,char**) {
     loadGameNameOverrides();
     applyGameNameOverridesToWorkspaces();
     applyThemePalette();
+    if(layoutLoaded&&layoutPrimaryNeedsRewrite&&(layoutRecoveredTiles>0||layoutDroppedTiles>0)) {
+        if(!layoutSaveBlocked) {
+            layoutUserModified=true;
+            const bool queued=saveNow();
+            desknx::diag::Write("layout","repair_persistence_queued",
+                "recovered=%zu dropped=%zu queued=%d",layoutRecoveredTiles,layoutDroppedTiles,queued?1:0);
+        } else desknx::diag::Write("layout","repair_persistence_blocked",
+            "recovered=%zu dropped=%zu reason=preserve_original",layoutRecoveredTiles,layoutDroppedTiles);
+    }
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
     setStatus("STARTING TRANSWITCH...",5000);
     drawScreen(); // first frame precedes application enumeration, SD recursion and font service init
@@ -8647,6 +8676,19 @@ int main(int,char**) {
     double metricsMaximumInputMs=0.0,metricsMaximumPresentMs=0.0;
     std::array<double,128> frameTimeSamples{};
     std::size_t frameTimeSampleCount=0,frameTimeSampleCursor=0;
+    struct MainLoopStageStats { Uint64 totalTicks{0},maximumTicks{0}; std::uint32_t calls{0},overTenMs{0}; };
+    static constexpr const char* MainLoopStageNames[]={"layout_save","auxiliary_save","launcher_settings_save",
+        "play_stats","font_warmup","steamgriddb_picker","steamgriddb_cache_cleanup","system_telemetry","active_workspace_marker"};
+    std::array<MainLoopStageStats,sizeof(MainLoopStageNames)/sizeof(MainLoopStageNames[0])> mainLoopStageStats{};
+    auto measureMainLoopStage=[&](std::size_t index,auto&& operation) {
+        const Uint64 start=SDL_GetPerformanceCounter();operation();
+        const Uint64 elapsed=SDL_GetPerformanceCounter()-start;
+        if(index>=mainLoopStageStats.size())return;
+        auto& stage=mainLoopStageStats[index];++stage.calls;stage.totalTicks+=elapsed;
+        stage.maximumTicks=std::max(stage.maximumTicks,elapsed);
+        if(performanceFrequency>0&&static_cast<double>(elapsed)*1000.0/static_cast<double>(performanceFrequency)>=10.0)
+            ++stage.overTenMs;
+    };
     while(running&&appletMainLoop()) {
         const Uint64 frameStartCounter=SDL_GetPerformanceCounter();
         bool ready=false,complete=false,truncated=false;
@@ -8721,11 +8763,11 @@ int main(int,char**) {
             }
         }
         const Uint64 controllerInputFinished=SDL_GetPerformanceCounter();
-        pumpAsyncLayoutSaver();
-        pumpAuxiliarySaves(false);
-        pumpLauncherSettingsSave();
-        pumpPlayStatsQuery();
-        (void)gFontRenderer.pumpWarmup();
+        measureMainLoopStage(0,[&]{pumpAsyncLayoutSaver();});
+        measureMainLoopStage(1,[&]{pumpAuxiliarySaves(false);});
+        measureMainLoopStage(2,[&]{pumpLauncherSettingsSave();});
+        measureMainLoopStage(3,[&]{pumpPlayStatsQuery();});
+        measureMainLoopStage(4,[&]{(void)gFontRenderer.pumpWarmup();});
         if(gFontRenderer.consumeLoadFailure()) {
             fontPath=gFontRenderer.customFontPath();
             scheduleLauncherSettingsSave(0);
@@ -8742,13 +8784,12 @@ int main(int,char**) {
             ?static_cast<double>((controllerInputFinished-controllerInputStarted)+
                 (touchInputFinished-touchInputStarted))*1000.0/
                 static_cast<double>(performanceFrequency):0.0;
-        pumpSteamGridDbPicker();
-        pumpSteamGridDbCacheCleanup();
-        pumpSystemTelemetrySnapshot();
+        measureMainLoopStage(5,[&]{pumpSteamGridDbPicker();});
+        measureMainLoopStage(6,[&]{pumpSteamGridDbCacheCleanup();});
+        measureMainLoopStage(7,[&]{pumpSystemTelemetrySnapshot();});
         const Uint32 persistenceNow=SDL_GetTicks();
-        if(activeWorkspaceMarkerPending &&
-           static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
-            (void)flushActiveWorkspaceSave();
+        if(activeWorkspaceMarkerPending&&static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
+            measureMainLoopStage(8,[&]{(void)flushActiveWorkspaceSave();});
         const Uint32 renderStarted=SDL_GetTicks();
         const Uint64 renderStartCounter=SDL_GetPerformanceCounter();
         drawScreen();
@@ -8819,12 +8860,22 @@ int main(int,char**) {
                 static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
             const auto& visualStats=gVisualEngine.lastFrameStats();
             desknx::diag::Write("visual","frame_primitives",
-                "fill_rect=%u rounded_rect=%u rounded_batches=%u outlines=%u gradient_draws=%u gradient_rebuilds=%u texture_draws=%u radial_glows=%u shadow_layers=%u failures=%u",
-                visualStats.filledRectCalls,visualStats.roundedRectCalls,
-                visualStats.roundedFillBatches,visualStats.outlineCalls,
-                visualStats.gradientDrawCalls,visualStats.gradientTextureRebuilds,
-                visualStats.textureDrawCalls,visualStats.radialGlowDrawCalls,
-                visualStats.shadowLayers,visualStats.failedCalls);
+                "fill_rect=%u fill_rect_batches=%u batched_rects=%u rounded_rect=%u rounded_batches=%u outlines=%u gradient_draws=%u gradient_rebuilds=%u texture_draws=%u radial_glows=%u shadow_layers=%u failures=%u",
+                visualStats.filledRectCalls,visualStats.filledRectBatches,visualStats.batchedRectPrimitives,
+                visualStats.roundedRectCalls,visualStats.roundedFillBatches,visualStats.outlineCalls,
+                visualStats.gradientDrawCalls,visualStats.gradientTextureRebuilds,visualStats.textureDrawCalls,
+                visualStats.radialGlowDrawCalls,visualStats.shadowLayers,visualStats.failedCalls);
+            for(std::size_t i=0;i<mainLoopStageStats.size();++i) {
+                const auto& stage=mainLoopStageStats[i];if(stage.calls==0)continue;
+                const double avg=performanceFrequency>0?static_cast<double>(stage.totalTicks)*1000.0/
+                    (static_cast<double>(performanceFrequency)*stage.calls):0.0;
+                const double max=performanceFrequency>0?static_cast<double>(stage.maximumTicks)*1000.0/
+                    static_cast<double>(performanceFrequency):0.0;
+                desknx::diag::Write("runtime","main_loop_stage",
+                    "stage=%s calls=%u avg_ms=%.3f max_ms=%.3f over_10ms=%u",
+                    MainLoopStageNames[i],stage.calls,avg,max,stage.overTenMs);
+                mainLoopStageStats[i]=MainLoopStageStats{};
+            }
             metricsWindowStart=frameEndCounter;
             metricsFrames=metricsSlowFrames=0;
             metricsFrameSumMs=metricsRenderSumMs=metricsInputSumMs=metricsPresentSumMs=0.0;

@@ -374,6 +374,15 @@ int main() {
     assert(recovered.recoveredTiles == 1);
     assert(recovered.workspaces[0].tiles.size() == 2);
     assert(recovered.workspaces[0].tiles[1].x != 1);
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(true,recovered));
+    desknx::layout::LoadResult clean{};
+    assert(!desknx::layout::shouldRewritePrimaryAfterLoad(true,clean));
+    clean.droppedTiles=1;
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(true,clean));
+    clean={};clean.needsMigration=true;
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(true,clean));
+    clean={};
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(false,clean));
 
     const std::string unknown =
         "DESKNX3\nA\t0\nD\tLegacy\n"

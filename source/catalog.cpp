@@ -13,6 +13,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdarg>
+#include <chrono>
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
@@ -386,7 +387,7 @@ constexpr const char* NroDirectoryCacheFile =
     "sdmc:/switch/DeskNX/cache/nro-directories.tsv";
 constexpr const char* NroDirectoryCacheTemp =
     "sdmc:/switch/DeskNX/cache/nro-directories.tmp";
-constexpr size_t MaxCachedDirectories = 2048;
+constexpr size_t MaxCachedDirectories = desknx::nro_scan::MaxDirectories;
 
 DirectoryStamp directoryStampFromStat(const struct stat& st) {
     return {static_cast<u64>(st.st_mtime),static_cast<u64>(st.st_ctime),
@@ -399,7 +400,7 @@ DirectoryStampCache ReadNroDirectoryStampCache(bool* validOut=nullptr) {
     if(validOut)*validOut=false;
     DirectoryStampCache cache;
     struct stat st{};
-    constexpr size_t MaxBytes=3u*1024u*1024u;
+    constexpr size_t MaxBytes=6u*1024u*1024u;
     if(stat(NroDirectoryCacheFile,&st)!=0||!S_ISREG(st.st_mode)||
        st.st_size<=0||static_cast<u64>(st.st_size)>MaxBytes)
         return cache;
@@ -462,15 +463,40 @@ bool SameNroDirectoryStampCache(const DirectoryStampCache& a,
     }
     return true;
 }
+struct NroDirectoryTiming { std::string path; std::uint64_t elapsedMs{0}; size_t entriesVisited{0}; size_t statChecks{0}; bool cacheReused{false}; };
 struct NroDirectoryScanStats {
-    size_t reusedDirectories{0};
-    size_t enumeratedDirectories{0};
-    size_t directoriesVisited{0};
-    size_t entriesVisited{0};
-    size_t checkedNroFiles{0};
-    bool complete{true};
-    bool truncated{false};
+    size_t reusedDirectories{0},enumeratedDirectories{0},directoriesVisited{0},entriesVisited{0};
+    size_t statChecks{0},fallbackStatChecks{0},nroStatChecks{0},dTypeClassifiedEntries{0},directoryStatChecks{0};
+    bool complete{true},truncated{false};
+    std::vector<NroDirectoryTiming> slowestDirectories;
 };
+class NroDirectoryTimer final {
+public:
+    NroDirectoryTimer(const std::string& path,NroDirectoryScanStats& stats)
+        : path_(path),stats_(stats),entriesStart_(stats.entriesVisited),statStart_(stats.statChecks),
+          started_(std::chrono::steady_clock::now()) {}
+    void markCacheReused() noexcept { cacheReused_=true; }
+    ~NroDirectoryTimer() {
+        const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now()-started_).count();
+        if(ms<10)return;
+        NroDirectoryTiming sample{};sample.path=path_;sample.elapsedMs=static_cast<std::uint64_t>(ms);
+        sample.entriesVisited=stats_.entriesVisited-entriesStart_;
+        sample.statChecks=stats_.statChecks-statStart_;sample.cacheReused=cacheReused_;
+        constexpr size_t KeepSlowest=12;
+        if(stats_.slowestDirectories.size()<KeepSlowest) {
+            stats_.slowestDirectories.push_back(std::move(sample));return;
+        }
+        auto fastest=std::min_element(stats_.slowestDirectories.begin(),stats_.slowestDirectories.end(),
+            [](const auto& a,const auto& b){return a.elapsedMs<b.elapsedMs;});
+        if(fastest!=stats_.slowestDirectories.end()&&sample.elapsedMs>fastest->elapsedMs)*fastest=std::move(sample);
+    }
+private:
+    const std::string& path_;NroDirectoryScanStats& stats_;
+    size_t entriesStart_{0},statStart_{0};
+    std::chrono::steady_clock::time_point started_;bool cacheReused_{false};
+};
+constexpr size_t MaxNroInventoryFiles=desknx::nro_scan::MaxFiles;
 
 void CollectNrosIncremental(const std::string& root,int depth,
     std::vector<NroFile>& out,const DirectoryStampCache& oldDirectories,
@@ -479,14 +505,13 @@ void CollectNrosIncremental(const std::string& root,int depth,
     if(depth>desknx::nro_scan::MaxDepth) {
         stats.complete=false;stats.truncated=true;return;
     }
-    if(out.size()>=MaxItems) {
-        stats.complete=false;stats.truncated=true;return;
-    }
     if(stats.directoriesVisited>=desknx::nro_scan::MaxDirectories) {
         stats.complete=false;stats.truncated=true;return;
     }
+    NroDirectoryTimer directoryTimer(root,stats);
     ++stats.directoriesVisited;
     struct stat rootStat{};
+    ++stats.statChecks;++stats.directoryStatChecks;
     if(stat(root.c_str(),&rootStat)!=0||!S_ISDIR(rootStat.st_mode)) {
         stats.complete=false;
         return;
@@ -502,6 +527,7 @@ void CollectNrosIncremental(const std::string& root,int depth,
         for(const auto& entry:oldDirectories) {
             if(entry.first.compare(0,prefix.size(),prefix)!=0)continue;
             struct stat childStat{};
+            ++stats.statChecks;++stats.directoryStatChecks;
             if(stat(entry.first.c_str(),&childStat)!=0||!S_ISDIR(childStat.st_mode)||
                !sameDirectoryStamp(entry.second,directoryStampFromStat(childStat))) {
                 reusable=false;
@@ -515,7 +541,7 @@ void CollectNrosIncremental(const std::string& root,int depth,
         for(const auto& entry:oldNros) {
             if(entry.first.compare(0,prefix.size(),prefix)!=0)continue;
             struct stat fileStat{};
-            ++stats.checkedNroFiles;
+            ++stats.statChecks;++stats.nroStatChecks;
             if(stat(entry.first.c_str(),&fileStat)!=0||!S_ISREG(fileStat.st_mode)) {
                 reusable=false;
                 break;
@@ -534,13 +560,13 @@ void CollectNrosIncremental(const std::string& root,int depth,
         freshDirectories[root]=currentStamp;
         for(const auto& entry:cachedSubdirectories)
             freshDirectories[entry.first]=entry.second;
-        const size_t remaining=MaxItems-out.size();
+        const size_t remaining=out.size()<MaxNroInventoryFiles?MaxNroInventoryFiles-out.size():0;
         if(cachedFiles.size()>remaining) {
-            stats.truncated=true;
-            cachedFiles.resize(remaining);
+            stats.complete=false;stats.truncated=true;cachedFiles.resize(remaining);
         }
         out.insert(out.end(),cachedFiles.begin(),cachedFiles.end());
         stats.reusedDirectories+=cachedSubdirectories.size()+1;
+        directoryTimer.markCacheReused();
         return;
     }
 
@@ -563,38 +589,35 @@ void CollectNrosIncremental(const std::string& root,int depth,
             stats.complete=false;stats.truncated=true;break;
         }
         ++stats.entriesVisited;
-        if(out.size()>=MaxItems) {
-            stats.complete=false;stats.truncated=true;break;
-        }
         const std::string name=entry->d_name;
         if(name=="."||name==".."||(!name.empty()&&name[0]=='.'))continue;
         if(depth==0&&name=="DeskNX")continue;
         const std::string path=root+"/"+name;
-        struct stat childStat{};
-        if(stat(path.c_str(),&childStat)!=0) {
-            stats.complete=false;
-            continue;
-        }
-        if(S_ISDIR(childStat.st_mode)) {
+        using EntryType=desknx::nro_scan::EntryType;
+        EntryType type=desknx::nro_scan::classifyEntryType(*entry);
+        struct stat childStat{};bool haveStat=false;
+        if(type==EntryType::Unknown) {
+            ++stats.statChecks;++stats.fallbackStatChecks;
+            if(desknx::nro_scan::hasNroExtension(name)&&name!="DeskNX.nro")++stats.nroStatChecks;
+            if(stat(path.c_str(),&childStat)!=0){stats.complete=false;continue;}
+            haveStat=true;
+            if(S_ISDIR(childStat.st_mode))type=EntryType::Directory;
+            else if(S_ISREG(childStat.st_mode))type=EntryType::Regular;
+            else type=EntryType::Other;
+        } else ++stats.dTypeClassifiedEntries;
+        if(type==EntryType::Directory) {
             if(depth<desknx::nro_scan::MaxDepth)
                 CollectNrosIncremental(path,depth+1,out,oldDirectories,
                     oldNros,freshDirectories,allowCache,stats);
-            else {
-                stats.complete=false;
-                stats.truncated=true;
+            else {stats.complete=false;stats.truncated=true;}
+        } else if(type==EntryType::Regular&&desknx::nro_scan::hasNroExtension(name)&&name!="DeskNX.nro") {
+            if(!haveStat) {
+                ++stats.statChecks;++stats.nroStatChecks;
+                if(stat(path.c_str(),&childStat)!=0||!S_ISREG(childStat.st_mode)){stats.complete=false;continue;}
             }
-        } else if(S_ISREG(childStat.st_mode)&&name.size()>4) {
-            std::string extension=name.substr(name.size()-4);
-            for(char& c:extension)
-                c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if(extension==".nro"&&name!="DeskNX.nro")
-                out.push_back({path,static_cast<u64>(childStat.st_size),
-                               static_cast<u64>(childStat.st_mtime)});
+            if(out.size()>=MaxNroInventoryFiles){stats.complete=false;stats.truncated=true;break;}
+            out.push_back({path,static_cast<u64>(childStat.st_size),static_cast<u64>(childStat.st_mtime)});
         }
-    }
-    if(out.size()>=MaxItems) {
-        stats.complete=false;
-        stats.truncated=true;
     }
     if(closedir(dir)!=0)stats.complete=false;
 }
@@ -1191,14 +1214,28 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
     const bool inventoryCacheUsable=!forceRefresh&&warmCacheAvailable&&
         nroMetadataCacheValid&&directoryCacheValid&&
         nroMetadataCache.size()==result.nroCount;
-    const std::time_t nroScanStarted = std::time(nullptr);
+    const auto nroScanStarted=std::chrono::steady_clock::now();
     std::vector<NroFile> nros;
     DirectoryStampCache freshDirectoryStamps;
     NroDirectoryScanStats directoryScanStats;
     CollectNrosIncremental("sdmc:/switch",0,nros,directoryStampCache,
         nroMetadataCache,freshDirectoryStamps,inventoryCacheUsable,directoryScanStats);
-    LogDiagnostic("nro_scan_elapsed seconds=%lld",
-        static_cast<long long>(std::time(nullptr) - nroScanStarted));
+    const auto scanMs=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now()-nroScanStarted).count());
+    LogDiagnostic("nro_scan_elapsed seconds=%llu elapsed_ms=%llu",
+        static_cast<unsigned long long>(scanMs/1000u),static_cast<unsigned long long>(scanMs));
+    std::sort(directoryScanStats.slowestDirectories.begin(),directoryScanStats.slowestDirectories.end(),
+        [](const auto& a,const auto& b){return a.elapsedMs>b.elapsedMs;});
+    for(const auto& slow:directoryScanStats.slowestDirectories)
+        LogDiagnostic("nro_dir_slowest path=%s elapsed_ms=%llu entries=%zu stat_checks=%zu mode=%s",
+            slow.path.c_str(),static_cast<unsigned long long>(slow.elapsedMs),slow.entriesVisited,
+            slow.statChecks,slow.cacheReused?"cache":"enumerated");
+    LogDiagnostic("nro_inventory directories_reused=%zu directories_enumerated=%zu directories_visited=%zu entries_visited=%zu inventory_stat_checks=%zu fallback_stat_checks=%zu nro_stat_checks=%zu directory_stat_checks=%zu dtype_entries=%zu cache_usable=%d complete=%d truncated=%d",
+        directoryScanStats.reusedDirectories,directoryScanStats.enumeratedDirectories,
+        directoryScanStats.directoriesVisited,directoryScanStats.entriesVisited,directoryScanStats.statChecks,
+        directoryScanStats.fallbackStatChecks,directoryScanStats.nroStatChecks,directoryScanStats.directoryStatChecks,
+        directoryScanStats.dTypeClassifiedEntries,inventoryCacheUsable?1:0,directoryScanStats.complete?1:0,
+        directoryScanStats.truncated?1:0);
     if(!directoryScanStats.complete&&warmCacheAvailable) {
         // A transient SD I/O failure must not turn the library into an empty
         // catalogue. Keep the published last-good snapshot and retry next run.
@@ -1213,11 +1250,6 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         report(true);
         return result;
     }
-    LogDiagnostic("nro_inventory directories_reused=%zu directories_enumerated=%zu directories_visited=%zu entries_visited=%zu nro_stat_checks=%zu cache_usable=%d complete=%d truncated=%d",
-        directoryScanStats.reusedDirectories,directoryScanStats.enumeratedDirectories,
-        directoryScanStats.directoriesVisited,directoryScanStats.entriesVisited,
-        directoryScanStats.checkedNroFiles,inventoryCacheUsable?1:0,
-        directoryScanStats.complete?1:0,directoryScanStats.truncated?1:0);
     result.nroCount = nros.size();
     LogDiagnostic("nro_scan root=switch depth_limit=8 count=%zu", nros.size());
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
@@ -1553,7 +1585,7 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         LogDiagnostic("nro_directory_cache_write ok=%d entries=%zu",
             saved?1:0,freshDirectoryStamps.size());
     }
-    if (games.size() > gameLimit || nros.size() >= MaxItems ||
+    if (games.size() > gameLimit ||
         !directoryScanStats.complete || directoryScanStats.truncated)
         result.truncated = true;
     (void)EnsureBuiltinWidgets(result.items);

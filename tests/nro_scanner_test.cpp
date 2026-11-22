@@ -44,6 +44,12 @@ int main() {
     auto report = desknx::nro_scan::Collect(root.string(), files);
     assert(report.rootOpened && report.complete);
     assert(report.filesFound == 3 && files.size() == 3);
+#if defined(DT_DIR) && defined(DT_REG)
+    dirent dirEntry{};dirEntry.d_type=DT_DIR;
+    dirent fileEntry{};fileEntry.d_type=DT_REG;
+    assert(desknx::nro_scan::classifyEntryType(dirEntry)==desknx::nro_scan::EntryType::Directory);
+    assert(desknx::nro_scan::classifyEntryType(fileEntry)==desknx::nro_scan::EntryType::Regular);
+#endif
     assert(hasPath(files, root / "top.nro"));
     assert(hasPath(files, root / "apps" / "demo.NRO"));
     assert(hasPath(files, root / "apps" / "emulators" / "retro.nro"));
@@ -63,15 +69,15 @@ int main() {
     assert(!report.complete && report.directoriesBeyondDepth > 0);
     assert(!hasPath(files, deep / "too-deep.nro"));
 
-    // Large folders stop at a fixed entry budget instead of consuming an
-    // unbounded amount of time on removable storage.
+    // A directory above the former 8192-entry budget should now be complete.
     const fs::path crowded = root / "crowded";
     fs::create_directories(crowded);
-    for (std::size_t i=0; i<=desknx::nro_scan::MaxEntries; ++i)
+    for (std::size_t i=0; i<8193; ++i)
         writeFile(crowded / ("entry-" + std::to_string(i) + ".txt"));
     report = desknx::nro_scan::Collect(crowded.string(), files);
-    assert(report.rootOpened && !report.complete && report.limitReached);
-    assert(report.entriesVisited == desknx::nro_scan::MaxEntries);
+    assert(report.rootOpened && report.complete && !report.limitReached);
+    assert(report.entriesVisited > 8192);
+    assert(report.fallbackStatChecks <= report.statChecks);
 
     // An unavailable root is not a successful empty scan.
     report = desknx::nro_scan::Collect((root / "missing").string(), files);

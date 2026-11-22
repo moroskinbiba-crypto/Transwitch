@@ -1,15 +1,29 @@
 #include <desknx/VisualGeometry.hpp>
+#include <desknx/DottedGrid.hpp>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
+#include <vector>
 
 using desknx::visual::geometry::MaxRoundedFillSpans;
 using desknx::visual::geometry::SpanRect;
 using desknx::visual::geometry::roundedFillSpans;
 
 int main() {
+    // The editor's dotted borders are a deterministic rect list, suitable
+    // for one SDL_RenderFillRects batch per frame.
+    {
+        std::vector<SpanRect> rects;
+        const std::size_t count=desknx::ui::forEachDottedCellRect(
+            10,20,25,25,[&](int x,int y,int w,int h){rects.push_back({x,y,w,h});});
+        assert(count==rects.size()&&count>0);
+        assert(rects.front().x==10&&rects.front().y==20);
+        assert(rects.front().w==6&&rects.front().h==2);
+        assert(desknx::ui::forEachDottedCellRect(0,0,0,20,[](int,int,int,int){})==0);
+        assert(desknx::ui::forEachDottedCellRect(0,0,20,-1,[](int,int,int,int){})==0);
+    }
     SpanRect spans[MaxRoundedFillSpans]{};
     std::size_t count = roundedFillSpans(7, 11, 100, 40, 0, spans, MaxRoundedFillSpans);
     assert(count == 1);
