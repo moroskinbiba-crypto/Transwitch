@@ -38,10 +38,37 @@ int main() {
     assert(last.x==390&&last.y==458&&last.width==500&&last.height==38);
     assert(menu.items.itemAt(390,496)==-1);
 
-    // The twelve launcher settings rows fit without overlapping the footer.
-    const auto& settings=LauncherSettingsOptionsLayout;
-    assert(settings.itemCount==12);
-    assert(settings.bounds.x==340&&settings.bounds.y==214);
+    // Both Settings windows share close-button and row geometry across input/render.
+    const auto& settings=LauncherSettingsDialogControls;
+    assert(settings.surface.contains(300,104));
+    assert(settings.closeButton.inside(settings.surface));
+    assert(settings.rows.itemCount==12);
+    assert(settings.rows.bounds.x==340&&settings.rows.bounds.y==214);
+    assert(settings.rows.itemAt(340,214)==0);
+    assert(settings.rows.itemAt(939,239)==0);
+    assert(settings.rows.itemAt(340,240)==-1);
+    assert(settings.rows.itemAt(340,242)==1);
+    assert(settings.rows.itemAt(940,242)==-1);
+    assert(settings.rows.itemAt(340,548)==-1);
+    assert(settings.closeButton.contains(842,132));
+    assert(settings.closeButton.contains(933,163));
+    assert(!settings.closeButton.contains(934,163));
+    assert(!settings.closeButton.contains(933,164));
+
+    const auto& workspaceSettings=WorkspaceSettingsDialogControls;
+    assert(workspaceSettings.surface.x==settings.surface.x);
+    assert(workspaceSettings.surface.y==settings.surface.y);
+    assert(workspaceSettings.closeButton.x==settings.closeButton.x);
+    assert(workspaceSettings.rows.itemCount==7);
+    assert(workspaceSettings.rows.bounds.x==340&&workspaceSettings.rows.bounds.y==216);
+    assert(workspaceSettings.rows.itemAt(340,216)==0);
+    assert(workspaceSettings.rows.itemAt(939,255)==0);
+    assert(workspaceSettings.rows.itemAt(340,256)==-1);
+    assert(workspaceSettings.rows.itemAt(340,264)==1);
+    assert(workspaceSettings.rows.itemAt(940,300)==-1);
+    assert(workspaceSettings.rows.itemAt(340,552)==-1);
+    assert(workspaceSettings.rows.itemRect(6).y==504);
+    assert(workspaceSettings.rows.itemRect(6).height==40);
     assert(settings.itemAt(340,214)==0);
     assert(settings.itemAt(939,239)==0);
     assert(settings.itemAt(340,240)==-1); // 2 px row gap

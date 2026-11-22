@@ -3032,12 +3032,17 @@ void drawScreen() {
     }
     if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceSettings)) {
         drawModalBackdrop(198);
-        drawModalSurface(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+        const auto& workspaceSettings=desknx::ui::WorkspaceSettingsDialogControls;
+        drawModalSurface(workspaceSettings.surface.x,workspaceSettings.surface.y,
+            workspaceSettings.surface.width,workspaceSettings.surface.height,
+            Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
         text(desk.name+"  /  PERSONAL APPEARANCE",346,168,1,MUTED,930);
-        roundRect(842,132,92,32,10,Color{54,57,66,255});
-        text("B  BACK",856,143,1,WHITE,926);
+        const desknx::ui::ButtonControl workspaceBack{
+            workspaceSettings.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(workspaceBack,"B  BACK",856,143,926,
+            desknx::ui::TextRole::Metadata);
         const char* fitNames[]={"COVER","CONTAIN","STRETCH"};
         const char* labels[]={"CHOOSE DESKTOP BACKGROUND","BACKGROUND FIT","GAME ART FIT",
                               "TITLE OVERLAY","ACCENT COLOR","RESET DESKTOP STYLE","DONE"};
@@ -3049,11 +3054,15 @@ void drawScreen() {
             desk.accentColor<0?"AUTO / TILE COLORS":"PALETTE "+std::to_string(desk.accentColor+1),
             "RESTORE DEFAULTS","CLOSE THIS MENU"
         };
-        for(int i=0;i<7;++i) {
-            const int yy=216+i*48;
-            if(i==workspaceSettingsIndex)roundRect(340,yy,600,40,10,Color{35,61,93,255});
-            text(labels[i],360,yy+8,1,i==workspaceSettingsIndex?WHITE:MUTED,700);
-            text(values[i],710,yy+8,1,i==workspaceSettingsIndex?BLUE:MUTED,920);
+        for(int i=0;i<workspaceSettings.rows.itemCount;++i) {
+            const auto row=workspaceSettings.rows.itemRect(i);
+            if(i==workspaceSettingsIndex)
+                drawSelectableRowBackground(row,
+                    desknx::ui::SelectableRowState::Focused,10);
+            text(labels[i],row.x+20,row.y+8,1,
+                i==workspaceSettingsIndex?WHITE:MUTED,row.x+360);
+            text(values[i],row.x+370,row.y+8,1,
+                i==workspaceSettingsIndex?BLUE:MUTED,row.x+row.width-20);
         }
         text("COVER FILLS THE TILE; CONTAIN SHOWS THE WHOLE IMAGE",346,568,1,MUTED,930);
         text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
@@ -3193,11 +3202,16 @@ void drawScreen() {
     }
     if(modalStack.contains(desknx::ui::ModalLayer::LauncherSettings)) {
         drawModalBackdrop(198);
-        drawModalSurface(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+        const auto& launcherSettings=desknx::ui::LauncherSettingsDialogControls;
+        drawModalSurface(launcherSettings.surface.x,launcherSettings.surface.y,
+            launcherSettings.surface.width,launcherSettings.surface.height,
+            Color{17,24,36,255},Color{255,255,255,28});
         text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
         text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
-        roundRect(842,132,92,32,10,Color{54,57,66,255});
-        text("B  BACK",856,143,1,WHITE,926);
+        const desknx::ui::ButtonControl launcherBack{
+            launcherSettings.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(launcherBack,"B  BACK",856,143,926,
+            desknx::ui::TextRole::Metadata);
         text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
              346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
         const size_t fontSlash=fontPath.find_last_of('/');
@@ -3213,7 +3227,7 @@ void drawScreen() {
             languageRussian?"РЕЖИМ АНИМАЦИИ":"ANIMATION MODE"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
         const char* motionModes[]={"FULL","REDUCED","LOW POWER"};
-        const auto& settingsRows=desknx::ui::LauncherSettingsOptionsLayout;
+        const auto& settingsRows=launcherSettings.rows;
         for(int i=0;i<settingsRows.itemCount;++i) {
             const auto row=settingsRows.itemRect(i);
             if(i==appSettingsIndex)
@@ -4126,7 +4140,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(activeModal==desknx::ui::ModalLayer::LauncherSettings) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        const int itemCount=desknx::ui::LauncherSettingsOptionsLayout.itemCount;
+        const int itemCount=desknx::ui::LauncherSettingsDialogControls.rows.itemCount;
         if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+itemCount-1)%itemCount;
         if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%itemCount;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
@@ -4476,20 +4490,30 @@ void touchInput(const SDL_Event&e) {
     }
     if(activeModal==desknx::ui::ModalLayer::LauncherSettings ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=842&&x<=934&&y>=132&&y<=164) {
+        const auto& layout=desknx::ui::LauncherSettingsDialogControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)) {
             appSettingsMenu=false;
         } else {
-            const int row=desknx::ui::LauncherSettingsOptionsLayout.itemAt(x,y);
+            const int row=layout.rows.itemAt(x,y);
             if(row>=0)activateAppSettings(row);
         }
         return;
     }
     if(activeModal==desknx::ui::ModalLayer::WorkspaceSettings ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=842&&x<=934&&y>=132&&y<=164)workspaceSettingsMenu=false;
-        else if(x>=340&&x<=940&&y>=216&&y<552) {
-            const int row=(y-216)/48;
-            if(row>=0&&row<7){workspaceSettingsIndex=row;activateWorkspaceAppearance(row);}
+        const auto& layout=desknx::ui::WorkspaceSettingsDialogControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)) {
+            workspaceSettingsMenu=false;
+        } else {
+            const int row=layout.rows.itemAt(x,y);
+            if(row>=0) {
+                workspaceSettingsIndex=row;
+                activateWorkspaceAppearance(row);
+            }
         }
         return;
     }

@@ -80,10 +80,22 @@ inline constexpr ContextMenuLayout WorkspaceOptionsContextMenuLayout{
     {390,518,500,18}
 };
 
-// Twelve settings rows fit between the heading and status footer. The 2 px
-// gutters remain non-interactive and are shared by render and touch dispatch.
-inline constexpr ItemListLayout LauncherSettingsOptionsLayout{
-    {340,214,600,334},12,26,28
+struct SettingsDialogLayout {
+    ModalRect surface;
+    ModalRect closeButton;
+    ItemListLayout rows;
+};
+
+inline constexpr SettingsDialogLayout LauncherSettingsDialogControls{
+    {300,104,680,520},
+    {842,132,92,32},
+    {{340,214,600,334},12,26,28}
+};
+
+inline constexpr SettingsDialogLayout WorkspaceSettingsDialogControls{
+    {300,104,680,520},
+    {842,132,92,32},
+    {{340,216,600,336},7,40,48}
 };
 
 struct RecentWindowLayout {

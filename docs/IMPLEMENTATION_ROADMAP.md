@@ -99,6 +99,8 @@ Successful compilation alone does not close a runtime acceptance item.
       touch activation from row gaps and out-of-bounds button edges.
 - [x] Migrate Recent header actions and history rows to shared geometry; row gaps and
       pixels beyond the painted Back/Launch buttons remain inert.
+- [x] Consolidate Launcher Settings and Workspace Settings surfaces, close buttons and
+      selectable rows into shared window layouts with exact touch boundaries.
 - [ ] Migrate remaining modal, toolbar, footer and workspace controls to shared styles.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,

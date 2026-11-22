@@ -249,3 +249,16 @@ The Back and Launch actions now use the exact drawn bounds.
 Keyboard Up/Down/A/B behaviour is unchanged. A tap on a history row only selects it;
 the separate Launch button retains the existing launch path. Tests cover first/last
 row bounds, gutters, button edges and containment.
+
+## Settings windows geometry update
+
+Launcher Settings and Workspace Settings now each expose one `SettingsDialogLayout`
+containing the parent surface, Back button and selectable rows. Both close actions use
+the shared Secondary Button contract for drawing and hit testing. Launcher Settings
+keeps 12 rows (26 px high / 28 px stride); Workspace Settings keeps seven rows
+(40 px high / 48 px stride). Their 2 px and 8 px gutters respectively are inert.
+
+Touch now resolves the same row rectangles that render, instead of a separate formula
+that previously accepted trailing pixels beyond the painted Workspace Settings rows.
+Keyboard navigation remains cyclic and uses the layout row count. Selected row visuals
+use the shared Focused state.
