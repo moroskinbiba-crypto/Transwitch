@@ -4499,7 +4499,7 @@ void refreshSurfaceManager() {
     using desknx::ui::SurfaceId;
     gSurfaceManager.beginFrame();
     if(currentWorkspaceIsEmpty())
-        (void)gSurfaceManager.push(SurfaceId::EmptyDesktop,false,true,174);
+        (void)gSurfaceManager.push(SurfaceId::EmptyDesktop,false,false,0);
 
     // Register from back to front. This matches keyInput's dispatch priority:
     // only the last modal surface is allowed to consume the current input.
