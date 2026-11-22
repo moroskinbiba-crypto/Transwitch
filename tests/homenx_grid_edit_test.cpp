@@ -53,26 +53,61 @@ void testMoveIntoEmptyCell() {
     assert(provider.activeWorkspace()->tiles[0].w == 1);
 }
 
-void testMoveOntoOccupiedCellIsRefusedAndChangesNothing() {
+void testMoveOntoOccupiedCellUsesNextFreeOrigin() {
     WorkspaceProvider provider = makeProvider();
-    const Workspace before = *provider.activeWorkspace();
 
-    // The 2x1 game occupies (1,0)-(2,0); dropping the clock there must fail.
-    assert(!provider.moveTile(0, 1, 0));
-
+    // The 2x1 game occupies (1,0)-(2,0). The clock requests (1,0),
+    // therefore the next available 1x1 origin is (3,0).
+    assert(provider.moveTile(0, 1, 0));
     const Workspace& after = *provider.activeWorkspace();
-    assert(after.tiles.size() == before.tiles.size());
-    assert(after.tiles[0].x == before.tiles[0].x);
-    assert(after.tiles[0].y == before.tiles[0].y);
+    assert(after.tiles[0].x == 3);
+    assert(after.tiles[0].y == 0);
+    assert(!overlap(after.tiles[0], after.tiles[1]));
 }
 
-void testMoveOffGridIsRefused() {
+void testMoveOffGridWrapsToNextAvailableOrigin() {
     WorkspaceProvider provider = makeProvider();
-    assert(!provider.moveTile(1, 5, 0));  // 2-wide tile would end at column 7
-    assert(!provider.moveTile(1, -1, 0));
-    assert(!provider.moveTile(1, 0, 3));  // below the third row
+    // The 2-wide game cannot begin at column 5, so the search wraps to row 1.
+    assert(provider.moveTile(1, 5, 0));
+    const Tile& moved = provider.activeWorkspace()->tiles[1];
+    assert(moved.x == 0 && moved.y == 1);
+    assert(moved.w == 2 && moved.h == 1);
+
+    // A negative X request is clamped to the first valid column and scans
+    // forward instead of refusing a drag at the board edge.
+    assert(provider.moveTile(1, -1, 0));
     assert(provider.activeWorkspace()->tiles[1].x == 1);
     assert(provider.activeWorkspace()->tiles[1].y == 0);
+}
+
+void testMoveWhenWorkspaceIsFullIsAtomic() {
+    Workspace full{"Full", {}};
+    for (int y = 0; y < Rows; ++y) {
+        for (int x = 0; x < Columns; ++x) {
+            full.tiles.push_back(makeTile(Kind::Clock, "Clock",
+                "widget://clock/" + std::to_string(y * Columns + x), x, y, 1, 1));
+        }
+    }
+    WorkspaceProvider provider;
+    assert(provider.load(std::vector<Workspace>{full}, 0));
+    const Workspace before = *provider.activeWorkspace();
+    assert(!provider.moveTile(0, 1, 0));
+    const Workspace& after = *provider.activeWorkspace();
+    assert(after.tiles.size() == before.tiles.size());
+    for (std::size_t i = 0; i < before.tiles.size(); ++i) {
+        assert(after.tiles[i].x == before.tiles[i].x);
+        assert(after.tiles[i].y == before.tiles[i].y);
+    }
+}
+
+void testMoveSelectedTileUsesSameCollisionPolicy() {
+    Workspace desk{"Home", {}};
+    desk.tiles.push_back(makeTile(Kind::Clock, "Clock", "widget://clock", 0, 0, 1, 1));
+    desk.tiles.push_back(makeTile(Kind::Game, "Game", "0100000000001000", 1, 0, 2, 1));
+    int selectedX = 0, selectedY = 0;
+    assert(desknx::workspace_ops::moveSelectedTile(desk, selectedX, selectedY, 1, 0));
+    assert(desk.tiles[0].x == 3 && desk.tiles[0].y == 0);
+    assert(selectedX == 3 && selectedY == 0);
 }
 
 void testMoveToSameCellIsNotAnEdit() {
@@ -221,8 +256,10 @@ void testEditsSurviveSerializeAndReload() {
 
 int main() {
     testMoveIntoEmptyCell();
-    testMoveOntoOccupiedCellIsRefusedAndChangesNothing();
-    testMoveOffGridIsRefused();
+    testMoveOntoOccupiedCellUsesNextFreeOrigin();
+    testMoveOffGridWrapsToNextAvailableOrigin();
+    testMoveWhenWorkspaceIsFullIsAtomic();
+    testMoveSelectedTileUsesSameCollisionPolicy();
     testMoveToSameCellIsNotAnEdit();
     testMoveOfUnknownTileIsRefused();
     testResizeInPlace();
