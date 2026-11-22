@@ -442,6 +442,88 @@ void setStatus(const std::string& s, Uint32 duration=2500) {
     desknx::diag::Write("ui","status","message=%s",s.c_str());
 }
 
+void pumpSystemTelemetrySnapshot() {
+    const SystemTelemetry::Snapshot snap=gSystemTelemetry.snapshot();
+    if(snap.batteryUpdatedAt!=0) {
+        battery=snap.battery;
+        batteryChargerType=snap.chargerType;
+        joyconLeft=JoyconBatteryState{snap.left.connected,snap.left.level,snap.left.charging};
+        joyconRight=JoyconBatteryState{snap.right.connected,snap.right.level,snap.right.charging};
+        joyconBatteryAvailable=snap.joyconAvailable;
+    }
+    if(snap.systemUpdatedAt!=0) {
+        systemPcbTemperature=snap.pcbTemperature;
+        systemSocTemperature=snap.socTemperature;
+        systemPcbTemperatureAvailable=snap.pcbTemperatureAvailable;
+        systemSocTemperatureAvailable=snap.socTemperatureAvailable;
+        systemCpuClockHz=snap.cpuClockHz;
+        systemGpuClockHz=snap.gpuClockHz;
+        systemCpuClockAvailable=snap.cpuClockAvailable;
+        systemGpuClockAvailable=snap.gpuClockAvailable;
+    }
+    if(snap.diagnosticsUpdatedAt!=0) {
+        processRamStatsAvailable=snap.processRamAvailable;
+        processRamUsed=snap.processRamUsed;
+        processRamTotal=snap.processRamTotal;
+    }
+
+    if(snap.quickLoaded && (!quickSettingsSnapshotLoaded ||
+       snap.quickUpdatedAt!=quickSettingsSnapshotTick)) {
+        quickAirplaneMode=snap.airplaneMode;
+        quickWifiEnabled=snap.wifiEnabled;
+        quickBluetoothEnabled=snap.bluetoothEnabled;
+        quickSoundMuted=snap.soundMuted;
+        quickAirplaneAvailable=snap.airplaneAvailable;
+        quickWifiAvailable=snap.wifiAvailable;
+        quickBluetoothAvailable=snap.bluetoothAvailable;
+        quickSoundAvailable=snap.soundAvailable;
+        quickBrightnessAvailable=snap.brightnessAvailable;
+        quickInternetConnected=snap.internetConnected;
+        quickWifiStrength=snap.wifiStrength;
+        quickAudioTarget=snap.audioTarget;
+        quickBrightness=snap.brightness;
+        if(quickAirplaneAvailable&&quickAirplaneMode)
+            quickNetworkStatus=languageRussian?"АВИАРЕЖИМ ВКЛЮЧЁН":"AIRPLANE MODE ON";
+        else if(quickInternetConnected)
+            quickNetworkStatus=snap.connectionType==NifmInternetConnectionType_Ethernet
+                ?(languageRussian?"ПРОВОДНАЯ СЕТЬ ПОДКЛЮЧЕНА":"ETHERNET CONNECTED")
+                :(languageRussian?"WI-FI ПОДКЛЮЧЁН  /  СИГНАЛ ":"WI-FI CONNECTED  /  SIGNAL ")+
+                    std::to_string(quickWifiStrength)+"/3";
+        else if(quickWifiAvailable&&quickWifiEnabled)
+            quickNetworkStatus=languageRussian?"WI-FI ВКЛЮЧЁН  /  НЕТ ИНТЕРНЕТА":"WI-FI ENABLED  /  NO INTERNET";
+        else if(quickWifiAvailable)
+            quickNetworkStatus=languageRussian?"WI-FI ВЫКЛЮЧЕН":"WI-FI DISABLED";
+        else
+            quickNetworkStatus=languageRussian?"СТАТУС СЕТИ НЕДОСТУПЕН":"NETWORK STATUS UNAVAILABLE";
+        quickSettingsSnapshotLoaded=true;
+        quickSettingsSnapshotLoading=false;
+        quickSettingsSnapshotTick=snap.quickUpdatedAt;
+    }
+
+    if(snap.commandSequence!=0 && snap.commandSequence!=lastSystemCommandSequence) {
+        lastSystemCommandSequence=snap.commandSequence;
+        if(snap.commandRejected) {
+            setStatus("BLUETOOTH IS KEPT ON WHILE DOCKED",2400);
+        } else if(R_FAILED(snap.commandResult)) {
+            char error[48]{};
+            std::snprintf(error,sizeof(error),"0X%08X",
+                static_cast<unsigned int>(snap.commandResult));
+            setStatus(std::string("QUICK SETTING CHANGE FAILED  ")+error,2600);
+        } else {
+            switch(snap.commandAction) {
+                case 0: setStatus(quickSoundMuted?"SOUND MUTED":"SOUND ENABLED",1800);break;
+                case 1: setStatus(quickAirplaneMode?"AIRPLANE MODE ENABLED":"AIRPLANE MODE DISABLED",2000);break;
+                case 2: setStatus(quickWifiEnabled?"WI-FI ENABLED":"WI-FI DISABLED",1800);break;
+                case 3: setStatus(quickBluetoothEnabled?"BLUETOOTH ENABLED":"BLUETOOTH DISABLED",1800);break;
+                case 4:
+                    setStatus("BRIGHTNESS  "+
+                        std::to_string(static_cast<int>(std::lround(quickBrightness*100.0f)))+"%",1600);
+                    break;
+                default: break;
+            }
+        }
+    }
+}
 
 void refreshQuickSettingsSnapshot(bool force=false) {
     const Uint32 now=SDL_GetTicks();
@@ -8437,6 +8519,9 @@ int main(int,char**) {
     }
     SDL_AtomicSet(&nextendoConfiguredRefreshMs,
         configuredWidgetRefresh(Kind::Nextendo)*1000);
+    if(!gSystemTelemetry.start(setsysServiceReady))
+        desknx::diag::Write("telemetry","worker_start_failed",
+            "system widgets will show unavailable values");
     if(storageStatsMutex)
         storageStatsThread=SDL_CreateThread(storageStatsThreadMain,"DeskNX storage stats",nullptr);
     if(!storageStatsThread)
@@ -8545,6 +8630,7 @@ int main(int,char**) {
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         pumpSteamGridDbPicker();
         pumpSteamGridDbCacheCleanup();
+        pumpSystemTelemetrySnapshot();
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
@@ -8606,6 +8692,8 @@ int main(int,char**) {
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    gSystemTelemetry.stop();
+    pumpSystemTelemetrySnapshot();
     SDL_AtomicSet(&nextendoStop,1);
     drainLauncherSettingsSave();
     drainAuxiliarySaves();
