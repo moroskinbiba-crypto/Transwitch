@@ -114,7 +114,9 @@ public:
     void beginFrame() {
         lastFrameStats_ = frameStats_;
         frameStats_ = FrameStats{};
+        if (++frameSerial_ == 0) frameSerial_ = 1;
         newTexturesRemaining_ = NewTextureBudget;
+        pruneStaleRasterJobs();
         pumpRasterQueue();
         frameStats_.pendingRasterJobs = rasterQueue_.size();
     }
@@ -190,7 +192,7 @@ public:
             fontLoadThread_ = nullptr;
         }
         rasterQueue_.clear();
-        pendingRasterKeys_.clear();
+        pendingRasterFrames_.clear();
         emptyTextKeys_.clear();
         clearCache();
         fittedTextCache_.clear();
@@ -246,8 +248,9 @@ private:
     std::unordered_map<std::string, CacheEntry> cache_;
     std::unordered_map<std::string, std::string> fittedTextCache_;
     std::deque<RasterJob> rasterQueue_;
-    std::unordered_set<std::string> pendingRasterKeys_;
+    std::unordered_map<std::string, std::uint64_t> pendingRasterFrames_;
     std::unordered_set<std::string> emptyTextKeys_;
+    std::uint64_t frameSerial_{0};
     unsigned long long clock_{0};
     uint64_t fontGeneration_{1};
     int customWarmupIndex_{8};
@@ -411,7 +414,11 @@ private:
     bool enqueueRaster(const std::string& key, const std::string& value,
                        int scale, int maxWidth, SDL_Color color,
                        bool customFace) {
-        if (pendingRasterKeys_.find(key) != pendingRasterKeys_.end()) return true;
+        auto pending = pendingRasterFrames_.find(key);
+        if (pending != pendingRasterFrames_.end()) {
+            pending->second = frameSerial_;
+            return true;
+        }
         if (rasterQueue_.size() >= MaxPendingRasterJobs) return false;
         RasterJob job;
         job.key = key;
@@ -422,9 +429,26 @@ private:
         job.fontGeneration = fontGeneration_;
         job.customFace = customFace;
         rasterQueue_.push_back(std::move(job));
-        pendingRasterKeys_.insert(key);
+        pendingRasterFrames_.emplace(key, frameSerial_);
         ++frameStats_.queuedRequests;
         return true;
+    }
+
+    void pruneStaleRasterJobs() {
+        if (rasterQueue_.empty() || frameSerial_ <= 1) return;
+        const std::uint64_t lastVisibleFrame = frameSerial_ - 1;
+        for (auto it = rasterQueue_.begin(); it != rasterQueue_.end();) {
+            const auto pending = pendingRasterFrames_.find(it->key);
+            if (pending == pendingRasterFrames_.end() ||
+                pending->second < lastVisibleFrame) {
+                if (pending != pendingRasterFrames_.end())
+                    pendingRasterFrames_.erase(pending);
+                it = rasterQueue_.erase(it);
+                ++frameStats_.deferredByBudget;
+            } else {
+                ++it;
+            }
+        }
     }
 
     void pumpRasterQueue() {
@@ -442,7 +466,7 @@ private:
             RasterJob job = std::move(rasterQueue_.front());
             rasterQueue_.pop_front();
             if (job.fontGeneration != fontGeneration_) {
-                pendingRasterKeys_.erase(job.key);
+                pendingRasterFrames_.erase(job.key);
                 continue;
             }
 
@@ -464,7 +488,7 @@ private:
                 // A missing shared face cannot become valid by retrying the
                 // same system request. Drop it; a newly warmed custom face will
                 // enqueue a distinct generation/key when it becomes available.
-                pendingRasterKeys_.erase(job.key);
+                pendingRasterFrames_.erase(job.key);
                 ++processed;
                 continue;
             }
@@ -475,7 +499,7 @@ private:
             frameStats_.textPreparationMs +=
                 elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
             if (fitted->empty()) {
-                pendingRasterKeys_.erase(job.key);
+                pendingRasterFrames_.erase(job.key);
                 if (emptyTextKeys_.size() >= CacheLimit) emptyTextKeys_.clear();
                 emptyTextKeys_.insert(job.key);
                 ++processed;
@@ -492,7 +516,7 @@ private:
                 std::max(frameStats_.maximumRasterizationMs, rasterMs);
             if (!surface) {
                 ++frameStats_.rasterFailures;
-                pendingRasterKeys_.erase(job.key);
+                pendingRasterFrames_.erase(job.key);
                 ++processed;
                 continue;
             }
@@ -508,7 +532,7 @@ private:
             frameStats_.textureUploadMs += uploadMs;
             frameStats_.maximumTextureUploadMs =
                 std::max(frameStats_.maximumTextureUploadMs, uploadMs);
-            pendingRasterKeys_.erase(job.key);
+            pendingRasterFrames_.erase(job.key);
             if (!texture) {
                 ++frameStats_.uploadFailures;
                 ++processed;
