@@ -3384,9 +3384,9 @@ bool writeActiveWorkspaceSnapshot(const LayoutSaveJob& job) {
     }
     mkdir("sdmc:/switch",0777);
     mkdir(CFG_DIR,0777);
-    const auto status=desknx::workspace_storage::writeActiveWorkspace(
-        desknx::workspace_storage::Paths{},job.workspaceSnapshot,
-        job.activeWorkspace,commitSdCardForPersistence,nullptr,
+    const auto status=desknx::workspace_storage::writeActiveWorkspaceBytes(
+        desknx::workspace_storage::Paths{},job.activeWorkspaceState,
+        commitSdCardForPersistence,nullptr,
         "active-workspace-temp","active-workspace-async-publish",false,true);
     return status==desknx::persist::WriteStatus::Success;
 }
