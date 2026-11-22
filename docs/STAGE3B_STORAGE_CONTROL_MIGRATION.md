@@ -17,7 +17,7 @@ It does not yet move every file family to one global path registry or replace ev
 - Failed commits enter wrap-safe exponential backoff: 250 ms, 500 ms, 1 s … capped at 30 s.
 - A successful commit clears the failure count and retry deadline.
 
-The production `commitSdCard()` function now routes all callers through this control plane while retaining the existing SDL mutex around the libnx commit operation. This includes workspace, settings, history and auxiliary snapshot writers that already use the shared commit callback.
+The production `commitSdCard()` function now routes all callers through this control plane while retaining the existing SDL mutex around the libnx commit operation. If that mutex cannot be created, commit fails closed rather than allowing concurrent workers to race. This includes workspace, settings, history and auxiliary snapshot writers that already use the shared commit callback.
 
 The mount state is initialized from the verified `statvfs("sdmc:/")` probe at startup. The state object supports removal/remount generation changes; periodic hot-plug detection and automatic stale-device remount are not enabled in this increment.
 
@@ -47,7 +47,7 @@ Format-specific steps live in `include/desknx/StorageMigrations.hpp`.
 
 ### Applied migrations
 
-- **Workspace:** versions 1–3 are parsed by the production layout parser and converted through the canonical DESKNX4 serializer. Startup validates the conversion in memory; the existing checked layout-save path performs publication and retains its backup.
+- **Workspace:** versions 1–3 are parsed by the production layout parser and converted through the canonical DESKNX4 serializer. Startup validates the conversion in memory and compares it with the canonical serialization of the loaded model. A mismatch blocks rewrite; the existing checked layout-save path performs publication only after the outputs agree, retaining its backup.
 - **Settings:** DESKNXSET1 is converted to DESKNXSET2. Legacy theme values are normalized using the exact old runtime mapping (0–7 → 0, 8 → 1); duplicate keys and unknown key/value rows are preserved. A migration is automatically published only when the source was the validated primary file. If startup recovered settings from `.bak`, automatic migration is deferred so the recovered backup is not overwritten by a potentially corrupt primary.
 
 History and active-workspace formats are registered and version-checked, but have no conversion steps because their current schema is already the deployed format.
