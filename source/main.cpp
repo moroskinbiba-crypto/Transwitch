@@ -914,11 +914,11 @@ std::array<Uint8,7> glyph(char input) {
         default:return {{31,17,1,2,4,0,4}};
     }
 }
-// Bitmap fallback remains fully readable for Russian labels when both the
-// custom font and Horizon shared-font service are unavailable.
-void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
-    const std::string localized=desknx::i18n::translate(value,languageRussian);
-    if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
+// Deterministic renderer-thread bitmap drawing. Kept separate from the TTF
+// cache so a multiline fallback never mixes fonts when the texture budget runs out.
+void drawBitmapText(const std::string& localized,int x,int y,int scale,
+                    Color c,int right) {
+    if(scale<=0||right<=x)return;
     color(c);
     int px=x;
     int py=y;
@@ -950,6 +950,14 @@ void text(const std::string& value,int x,int y,int scale,Color c,int right=1260)
         px+=6*scale;
     }
 }
+
+// Bitmap fallback remains fully readable for Russian labels when both the
+// custom font and Horizon shared-font service are unavailable.
+void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
+    drawBitmapText(localized,x,y,scale,c,right);
+}
 void textRole(const std::string& value,int x,int y,desknx::ui::TextRole role,
               Color c,int right=1260) {
     const auto style=desknx::ui::TypographyFor(role);
@@ -962,7 +970,22 @@ void textBlock(const std::string& value,int x,int y,desknx::ui::TextRole role,
     const std::string localized=desknx::i18n::translate(value,languageRussian);
     if(gFontRenderer.drawWrapped(localized,x,y,style.fontScale,
         SDL_Color{c.r,c.g,c.b,c.a},right,style.maxLines,style.lineHeight))return;
-    text(localized,x,y,style.fontScale,c,right);
+
+    // Keep fallback output consistent for the entire block. Do not route each
+    // line back through FontRenderer: a nearly exhausted texture budget could
+    // otherwise render early lines with TTF and later lines with bitmap glyphs.
+    const int maxWidth=std::max(0,right-x);
+    if(maxWidth==0||style.maxLines<=0)return;
+    const int scale=style.fontScale;
+    const auto measure=[scale](const std::string& candidate) {
+        return desknx::ui::MeasureBitmapTextWidth(candidate,scale);
+    };
+    const auto lines=desknx::ui::WrapUtf8Text(
+        localized,maxWidth,style.maxLines,measure);
+    const int lineHeight=style.lineHeight>0?style.lineHeight:8*scale;
+    for(std::size_t index=0;index<lines.size();++index)
+        drawBitmapText(lines[index],x,y+static_cast<int>(index)*lineHeight,
+            scale,c,right);
 }
 
 Color controlColor(desknx::ui::ControlColor c) {
