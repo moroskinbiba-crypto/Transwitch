@@ -16,7 +16,7 @@ The component layer centralizes presentation without moving input handling or ap
 
 ## Tile contract
 
-`TileRenderer` handles the visual shell for cover-art tiles. The launcher still owns artwork lookup and the original fit policy (cover/contain), text shaping, badges, selection style and controller/touch hitboxes. The title scrim uses the VisualEngine's cached vertical gradient so that text contrast increases toward the bottom of the cover instead of placing a flat dark rectangle over the whole label band.
+`TileRenderer` is shared by desktop cover tiles and library game/homebrew cards. The caller supplies an already-decoded texture and the saved fit mode; TileRenderer computes the destination, preserves/restores SDL clipping, draws rounded image corners with a renderer-owned cached mask and provides shared badge shells. The caller still owns texture lookup, title shaping, status text, selection actions and the existing controller/touch hitboxes. The title scrim uses the VisualEngine's cached vertical gradient so that text contrast increases toward the bottom of the cover.
 
 `TileVisualRules.hpp` is SDL-independent. It measures the title strip, line offsets, maximum character count and safe corner radius for the actual tile bounds. The host test covers standard, wide and constrained tile sizes.
 
