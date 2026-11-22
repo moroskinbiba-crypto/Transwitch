@@ -74,8 +74,10 @@ Successful compilation alone does not close a runtime acceptance item.
 - [x] Reset SDL clip and draw-blend state at frame start and immediately before Present.
 
 ### Still open
-- [ ] Extract Dialog, SidePanel, ContextMenu and ConfirmationDialog content/layout
-      components; migrate one window at a time while preserving hit regions.
+- [x] Introduce a reusable ConfirmationDialog layout/renderer and migrate workspace
+      deletion; the visible buttons and touch hit regions use the same geometry.
+- [ ] Extract remaining Dialog, SidePanel and ContextMenu content/layout components;
+      migrate one window at a time while preserving hit regions.
 - [ ] Add scoped clip and texture-modulation guards around every image/mask operation.
 - [ ] Add regression checks for full-frame recovery after every modal/window path.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.

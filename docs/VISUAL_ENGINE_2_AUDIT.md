@@ -17,6 +17,9 @@ The first Visual Engine 2.0 stability slice is now implemented in this branch:
 - Host tests cover overlapping modal precedence.
 - All outer modal shells now use the shared `drawModalBackdrop()` and
   `drawModalSurface()` primitives.
+- Workspace deletion now uses a shared `ConfirmationDialogLayout` for both visible
+  button geometry and touch hit-testing; the layout has a host test for boundaries,
+  containment and non-overlap.
 - The frame resets SDL clip and draw-blend state before composition and before Present.
 
 This closes the z-order mismatch described below. It does not yet prove the white-screen

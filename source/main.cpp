@@ -22,6 +22,7 @@
 #include "../include/desknx/SensorService.hpp"
 #include "../include/desknx/RuntimeMetrics.hpp"
 #include "../include/desknx/ModalStack.hpp"
+#include "../include/desknx/ConfirmationDialogLayout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -827,6 +828,37 @@ void text(const std::string& value,int x,int y,int scale,Color c,int right=1260)
         px+=6*scale;
     }
 }
+void drawConfirmationDialog(
+    const desknx::ui::ConfirmationDialogLayout& layout,
+    const std::string& title,const std::string& subtitle,
+    const std::string& description,const std::string& primaryLabel,
+    const std::string& secondaryLabel,bool destructive) {
+    drawModalBackdrop(194);
+    drawModalSurface(layout.surface.x,layout.surface.y,
+        layout.surface.width,layout.surface.height,
+        Color{24,27,38,255},
+        destructive?Color{255,99,112,100}:Color{255,255,255,24});
+    text(title,layout.titleX,layout.titleY,3,WHITE,layout.surface.x+layout.surface.width-30);
+    text(subtitle,layout.subtitleX,layout.subtitleY,2,MUTED,layout.surface.x+layout.surface.width-30);
+    text(description,layout.descriptionX,layout.descriptionY,1,MUTED,layout.surface.x+layout.surface.width-30);
+    roundRect(layout.primaryButton.x,layout.primaryButton.y,
+        layout.primaryButton.width,layout.primaryButton.height,12,
+        destructive?Color{112,38,42,255}:Color{10,132,255,255});
+    if(destructive)
+        outline(layout.primaryButton.x,layout.primaryButton.y,
+            layout.primaryButton.width,layout.primaryButton.height,
+            Color{255,69,58,130});
+    text(primaryLabel,layout.primaryLabelX,layout.primaryLabelY,2,WHITE,
+        layout.primaryButton.x+layout.primaryButton.width-10);
+    roundRect(layout.secondaryButton.x,layout.secondaryButton.y,
+        layout.secondaryButton.width,layout.secondaryButton.height,12,
+        Color{54,57,66,255});
+    text(secondaryLabel,layout.secondaryLabelX,layout.secondaryLabelY,2,WHITE,
+        layout.secondaryButton.x+layout.secondaryButton.width-10);
+    text("A CONFIRM     B CANCEL",layout.footer.x,layout.footer.y,1,MUTED,
+        layout.footer.x+layout.footer.width);
+}
+
 std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
@@ -2832,19 +2864,14 @@ void drawScreen() {
         text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::DeleteConfirmation)) {
-        drawModalBackdrop(194);
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
-        drawModalSurface(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
-        text("DELETE WORKSPACE?",405,270,3,WHITE,890);
-        text(desks[static_cast<size_t>(deskIndex)].name,405,314,2,MUTED,890);
-        text(std::to_string(tileCount)+" SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
-             405,346,1,MUTED,890);
-        roundRect(405,382,210,48,12,Color{112,38,42,255});
-        outline(405,382,210,48,Color{255,69,58,130});
-        text("DELETE",466,399,2,WHITE,600);
-        roundRect(635,382,240,48,12,Color{54,57,66,255});
-        text("CANCEL",706,399,2,WHITE,865);
-        text("A CONFIRM     B CANCEL",405,444,1,MUTED,890);
+        drawConfirmationDialog(
+            desknx::ui::WorkspaceDeleteConfirmationLayout,
+            "DELETE WORKSPACE?",
+            desks[static_cast<size_t>(deskIndex)].name,
+            std::to_string(tileCount)+
+                " SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
+            "DELETE","CANCEL",true);
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(modalStack.contains(desknx::ui::ModalLayer::Recent)) {
@@ -4134,10 +4161,11 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(activeModal==desknx::ui::ModalLayer::DeleteConfirmation ) {
+    if(activeModal==desknx::ui::ModalLayer::DeleteConfirmation) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
-        else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
+        const auto& layout=desknx::ui::WorkspaceDeleteConfirmationLayout;
+        if(layout.primaryButton.contains(x,y))keyInput(HidNpadButton_A,false);
+        else if(layout.secondaryButton.contains(x,y))keyInput(HidNpadButton_B,false);
         return;
     }
     if(e.type==SDL_FINGERDOWN && editing && !dragging &&
