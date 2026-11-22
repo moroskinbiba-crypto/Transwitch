@@ -1216,7 +1216,11 @@ void drawWallpaper(bool fallback=false) {
 }
 
 void drawWorkspaceBackground(const Workspace& desk) {
-    if(desk.backgroundPath.empty()) { drawWallpaper(); return; }
+    if(desk.backgroundPath.empty()) {
+        if(wallpaperPath.empty()) gWorkspaceBackgroundCache.clearPriority();
+        drawWallpaper();
+        return;
+    }
     int width=0,height=0;
     SDL_Texture* texture=gWorkspaceBackgroundCache.get(
         desk.backgroundPath,width,height,true);
@@ -5767,7 +5771,7 @@ void drawScreen() {
         text(queueText,652,396,1,
              iconStats.workerRunning?okColor:warnColor,1050);
         std::snprintf(queueText,sizeof(queueText),
-            "BG DECODE %.2F MS / WAIT %.2F / UPLOAD %.2F",
+            "BG DECODE PEAK %.2F MS / WAIT %.2F / UPLOAD %.2F",
             backgroundStats.lastFrameDecodeMs,
             backgroundStats.lastFrameQueueWaitMs,
             backgroundStats.lastFrameUploadMs);
