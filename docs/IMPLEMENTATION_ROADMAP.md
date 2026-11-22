@@ -76,12 +76,13 @@ Successful compilation alone does not close a runtime acceptance item.
 ### Still open
 - [x] Introduce a reusable ConfirmationDialog layout/renderer and migrate workspace
       deletion; the visible buttons and touch hit regions use the same geometry.
-- [ ] Extract remaining Dialog, SidePanel and ContextMenu content/layout components;
-      migrate one window at a time while preserving hit regions.
+- [x] Add tested shared Dialog, SidePanel and ContextMenu geometry contracts; migrate
+      Workspace Picker, Workspace Options and the App Library details surface to them.
+- [ ] Continue reusable content/renderer primitives for remaining modal and panel
+      variants, migrating one window at a time while preserving hit regions.
 - [x] Add scoped clip and texture-modulation guards to wallpaper, workspace-background,
       tile-artwork and rounded-mask paths.
 - [ ] Add regression checks for full-frame recovery after every modal/window path.
-- [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [ ] Complete shared button, badge, toggle, field, card and indicator primitives.
 - [ ] Add semantic typography roles and consistent wrapping, line height and font fallback.

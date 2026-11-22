@@ -23,6 +23,7 @@
 #include "../include/desknx/RuntimeMetrics.hpp"
 #include "../include/desknx/ModalStack.hpp"
 #include "../include/desknx/ConfirmationDialogLayout.hpp"
+#include "../include/desknx/WindowComponents.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2763,7 +2764,9 @@ void drawScreen() {
                     (i==listIndex?BLUE:MUTED),mx+750);
             }
         }
-        roundRect(mx+780,my+110,252,410,16,Color{22,31,45,255});
+        const auto& detailsPanel=desknx::ui::AppLibraryDetailsPanelLayout;
+        roundRect(detailsPanel.surface.x,detailsPanel.surface.y,
+            detailsPanel.surface.width,detailsPanel.surface.height,16,Color{22,31,45,255});
         if(!available.empty()) {
             const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
@@ -2832,8 +2835,10 @@ void drawScreen() {
             }
             text(std::to_string(listIndex+1)+" OF "+std::to_string(available.size()),
                  mx+800,my+438,1,MUTED,mx+mw-30);
-            roundRect(mx+792,my+462,228,42,12,Color{49,119,199,255});
-            text("A  ADD TO WORKSPACE",mx+823,my+477,1,WHITE,mx+mw-30);
+            const auto& addAction=detailsPanel.primaryAction;
+            roundRect(addAction.x,addAction.y,addAction.width,addAction.height,
+                12,Color{49,119,199,255});
+            text("A  ADD TO WORKSPACE",addAction.x+21,addAction.y+15,1,WHITE,mx+mw-30);
         }
         const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
@@ -2841,21 +2846,28 @@ void drawScreen() {
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceMenu)) {
+        const auto& layout=desknx::ui::WorkspaceOptionsContextMenuLayout;
         drawModalBackdrop(190);
-        drawModalSurface(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
-        text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
+        drawModalSurface(layout.surface.x,layout.surface.y,
+            layout.surface.width,layout.surface.height,
+            Color{18,25,37,255},Color{255,255,255,26});
+        text("WORKSPACE OPTIONS",layout.title.x,layout.title.y,3,WHITE,
+            layout.title.x+layout.title.width);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
         const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE","CUSTOMIZE DESKTOP",
                                "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
-        for(int i=0;i<6;++i) {
-            const int yy=238+i*44;
-            if(i==workspaceMenuIndex)roundRect(390,yy,500,38,10,Color{45,61,82,255});
+        for(int i=0;i<layout.items.itemCount;++i) {
+            const auto row=layout.items.itemRect(i);
+            if(i==workspaceMenuIndex)
+                roundRect(row.x,row.y,row.width,row.height,10,Color{45,61,82,255});
             const Color labelColor=(i==1&&!canMoveTile)?Color{91,101,118,255}:
                                    (i==workspaceMenuIndex?WHITE:MUTED);
-            text(actions[i],412,yy+12,1,labelColor,875);
+            text(actions[i],row.x+22,row.y+12,1,labelColor,row.x+row.width-15);
         }
-        text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
+        text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",
+            layout.footer.x,layout.footer.y,1,MUTED,
+            layout.footer.x+layout.footer.width);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceSettings)) {
         drawModalBackdrop(198);
@@ -2886,27 +2898,37 @@ void drawScreen() {
         text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::WorkspacePicker)) {
+        const auto& layout=desknx::ui::WorkspacePickerDialogLayout;
         drawModalBackdrop(194);
-        drawModalSurface(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
+        drawModalSurface(layout.surface.x,layout.surface.y,
+            layout.surface.width,layout.surface.height,
+            Color{18,25,37,255},Color{255,255,255,26});
         text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
-             360,100,3,WHITE,920);
+             layout.title.x,layout.title.y,3,WHITE,
+             layout.title.x+layout.title.width);
         text("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
-             360,136,1,MUTED,920);
-        for(size_t i=0;i<desks.size();++i) {
-            const int yy=168+static_cast<int>(i)*32;
+             layout.description.x,layout.description.y,1,MUTED,
+             layout.description.x+layout.description.width);
+        for(size_t i=0;i<desks.size()&&i<static_cast<size_t>(layout.items.itemCount);++i) {
+            const auto row=layout.items.itemRect(static_cast<int>(i));
             const bool selected=static_cast<int>(i)==workspacePickerIndex;
             const bool current=static_cast<int>(i)==deskIndex;
-            if(selected)roundRect(360,yy,560,29,8,Color{45,61,82,255});
-            else if(current)roundRect(360,yy,560,29,8,Color{30,43,60,255});
-            text(desks[i].name,382,yy+9,1,
-                 selected?WHITE:(current?BLUE:MUTED),760);
+            if(selected)roundRect(row.x,row.y,row.width,row.height,8,Color{45,61,82,255});
+            else if(current)roundRect(row.x,row.y,row.width,row.height,8,Color{30,43,60,255});
+            text(desks[i].name,row.x+22,row.y+9,1,
+                 selected?WHITE:(current?BLUE:MUTED),row.x+row.width-160);
             const std::string detail=current?"CURRENT":
                 std::to_string(desks[i].tiles.size())+" ITEMS";
-            text(detail,804,yy+9,1,current?BLUE:MUTED,902);
+            text(detail,row.x+444,row.y+9,1,current?BLUE:MUTED,
+                 row.x+row.width-18);
         }
-        roundRect(744,590,176,38,10,Color{54,57,66,255});
-        text("CANCEL",795,603,1,WHITE,875);
-        text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
+        const auto& cancel=layout.closeButton;
+        roundRect(cancel.x,cancel.y,cancel.width,cancel.height,
+            10,Color{54,57,66,255});
+        text("CANCEL",cancel.x+51,cancel.y+13,1,WHITE,cancel.x+cancel.width-45);
+        text("UP / DOWN SELECT     A OPEN     B BACK",
+             layout.footer.x,layout.footer.y+18,1,MUTED,
+             layout.footer.x+layout.footer.width);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::DeleteConfirmation)) {
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
@@ -3873,10 +3895,12 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(activeModal==desknx::ui::ModalLayer::WorkspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
+        const int itemCount=desknx::ui::WorkspaceOptionsContextMenuLayout.items.itemCount;
+        if(itemCount<=0)return;
         if(keys&HidNpadButton_Up)
-            workspaceMenuIndex=(workspaceMenuIndex+5)%6;
+            workspaceMenuIndex=(workspaceMenuIndex+itemCount-1)%itemCount;
         if(keys&HidNpadButton_Down)
-            workspaceMenuIndex=(workspaceMenuIndex+1)%6;
+            workspaceMenuIndex=(workspaceMenuIndex+1)%itemCount;
         if(keys&HidNpadButton_A) {
             const int action=workspaceMenuIndex;
             workspaceMenu=false;
@@ -4183,26 +4207,27 @@ void touchInput(const SDL_Event&e) {
     }
     if(activeModal==desknx::ui::ModalLayer::WorkspacePicker ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=744&&x<=920&&y>=590&&y<=628) {
+        const auto& layout=desknx::ui::WorkspacePickerDialogLayout;
+        if(layout.closeButton.contains(x,y)) {
             workspacePicker=false;
-        } else if(x>=360&&x<=920&&y>=168&&y<168+static_cast<int>(desks.size())*32) {
-            const int target=(y-168)/32;
-            selectWorkspace(target);
+        } else {
+            const int target=layout.items.itemAt(x,y);
+            if(target>=0&&target<static_cast<int>(desks.size()))
+                selectWorkspace(target);
         }
         return;
     }
     if(activeModal==desknx::ui::ModalLayer::WorkspaceMenu ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=390&&x<=890&&y>=238&&y<502) {
-            const int row=(y-238)/44;
-            if(row>=0&&row<6) {
-                workspaceMenu=false;
-                if(row==0)openWorkspacePicker(false);
-                else if(row==1)openWorkspacePicker(true);
-                else if(row==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
-                else if(row==3)renameDesk();
-                else if(row==4)deleteDesk();
-            }
+        const auto& layout=desknx::ui::WorkspaceOptionsContextMenuLayout;
+        const int row=layout.items.itemAt(x,y);
+        if(row>=0) {
+            workspaceMenu=false;
+            if(row==0)openWorkspacePicker(false);
+            else if(row==1)openWorkspacePicker(true);
+            else if(row==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
+            else if(row==3)renameDesk();
+            else if(row==4)deleteDesk();
         }
         return;
     }
@@ -4268,7 +4293,7 @@ void touchInput(const SDL_Event&e) {
                 else if(x>=756&&x<828) addSelected();
                 return;
             }
-            if(y>=532&&y<=576&&x>=900&&x<=1150) {
+            if(desknx::ui::AppLibraryDetailsPanelLayout.primaryAction.contains(x,y)) {
                 addSelected();
                 return;
             }

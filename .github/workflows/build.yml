@@ -81,6 +81,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/confirmation_dialog_layout_test.cpp -o /tmp/desknx-confirmation-layout-test
           /tmp/desknx-confirmation-layout-test
 
+      - name: Test shared Dialog, SidePanel and ContextMenu geometry
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/window_components_test.cpp -o /tmp/desknx-window-components-test
+          /tmp/desknx-window-components-test
+
       - name: Test modal stack precedence and layer invariants
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/modal_stack_test.cpp -o /tmp/desknx-modal-stack-test

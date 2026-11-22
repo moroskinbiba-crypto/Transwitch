@@ -24,6 +24,10 @@ The first Visual Engine 2.0 stability slice is now implemented in this branch:
 - Scoped RAII guards now restore clip rects around wallpaper, workspace-background and
   tile-artwork copies, and restore the rounded-mask texture's previous color/alpha
   modulation rather than assuming white/opaque was its prior state.
+- `WindowComponents.hpp` now defines shared dialog, side-panel, context-menu and
+  repeated-row geometry contracts. Workspace Picker, Workspace Options and the App
+  Library details panel use the same layouts for drawing and touch hit testing; row
+  gaps are explicitly non-interactive.
 
 This closes the z-order mismatch described below. It does not yet prove the white-screen
 issue fixed; on-console reproduction and compositing regression tests remain open.
