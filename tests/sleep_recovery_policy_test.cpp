@@ -17,6 +17,12 @@ int main() {
            SleepRecoveryAction::ReapMenuHolder);
     assert(DecideSleepStartFailureRecovery(true, false, false, false, true) ==
            SleepRecoveryAction::LaunchMenu);
+    // A stale-but-owned holder must be reaped even if the pre-sleep snapshot
+    // did not classify the menu as open.
+    assert(DecideSleepStartFailureRecovery(false, false, true, false, true) ==
+           SleepRecoveryAction::ReapMenuHolder);
+    assert(DecideSleepStartFailureRecovery(false, true, true, true, true) ==
+           SleepRecoveryAction::KeepMenuActive);
 
     // Sleep API failure, no menu was open:
     assert(DecideSleepStartFailureRecovery(false, false, false, false, true) ==
@@ -33,6 +39,10 @@ int main() {
            SleepRecoveryAction::ReapMenuHolder);
     assert(DecideSleepWakeRecovery(true, false, false, false, true, true) ==
            SleepRecoveryAction::LaunchMenu);
+    assert(DecideSleepWakeRecovery(false, false, true, false, true, true) ==
+           SleepRecoveryAction::ReapMenuHolder);
+    assert(DecideSleepWakeRecovery(false, true, true, true, true, true) ==
+           SleepRecoveryAction::KeepMenuActive);
 
     // Without menu intent, restore the game only if it still owns a live holder.
     assert(DecideSleepWakeRecovery(false, false, false, false, true, true) ==
