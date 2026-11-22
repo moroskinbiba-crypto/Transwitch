@@ -9,7 +9,7 @@ The runtime path is split into four independently observable areas:
 - renderer presentation wait (including VSync);
 - active-workspace switch latency through the first presented frame.
 
-The Diagnostics panel shows the current five-second averages and maxima. The runtime log records the same values. Workspace changes also emit a `performance / workspace_switch` event with the selected workspace index and tile count.
+The Diagnostics panel shows the current five-second averages, P95 frame time and maxima. P95 is calculated from a bounded rolling sample of the most recent 128 frames in each metrics window; the runtime log records average/max input, rendering and presentation wait. Workspace changes also emit a `performance / workspace_switch` event with the selected workspace index and tile count.
 
 ## Horizon telemetry worker
 
@@ -21,7 +21,7 @@ The worker uses separate sample intervals:
 - quick-settings status: 3.5 seconds;
 - process memory: 5 seconds.
 
-Service initialization failures are retried with a bounded delay; unavailable readings remain explicitly unavailable rather than being presented as zero. The worker is stopped before Horizon service teardown.
+Service initialization failures are retried with a bounded delay; unavailable readings remain explicitly unavailable rather than being presented as zero. Failed TS/CLKRST sessions are closed and reopened on the next sample, and a fully failed PSM read pair causes a bounded service reinitialization attempt. The worker is stopped before Horizon service teardown.
 
 ## Artwork scheduling
 
