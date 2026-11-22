@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <deque>
+#include <unordered_set>
 #include <cstdint>
 
 class FontRenderer {
@@ -27,9 +29,17 @@ public:
         double textureUploadMs{0.0};
         double maximumRasterizationMs{0.0};
         double maximumTextureUploadMs{0.0};
+        std::uint32_t queuedRequests{0};
+        std::uint32_t cacheEvictions{0};
+        double textureDestroyMs{0.0};
+        std::size_t pendingRasterJobs{0};
     };
 
     FrameStats lastFrameStats() const noexcept { return lastFrameStats_; }
+    double lastCacheClearMs() const noexcept { return lastCacheClearMs_; }
+    std::uint32_t lastCacheClearTextures() const noexcept {
+        return lastCacheClearTextures_;
+    }
 
     bool initialize() {
         performanceFrequency_ = SDL_GetPerformanceFrequency();
@@ -97,10 +107,15 @@ public:
         return failed;
     }
 
+    // Text misses are queued by drawImpl and rasterized here on the next frame.
+    // This keeps TTF sizing/rasterization and SDL texture creation out of the
+    // tile/window traversal that is responsible for presenting the current UI.
     void beginFrame() {
         lastFrameStats_ = frameStats_;
         frameStats_ = FrameStats{};
         newTexturesRemaining_ = NewTextureBudget;
+        pumpRasterQueue();
+        frameStats_.pendingRasterJobs = rasterQueue_.size();
     }
 
     // Open one additional point size from RAM every three frames. Until that
@@ -173,6 +188,8 @@ public:
             SDL_WaitThread(fontLoadThread_, nullptr);
             fontLoadThread_ = nullptr;
         }
+        rasterQueue_.clear();
+        pendingRasterKeys_.clear();
         clearCache();
         fittedTextCache_.clear();
         closeFonts();
@@ -195,9 +212,23 @@ private:
         unsigned long long lastUse;
     };
 
+    struct RasterJob {
+        std::string key;
+        std::string text;
+        int scale{1};
+        int maxWidth{0};
+        SDL_Color color{255,255,255,255};
+        std::uint64_t fontGeneration{0};
+        bool customFace{false};
+    };
+
     static constexpr size_t CacheLimit = 384;
     static constexpr size_t FitCacheLimit = 512;
-    static constexpr int NewTextureBudget = 12;
+    static constexpr size::size_type MaxPendingRasterJobs = 192;
+    static constexpr size_t MaxTextBytes = 2048;
+    static constexpr int NewTextureBudget = 2;
+    static constexpr int MaxRasterJobsPerFrame = 2;
+    static constexpr double RasterFrameBudgetMs = 2.5;
     static int fontPixelSize(int index) {
         // Small labels are noticeably clearer at 10 px; larger scale steps
         // retain a consistent, predictable hierarchy for cards and headings.
@@ -212,6 +243,8 @@ private:
     std::vector<Uint8> customFontData_;
     std::unordered_map<std::string, CacheEntry> cache_;
     std::unordered_map<std::string, std::string> fittedTextCache_;
+    std::deque<RasterJob> rasterQueue_;
+    std::unordered_set<std::string> pendingRasterKeys_;
     unsigned long long clock_{0};
     uint64_t fontGeneration_{1};
     int customWarmupIndex_{8};
@@ -230,6 +263,8 @@ private:
     std::vector<Uint8> fontLoadData_;
     bool fontLoadSuccess_{false};
     bool fontLoadFailed_{false};
+    double lastCacheClearMs_{0.0};
+    std::uint32_t lastCacheClearTextures_{0};
 
     static int SDLCALL fontLoadWorker(void* context) {
         auto* self = static_cast<FontRenderer*>(context);
@@ -325,72 +360,33 @@ private:
         ++frameStats_.drawCalls;
         const int maxWidth = std::max(0, right - left);
         if (maxWidth == 0) return true;
+        if (value.size() > MaxTextBytes) return false;
+
         const int fontIndex = std::max(0, std::min(7, scale - 1));
+        const bool customReady = customFontPath_.size() > 0 &&
+            customFonts_[fontIndex] != nullptr;
         const Uint64 prepareStarted = SDL_GetPerformanceCounter();
-        TTF_Font* font = fontForScale(scale);
-        if (!font) {
-            frameStats_.textPreparationMs +=
-                elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
-            return false;
-        }
-        const std::string* fitted = &fitToWidth(value, font, scale, maxWidth);
-        if (fitted->empty()) {
-            frameStats_.textPreparationMs +=
-                elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
-            return true;
+        std::string key = makeKey(value, scale, color, maxWidth, customReady);
+        CacheEntry* entry = find(key);
+
+        // A cached system-face label remains a valid temporary fallback while
+        // a newly selected custom face is warming up or its texture is queued.
+        if (!entry && customReady) {
+            const std::string systemKey =
+                makeKey(value, scale, color, maxWidth, false);
+            entry = find(systemKey);
         }
 
-        std::string key = makeKey(*fitted, scale, color, font);
-        CacheEntry* entry = find(key);
-        if (!entry && newTexturesRemaining_ <= 0 &&
-            isCustomFace(font) && fonts_[fontIndex]) {
-            // During the post-change warm-up, reuse the already cached system
-            // face for strings whose new-font texture has not been rebuilt.
-            // This avoids falling through to bitmap placeholders.
-            font = fonts_[fontIndex];
-            fitted = &fitToWidth(value, font, scale, maxWidth);
-            key = makeKey(*fitted, scale, color, font);
-            entry = find(key);
-        }
         frameStats_.textPreparationMs +=
             elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
-        if (entry) {
-            ++frameStats_.cacheHits;
-        } else {
+        if (!entry) {
             ++frameStats_.cacheMisses;
-            if (newTexturesRemaining_ <= 0) {
+            if (!enqueueRaster(key, value, scale, maxWidth, color, customReady))
                 ++frameStats_.deferredByBudget;
-                return false;
-            }
-            const Uint64 rasterStarted = SDL_GetPerformanceCounter();
-            SDL_Surface* surface = TTF_RenderUTF8_Blended(font, fitted->c_str(), color);
-            const double rasterMs =
-                elapsedMs(rasterStarted, SDL_GetPerformanceCounter());
-            frameStats_.rasterizationMs += rasterMs;
-            frameStats_.maximumRasterizationMs =
-                std::max(frameStats_.maximumRasterizationMs, rasterMs);
-            if (!surface) {
-                ++frameStats_.rasterFailures;
-                return false;
-            }
-            const int width = surface->w, height = surface->h;
-            const Uint64 uploadStarted = SDL_GetPerformanceCounter();
-            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
-            SDL_FreeSurface(surface);
-            const double uploadMs =
-                elapsedMs(uploadStarted, SDL_GetPerformanceCounter());
-            frameStats_.textureUploadMs += uploadMs;
-            frameStats_.maximumTextureUploadMs =
-                std::max(frameStats_.maximumTextureUploadMs, uploadMs);
-            if (!texture) {
-                ++frameStats_.uploadFailures;
-                return false;
-            }
-            SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
-            entry = insert(key, texture, width, height);
-            ++frameStats_.texturesCreated;
-            --newTexturesRemaining_;
+            return false;
         }
+
+        ++frameStats_.cacheHits;
         entry->lastUse = ++clock_;
         const int drawWidth = std::min(entry->width, maxWidth);
         const int destinationX = centered
@@ -400,6 +396,109 @@ private:
         SDL_Rect destination{destinationX, y, drawWidth, entry->height};
         SDL_RenderCopy(renderer_, entry->texture, &source, &destination);
         return true;
+    }
+
+    bool enqueueRaster(const std::string& key, const std::string& value,
+                       int scale, int maxWidth, SDL_Color color,
+                       bool customFace) {
+        if (pendingRasterKeys_.find(key) != pendingRasterKeys_.end()) return true;
+        if (rasterQueue_.size() >= MaxPendingRasterJobs) return false;
+        RasterJob job;
+        job.key = key;
+        job.text = value;
+        job.scale = scale;
+        job.maxWidth = maxWidth;
+        job.color = color;
+        job.fontGeneration = fontGeneration_;
+        job.customFace = customFace;
+        rasterQueue_.push_back(std::move(job));
+        pendingRasterKeys_.insert(key);
+        ++frameStats_.queuedRequests;
+        return true;
+    }
+
+    void pumpRasterQueue() {
+        if (!renderer_ || !ttfReady_ || rasterQueue_.empty()) return;
+        const Uint64 started = SDL_GetPerformanceCounter();
+        int processed = 0;
+        bool openedFontThisFrame = false;
+
+        while (!rasterQueue_.empty() && processed < MaxRasterJobsPerFrame &&
+               newTexturesRemaining_ > 0) {
+            if (processed > 0 && elapsedMs(started, SDL_GetPerformanceCounter()) >=
+                                     RasterFrameBudgetMs)
+                break;
+
+            RasterJob job = std::move(rasterQueue_.front());
+            rasterQueue_.pop_front();
+            if (job.fontGeneration != fontGeneration_) {
+                pendingRasterKeys_.erase(job.key);
+                continue;
+            }
+
+            const int fontIndex = std::max(0, std::min(7, job.scale - 1));
+            TTF_Font* font = job.customFace
+                ? customFonts_[fontIndex] : fonts_[fontIndex];
+            if (!font && !openedFontThisFrame) {
+                // Font opening is also kept out of drawImpl. At most one new
+                // system face is opened in a frame; unavailable faces are
+                // deferred until the font warm-up/loader makes them available.
+                font = fontForScale(job.scale);
+                openedFontThisFrame = font != nullptr;
+                if (job.customFace && font == fonts_[fontIndex]) font = nullptr;
+            }
+            if (!font) {
+                rasterQueue_.push_front(std::move(job));
+                break;
+            }
+
+            const std::string* fitted =
+                &fitToWidth(job.text, font, job.scale, job.maxWidth);
+            if (fitted->empty()) {
+                pendingRasterKeys_.erase(job.key);
+                ++processed;
+                continue;
+            }
+
+            const Uint64 rasterStarted = SDL_GetPerformanceCounter();
+            SDL_Surface* surface =
+                TTF_RenderUTF8_Blended(font, fitted->c_str(), job.color);
+            const double rasterMs =
+                elapsedMs(rasterStarted, SDL_GetPerformanceCounter());
+            frameStats_.rasterizationMs += rasterMs;
+            frameStats_.maximumRasterizationMs =
+                std::max(frameStats_.maximumRasterizationMs, rasterMs);
+            if (!surface) {
+                ++frameStats_.rasterFailures;
+                pendingRasterKeys_.erase(job.key);
+                ++processed;
+                continue;
+            }
+
+            const int width = surface->w;
+            const int height = surface->h;
+            const Uint64 uploadStarted = SDL_GetPerformanceCounter();
+            SDL_Texture* texture =
+                SDL_CreateTextureFromSurface(renderer_, surface);
+            SDL_FreeSurface(surface);
+            const double uploadMs =
+                elapsedMs(uploadStarted, SDL_GetPerformanceCounter());
+            frameStats_.textureUploadMs += uploadMs;
+            frameStats_.maximumTextureUploadMs =
+                std::max(frameStats_.maximumTextureUploadMs, uploadMs);
+            pendingRasterKeys_.erase(job.key);
+            if (!texture) {
+                ++frameStats_.uploadFailures;
+                ++processed;
+                continue;
+            }
+
+            SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+            (void)insert(job.key, texture, width, height);
+            ++frameStats_.texturesCreated;
+            --newTexturesRemaining_;
+            ++processed;
+        }
     }
 
     static size_t previousCodePointStart(const std::string& value, size_t end) {
@@ -465,14 +564,13 @@ private:
     }
 
     std::string makeKey(const std::string& text, int scale, SDL_Color c,
-                        const TTF_Font* font) const {
-        // Shared/system faces remain alive across custom-font changes. Their
-        // existing cached textures can be used while new custom glyphs warm.
-        const std::string identity = isCustomFace(font)
-            ? std::to_string(fontGeneration_) : std::string("system");
-        return identity + ":" +
-               std::to_string(reinterpret_cast<std::uintptr_t>(font)) + ":" +
-               std::to_string(scale) + ":" + std::to_string(c.r) + ":" +
+                        int maxWidth, bool customFace) const {
+        // Key from the draw request rather than the measured/truncated output:
+        // cache lookup therefore requires no TTF_SizeUTF8 call on the UI path.
+        const std::string identity = customFace
+            ? "custom:" + std::to_string(fontGeneration_) : "system";
+        return identity + ":" + std::to_string(scale) + ":" +
+               std::to_string(maxWidth) + ":" + std::to_string(c.r) + ":" +
                std::to_string(c.g) + ":" + std::to_string(c.b) + ":" +
                std::to_string(c.a) + ":" + text;
     }
@@ -488,17 +586,30 @@ private:
             for (auto it = cache_.begin(); it != cache_.end(); ++it) {
                 if (it->second.lastUse < oldest->second.lastUse) oldest = it;
             }
-            if (oldest->second.texture) SDL_DestroyTexture(oldest->second.texture);
+            if (oldest->second.texture) {
+                const Uint64 destroyStarted = SDL_GetPerformanceCounter();
+                SDL_DestroyTexture(oldest->second.texture);
+                frameStats_.textureDestroyMs +=
+                    elapsedMs(destroyStarted, SDL_GetPerformanceCounter());
+            }
             cache_.erase(oldest);
+            ++frameStats_.cacheEvictions;
         }
         CacheEntry entry{texture, width, height, ++clock_};
         return &cache_.emplace(key, entry).first->second;
     }
 
     void clearCache() {
+        const Uint64 started = SDL_GetPerformanceCounter();
+        std::uint32_t destroyed = 0;
         for (auto& pair : cache_) {
-            if (pair.second.texture) SDL_DestroyTexture(pair.second.texture);
+            if (pair.second.texture) {
+                SDL_DestroyTexture(pair.second.texture);
+                ++destroyed;
+            }
         }
         cache_.clear();
+        lastCacheClearTextures_ = destroyed;
+        lastCacheClearMs_ = elapsedMs(started, SDL_GetPerformanceCounter());
     }
 };
