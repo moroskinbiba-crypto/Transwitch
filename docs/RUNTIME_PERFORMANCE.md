@@ -63,8 +63,12 @@ beginFrame() pumps at most two requests, with a 2.5 ms soft time budget after
 the first request and a hard limit of two texture creations. Font-face opening
 for a missing system size is also performed by this pump, not by drawImpl().
 The existing custom-font file reader stays asynchronous, and font-generation
-changes invalidate queued work from the previous face. A cached system-face
-label can remain visible while the matching custom-face texture is prepared.
+changes invalidate queued work from the previous face. Requests not referenced
+by the most recent rendered frame are pruned, so switching desktops does not
+spend many frames rasterizing labels that are no longer visible. A cached
+system-face label can remain visible while the matching custom-face texture is
+prepared. Old custom-font textures are retired at a bounded rate (six per
+frame); cache clear and destruction time are included in diagnostics.
 
 TTF rasterization deliberately remains on the renderer/UI thread: moving SDL_ttf
 calls to a second thread without a separately owned and validated font runtime
