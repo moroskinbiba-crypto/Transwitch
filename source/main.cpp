@@ -602,14 +602,22 @@ void toggleQuickSetting(int index) {
 
 bool commitSdCard(const char* operation) {
     if(!sdMounted || !gStorageControlPlane.mounted())return false;
+    // Without the platform mutex, the control plane cannot safely coordinate
+    // commit leases across SDL workers. Fail closed rather than race fsdev.
+    if(!storageCommitMutex) {
+        desknx::diag::Write("storage","commit_rejected",
+            "operation=%s reason=commit_mutex_unavailable",
+            operation?operation:"unknown");
+        return false;
+    }
     const Uint64 frequency=SDL_GetPerformanceFrequency();
     const Uint64 lockStarted=SDL_GetPerformanceCounter();
-    if(storageCommitMutex)SDL_LockMutex(storageCommitMutex);
+    SDL_LockMutex(storageCommitMutex);
     const Uint64 lockAcquired=SDL_GetPerformanceCounter();
 
     const auto begin=gStorageControlPlane.beginCommit(SDL_GetTicks());
     if(begin.status!=desknx::storage::CommitBeginStatus::Acquired) {
-        if(storageCommitMutex)SDL_UnlockMutex(storageCommitMutex);
+        SDL_UnlockMutex(storageCommitMutex);
         const char* reason=begin.status==desknx::storage::CommitBeginStatus::Unavailable
             ?"unavailable":begin.status==desknx::storage::CommitBeginStatus::Busy
             ?"busy":"backoff";
@@ -626,7 +634,7 @@ bool commitSdCard(const char* operation) {
     const Uint64 commitFinished=SDL_GetPerformanceCounter();
     const auto finished=gStorageControlPlane.finishCommit(
         begin.lease,R_SUCCEEDED(rc),SDL_GetTicks());
-    if(storageCommitMutex)SDL_UnlockMutex(storageCommitMutex);
+    SDL_UnlockMutex(storageCommitMutex);
 
     const double lockWaitMs=frequency>0?static_cast<double>(lockAcquired-lockStarted)*1000.0/static_cast<double>(frequency):0.0;
     const double commitMs=frequency>0?static_cast<double>(commitFinished-lockAcquired)*1000.0/static_cast<double>(frequency):0.0;
