@@ -108,6 +108,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_layout_test.cpp -o /tmp/desknx-widget-layout-test
           /tmp/desknx-widget-layout-test
 
+      - name: Test visual policy separation for SOCOMA and 0.1
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/theme_visual_policy_test.cpp -o /tmp/desknx-theme-policy-test
+          /tmp/desknx-theme-policy-test
+
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test
