@@ -26,6 +26,7 @@
 #include "../include/desknx/WindowComponents.hpp"
 #include "../include/desknx/ControlComponents.hpp"
 #include "../include/desknx/RendererStatePolicy.hpp"
+#include "../include/desknx/RendererStateRecovery.hpp"
 #include "../include/desknx/Typography.hpp"
 #include "../include/desknx/MotionController.hpp"
 
@@ -183,21 +184,18 @@ void diagnoseRendererState(const char* phase) {
 
 void restoreFrameRendererBaseline(const char* phase) {
     if(!renderer)return;
-    SDL_Texture* activeTarget=SDL_GetRenderTarget(renderer);
-    if(activeTarget) {
-        const int rc=SDL_SetRenderTarget(renderer,nullptr);
-        if(rc!=0) {
-            desknx::diag::Write("render","render_target_restore_failed",
-                "phase=%s rc=%d",phase?phase:"unknown",rc);
-        }
+    const auto recovery=desknx::ui::RestoreRendererFrameBaseline(renderer);
+    if(recovery.hadActiveTarget&&recovery.renderTargetResult!=0) {
+        desknx::diag::Write("render","render_target_restore_failed",
+            "phase=%s rc=%d",phase?phase:"unknown",recovery.renderTargetResult);
     }
-    if(SDL_RenderSetClipRect(renderer,nullptr)!=0) {
+    if(recovery.clipResult!=0) {
         desknx::diag::Write("render","clip_restore_failed",
-            "phase=%s",phase?phase:"unknown");
+            "phase=%s rc=%d",phase?phase:"unknown",recovery.clipResult);
     }
-    if(SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND)!=0) {
+    if(recovery.blendResult!=0) {
         desknx::diag::Write("render","draw_blend_restore_failed",
-            "phase=%s",phase?phase:"unknown");
+            "phase=%s rc=%d",phase?phase:"unknown",recovery.blendResult);
     }
 }
 

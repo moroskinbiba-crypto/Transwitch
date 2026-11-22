@@ -86,8 +86,11 @@ Successful compilation alone does not close a runtime acceptance item.
       blend and off-screen render-target invariant violations at frame boundaries.
 - [x] Restore the default screen render target before composition/Present when a stray
       off-screen target is detected; verify the policy with host tests.
-- [ ] Add regression checks for full-frame recovery after every modal/window path.
-- [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
+- [x] Add an SDL software-renderer regression test that repeatedly injects clip,
+      blend-mode and off-screen-target leaks, restores the frame baseline, and verifies
+      pixels outside the leaked clip are painted on the next full frame.
+- [ ] Add on-device visual regression captures for every modal/window path and reproduce
+      the known white-screen/window compositing issue before declaring it fixed.
 - [x] Add shared Button variants/states and selectable-row visual contracts; migrate
       workspace picker actions, workspace menu rows and confirmation actions.
 - [x] Add badge, toggle, value-field, card and status-indicator primitives; migrate

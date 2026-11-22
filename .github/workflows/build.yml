@@ -39,10 +39,10 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
-      - name: Install host zlib headers for NACP normalization test
+      - name: Install host dependencies for native integration tests
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev
+          apt-get install -y --no-install-recommends zlib1g-dev libsdl2-dev
 
       - name: Test compressed NACP title normalization
         run: |
@@ -110,6 +110,11 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_state_policy_test.cpp -o /tmp/desknx-renderer-state-test
           /tmp/desknx-renderer-state-test
+
+      - name: Test SDL renderer frame-baseline recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_frame_recovery_test.cpp -lSDL2 -o /tmp/desknx-renderer-recovery-test
+          /tmp/desknx-renderer-recovery-test
 
       - name: Test per-frame text texture creation budget
         run: |
