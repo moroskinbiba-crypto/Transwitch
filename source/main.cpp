@@ -5035,23 +5035,7 @@ void drawScreen() {
                     const Candidate& candidate=available[static_cast<size_t>(i)];
                     const int x=cardX+column*cardStepX,y=cardY+row*cardStepY;
                     const bool selectedCard=i==listIndex;
-                    softCard(x,y,cardW,cardH,
-                        selectedCard?Color{36,60,91,255}:Color{20,29,43,255},
-                        selectedCard?Color{106,175,255,190}:Color{255,255,255,20});
                     Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                    drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66,selectedCard);
-                    if(candidate.kind==Kind::Game) {
-                        const bool favorite=isFavoriteTitleId(candidate.data);
-                        roundRect(x+cardW-36,y+8,28,28,8,
-                            favorite?Color{52,42,27,242}:Color{14,22,34,218});
-                        drawSystemIcon(favorite?desknx::ui::IconId::StarFilled:
-                            desknx::ui::IconId::StarOutline,
-                            x+cardW-30,y+14,16,
-                            favorite?Color{255,207,112,255}:Color{183,197,215,230});
-                    }
-                    if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,focusAccent());
-                    textCentered(candidate.title,x+cardW/2,y+79,2,
-                        selectedCard?WHITE:Color{201,211,225,255},x+8,x+cardW-8);
                     std::string appBadge=typeName(candidate.kind);
                     Color badgeColor=selectedCard?BLUE:MUTED;
                     if(candidate.kind==Kind::Game) {
@@ -5079,7 +5063,80 @@ void drawScreen() {
                                 break;
                         }
                     }
-                    textCentered(appBadge,x+cardW/2,y+101,1,badgeColor,x+8,x+cardW-8);
+                    const bool artworkCandidate=candidate.kind==Kind::Game||
+                        candidate.kind==Kind::Nro;
+                    if(artworkCandidate) {
+                        const Color accent=COLORS[static_cast<size_t>(candidate.color)%
+                            COLORS.size()];
+                        const Color cardFill=selectedCard
+                            ?Color{36,60,91,255}:Color{20,29,43,255};
+                        const Color cardEdge=selectedCard
+                            ?Color{106,175,255,190}:Color{255,255,255,20};
+                        const SDL_Rect cardBounds{x,y,cardW,cardH};
+                        (void)gTileRenderer.artworkFrame(cardBounds,
+                            SDL_Color{cardFill.r,cardFill.g,cardFill.b,cardFill.a},
+                            SDL_Color{cardEdge.r,cardEdge.g,cardEdge.b,cardEdge.a},
+                            SDL_Color{accent.r,accent.g,accent.b,accent.a},
+                            selectedCard,surfaceOpacity,UiCornerRadius);
+                        const SDL_Rect viewport{x+1,y+1,cardW-2,cardH-2};
+                        SDL_Texture* cover=gIconCache.get(iconTile,selectedCard);
+                        const Color fallback=COLORS[static_cast<size_t>(candidate.color)%
+                            COLORS.size()];
+                        const bool coverDrawn=cover&&gTileRenderer.artworkImage(
+                            cover,viewport,desknx::artwork::FitMode::Cover,
+                            SDL_Color{fallback.r,fallback.g,fallback.b,fallback.a},
+                            UiCornerRadius);
+                        if(!coverDrawn)
+                            drawTileIcon(iconTile,x+(cardW-58)/2,y+12,58,selectedCard);
+
+                        const auto labelMetrics=desknx::ui::TileRenderer::labelLayout(
+                            viewport.w,viewport.h,true,UiCornerRadius);
+                        const auto& titleLines=cachedTileTitleLines(candidate.title,
+                            static_cast<size_t>(labelMetrics.maxCharacters));
+                        (void)gTileRenderer.labelScrim(viewport,true,224,UiCornerRadius);
+                        textCentered(titleLines[0],x+cardW/2,
+                            y+cardH-labelMetrics.stripHeight+
+                                labelMetrics.firstLineOffset,
+                            2,WHITE,x+10,x+cardW-10);
+                        if(titleLines.size()>1)
+                            textCentered(titleLines[1],x+cardW/2,
+                                y+cardH-labelMetrics.stripHeight+
+                                    labelMetrics.secondLineOffset,
+                                2,WHITE,x+10,x+cardW-10);
+
+                        const int statusWidth=std::max(54,std::min(
+                            144,18+static_cast<int>(appBadge.size())*6));
+                        (void)gTileRenderer.badgeSurface(
+                            SDL_Rect{x+8,y+8,statusWidth,22},
+                            SDL_Color{12,20,31,224},
+                            SDL_Color{255,255,255,28},8);
+                        text(appBadge,x+15,y+15,1,badgeColor,x+statusWidth+1);
+
+                        if(candidate.kind==Kind::Game) {
+                            const bool favorite=isFavoriteTitleId(candidate.data);
+                            (void)gTileRenderer.badgeSurface(
+                                SDL_Rect{x+cardW-36,y+8,28,28},
+                                favorite?SDL_Color{52,42,27,242}:
+                                         SDL_Color{14,22,34,218},
+                                SDL_Color{255,255,255,24},8);
+                            drawSystemIcon(favorite?desknx::ui::IconId::StarFilled:
+                                desknx::ui::IconId::StarOutline,
+                                x+cardW-30,y+14,16,
+                                favorite?Color{255,207,112,255}:Color{183,197,215,230});
+                        }
+                        (void)gTileRenderer.maskRoundedCorners(viewport,UiCornerRadius,
+                            SDL_Color{cardFill.r,cardFill.g,cardFill.b,cardFill.a});
+                        if(selectedCard)drawSelectionFrame(x,y,cardW,cardH,focusAccent());
+                    } else {
+                        softCard(x,y,cardW,cardH,
+                            selectedCard?Color{36,60,91,255}:Color{20,29,43,255},
+                            selectedCard?Color{106,175,255,190}:Color{255,255,255,20});
+                        drawTileIcon(iconTile,x+(cardW-66)/2,y+7,66,selectedCard);
+                        if(selectedCard)outline(x+1,y+1,cardW-2,cardH-2,focusAccent());
+                        textCentered(candidate.title,x+cardW/2,y+79,2,
+                            selectedCard?WHITE:Color{201,211,225,255},x+8,x+cardW-8);
+                        textCentered(appBadge,x+cardW/2,y+101,1,badgeColor,x+8,x+cardW-8);
+                    }
                 }
             }
         }
