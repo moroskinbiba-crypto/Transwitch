@@ -19,6 +19,8 @@
 #include "../include/desknx/Layout.hpp"
 #include "../include/desknx/ProductionPersistence.hpp"
 #include "../include/desknx/WorkspaceStorage.hpp"
+#include "../include/desknx/StorageControlPlane.hpp"
+#include "../include/desknx/StorageMigrations.hpp"
 #include "../include/desknx/SettingsFile.hpp"
 #include "../include/desknx/LaunchHistory.hpp"
 #include "catalog.hpp"
@@ -176,6 +178,7 @@ std::vector<Candidate> catalogue;
 SDL_mutex* catalogueMutex = nullptr;
 SDL_mutex* ipcMutex = nullptr;
 SDL_mutex* storageCommitMutex = nullptr;
+desknx::storage::ControlPlane gStorageControlPlane;
 SDL_Thread* catalogueThread = nullptr;
 SDL_Thread* nextendoThread = nullptr;
 SDL_mutex* nextendoMutex = nullptr;
@@ -598,27 +601,68 @@ void toggleQuickSetting(int index) {
 }
 
 bool commitSdCard(const char* operation) {
-    if(!sdMounted)return false;
+    if(!sdMounted || !gStorageControlPlane.mounted())return false;
+    // Without the platform mutex, the control plane cannot safely coordinate
+    // commit leases across SDL workers. Fail closed rather than race fsdev.
+    if(!storageCommitMutex) {
+        desknx::diag::Write("storage","commit_rejected",
+            "operation=%s reason=commit_mutex_unavailable",
+            operation?operation:"unknown");
+        return false;
+    }
     const Uint64 frequency=SDL_GetPerformanceFrequency();
     const Uint64 lockStarted=SDL_GetPerformanceCounter();
-    if(storageCommitMutex)SDL_LockMutex(storageCommitMutex);
+    SDL_LockMutex(storageCommitMutex);
     const Uint64 lockAcquired=SDL_GetPerformanceCounter();
+
+    const auto begin=gStorageControlPlane.beginCommit(SDL_GetTicks());
+    if(begin.status!=desknx::storage::CommitBeginStatus::Acquired) {
+        SDL_UnlockMutex(storageCommitMutex);
+        const char* reason=begin.status==desknx::storage::CommitBeginStatus::Unavailable
+            ?"unavailable":begin.status==desknx::storage::CommitBeginStatus::Busy
+            ?"busy":"backoff";
+        desknx::diag::Write("storage","commit_deferred",
+            "operation=%s reason=%s failures=%u retry_at=%u generation=%llu",
+            operation?operation:"unknown",reason,
+            gStorageControlPlane.consecutiveFailures(),
+            gStorageControlPlane.retryAt(),
+            static_cast<unsigned long long>(gStorageControlPlane.mountGeneration()));
+        return false;
+    }
+
     const Result rc=fsdevCommitDevice("sdmc");
     const Uint64 commitFinished=SDL_GetPerformanceCounter();
-    if(storageCommitMutex)SDL_UnlockMutex(storageCommitMutex);
+    const auto finished=gStorageControlPlane.finishCommit(
+        begin.lease,R_SUCCEEDED(rc),SDL_GetTicks());
+    SDL_UnlockMutex(storageCommitMutex);
+
     const double lockWaitMs=frequency>0?static_cast<double>(lockAcquired-lockStarted)*1000.0/static_cast<double>(frequency):0.0;
     const double commitMs=frequency>0?static_cast<double>(commitFinished-lockAcquired)*1000.0/static_cast<double>(frequency):0.0;
     if(lockWaitMs>=0.5||commitMs>=3.0)
         desknx::diag::Write("storage","commit_timing","operation=%s mutex_wait_ms=%.3f commit_ms=%.3f",
             operation?operation:"unknown",lockWaitMs,commitMs);
-    if (R_FAILED(rc)) {
-        desknx::diag::Write("storage", "commit_failed",
-            "operation=%s rc=0x%08X", operation ? operation : "unknown",
-            static_cast<unsigned int>(rc));
+
+    if(finished!=desknx::storage::CommitFinishStatus::Accepted) {
+        desknx::diag::Write("storage","commit_lease_stale",
+            "operation=%s generation=%llu finish=%u",
+            operation?operation:"unknown",
+            static_cast<unsigned long long>(begin.lease.mountGeneration),
+            static_cast<unsigned int>(finished));
         return false;
     }
-    desknx::diag::Write("storage", "commit_ok", "operation=%s",
-                        operation ? operation : "unknown");
+    if(R_FAILED(rc)) {
+        desknx::diag::Write("storage","commit_failed",
+            "operation=%s rc=0x%08X failures=%u retry_delay_ms=%u retry_at=%u",
+            operation?operation:"unknown",static_cast<unsigned int>(rc),
+            gStorageControlPlane.consecutiveFailures(),
+            desknx::storage::ControlPlane::retryDelayMs(
+                gStorageControlPlane.consecutiveFailures()),
+            gStorageControlPlane.retryAt());
+        return false;
+    }
+    desknx::diag::Write("storage","commit_ok",
+        "operation=%s generation=%llu",operation?operation:"unknown",
+        static_cast<unsigned long long>(gStorageControlPlane.mountGeneration()));
     return true;
 }
 
@@ -993,6 +1037,9 @@ bool validateLauncherSettingsSnapshot(const std::string& contents,void*) {
     return desknx::settings_file::parse(contents,entries);
 }
 
+LauncherSettingsSaveStatus writeLauncherSettingsSnapshot(
+    const std::string& contents);
+
 void loadLauncherSettings() {
     gMotionController.setMode(desknx::ui::MotionMode::Reduced);
     if(!sdMounted){motionEffects=false;applyThemePalette();return;}
@@ -1012,6 +1059,18 @@ void loadLauncherSettings() {
         applyThemePalette();
         return;
     }
+    const auto settingsSchema=desknx::migration::inspect(
+        serialized,desknx::migration::SettingsSchema);
+    std::string settingsMigrationPreview;
+    const auto settingsMigrationPlan=desknx::migration::run(
+        serialized,desknx::migration::SettingsSchema,
+        desknx::migration::SettingsSteps,desknx::migration::SettingsStepCount,
+        true,settingsMigrationPreview,validateLauncherSettingsSnapshot);
+    desknx::diag::Write("migration","schema_inspected",
+        "domain=settings source_version=%u target_version=%u status=%u plan=%u",
+        settingsSchema.sourceVersion,settingsSchema.targetVersion,
+        static_cast<unsigned int>(settingsSchema.status),
+        static_cast<unsigned int>(settingsMigrationPlan.status));
     if(source==desknx::persist::FileSource::Backup) {
         desknx::diag::Write("settings","backup_restored","path=%s",SETTINGS_BAK);
         setStatus("APPEARANCE SETTINGS RESTORED FROM BACKUP",4000);
@@ -1103,6 +1162,32 @@ void loadLauncherSettings() {
     else
         motionEffects=gMotionController.mode()!=desknx::ui::MotionMode::Reduced;
     applyThemePalette();
+
+    // Do not rewrite a recovered backup in place: it may be the only known-good
+    // copy while the primary is corrupt. A primary v1 file can be migrated
+    // through the atomic writer, which keeps its exact original bytes in .bak.
+    if(source==desknx::persist::FileSource::Primary &&
+       settingsMigrationPlan.status==desknx::migration::RunStatus::DryRunReady) {
+        std::string migratedSettings;
+        const auto migrationResult=desknx::migration::run(
+            serialized,desknx::migration::SettingsSchema,
+            desknx::migration::SettingsSteps,desknx::migration::SettingsStepCount,
+            false,migratedSettings,validateLauncherSettingsSnapshot);
+        if(migrationResult.status==desknx::migration::RunStatus::AppliedInMemory) {
+            const auto saveStatus=writeLauncherSettingsSnapshot(migratedSettings);
+            desknx::diag::Write("migration","settings_migration_publish",
+                "status=%u source_version=%u target_version=%u backup_preserved=1",
+                static_cast<unsigned int>(saveStatus),
+                migrationResult.sourceVersion,migrationResult.targetVersion);
+            if(saveStatus==LauncherSettingsSaveStatus::Success)
+                setStatus("SETTINGS FORMAT UPDATED",2500);
+        } else {
+            desknx::diag::Write("migration","settings_migration_rejected",
+                "status=%u source_version=%u",
+                static_cast<unsigned int>(migrationResult.status),
+                migrationResult.sourceVersion);
+        }
+    }
 }
 
 std::string serializeLauncherSettingsSnapshot() {
@@ -2845,6 +2930,12 @@ void loadHistory() {
             HISTORY_FILE,HISTORY_BAK_FILE);
         return;
     }
+    const auto historySchema=desknx::migration::inspect(
+        serialized,desknx::migration::LaunchHistorySchema);
+    desknx::diag::Write("migration","schema_inspected",
+        "domain=launch_history source_version=%u target_version=%u status=%u",
+        historySchema.sourceVersion,historySchema.targetVersion,
+        static_cast<unsigned int>(historySchema.status));
     recentLaunches=std::move(loaded);
     if(source==desknx::persist::FileSource::Backup) {
         desknx::diag::Write("history","backup_restored","path=%s entries=%zu",
@@ -3683,10 +3774,39 @@ void drainAsyncLayoutSaver() {
 bool loadLayoutFrom(const char* path) {
     const Uint64 started=SDL_GetTicks64();
     desknx::layout::LoadResult loaded{};
-    if(!desknx::workspace_storage::readLayoutFile(path,loaded)) {
+    std::string rawLayout;
+    if(!desknx::workspace_storage::readLayoutFile(path,loaded,&rawLayout)) {
         desknx::diag::Write("layout","load_failed","path=%s reason=stat_read_or_parse",
             path?path:"null");
         return false;
+    }
+    const auto layoutSchema=desknx::migration::inspect(
+        rawLayout,desknx::migration::WorkspaceSchema);
+    std::string layoutMigrationPreview;
+    const auto layoutMigrationPlan=desknx::migration::run(
+        rawLayout,desknx::migration::WorkspaceSchema,
+        desknx::migration::WorkspaceSteps,desknx::migration::WorkspaceStepCount,
+        false,layoutMigrationPreview,desknx::migration::validateWorkspaceV4);
+    desknx::diag::Write("migration","schema_inspected",
+        "domain=workspace source_version=%u target_version=%u status=%u plan=%u",
+        layoutSchema.sourceVersion,layoutSchema.targetVersion,
+        static_cast<unsigned int>(layoutSchema.status),
+        static_cast<unsigned int>(layoutMigrationPlan.status));
+    if(layoutSchema.status==desknx::migration::InspectionStatus::NeedsMigration) {
+        const std::string canonical=desknx::layout::serialize(
+            loaded.workspaces,loaded.activeWorkspace);
+        if(layoutMigrationPlan.status!=desknx::migration::RunStatus::AppliedInMemory ||
+           canonical.empty() || canonical!=layoutMigrationPreview) {
+            layoutSaveBlocked=true;
+            desknx::diag::Write("migration","workspace_migration_blocked",
+                "source_version=%u reason=canonical_output_mismatch",
+                layoutSchema.sourceVersion);
+        } else {
+            desknx::diag::Write("migration","workspace_migration_validated",
+                "source_version=%u target_version=%u bytes=%zu",
+                layoutSchema.sourceVersion,layoutSchema.targetVersion,
+                layoutMigrationPreview.size());
+        }
     }
     struct stat layoutStat{};
     const size_t bytes=(path&&stat(path,&layoutStat)==0&&layoutStat.st_size>0)
@@ -8566,6 +8686,7 @@ int main(int,char**) {
             // the normal mount once; never mount over an existing device.
             const int unmountRc = fsdevUnmountDevice("sdmc");
             if (unmountRc == 0) {
+                gStorageControlPlane.setMounted(false);
                 sdMountRc = fsdevMountSdmc();
                 if (R_SUCCEEDED(sdMountRc)) sdMounted = probeSdRoot();
             }
@@ -8579,6 +8700,7 @@ int main(int,char**) {
             sdMounted = probeSdRoot();
     }
 
+    gStorageControlPlane.setMounted(sdMounted);
     desknx::diag::Initialize(sdMounted);
 #ifdef DESKNX_SYSTEM_APPLET
     constexpr const char* buildMode = "system-applet";
@@ -8640,6 +8762,8 @@ int main(int,char**) {
         visualProfile.maxTextureWidth,visualProfile.maxTextureHeight);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
     storageCommitMutex=SDL_CreateMutex();
+    desknx::diag::Write("storage","commit_mutex_ready",
+        "available=%d",storageCommitMutex?1:0);
     playStatsMutex=SDL_CreateMutex();
     nextendoMutex=SDL_CreateMutex();
     storageStatsMutex=SDL_CreateMutex();

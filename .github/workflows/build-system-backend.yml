@@ -162,6 +162,25 @@ jobs:
             -o /tmp/desknx-workspace-storage-test
           /tmp/desknx-workspace-storage-test
 
+      - name: Test SD mount generations commit arbitration and retry backoff
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_control_plane_test.cpp -o /tmp/desknx-storage-control-test
+          /tmp/desknx-storage-control-test
+
+      - name: Test versioned storage migration dry-run and validation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_migration_test.cpp -o /tmp/desknx-storage-migration-test
+          /tmp/desknx-storage-migration-test
+
+      - name: Test production workspace and settings migration adapters
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/storage_migration_adapters_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-storage-migration-adapters-test
+          /tmp/desknx-storage-migration-adapters-test
+
       - name: Test installer and uninstaller rollback with injected rename failures
         run: bash tests/test-recovery.sh
 
