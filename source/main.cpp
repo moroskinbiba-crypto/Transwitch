@@ -660,7 +660,7 @@ bool writeAuxiliaryFileSnapshot(const AuxiliaryFileSaveJob& job,
 
     // The ordinary snapshot path, including launch history, uses the same
     // tested transaction function as settings, layouts and workspace markers.
-    if(!job.copySourceToTemporary) {
+    if(!job.copySourceToTemporary && job.obsoletePaths.empty()) {
         const auto status=desknx::persist::writeAtomically(
             job.temporaryPath.c_str(),job.targetPath.c_str(),job.backupPath.c_str(),
             job.contents,commitSdCardForPersistence,nullptr,

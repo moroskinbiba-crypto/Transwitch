@@ -135,8 +135,8 @@ int main() {
     assert(desknx::launch_history::parse(
         "DESKNXH1\nG\tBad\tnot-a-title-id\n", parsedHistory));
     assert(parsedHistory.empty());
-    assert(!desknx::launch_history::serialize({
-        {desknx::model::Kind::Game, "Bad", "not-a-title-id"}}));
+    assert(desknx::launch_history::serialize({
+        {desknx::model::Kind::Game, "Bad", "not-a-title-id"}}).empty());
 
     // Layout parser and active-marker parser are the production implementations.
     using namespace desknx::model;
