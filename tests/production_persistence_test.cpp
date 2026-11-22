@@ -91,6 +91,21 @@ bool validateHistory(const std::string& contents, void* context) {
     return parsed && desknx::launch_history::parse(contents, *parsed);
 }
 
+struct ActiveWorkspaceContext {
+    const std::vector<desknx::model::Workspace>* workspaces{nullptr};
+    int active{0};
+};
+
+bool validateActiveWorkspace(const std::string& contents, void* opaque) {
+    auto* context=static_cast<ActiveWorkspaceContext*>(opaque);
+    if(!context||!context->workspaces)return false;
+    int candidate=context->active;
+    if(!desknx::layout::parseActiveWorkspaceState(
+        contents,*context->workspaces,candidate))return false;
+    context->active=candidate;
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -158,6 +173,27 @@ int main() {
     assert(active == 1);
     assert(!desknx::layout::parseActiveWorkspaceState(
         activeMarker, std::vector<Workspace>{Workspace{"Wrong", {}}}, active));
+
+    // Restore the most recently selected workspace from the active-marker
+    // backup when the primary marker is corrupt. The candidate index changes
+    // only after the production layout parser validates the entire marker.
+    writeFile(primary,"BROKEN ACTIVE MARKER\\n");
+    writeFile(backup,activeMarker);
+    ActiveWorkspaceContext activeContext{&workspaces,0};
+    source=desknx::persist::readValidatedWithBackup(
+        primary.c_str(),backup.c_str(),512,
+        validateActiveWorkspace,&activeContext,selected);
+    assert(source==desknx::persist::FileSource::Backup);
+    assert(selected==activeMarker);
+    assert(activeContext.active==1);
+
+    writeFile(backup,"DESKNX-ACTIVE1\\n99\\n2\\n0\\nMissing\\n");
+    activeContext.active=0;
+    source=desknx::persist::readValidatedWithBackup(
+        primary.c_str(),backup.c_str(),512,
+        validateActiveWorkspace,&activeContext,selected);
+    assert(source==desknx::persist::FileSource::None);
+    assert(activeContext.active==0);
 
     // Primary/backup selection uses the same bounded reader and validators as
     // production settings, history and active-workspace restore.
