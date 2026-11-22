@@ -39,9 +39,8 @@ int main() {
     assert(ControlPlane::retryDelayMs(3) == 1000);
     assert(ControlPlane::retryDelayMs(100) == ControlPlane::RetryMaxMs);
     assert(control.beginCommit(449).status == CommitBeginStatus::Backoff);
-    assert(control.beginCommit(450).status == CommitBeginStatus::Acquired);
 
-    // A successful commit clears the retry state.
+    // A successful retry clears the backoff state.
     const auto recovered = control.beginCommit(450);
     assert(recovered.status == CommitBeginStatus::Acquired);
     assert(control.finishCommit(recovered.lease, true, 451) ==
