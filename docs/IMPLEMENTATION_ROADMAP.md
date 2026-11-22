@@ -115,8 +115,8 @@ Successful compilation alone does not close a runtime acceptance item.
 - [x] Migrate workspace footer status, key hints and selected-tile actions to shared
       layout geometry; render hint chips and actions through shared Badge/Button styles
       with matching touch bounds.
-- [ ] Migrate remaining workspace dock chrome (tabs, add/menu/page/edit controls) to
-      shared control styles while preserving drag-to-workspace behavior.
+- [x] Migrate workspace dock tabs, Add, menu, page indicator and Edit actions to shared
+      Button/Toolbar variants while preserving the existing tab/drag interaction geometry.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,
       library and workspace-picker surfaces.
