@@ -180,19 +180,20 @@ int main() {
     writeFile(primary,"BROKEN ACTIVE MARKER\\n");
     writeFile(backup,activeMarker);
     ActiveWorkspaceContext activeContext{&workspaces,0};
-    source=desknx::persist::readValidatedWithBackup(
+    std::string activeMarkerSelected;
+    auto activeMarkerSource=desknx::persist::readValidatedWithBackup(
         primary.c_str(),backup.c_str(),512,
-        validateActiveWorkspace,&activeContext,selected);
-    assert(source==desknx::persist::FileSource::Backup);
-    assert(selected==activeMarker);
+        validateActiveWorkspace,&activeContext,activeMarkerSelected);
+    assert(activeMarkerSource==desknx::persist::FileSource::Backup);
+    assert(activeMarkerSelected==activeMarker);
     assert(activeContext.active==1);
 
     writeFile(backup,"DESKNX-ACTIVE1\\n99\\n2\\n0\\nMissing\\n");
     activeContext.active=0;
-    source=desknx::persist::readValidatedWithBackup(
+    activeMarkerSource=desknx::persist::readValidatedWithBackup(
         primary.c_str(),backup.c_str(),512,
-        validateActiveWorkspace,&activeContext,selected);
-    assert(source==desknx::persist::FileSource::None);
+        validateActiveWorkspace,&activeContext,activeMarkerSelected);
+    assert(activeMarkerSource==desknx::persist::FileSource::None);
     assert(activeContext.active==0);
 
     // Primary/backup selection uses the same bounded reader and validators as
