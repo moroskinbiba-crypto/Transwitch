@@ -48,6 +48,16 @@ public:
                 "[background-cache] worker unavailable; backgrounds stay on fallback\n");
     }
 
+    void setPriorityPath(const std::string& path) {
+        if (path.empty()) {
+            clearPriority();
+            return;
+        }
+        if (priorityPath_ == path) return;
+        priorityPath_ = path;
+        discardQueuedRequestsExcept(path);
+    }
+
     void clearPriority() {
         priorityPath_.clear();
         if (!mutex_) return;
@@ -62,7 +72,7 @@ public:
                      bool highPriority = true) {
         width = height = 0;
         if (!renderer_ || path.empty() || path.size() > MaxPathBytes) return nullptr;
-        if (highPriority) priorityPath_ = path;
+        if (highPriority) setPriorityPath(path);
 
         for (auto& entry : entries_) {
             if (entry.path != path) continue;
