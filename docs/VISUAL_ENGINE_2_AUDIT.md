@@ -172,3 +172,21 @@ Important remaining limits: the bitmap fallback still cannot render full Cyrilli
 and TTF surface creation / SDL texture upload still occur synchronously on a cache miss.
 The new layout cache removes repeated wrapping work; it does not claim to solve that
 separate frame-time issue.
+
+## Expanded control library update
+
+The shared control layer now also defines Badge, Toggle, ValueField, Card and Status
+Indicator visual contracts. Palette resolution remains pure data and renderer-independent.
+The live migrations use the shared components for app-type/update badges in the library,
+the edit-mode setting toggle, theme/icon/motion value fields, the library-service status
+dot, System Tools cards and the library details panel.
+
+The settings toggle reflects the actual `editing` state and remains informational within
+the row; the existing whole-row activation path still owns the action. No new input route
+was added. Value fields likewise preserve the existing row activation/navigation logic.
+Status tones distinguish Loading, Ready and Offline without adding polling or any
+additional service calls.
+
+The host control contract test now covers all of these resolvers and interactive
+hit-test boundaries. Remaining migrations include other modals, toolbar/footer elements
+and workspace controls; this change does not claim the full UI has already been migrated.

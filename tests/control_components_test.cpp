@@ -58,5 +58,45 @@ int main() {
     assert(IsSelectableRowInteractive(SelectableRowState::Focused));
     assert(!IsSelectableRowInteractive(SelectableRowState::Disabled));
 
+    const auto infoBadge=ResolveBadgeStyle(BadgeVariant::Info);
+    const auto warningBadge=ResolveBadgeStyle(BadgeVariant::Warning);
+    assert(infoBadge.background.b>infoBadge.background.r);
+    assert(warningBadge.foreground.r==255&&warningBadge.foreground.g==202);
+
+    const ModalRect toggleBounds{20,30,44,22};
+    const ToggleControl onToggle{toggleBounds,true,{}};
+    const ToggleControl offToggle{toggleBounds,false,{}};
+    assert(onToggle.hitTest(20,30)&&onToggle.hitTest(63,51));
+    assert(!onToggle.hitTest(64,51));
+    assert(ResolveToggleStyle(true,{}).track.g==132);
+    assert(ResolveToggleStyle(false,{}).track.r==48);
+    const ToggleControl disabledToggle{
+        toggleBounds,true,ControlState{false,false,true}};
+    assert(!disabledToggle.hitTest(30,40));
+    assert(ResolveToggleStyle(true,disabledToggle.state).knob.r==112);
+
+    const ValueFieldControl field{{100,100,120,24},FieldVisualState::Focused};
+    assert(field.hitTest(100,100)&&!field.hitTest(220,100));
+    assert(ResolveValueFieldStyle(FieldVisualState::Focused).drawFocusRing);
+    assert(!ResolveValueFieldStyle(FieldVisualState::Disabled).drawFocusRing);
+    const ValueFieldControl disabledField{{100,100,120,24},FieldVisualState::Disabled};
+    assert(!disabledField.hitTest(110,110));
+
+    const auto normalCard=ResolveCardStyle(CardVisualState::Normal);
+    const auto focusCard=ResolveCardStyle(CardVisualState::Focused);
+    const auto panelCard=ResolveCardStyle(CardVisualState::Panel);
+    assert(normalCard.shadow&&focusCard.shadow);
+    assert(focusCard.background.r>normalCard.background.r);
+    assert(!panelCard.shadow&&panelCard.background.r==22);
+
+    const auto readyIndicator=ResolveIndicatorStyle(IndicatorTone::Ready);
+    const auto loadingIndicator=ResolveIndicatorStyle(IndicatorTone::Loading);
+    const auto offlineIndicator=ResolveIndicatorStyle(IndicatorTone::Offline);
+    const auto errorIndicator=ResolveIndicatorStyle(IndicatorTone::Error);
+    assert(readyIndicator.dot.g==211&&!readyIndicator.drawHalo);
+    assert(loadingIndicator.dot.r==255&&loadingIndicator.drawHalo);
+    assert(offlineIndicator.dot.r==128&&!offlineIndicator.drawHalo);
+    assert(errorIndicator.dot.r==255&&errorIndicator.dot.g==99);
+
     return 0;
 }

@@ -935,6 +935,80 @@ void drawSelectableRowBackground(const desknx::ui::ModalRect& bounds,
 }
 
 
+void drawBadge(const desknx::ui::ModalRect& bounds,const std::string& label,
+               desknx::ui::BadgeVariant variant) {
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveBadgeStyle(variant);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        std::min(10,bounds.height/2),controlColor(style.background));
+    outline(bounds.x,bounds.y,bounds.width,bounds.height,
+        controlColor(style.border));
+    textRole(label,bounds.x+8,bounds.y+std::max(1,(bounds.height-10)/2),
+        desknx::ui::TextRole::Metadata,controlColor(style.foreground),
+        bounds.x+bounds.width-6);
+}
+
+void drawToggle(const desknx::ui::ToggleControl& toggle) {
+    const auto& bounds=toggle.bounds;
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveToggleStyle(toggle.value,toggle.state);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        bounds.height/2,controlColor(style.track));
+    outline(bounds.x,bounds.y,bounds.width,bounds.height,
+        controlColor(style.border));
+    const int knobSize=std::max(4,bounds.height-6);
+    const int knobX=toggle.value?bounds.x+bounds.width-knobSize-3:bounds.x+3;
+    roundRect(knobX,bounds.y+3,knobSize,knobSize,knobSize/2,
+        controlColor(style.knob));
+    if(style.drawFocusRing)
+        outline(bounds.x-2,bounds.y-2,bounds.width+4,bounds.height+4,
+            controlColor(style.focusRing));
+}
+
+void drawValueField(const desknx::ui::ValueFieldControl& field,
+                    const std::string& value) {
+    const auto& bounds=field.bounds;
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveValueFieldStyle(field.visualState);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        std::min(8,bounds.height/2),controlColor(style.background));
+    outline(bounds.x,bounds.y,bounds.width,bounds.height,
+        controlColor(style.border));
+    if(style.drawFocusRing)
+        outline(bounds.x-2,bounds.y-2,bounds.width+4,bounds.height+4,
+            Color{83,157,255,150});
+    textRole(value,bounds.x+8,bounds.y+std::max(1,(bounds.height-10)/2),
+        desknx::ui::TextRole::Metadata,controlColor(style.foreground),
+        bounds.x+bounds.width-6);
+}
+
+void drawCard(const desknx::ui::ModalRect& bounds,
+              desknx::ui::CardVisualState state) {
+    const auto style=desknx::ui::ResolveCardStyle(state);
+    const Color fill=controlColor(style.background);
+    const Color border=controlColor(style.border);
+    if(style.shadow)softCard(bounds.x,bounds.y,bounds.width,bounds.height,fill,border);
+    else {
+        roundRect(bounds.x,bounds.y,bounds.width,bounds.height,UiCornerRadius,fill);
+        if(style.border.a>0)
+            outline(bounds.x,bounds.y,bounds.width,bounds.height,border);
+    }
+}
+
+void drawStatusIndicator(const desknx::ui::ModalRect& bounds,
+                         desknx::ui::IndicatorTone tone) {
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveIndicatorStyle(tone);
+    const int diameter=std::min(bounds.width,bounds.height);
+    if(style.drawHalo) {
+        roundRect(bounds.x-2,bounds.y-2,diameter+4,diameter+4,
+            (diameter+4)/2,controlColor(style.halo));
+    }
+    roundRect(bounds.x,bounds.y,diameter,diameter,diameter/2,
+        controlColor(style.dot));
+}
+
+
 void drawConfirmationDialog(
     const desknx::ui::ConfirmationDialogLayout& layout,
     const std::string& title,const std::string& subtitle,
@@ -2835,14 +2909,16 @@ void drawScreen() {
                     if(candidate.viewFlags&NsViewFlagNeedsUpdate)appBadge="UPDATE";
                     else if(candidate.viewFlags&NsViewFlagIsGameCard)appBadge="GAME CARD";
                 }
-                text(appBadge,mx+615,yy+11,1,
-                    (candidate.viewFlags&NsViewFlagNeedsUpdate)?Color{255,177,74,255}:
-                    (i==listIndex?BLUE:MUTED),mx+750);
+                const auto badgeVariant=(candidate.viewFlags&NsViewFlagNeedsUpdate)
+                    ?desknx::ui::BadgeVariant::Warning
+                    :candidate.kind==Kind::Game?desknx::ui::BadgeVariant::Info
+                    :candidate.kind==Kind::Nro?desknx::ui::BadgeVariant::Success
+                    :desknx::ui::BadgeVariant::Neutral;
+                drawBadge({mx+610,yy+5,136,25},appBadge,badgeVariant);
             }
         }
         const auto& detailsPanel=desknx::ui::AppLibraryDetailsPanelLayout;
-        roundRect(detailsPanel.surface.x,detailsPanel.surface.y,
-            detailsPanel.surface.width,detailsPanel.surface.height,16,Color{22,31,45,255});
+        drawCard(detailsPanel.surface,desknx::ui::CardVisualState::Panel);
         if(!available.empty()) {
             const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
@@ -3073,10 +3149,10 @@ void drawScreen() {
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
-            softCard(item.x,item.y,288,136,systemMenuIndex==static_cast<int>(toolIndex)?
-                Color{34,63,98,255}:Color{23,32,46,255},
-                systemMenuIndex==static_cast<int>(toolIndex)?
-                Color{91,157,238,115}:Color{255,255,255,18});
+            drawCard({item.x,item.y,288,136},
+                systemMenuIndex==static_cast<int>(toolIndex)
+                    ?desknx::ui::CardVisualState::Focused
+                    :desknx::ui::CardVisualState::Normal);
             roundRect(item.x+14,item.y+14,54,54,16,
                 systemMenuIndex==static_cast<int>(toolIndex)?
                 Color{54,108,171,255}:Color{38,51,71,255});
@@ -3117,17 +3193,32 @@ void drawScreen() {
                 roundRect(row.x,row.y,row.width,row.height,8,Color{35,61,93,255});
             text(actions[i],row.x+22,row.y+7,1,i==appSettingsIndex?WHITE:MUTED,
                 row.x+390);
-            if(i==3)
-                text("THEME "+std::to_string(themeIndex+1)+"/8",
-                    row.x+450,row.y+7,1,BLUE,row.x+row.width-18);
-            if(i==10)
-                text(iconStyles[static_cast<size_t>(iconStyle)],
-                    row.x+415,row.y+7,1,BLUE,row.x+row.width-18);
-            if(i==11) {
-                const int mode=static_cast<int>(gMotionController.mode());
-                const int boundedMode=std::max(0,std::min(2,mode));
-                text(motionModes[boundedMode],row.x+445,row.y+7,1,BLUE,
-                    row.x+row.width-18);
+            if(i==3||i==10||i==11) {
+                std::string value;
+                int fieldOffset=410;
+                int fieldWidth=172;
+                if(i==3) {
+                    value="THEME "+std::to_string(themeIndex+1)+"/8";
+                    fieldOffset=424;
+                    fieldWidth=158;
+                } else if(i==10) {
+                    value=iconStyles[static_cast<size_t>(iconStyle)];
+                    fieldOffset=405;
+                } else {
+                    const int mode=static_cast<int>(gMotionController.mode());
+                    const int boundedMode=std::max(0,std::min(2,mode));
+                    value=motionModes[boundedMode];
+                    fieldOffset=430;
+                    fieldWidth=144;
+                }
+                const auto fieldState=i==appSettingsIndex
+                    ?desknx::ui::FieldVisualState::Focused
+                    :desknx::ui::FieldVisualState::Normal;
+                drawValueField({{row.x+fieldOffset,row.y+2,fieldWidth,22},fieldState},value);
+            }
+            if(i==7) {
+                drawToggle({{row.x+536,row.y+2,44,22},editing,
+                    desknx::ui::ControlState{i==appSettingsIndex,false,false}});
             }
         }
         char nsInfo[80]{};
@@ -3137,6 +3228,11 @@ void drawScreen() {
             std::snprintf(nsInfo,sizeof(nsInfo),"GAME SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
+        const auto libraryTone=(!catalogReadyNow&&!catalogCompleteNow)
+            ?desknx::ui::IndicatorTone::Loading
+            :catalogueNsAvailableNow?desknx::ui::IndicatorTone::Ready
+            :desknx::ui::IndicatorTone::Offline;
+        drawStatusIndicator({330,576,8,8},libraryTone);
         text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
         text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
              346,592,1,MUTED,930);

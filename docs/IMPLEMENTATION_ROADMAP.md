@@ -86,8 +86,10 @@ Successful compilation alone does not close a runtime acceptance item.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [x] Add shared Button variants/states and selectable-row visual contracts; migrate
       workspace picker actions, workspace menu rows and confirmation actions.
-- [ ] Add badge, toggle, field, card and indicator primitives, then migrate remaining
-      windows to the shared controls.
+- [x] Add badge, toggle, value-field, card and status-indicator primitives; migrate
+      library badges, Settings values/edit-mode toggle, library service status, and
+      System Tools/library-details cards.
+- [ ] Migrate remaining modal, toolbar, footer and workspace controls to shared styles.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,
       library and workspace-picker surfaces.
