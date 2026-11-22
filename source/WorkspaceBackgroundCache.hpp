@@ -48,6 +48,16 @@ public:
                 "[background-cache] worker unavailable; backgrounds stay on fallback\n");
     }
 
+    void clearPriority() {
+        priorityPath_.clear();
+        if (!mutex_) return;
+        SDL_LockMutex(mutex_);
+        for (const auto& request : requests_) pending_.erase(request.path);
+        requests_.clear();
+        SDL_CondBroadcast(condition_);
+        SDL_UnlockMutex(mutex_);
+    }
+
     SDL_Texture* get(const std::string& path, int& width, int& height,
                      bool highPriority = true) {
         width = height = 0;
@@ -101,7 +111,7 @@ public:
         SDL_CondBroadcast(condition_);
         SDL_UnlockMutex(mutex_);
 
-        if (!priorityPath_.empty() && decoded.path != priorityPath_) {
+        if (decoded.path != priorityPath_) {
             pending_.erase(decoded.path);
             return;
         }
