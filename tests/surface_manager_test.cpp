@@ -23,8 +23,12 @@ int main() {
     // The last registered modal owns input; a lower surface cannot steal it.
     assert(surfaces.push(SurfaceId::Library, true, true, 120));
     assert(surfaces.push(SurfaceId::QuickSettings, true, true, 190));
+    assert(surfaces.contains(SurfaceId::Library));
+    assert(surfaces.contains(SurfaceId::QuickSettings));
     assert(surfaces.isTop(SurfaceId::QuickSettings));
     assert(!surfaces.isTop(SurfaceId::Library));
+    // Parent panels remain visible in the stack; only the top surface owns input.
+    assert(surfaces.top() && surfaces.top()->id == SurfaceId::QuickSettings);
     assert(surfaces.hasBlockingSurface());
     assert(surfaces.dimAlpha() == 190);
 
