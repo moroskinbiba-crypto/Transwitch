@@ -2,7 +2,7 @@ name: Build DeskNX
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, "preview/**" ]
   workflow_dispatch:
   pull_request:
     branches: [ main, master ]
