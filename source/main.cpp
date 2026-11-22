@@ -600,6 +600,178 @@ bool commitSdCard(const char* operation) {
                         operation ? operation : "unknown");
     return true;
 }
+
+const char* auxiliarySaveSlotName(AuxiliarySaveSlot slot) {
+    switch(slot) {
+        case AuxiliarySaveSlot::Favorites:return "favorites";
+        case AuxiliarySaveSlot::History:return "history";
+        case AuxiliarySaveSlot::CalendarNotes:return "calendar_notes";
+        case AuxiliarySaveSlot::GameNames:return "game_name_overrides";
+        default:return "unknown";
+    }
+}
+
+bool writeAuxiliaryFileSnapshot(const AuxiliaryFileSaveJob& job,
+                                char* errorMessage,std::size_t errorCapacity) {
+    auto fail=[&](const char* message) {
+        if(errorMessage&&errorCapacity>0)
+            std::snprintf(errorMessage,errorCapacity,"%s",
+                          message?message:"BACKGROUND SAVE FAILED");
+        return false;
+    };
+    if(!sdMounted)return fail("SD CARD UNAVAILABLE");
+    mkdir("sdmc:/switch",0777);
+    mkdir(CFG_DIR,0777);
+    if(!job.directory.empty())mkdir(job.directory.c_str(),0777);
+
+    std::ofstream out(job.temporaryPath,std::ios::binary|std::ios::trunc);
+    if(!out)return fail(job.failureMessage.empty()
+        ?"BACKGROUND SAVE OPEN FAILED":job.failureMessage.c_str());
+    out.write(job.contents.data(),static_cast<std::streamsize>(job.contents.size()));
+    out.flush();
+    const bool good=out.good();
+    out.close();
+    if(!good) {
+        std::remove(job.temporaryPath.c_str());
+        return fail(job.failureMessage.empty()
+            ?"BACKGROUND SAVE WRITE FAILED":job.failureMessage.c_str());
+    }
+    if(!commitSdCard(job.tempCommitOperation.c_str())) {
+        std::remove(job.temporaryPath.c_str());
+        return fail(job.failureMessage.empty()
+            ?"BACKGROUND SD COMMIT FAILED":job.failureMessage.c_str());
+    }
+    const auto replaceStatus=desknx::safeio::replaceFilePreservingOnFailure(
+        job.temporaryPath.c_str(),job.targetPath.c_str(),
+        job.backupPath.c_str(),true);
+    if(replaceStatus!=desknx::safeio::ReplaceStatus::Success) {
+        std::remove(job.temporaryPath.c_str());
+        return fail(job.failureMessage.empty()
+            ?"BACKGROUND SAVE PUBLISH FAILED":job.failureMessage.c_str());
+    }
+    if(!commitSdCard(job.publishCommitOperation.c_str()))
+        return fail(job.failureMessage.empty()
+            ?"BACKGROUND PUBLISH COMMIT FAILED; BACKUP KEPT":job.failureMessage.c_str());
+    return true;
+}
+
+int auxiliarySaveThreadMain(void* context) {
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+    const auto* batch=static_cast<const AuxiliarySaveBatch*>(context);
+    AuxiliarySaveOutcome outcome{};
+    if(batch) {
+        for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i) {
+            if(!batch->present[i])continue;
+            outcome.success[i]=writeAuxiliaryFileSnapshot(
+                batch->jobs[i],outcome.messages[i].data(),
+                outcome.messages[i].size());
+        }
+    }
+    auxiliarySaveOutcome=outcome;
+    SDL_AtomicSet(&auxiliarySaveDone,1);
+    return 0;
+}
+
+void scheduleAuxiliaryFileSave(AuxiliarySaveSlot slot,
+                               AuxiliaryFileSaveJob job,
+                               Uint32 debounceMs=350) {
+    const std::size_t index=static_cast<std::size_t>(slot);
+    if(index>=AuxiliarySaveSlotCount)return;
+    pendingAuxiliarySaveJobs[index]=std::move(job);
+    pendingAuxiliarySaveValid[index]=true;
+    pendingAuxiliarySaveDue[index]=SDL_GetTicks()+debounceMs;
+}
+
+void pumpAuxiliarySaves(bool waitForCompletion) {
+    for(;;) {
+        if(auxiliarySaveThread) {
+            if(!waitForCompletion&&!SDL_AtomicGet(&auxiliarySaveDone))
+                return;
+            SDL_WaitThread(auxiliarySaveThread,nullptr);
+            auxiliarySaveThread=nullptr;
+            const AuxiliarySaveOutcome outcome=auxiliarySaveOutcome;
+            if(activeAuxiliarySaveBatch) {
+                for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i) {
+                    if(!activeAuxiliarySaveBatch->present[i])continue;
+                    const auto slot=static_cast<AuxiliarySaveSlot>(i);
+                    if(outcome.success[i]) {
+                        desknx::diag::Write("storage","async_file_save_ok",
+                            "slot=%s bytes=%zu",auxiliarySaveSlotName(slot),
+                            activeAuxiliarySaveBatch->jobs[i].contents.size());
+                    } else {
+                        const char* message=outcome.messages[i][0]
+                            ?outcome.messages[i].data()
+                            :"BACKGROUND SAVE FAILED";
+                        setStatus(message,3500);
+                        desknx::diag::Write("storage","async_file_save_failed",
+                            "slot=%s bytes=%zu",auxiliarySaveSlotName(slot),
+                            activeAuxiliarySaveBatch->jobs[i].contents.size());
+                        // Keep the newest pending snapshot if the user changed
+                        // the same setting while this worker was committing.
+                        if(!pendingAuxiliarySaveValid[i]) {
+                            pendingAuxiliarySaveJobs[i]=
+                                activeAuxiliarySaveBatch->jobs[i];
+                            pendingAuxiliarySaveValid[i]=true;
+                            pendingAuxiliarySaveDue[i]=SDL_GetTicks()+5000;
+                        }
+                    }
+                }
+            }
+            activeAuxiliarySaveBatch.reset();
+        }
+
+        auto batch=std::make_unique<AuxiliarySaveBatch>();
+        const Uint32 now=SDL_GetTicks();
+        bool any=false;
+        for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i) {
+            if(!pendingAuxiliarySaveValid[i])continue;
+            const bool due=waitForCompletion||
+                static_cast<Sint32>(now-pendingAuxiliarySaveDue[i])>=0;
+            if(!due)continue;
+            batch->jobs[i]=std::move(pendingAuxiliarySaveJobs[i]);
+            batch->present[i]=true;
+            pendingAuxiliarySaveValid[i]=false;
+            pendingAuxiliarySaveDue[i]=0;
+            any=true;
+        }
+        if(!any)return;
+
+        activeAuxiliarySaveBatch=std::move(batch);
+        auxiliarySaveOutcome=AuxiliarySaveOutcome{};
+        SDL_AtomicSet(&auxiliarySaveDone,0);
+        auxiliarySaveThread=SDL_CreateThread(auxiliarySaveThreadMain,
+            "DeskNX auxiliary persistence",activeAuxiliarySaveBatch.get());
+        if(!auxiliarySaveThread) {
+            for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i) {
+                if(!activeAuxiliarySaveBatch->present[i]||
+                   pendingAuxiliarySaveValid[i])continue;
+                pendingAuxiliarySaveJobs[i]=
+                    std::move(activeAuxiliarySaveBatch->jobs[i]);
+                pendingAuxiliarySaveValid[i]=true;
+                pendingAuxiliarySaveDue[i]=SDL_GetTicks()+2500;
+            }
+            activeAuxiliarySaveBatch.reset();
+            setStatus("BACKGROUND STORAGE WORKER UNAVAILABLE",3000);
+            return;
+        }
+        if(!waitForCompletion)return;
+        // Drain mode waits, reaps, then continues until every queued snapshot
+        // has been committed or the platform refuses to create a worker.
+    }
+}
+
+void drainAuxiliarySaves() {
+    for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i)
+        if(pendingAuxiliarySaveValid[i])pendingAuxiliarySaveDue[i]=0;
+    while(auxiliarySaveThread||activeAuxiliarySaveBatch) {
+        pumpAuxiliarySaves(true);
+        if(!auxiliarySaveThread&&!activeAuxiliarySaveBatch)break;
+    }
+    // One final pass takes any snapshots queued while the previous batch ran.
+    pumpAuxiliarySaves(true);
+    if(auxiliarySaveThread)pumpAuxiliarySaves(true);
+}
+
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
 void rect(int x,int y,int w,int h,Color c) {
     if(w<=0||h<=0) return;
