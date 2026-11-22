@@ -8638,7 +8638,7 @@ int main(int,char**) {
         consumeInitialState(); // IPC-06: queued at backend launch, read once
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
-        const Uint64 inputStarted=SDL_GetPerformanceCounter();
+        const Uint64 controllerInputStarted=SDL_GetPerformanceCounter();
         padUpdate(&pad);
         const u64 buttonDown=padGetButtonsDown(&pad);
         const HidAnalogStickState leftStick=padGetStickPos(&pad,0);
@@ -8694,10 +8694,13 @@ int main(int,char**) {
                 ?"ШРИФТ НЕ ПОДХОДИТ — ПРЕДЫДУЩИЙ СОХРАНЁН"
                 :"FONT REJECTED — PREVIOUS FONT RESTORED",4500);
         }
+        const Uint64 controllerInputFinished=SDL_GetPerformanceCounter();
+        const Uint64 touchInputStarted=SDL_GetPerformanceCounter();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
-        const Uint64 inputFinished=SDL_GetPerformanceCounter();
+        const Uint64 touchInputFinished=SDL_GetPerformanceCounter();
         const double inputMs=performanceFrequency>0
-            ?static_cast<double>(inputFinished-inputStarted)*1000.0/
+            ?static_cast<double>((controllerInputFinished-controllerInputStarted)+
+                (touchInputFinished-touchInputStarted))*1000.0/
                 static_cast<double>(performanceFrequency):0.0;
         pumpSteamGridDbPicker();
         pumpSteamGridDbCacheCleanup();
