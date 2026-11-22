@@ -82,6 +82,8 @@ Successful compilation alone does not close a runtime acceptance item.
       variants, migrating one window at a time while preserving hit regions.
 - [x] Add scoped clip and texture-modulation guards to wallpaper, workspace-background,
       tile-artwork and rounded-mask paths.
+- [x] Restore pre-existing SDL clip rectangles in scoped guards and diagnose clip/draw-
+      blend invariant violations at frame boundaries.
 - [ ] Add regression checks for full-frame recovery after every modal/window path.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [x] Add shared Button variants/states and selectable-row visual contracts; migrate

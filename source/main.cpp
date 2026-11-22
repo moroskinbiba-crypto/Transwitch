@@ -126,20 +126,47 @@ class ScopedRenderClip {
 public:
     ScopedRenderClip(SDL_Renderer* target,const SDL_Rect& clip) noexcept
         : renderer_(target) {
-        if(renderer_) {
-            (void)SDL_RenderSetClipRect(renderer_,&clip);
-            active_=true;
-        }
+        if(!renderer_)return;
+        previousClipEnabled_=SDL_RenderIsClipEnabled(renderer_)==SDL_TRUE;
+        if(previousClipEnabled_)
+            SDL_RenderGetClipRect(renderer_,&previousClip_);
+        // If SDL rejects the new clip, leave the renderer untouched and do
+        // not attempt to restore a state that was never changed.
+        changed_=SDL_RenderSetClipRect(renderer_,&clip)==0;
     }
     ScopedRenderClip(const ScopedRenderClip&)=delete;
     ScopedRenderClip& operator=(const ScopedRenderClip&)=delete;
     ~ScopedRenderClip() {
-        if(renderer_&&active_)(void)SDL_RenderSetClipRect(renderer_,nullptr);
+        if(!renderer_||!changed_)return;
+        if(previousClipEnabled_)
+            (void)SDL_RenderSetClipRect(renderer_,&previousClip_);
+        else
+            (void)SDL_RenderSetClipRect(renderer_,nullptr);
     }
 private:
     SDL_Renderer* renderer_{nullptr};
-    bool active_{false};
+    SDL_Rect previousClip_{};
+    bool previousClipEnabled_{false};
+    bool changed_{false};
 };
+
+void diagnoseRendererState(const char* phase) {
+    if(!renderer)return;
+    if(SDL_RenderIsClipEnabled(renderer)==SDL_TRUE) {
+        SDL_Rect clip{};
+        SDL_RenderGetClipRect(renderer,&clip);
+        desknx::diag::Write("render","clip_state_leak",
+            "phase=%s x=%d y=%d w=%d h=%d",
+            phase?phase:"unknown",clip.x,clip.y,clip.w,clip.h);
+    }
+    SDL_BlendMode blendMode=SDL_BLENDMODE_NONE;
+    if(SDL_GetRenderDrawBlendMode(renderer,&blendMode)==0&&
+       blendMode!=SDL_BLENDMODE_BLEND) {
+        desknx::diag::Write("render","draw_blend_state_leak",
+            "phase=%s mode=%d",phase?phase:"unknown",
+            static_cast<int>(blendMode));
+    }
+}
 
 class ScopedTextureModulation {
 public:
@@ -2699,8 +2726,9 @@ void drawScreen() {
     }
     gTileFocusProgress=gMotionController.sample(gTileFocusTransition,motionNow);
     gIconCache.beginFrame();
-    // Every frame starts from a known SDL clip/blend state. A previous image or
-    // modal path must never constrain the next full-screen clear or composition.
+    // Report state left behind by the previous frame before establishing
+    // the known full-frame baseline.
+    diagnoseRendererState("frame_begin");
     SDL_RenderSetClipRect(renderer,nullptr);
     SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -3412,8 +3440,8 @@ void drawScreen() {
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
     }
-    // Restore the frame baseline before Present as a final guard against clip
-    // leakage from future modal components or early-return draw paths.
+    // Diagnose state left by this frame before restoring the baseline for Present.
+    diagnoseRendererState("frame_end");
     SDL_RenderSetClipRect(renderer,nullptr);
     SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     if(gFrameRenderStartedCounter!=0) {

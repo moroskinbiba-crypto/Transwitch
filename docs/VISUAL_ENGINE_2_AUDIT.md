@@ -274,3 +274,16 @@ The details-panel "Add to Workspace" action is now drawn and hit-tested through 
 Primary `ButtonControl` using the existing `primaryAction` rectangle. The separate
 toolbar Add action is unchanged. The double-tap-to-launch behaviour, 500 ms interval,
 selection update and play-stat refresh path are preserved.
+
+## Renderer clip restoration and frame diagnostics
+
+A re-audit found that the existing `ScopedRenderClip` reset to a null clip on
+destruction instead of restoring a clip that might already have been active. The
+current call sites are non-nested, but this was not a safe contract for future nested
+surfaces. The guard now snapshots the prior enabled state and rectangle, changes the
+clip only when SDL accepts the new rectangle, and restores the exact prior state.
+
+`drawScreen` now reports unexpected clip or draw-blend state at both frame boundaries
+before applying its known baseline. These diagnostics can identify renderer-state
+leaks in logs. They do not prove the historical white-screen symptom is fixed; repeated
+modal open/close and sleep/wake checks on actual Switch hardware remain mandatory.
