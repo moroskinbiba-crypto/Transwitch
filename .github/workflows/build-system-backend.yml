@@ -155,6 +155,13 @@ jobs:
             tests/sleep_recovery_policy_test.cpp -o /tmp/desknx-sleep-recovery-test
           /tmp/desknx-sleep-recovery-test
 
+      - name: Test unified workspace snapshot transactions and recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/workspace_storage_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-workspace-storage-test
+          /tmp/desknx-workspace-storage-test
+
       - name: Test installer and uninstaller rollback with injected rename failures
         run: bash tests/test-recovery.sh
 

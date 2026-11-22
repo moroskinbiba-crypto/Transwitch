@@ -259,6 +259,13 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
 
+      - name: Test unified workspace snapshot transactions and recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/workspace_storage_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-workspace-storage-test
+          /tmp/desknx-workspace-storage-test
+
       - name: Test production persistence recovery and injected failures
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/production_persistence_test.cpp source/Layout.cpp -o /tmp/desknx-production-persistence-test

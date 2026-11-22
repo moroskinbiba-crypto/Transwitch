@@ -18,6 +18,7 @@
 #include "../include/desknx/CoalescedLayoutSaveScheduler.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "../include/desknx/ProductionPersistence.hpp"
+#include "../include/desknx/WorkspaceStorage.hpp"
 #include "../include/desknx/SettingsFile.hpp"
 #include "../include/desknx/LaunchHistory.hpp"
 #include "catalog.hpp"
@@ -3225,8 +3226,8 @@ bool saveActiveWorkspaceState() {
     }
     // Active desk is a small navigation hint: publish atomically, then perform
     // one SD commit. The previous marker remains in .bak until a later save.
-    const auto status=desknx::persist::writeAtomically(
-        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,state,
+    const auto status=desknx::workspace_storage::writeActiveWorkspace(
+        desknx::workspace_storage::Paths{},desks,deskIndex,
         commitSdCardForPersistence,nullptr,"active-workspace-temp",
         "active-workspace-publish",false,true);
     if(status!=desknx::persist::WriteStatus::Success)return false;
@@ -3264,29 +3265,16 @@ bool flushActiveWorkspaceSave() {
 
 bool loadActiveWorkspaceState() {
     if(!sdMounted || desks.empty()) return false;
-    struct RestoreContext {
-        const std::vector<Workspace>* workspaces;
-        int index;
-    } context{&desks,deskIndex};
-    const auto validator=[](const std::string& contents,void* opaque)->bool {
-        auto* restore=static_cast<RestoreContext*>(opaque);
-        if(!restore||!restore->workspaces)return false;
-        int candidate=restore->index;
-        if(!desknx::layout::parseActiveWorkspaceState(
-            contents,*restore->workspaces,candidate))return false;
-        restore->index=candidate;
-        return true;
-    };
-    std::string serialized;
-    const auto source=desknx::persist::readValidatedWithBackup(
-        ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,512,
-        validator,&context,serialized);
+    int restoredIndex=deskIndex;
+    const auto source=desknx::workspace_storage::readActiveWorkspace(
+        desknx::workspace_storage::Paths{},desks,restoredIndex);
     if(source==desknx::persist::FileSource::None)return false;
 
-    deskIndex=context.index;
+    deskIndex=restoredIndex;
     if(source==desknx::persist::FileSource::Primary) {
-        persistedActiveWorkspaceMarker=serialized;
-        activeWorkspaceMarkerKnown=true;
+        persistedActiveWorkspaceMarker=
+            desknx::layout::serializeActiveWorkspaceState(desks,deskIndex);
+        activeWorkspaceMarkerKnown=!persistedActiveWorkspaceMarker.empty();
     } else {
         persistedActiveWorkspaceMarker.clear();
         activeWorkspaceMarkerKnown=false;
@@ -3304,7 +3292,6 @@ bool loadActiveWorkspaceState() {
     }
     return true;
 }
-
 bool saveLayout() {
     const Uint64 saveStarted=SDL_GetTicks64();
     drainAsyncLayoutSaver();
@@ -3343,11 +3330,15 @@ bool saveLayout() {
     }
 
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
-    const auto writeStatus=desknx::persist::writeAtomically(
-        CFG_TMP,CFG_FILE,CFG_BAK_FILE,serialized,
-        commitSdCardForPersistence,nullptr,"layout-temp","layout-publish",
-        true,true);
-    if(writeStatus!=desknx::persist::WriteStatus::Success) {
+    const std::string activeState=
+        desknx::layout::serializeActiveWorkspaceState(
+            deskIndex,desks.size(),shapeHash,
+            desks[static_cast<size_t>(deskIndex)].name);
+    const auto writeResult=desknx::workspace_storage::writeSnapshotBytes(
+        desknx::workspace_storage::Paths{},serialized,activeState,
+        commitSdCardForPersistence,nullptr,"layout-temp","layout-publish");
+    const auto writeStatus=writeResult.status;
+    if(!writeResult.success()) {
         if(writeStatus==desknx::persist::WriteStatus::RollbackFailed||
            writeStatus==desknx::persist::WriteStatus::PublishCommitFailed) {
             layoutSaveBlocked=true;
@@ -3365,16 +3356,10 @@ bool saveLayout() {
     persistedLayoutShapeKnown=true;
     layoutPrimaryNeedsRewrite=false;
     layoutNeedsMigration=false;
-    // If the marker cannot be published, the main layout already carries the
-    // current index. Remove the stale marker rather than restoring an old desk.
-    if(!saveActiveWorkspaceState()) {
-        desknx::diag::Write("layout","active_workspace_marker_write_failed",
-                            "index=%d",deskIndex);
-        if(!desknx::persist::discardFallbackPairAfterAuthoritativeCommit(
-            ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK))
-            desknx::diag::Write("layout","active_workspace_marker_invalidation_failed",
-                "primary=%s backup=%s",ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK);
-    }
+    persistedActiveWorkspaceMarker=activeState;
+    activeWorkspaceMarkerKnown=!persistedActiveWorkspaceMarker.empty();
+    activeWorkspaceMarkerPending=false;
+    activeWorkspaceMarkerDue=0;
     layoutLoaded=true;
     size_t tileCount=0;for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
     desknx::diag::Write("layout","saved",
@@ -3399,9 +3384,9 @@ bool writeActiveWorkspaceSnapshot(const LayoutSaveJob& job) {
     }
     mkdir("sdmc:/switch",0777);
     mkdir(CFG_DIR,0777);
-    const auto status=desknx::persist::writeAtomically(
-        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,
-        job.activeWorkspaceState,commitSdCardForPersistence,nullptr,
+    const auto status=desknx::workspace_storage::writeActiveWorkspaceBytes(
+        desknx::workspace_storage::Paths{},job.activeWorkspaceState,
+        commitSdCardForPersistence,nullptr,
         "active-workspace-temp","active-workspace-async-publish",false,true);
     return status==desknx::persist::WriteStatus::Success;
 }
@@ -3468,12 +3453,15 @@ int layoutSaveThreadMain(void* context) {
     if(primaryOk&&job->rewritePrimary) {
         mkdir("sdmc:/switch",0777);
         mkdir(CFG_DIR,0777);
-        const auto writeStatus=desknx::persist::writeAtomically(
-            CFG_TMP,CFG_FILE,CFG_BAK_FILE,job->serializedLayout,
-            commitSdCardForPersistence,nullptr,"layout-async-temp",
-            "layout-async-publish",true,true);
-        if(writeStatus!=desknx::persist::WriteStatus::Success) {
+        const auto writeResult=desknx::workspace_storage::writeSnapshotBytes(
+            desknx::workspace_storage::Paths{},job->serializedLayout,
+            job->activeWorkspaceState,commitSdCardForPersistence,nullptr,
+            "layout-async-temp","layout-async-publish");
+        outcome.primaryWritten=writeResult.layoutPublished;
+        outcome.markerWritten=writeResult.activeMarkerPublished;
+        if(!writeResult.success()) {
             primaryOk=false;
+            const auto writeStatus=writeResult.status;
             outcome.blocked=
                 writeStatus==desknx::persist::WriteStatus::RollbackFailed||
                 writeStatus==desknx::persist::WriteStatus::PublishCommitFailed;
@@ -3504,21 +3492,13 @@ int layoutSaveThreadMain(void* context) {
                                   "LAYOUT SAVE FAILED");
                     break;
             }
-        } else {
-            outcome.primaryWritten=true;
         }
     }
-
     if(primaryOk) {
-        outcome.markerWritten=writeActiveWorkspaceSnapshot(*job);
-        // A full layout snapshot already carries the active index. If its
-        // small marker cannot be published, remove the stale marker so it
-        // cannot override the just-published layout during the next boot.
-        if(job->rewritePrimary&&!outcome.markerWritten&&
-           !desknx::persist::discardFallbackPairAfterAuthoritativeCommit(
-               ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK))
-            desknx::diag::Write("layout","active_workspace_marker_invalidation_failed",
-                "primary=%s backup=%s",ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK);
+        // Full saves publish the layout and active marker as one validated
+        // generation. Marker-only jobs still use the lightweight single-file path.
+        if(!job->rewritePrimary)
+            outcome.markerWritten=writeActiveWorkspaceSnapshot(*job);
         outcome.success=outcome.primaryWritten||outcome.markerWritten;
         if(outcome.success) {
             std::snprintf(outcome.message,sizeof(outcome.message),
@@ -3615,6 +3595,7 @@ void pumpAsyncLayoutSaver(bool waitForCompletion) {
             const LayoutSaveOutcome outcome=layoutSaveOutcome;
             const bool hadJob=static_cast<bool>(activeLayoutSaveJob);
             const bool markerOnly=hadJob&&activeLayoutSaveJob->markerOnly;
+            const bool rewritePrimary=hadJob&&activeLayoutSaveJob->rewritePrimary;
             const std::string completedMarker=
                 hadJob?activeLayoutSaveJob->activeWorkspaceState:std::string{};
             if(outcome.success) {
@@ -3645,9 +3626,13 @@ void pumpAsyncLayoutSaver(bool waitForCompletion) {
                 if(outcome.message[0])setStatus(outcome.message,1800);
             } else {
                 if(outcome.blocked)layoutSaveBlocked=true;
-                if(markerOnly||(outcome.primaryWritten&&!outcome.markerWritten)) {
+                if(!outcome.blocked&&
+                   (markerOnly||rewritePrimary||
+                    (outcome.primaryWritten&&!outcome.markerWritten))) {
                     activeWorkspaceMarkerPending=true;
                     activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
+                    layoutSaveScheduler.request(SDL_GetTicks(),2500u,
+                                                markerOnly&&!rewritePrimary);
                 }
                 setStatus(outcome.message[0]?outcome.message:
                           "BACKGROUND SAVE FAILED",4000);
@@ -3697,18 +3682,15 @@ void drainAsyncLayoutSaver() {
 
 bool loadLayoutFrom(const char* path) {
     const Uint64 started=SDL_GetTicks64();
-    std::string serialized;
-    if(!desknx::persist::readBoundedFile(path,1024u*1024u,serialized)) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_read",
+    desknx::layout::LoadResult loaded{};
+    if(!desknx::workspace_storage::readLayoutFile(path,loaded)) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=stat_read_or_parse",
             path?path:"null");
         return false;
     }
-    desknx::layout::LoadResult loaded{};
-    if(!desknx::layout::parse(serialized,loaded)) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=parse bytes=%zu",
-            path,serialized.size());
-        return false;
-    }
+    struct stat layoutStat{};
+    const size_t bytes=(path&&stat(path,&layoutStat)==0&&layoutStat.st_size>0)
+        ?static_cast<size_t>(layoutStat.st_size):0u;
     desks=std::move(loaded.workspaces);
     deskIndex=loaded.activeWorkspace;
     layoutNeedsMigration=loaded.needsMigration;
@@ -3727,7 +3709,7 @@ bool loadLayoutFrom(const char* path) {
     for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
     desknx::diag::Write("layout","loaded",
         "path=%s bytes=%zu workspaces=%zu tiles=%zu active=%d migration=%d recovered=%zu dropped=%zu elapsed_ms=%llu",
-        path,serialized.size(),desks.size(),tileCount,deskIndex,
+        path,bytes,desks.size(),tileCount,deskIndex,
         layoutNeedsMigration?1:0,layoutRecoveredTiles,layoutDroppedTiles,
         static_cast<unsigned long long>(SDL_GetTicks64()-started));
     return true;
