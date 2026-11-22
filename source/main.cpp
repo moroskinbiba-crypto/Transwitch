@@ -19,6 +19,7 @@
 #include "../include/desknx/Layout.hpp"
 #include "../include/desknx/ProductionPersistence.hpp"
 #include "../include/desknx/WorkspaceStorage.hpp"
+#include "../include/desknx/StorageControlPlane.hpp"
 #include "../include/desknx/SettingsFile.hpp"
 #include "../include/desknx/LaunchHistory.hpp"
 #include "catalog.hpp"
@@ -176,6 +177,7 @@ std::vector<Candidate> catalogue;
 SDL_mutex* catalogueMutex = nullptr;
 SDL_mutex* ipcMutex = nullptr;
 SDL_mutex* storageCommitMutex = nullptr;
+desknx::storage::ControlPlane gStorageControlPlane;
 SDL_Thread* catalogueThread = nullptr;
 SDL_Thread* nextendoThread = nullptr;
 SDL_mutex* nextendoMutex = nullptr;
@@ -598,27 +600,60 @@ void toggleQuickSetting(int index) {
 }
 
 bool commitSdCard(const char* operation) {
-    if(!sdMounted)return false;
+    if(!sdMounted || !gStorageControlPlane.mounted())return false;
     const Uint64 frequency=SDL_GetPerformanceFrequency();
     const Uint64 lockStarted=SDL_GetPerformanceCounter();
     if(storageCommitMutex)SDL_LockMutex(storageCommitMutex);
     const Uint64 lockAcquired=SDL_GetPerformanceCounter();
+
+    const auto begin=gStorageControlPlane.beginCommit(SDL_GetTicks());
+    if(begin.status!=desknx::storage::CommitBeginStatus::Acquired) {
+        if(storageCommitMutex)SDL_UnlockMutex(storageCommitMutex);
+        const char* reason=begin.status==desknx::storage::CommitBeginStatus::Unavailable
+            ?"unavailable":begin.status==desknx::storage::CommitBeginStatus::Busy
+            ?"busy":"backoff";
+        desknx::diag::Write("storage","commit_deferred",
+            "operation=%s reason=%s failures=%u retry_at=%u generation=%llu",
+            operation?operation:"unknown",reason,
+            gStorageControlPlane.consecutiveFailures(),
+            gStorageControlPlane.retryAt(),
+            static_cast<unsigned long long>(gStorageControlPlane.mountGeneration()));
+        return false;
+    }
+
     const Result rc=fsdevCommitDevice("sdmc");
     const Uint64 commitFinished=SDL_GetPerformanceCounter();
+    const auto finished=gStorageControlPlane.finishCommit(
+        begin.lease,R_SUCCEEDED(rc),SDL_GetTicks());
     if(storageCommitMutex)SDL_UnlockMutex(storageCommitMutex);
+
     const double lockWaitMs=frequency>0?static_cast<double>(lockAcquired-lockStarted)*1000.0/static_cast<double>(frequency):0.0;
     const double commitMs=frequency>0?static_cast<double>(commitFinished-lockAcquired)*1000.0/static_cast<double>(frequency):0.0;
     if(lockWaitMs>=0.5||commitMs>=3.0)
         desknx::diag::Write("storage","commit_timing","operation=%s mutex_wait_ms=%.3f commit_ms=%.3f",
             operation?operation:"unknown",lockWaitMs,commitMs);
-    if (R_FAILED(rc)) {
-        desknx::diag::Write("storage", "commit_failed",
-            "operation=%s rc=0x%08X", operation ? operation : "unknown",
-            static_cast<unsigned int>(rc));
+
+    if(finished!=desknx::storage::CommitFinishStatus::Accepted) {
+        desknx::diag::Write("storage","commit_lease_stale",
+            "operation=%s generation=%llu finish=%u",
+            operation?operation:"unknown",
+            static_cast<unsigned long long>(begin.lease.mountGeneration),
+            static_cast<unsigned int>(finished));
         return false;
     }
-    desknx::diag::Write("storage", "commit_ok", "operation=%s",
-                        operation ? operation : "unknown");
+    if(R_FAILED(rc)) {
+        desknx::diag::Write("storage","commit_failed",
+            "operation=%s rc=0x%08X failures=%u retry_delay_ms=%u retry_at=%u",
+            operation?operation:"unknown",static_cast<unsigned int>(rc),
+            gStorageControlPlane.consecutiveFailures(),
+            desknx::storage::ControlPlane::retryDelayMs(
+                gStorageControlPlane.consecutiveFailures()),
+            gStorageControlPlane.retryAt());
+        return false;
+    }
+    desknx::diag::Write("storage","commit_ok",
+        "operation=%s generation=%llu",operation?operation:"unknown",
+        static_cast<unsigned long long>(gStorageControlPlane.mountGeneration()));
     return true;
 }
 
@@ -8566,6 +8601,7 @@ int main(int,char**) {
             // the normal mount once; never mount over an existing device.
             const int unmountRc = fsdevUnmountDevice("sdmc");
             if (unmountRc == 0) {
+                gStorageControlPlane.setMounted(false);
                 sdMountRc = fsdevMountSdmc();
                 if (R_SUCCEEDED(sdMountRc)) sdMounted = probeSdRoot();
             }
@@ -8579,6 +8615,7 @@ int main(int,char**) {
             sdMounted = probeSdRoot();
     }
 
+    gStorageControlPlane.setMounted(sdMounted);
     desknx::diag::Initialize(sdMounted);
 #ifdef DESKNX_SYSTEM_APPLET
     constexpr const char* buildMode = "system-applet";
