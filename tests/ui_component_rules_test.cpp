@@ -1,6 +1,5 @@
 #include <desknx/UiComponentRules.hpp>
 #include <cassert>
-#include <cstdint>
 #include <iostream>
 
 using desknx::ui::ButtonState;
@@ -16,10 +15,22 @@ int main() {
         ButtonVariant::Glass,ButtonState{true,false,false});
     assert(glassActive.drawFill && glassActive.drawEdge);
 
+    const auto glassHover=resolveButtonPaint(
+        ButtonVariant::Glass,ButtonState{false,false,false,true,false});
+    assert(glassHover.drawFill && glassHover.drawEdge);
+
+    const auto glassFocus=resolveButtonPaint(
+        ButtonVariant::Glass,ButtonState{false,true,false});
+    assert(glassFocus.drawFocusRing && glassFocus.drawEdge);
+
     const auto railActive=resolveButtonPaint(
         ButtonVariant::Rail,ButtonState{true,false,false});
     assert(railActive.drawFill && railActive.drawAccentRail);
     assert(!railActive.drawEdge);
+
+    const auto railHover=resolveButtonPaint(
+        ButtonVariant::Rail,ButtonState{false,false,false,true,false});
+    assert(railHover.drawFill && !railHover.drawAccentRail);
 
     const auto minimalIdle=resolveButtonPaint(ButtonVariant::Minimal,{});
     assert(!minimalIdle.drawFill && !minimalIdle.drawAccentRail);
@@ -31,8 +42,12 @@ int main() {
         ButtonVariant::Solid,ButtonState{false,true,false});
     assert(focused.drawFocusRing && focused.drawEdge);
 
+    const auto pressed=resolveButtonPaint(
+        ButtonVariant::Solid,ButtonState{false,false,false,false,true});
+    assert(pressed.alphaScale==224);
+
     const auto disabled=resolveButtonPaint(
-        ButtonVariant::Chip,ButtonState{true,true,true});
+        ButtonVariant::Chip,ButtonState{true,true,true,false,true});
     assert(disabled.drawFill && disabled.drawFocusRing);
     assert(disabled.alphaScale==112);
 
