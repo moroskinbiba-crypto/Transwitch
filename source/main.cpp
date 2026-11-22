@@ -233,7 +233,38 @@ SDL_Thread* layoutSaveThread=nullptr;
 SDL_atomic_t layoutSaveDone{};
 LayoutSaveOutcome layoutSaveOutcome{};
 desknx::persistence::CoalescedLayoutSaveScheduler layoutSaveScheduler{2000};
+
+enum class AuxiliarySaveSlot : std::size_t { Favorites, History, CalendarNotes, GameNames, Count };
+constexpr std::size_t AuxiliarySaveSlotCount=static_cast<std::size_t>(AuxiliarySaveSlot::Count);
+struct AuxiliaryFileSaveJob {
+    std::string contents;
+    std::string temporaryPath;
+    std::string targetPath;
+    std::string backupPath;
+    std::string directory;
+    std::string tempCommitOperation;
+    std::string publishCommitOperation;
+    std::string failureMessage;
+};
+struct AuxiliarySaveBatch {
+    std::array<AuxiliaryFileSaveJob,AuxiliarySaveSlotCount> jobs{};
+    std::array<bool,AuxiliarySaveSlotCount> present{};
+};
+struct AuxiliarySaveOutcome {
+    std::array<bool,AuxiliarySaveSlotCount> success{};
+    std::array<char,128> messages[AuxiliarySaveSlotCount]{};
+};
+std::array<AuxiliaryFileSaveJob,AuxiliarySaveSlotCount> pendingAuxiliarySaveJobs{};
+std::array<bool,AuxiliarySaveSlotCount> pendingAuxiliarySaveValid{};
+std::array<Uint32,AuxiliarySaveSlotCount> pendingAuxiliarySaveDue{};
+std::unique_ptr<AuxiliarySaveBatch> activeAuxiliarySaveBatch;
+SDL_Thread* auxiliarySaveThread=nullptr;
+SDL_atomic_t auxiliarySaveDone{};
+AuxiliarySaveOutcome auxiliarySaveOutcome{};
+
 bool enqueueLayoutSave(bool markerOnly=false);
+void pumpAuxiliarySaves(bool waitForCompletion=false);
+void drainAuxiliarySaves();
 void pumpAsyncLayoutSaver(bool waitForCompletion=false);
 void drainAsyncLayoutSaver();
 struct ConsoleUserProfile { AccountUid uid{}; std::string nickname; };
