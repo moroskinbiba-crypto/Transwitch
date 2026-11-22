@@ -8622,7 +8622,7 @@ int main(int,char**) {
     double metricsInputSumMs=0.0,metricsPresentSumMs=0.0;
     double metricsMaximumInputMs=0.0,metricsMaximumPresentMs=0.0;
     std::array<double,128> frameTimeSamples{};
-    std::size_t frameTimeSampleCount=0;
+    std::size_t frameTimeSampleCount=0,frameTimeSampleCursor=0;
     while(running&&appletMainLoop()) {
         const Uint64 frameStartCounter=SDL_GetPerformanceCounter();
         bool ready=false,complete=false,truncated=false;
@@ -8745,7 +8745,8 @@ int main(int,char**) {
             ?static_cast<double>(frameEndCounter-frameStartCounter)*1000.0/
                 static_cast<double>(performanceFrequency):0.0;
         ++metricsFrames;
-        frameTimeSamples[frameTimeSampleCount%frameTimeSamples.size()]=frameMs;
+        frameTimeSamples[frameTimeSampleCursor]=frameMs;
+        frameTimeSampleCursor=(frameTimeSampleCursor+1)%frameTimeSamples.size();
         if(frameTimeSampleCount<frameTimeSamples.size())++frameTimeSampleCount;
         metricsFrameSumMs+=frameMs;
         metricsRenderSumMs+=renderMs;
@@ -8804,6 +8805,7 @@ int main(int,char**) {
             metricsFrameSumMs=metricsRenderSumMs=metricsInputSumMs=metricsPresentSumMs=0.0;
             metricsMaximumFrameMs=metricsMaximumInputMs=metricsMaximumPresentMs=0.0;
             frameTimeSampleCount=0;
+            frameTimeSampleCursor=0;
         }
     }
 #ifdef DESKNX_SYSTEM_APPLET
