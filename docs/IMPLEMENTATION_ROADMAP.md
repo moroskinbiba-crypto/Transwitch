@@ -37,16 +37,25 @@ Successful compilation alone does not close a runtime acceptance item.
 
 ## Stage 2 — Desktop Streaming
 
-- [ ] Replace FIFO icon requests with priority-aware requests (focused tile, visible
-      tiles, near-visible tiles, background prefetch).
-- [ ] Preload the target workspace immediately after switching, without delaying the
-      logical workspace change.
-- [ ] Retain a small LRU of recently used workspaces and cancel obsolete low-priority
-      work on rapid switching.
-- [ ] Add bounded upload-time/byte budgets per frame rather than a fixed one-texture
-      upload.
-- [ ] Stream workspace backgrounds through CPU decode and render-thread texture upload.
-- [ ] Add memory pressure telemetry and explicit cache-budget tests.
+### Implemented in this branch
+- [x] Replace FIFO icon requests with priority-aware scheduling (focused tile, rendered
+      tiles, nearby workspace prefetch and lower-priority catalogue thumbnails).
+- [x] Preload up to 48 game/homebrew covers after the first ready frame and immediately
+      after each workspace change; the current focus cell is scheduled first.
+- [x] Cancel queued/completed speculative requests on rapid workspace changes; a
+      currently decoding request is discarded unless the new visible frame promotes it.
+- [x] Replace the one-texture limit with a two-upload / 6 MiB per-frame budget.
+- [x] Keep the existing bounded 64-entry / 32 MiB LRU texture cache and renderer-thread
+      texture ownership unchanged.
+- [x] Add a host unit test for focus-distance priority ranking.
+
+### Still open
+- [ ] Keep an explicit small LRU of recently used workspaces, not only the global icon
+      texture LRU.
+- [ ] Move workspace-background stat/decode/scale/texture creation out of draw.
+- [ ] Add cache hit/miss, queue depth/high-water and texture-upload timing telemetry.
+- [ ] Add memory-pressure tests and real-console profiling for large, rapidly switched
+      desktops.
 
 ## Stage 3 — Visual Engine 2.0
 
