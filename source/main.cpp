@@ -4363,7 +4363,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             if(!std::strftime(timeValue,sizeof(timeValue),format,&current))
                 std::snprintf(timeValue,sizeof(timeValue),"--:--");
             std::strftime(dateValue,sizeof(dateValue),"%d.%m.%Y",&current);
-            if(config.style==2) {
+            if(config.style==2&&!compact&&!wide) {
                 const int radius=std::min(39,std::max(23,(wide?r.h:r.w)/3));
                 const int cx=left+radius+4,cy=r.y+r.h/2;
                 color(Color{91,112,139,255});
@@ -4391,10 +4391,14 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 if(dataB)label(dateValue,r.y+65);
                 label("LOCAL TIME",r.y+r.h-18);
             } else {
-                const int scale=wide?4:6;
-                text(timeValue,left,r.y+(wide?23:24),scale,WHITE,right);
-                if(dataB)label(dateValue,r.y+(wide?78:105));
-                label(config.style==1?"12-HOUR CLOCK":"24-HOUR CLOCK",r.y+r.h-18);
+                // The compact square always keeps the time as its primary
+                // value, even when the analog presentation is selected.
+                const int scale=compact?3:(wide?(banner2?3:4):(portrait?5:(standard?5:6)));
+                const int timeY=compact?r.y+31:(wide?r.y+24:(portrait?r.y+62:r.y+48));
+                text(timeValue,left,timeY,scale,WHITE,right);
+                if(dataB)label(dateValue,compact?r.y+70:(wide?r.y+78:(portrait?r.y+142:r.y+108)));
+                if(banner3)label(languageRussian?"МЕСТНОЕ ВРЕМЯ":"LOCAL TIME",r.y+r.h-17);
+                else label(config.style==1?"12-HOUR CLOCK":"24-HOUR CLOCK",r.y+r.h-18);
             }
         } else if(t.kind==Kind::Battery) {
             const bool powerConnected=batteryChargerType>=0&&
@@ -4426,6 +4430,18 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     config.style==2?(powerConnected?GREEN:BLUE):(battery>=20?GREEN:RED));
                 if(dataB)text(joycons,left,r.y+91,1,WHITE,right);
                 else text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
+                if(banner3)label(powerLabel,r.y+112);
+            } else if(portrait) {
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+38,5,WHITE,right);
+                if(dataA)progress(r.y+112,battery);
+                text(battery<0?"UNAVAILABLE":
+                     battery>=80?"HIGH CHARGE":battery>=20?"NORMAL":"LOW BATTERY",
+                     left,r.y+145,1,battery>=20?GREEN:RED,right);
+                if(dataB) {
+                    label(powerLabel,r.y+190);
+                    label(joycons,r.y+224);
+                }
             } else {
                 drawSystemIcon(desknx::ui::IconId::Battery,r.x+r.w-86,r.y+26,58,battery>=20?GREEN:RED);
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
@@ -4479,6 +4495,26 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     }
                 }
                 if(!dataA&&!dataB)text("HOS "+std::string(firmwareText),left,r.y+43,2,WHITE,right);
+            } else if(standard||dashboard||portrait) {
+                // Larger shapes become a true monitor dashboard: standard
+                // shows four core readings, dashboard/portrait expose five.
+                const char* names[]={"SOC TEMP","PCB TEMP","CPU CLOCK","GPU CLOCK","HOS VERSION"};
+                const char* values[]={socText,pcbText,cpuText,gpuText,firmwareText};
+                const int count=standard?4:5;
+                const int columns=metrics.gridColumns;
+                const int rows=(count+columns-1)/columns;
+                const int gap=7;
+                const int cellW=std::max(1,(right-left-gap*(columns-1))/columns);
+                const int cellH=std::max(34,(bottom-bodyTop-gap*(rows-1))/rows);
+                for(int i=0;i<count;++i) {
+                    const int col=i%columns,row=i/columns;
+                    const int x=left+col*(cellW+gap);
+                    const int y=bodyTop+row*(cellH+gap);
+                    roundRect(x,y,cellW,cellH,8,Color{28,42,59,230});
+                    text(names[i],x+7,y+7,1,MUTED,x+cellW-5);
+                    text(values[i],x+7,y+cellH/2-1,1,
+                         i<2?WHITE:BLUE,x+cellW-5);
+                }
             } else {
                 if(config.style==2) {
                     if(dataB) {
