@@ -4245,7 +4245,7 @@ void touchInput(const SDL_Event&e) {
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
         } else {
-            const int row=desknx::ui::LauncherSettingsOptionsLayout.items.itemAt(x,y);
+            const int row=desknx::ui::LauncherSettingsOptionsLayout.itemAt(x,y);
             if(row>=0)activateAppSettings(row);
         }
         return;
