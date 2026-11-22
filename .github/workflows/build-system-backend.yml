@@ -137,6 +137,18 @@ jobs:
             -o /tmp/desknx-backend-machine-test
           /tmp/desknx-backend-machine-test
 
+      - name: Test pending runtime operation gate
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/pending_operation_gate_test.cpp -o /tmp/desknx-pending-operation-test
+          /tmp/desknx-pending-operation-test
+
+      - name: Test application lifecycle completion policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/application_lifecycle_policy_test.cpp -o /tmp/desknx-application-lifecycle-test
+          /tmp/desknx-application-lifecycle-test
+
       - name: Test installer and uninstaller rollback with injected rename failures
         run: bash tests/test-recovery.sh
 
