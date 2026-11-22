@@ -4778,20 +4778,37 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else if(popular.count==0) {
                 textCentered(languageRussian?"СЕЙЧАС НЕТ ИГР":"NO SUPPORTED GAMES ONLINE",
                              center,metrics.clampY(bodyTop+8,8),1,MUTED,left,right);
+            } else if(compact) {
+                const auto& game=popular.games[0];
+                text(game.title?game.title:(languageRussian?"ИГРА":"UNKNOWN GAME"),
+                     left,bodyTop+5,1,WHITE,right-42);
+                text(std::to_string(game.players),right-38,bodyTop+5,1,GREEN,right);
+                label(languageRussian?"ИГРОКОВ ОНЛАЙН":"PLAYERS ONLINE",r.y+r.h-18);
             } else {
-                const int rows=compact?1:(banner?std::min(2,metrics.maxRows):metrics.maxRows);
-                const int nameRight=right-43;
-                for(std::size_t i=0;i<popular.count&&i<static_cast<std::size_t>(rows);++i) {
-                    const auto& game=popular.games[i];
-                    const int y=metrics.rowY(static_cast<int>(i));
-                    text(std::to_string(i+1)+".",left,y,1,BLUE,nameRight-4);
-                    text(game.title?game.title:"Unknown game",left+20,y,1,WHITE,nameRight);
-                    text(std::to_string(game.players),right-38,y,1,GREEN,right);
+                const int count=std::min<int>(
+                    metrics.visibleItems(static_cast<int>(popular.count)),
+                    static_cast<int>(popular.count));
+                const int columns=metrics.gridColumns;
+                const int rows=(count+columns-1)/columns;
+                const int gap=6;
+                const int cellW=std::max(1,(right-left-gap*(columns-1))/columns);
+                const int cellH=std::max(30,(bottom-bodyTop-gap*(rows-1))/rows);
+                for(int i=0;i<count;++i) {
+                    const int col=i%columns,row=i/columns;
+                    const int x=left+col*(cellW+gap);
+                    const int y=bodyTop+row*(cellH+gap);
+                    const auto& game=popular.games[static_cast<std::size_t>(i)];
+                    roundRect(x,y,cellW,cellH,8,Color{28,42,59,230});
+                    text(std::to_string(i+1)+".",x+6,y+5,1,BLUE,x+cellW-5);
+                    text(game.title?game.title:"Unknown game",x+22,y+5,1,WHITE,x+cellW-5);
+                    text(std::to_string(game.players)+
+                         (languageRussian?" ИГР.":" PLAYERS"),
+                         x+6,y+cellH/2+1,1,GREEN,x+cellW-5);
                 }
+                if(!banner)
+                    label(languageRussian?"САМЫЕ ПОПУЛЯРНЫЕ ИГРЫ":"MOST PLAYED RIGHT NOW",
+                          r.y+r.h-18);
             }
-            if(!compact&&!banner)
-                text(languageRussian?"ИГРЫ С МАКСИМАЛЬНЫМ ОНЛАЙНОМ":
-                    "MOST PLAYED RIGHT NOW",left,metrics.clampY(bottom-11,8),1,MUTED,right);
         } else if(t.kind==Kind::QuickSettings) {
             if(!quickSettingsSnapshotLoaded&&!quickSettingsSnapshotLoading)
                 refreshQuickSettingsSnapshot(true);
@@ -4826,37 +4843,41 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 {languageRussian?"СЕТЬ":"NETWORK",networkValue,quickAirplaneAvailable||quickWifiAvailable,
                     quickInternetConnected}
             };
-            if(t.h<=1||t.w<=1) {
-                const std::string summary=
-                    "SOUND "+std::string(quickSoundAvailable?(quickSoundMuted?"MUTED":"ON"):"N/A")+
-                    "   WI-FI "+(quickWifiAvailable?(quickWifiEnabled&&!quickAirplaneMode?"ON":"OFF"):"N/A");
-                label(summary,metrics.clampY(metrics.bodyTop+8,8));
+            if(compact) {
+                // 1x1 is a status summary, not an empty miniature settings
+                // panel: the two most useful states remain readable.
+                for(int i=0;i<2;++i) {
+                    const QuickCell& cell=cells[i==0?2:0]; // Wi-Fi first, then sound
+                    const int y=bodyTop+5+i*29;
+                    const Color stateColor=!cell.available?MUTED:
+                        (cell.active?GREEN:Color{185,157,122,255});
+                    roundRect(left,y,std::max(1,innerWidth),23,7,Color{28,42,59,230});
+                    text(cell.name,left+7,y+7,1,MUTED,right);
+                    text(cell.value,right-55,y+7,1,stateColor,right);
+                }
             } else {
-                const int count=std::max(2,std::min(6,config.itemCount));
-                const int rows=(count+1)/2;
+                const int count=metrics.visibleItems(config.itemCount);
+                const int columns=metrics.gridColumns;
+                const int rows=(count+columns-1)/columns;
                 const int gap=6;
                 const int availableHeight=std::max(rows*24,
-                    metrics.bodyBottom-metrics.bodyTop-4-gap*(rows-1));
-                const int cellH=std::max(24,std::min(42,availableHeight/rows));
-                const int cellW=std::max(1,(right-left-gap)/2);
-                const int gridY=metrics.bodyTop+2;
+                    bottom-bodyTop-gap*(rows-1));
+                const int cellH=std::max(24,availableHeight/std::max(1,rows));
+                const int cellW=std::max(1,(right-left-gap*(columns-1))/columns);
                 for(int i=0;i<count;++i) {
-                    const int col=i%2,row=i/2;
-                    const int x=left+col*(cellW+gap),y=gridY+row*(cellH+gap);
+                    const int col=i%columns,row=i/columns;
+                    const int x=left+col*(cellW+gap),y=bodyTop+row*(cellH+gap);
                     const QuickCell& cell=cells[i];
                     const Color stateColor=!cell.available?MUTED:
                         (cell.active?GREEN:Color{185,157,122,255});
-                    const bool compact=config.style==1;
+                    const bool compactStyle=config.style==1;
                     const Color surface=config.style==2
                         ?Color{19,31,47,245}:Color{31,43,59,245};
-                    roundRect(x,y,cellW,cellH,9,compact?Color{25,38,54,230}:surface);
-                    if(config.style==2) {
-                        roundRect(x+7,y+7,5,std::max(10,cellH-14),2,stateColor);
-                    } else {
-                        roundRect(x+7,y+7,4,std::max(10,cellH-14),2,stateColor);
-                    }
-                    text(cell.name,x+15,y+5,1,MUTED,right);
-                    text(cell.value,x+15,y+cellH/2,1,stateColor,right);
+                    roundRect(x,y,cellW,cellH,9,
+                        compactStyle?Color{25,38,54,230}:surface);
+                    roundRect(x+7,y+7,4,std::max(10,cellH-14),2,stateColor);
+                    text(cell.name,x+15,y+5,1,MUTED,x+cellW-5);
+                    text(cell.value,x+15,y+cellH/2,1,stateColor,x+cellW-5);
                 }
             }
         } else if(t.kind==Kind::Unsupported) {
