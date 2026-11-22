@@ -4915,7 +4915,9 @@ void touchInput(const SDL_Event&e) {
                 return;
             }
             switch(dock.actionAt(x,y)) {
-                case desknx::ui::WorkspaceDockAction::AddWorkspace:newDesk();return;
+                case desknx::ui::WorkspaceDockAction::AddWorkspace:
+                    if(desks.size()<static_cast<size_t>(MAX_DESKS))newDesk();
+                    return;
                 case desknx::ui::WorkspaceDockAction::OpenMenu:
                     workspaceMenu=true;workspaceMenuIndex=0;return;
                 case desknx::ui::WorkspaceDockAction::OpenPicker:openWorkspacePicker(false);return;
