@@ -3541,51 +3541,6 @@ void defaultLayout() {
         Tile{Kind::Calendar,"Calendar","",4,2,2,1,4}
     };
 }
-void updateJoyconBatteryState(JoyconBatteryState& target,
-                              const HidPowerInfo& info) {
-    target.connected=true;
-    target.level=static_cast<int>(std::min<u32>(info.battery_level,4));
-    target.charging=info.is_charging;
-}
-
-void refreshJoyconBattery() {
-    const Uint32 now=SDL_GetTicks();
-    if(lastJoyconBatteryTick!=0&&now-lastJoyconBatteryTick<3000)return;
-    lastJoyconBatteryTick=now;
-    joyconLeft=JoyconBatteryState{};
-    joyconRight=JoyconBatteryState{};
-
-    auto inspectNpad=[&](HidNpadIdType id) {
-        const u32 device=hidGetNpadDeviceType(id);
-        const bool leftConnected=(device&
-            (HidDeviceTypeBits_JoyLeft|HidDeviceTypeBits_HandheldLeft))!=0;
-        const bool rightConnected=(device&
-            (HidDeviceTypeBits_JoyRight|HidDeviceTypeBits_HandheldRight))!=0;
-        if(!leftConnected&&!rightConnected)return;
-
-        if(leftConnected&&rightConnected) {
-            HidPowerInfo left{},right{};
-            hidGetNpadPowerInfoSplit(id,&left,&right);
-            if(!joyconLeft.connected)updateJoyconBatteryState(joyconLeft,left);
-            if(!joyconRight.connected)updateJoyconBatteryState(joyconRight,right);
-            return;
-        }
-
-        HidPowerInfo single{};
-        hidGetNpadPowerInfoSingle(id,&single);
-        if(leftConnected&&!joyconLeft.connected)
-            updateJoyconBatteryState(joyconLeft,single);
-        if(rightConnected&&!joyconRight.connected)
-            updateJoyconBatteryState(joyconRight,single);
-    };
-
-    // Prefer the attached pair in handheld mode, then paired controllers.
-    inspectNpad(HidNpadIdType_Handheld);
-    for(int i=0;i<8;++i)
-        inspectNpad(static_cast<HidNpadIdType>(i));
-    joyconBatteryAvailable=joyconLeft.connected||joyconRight.connected;
-}
-
 void refreshAtmosphereVersion() {
     if(atmosphereVersionChecked)return;
     atmosphereVersionChecked=true;
@@ -3619,22 +3574,7 @@ void refreshAtmosphereVersion() {
 }
 
 void refreshBattery() {
-    if(!hasWidgetKind(Kind::Battery))return;
-    refreshJoyconBattery();
-    const Uint32 now=SDL_GetTicks();
-    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::Battery))*1000u;
-    if(lastBatteryTick!=0&&now-lastBatteryTick<interval)return;
-    lastBatteryTick=now;
-    if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady) {
-        u32 pct=0;
-        if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct))&&pct<=100u)
-            battery=static_cast<int>(pct);
-        PsmChargerType charger=PsmChargerType_Unconnected;
-        if(R_SUCCEEDED(psmGetChargerType(&charger)))
-            batteryChargerType=static_cast<int>(charger);
-        else batteryChargerType=-1;
-    }
+    gSystemTelemetry.setDemandMask(SystemTelemetry::BatteryDemand);
 }
 
 int storageStatsThreadMain(void*) {
@@ -3691,86 +3631,12 @@ void refreshDiagnosticsSnapshot(bool force=false) {
     installedHomebrewCount=static_cast<size_t>(std::count_if(items.begin(),items.end(),
         [](const Candidate& item){return item.kind==Kind::Nro;}));
 
-    u64 used=0,total=0;
-    const Result usedRc=svcGetInfo(&used,InfoType_UsedMemorySize,CUR_PROCESS_HANDLE,0);
-    const Result totalRc=svcGetInfo(&total,InfoType_TotalMemorySize,CUR_PROCESS_HANDLE,0);
-    processRamStatsAvailable=R_SUCCEEDED(usedRc)&&R_SUCCEEDED(totalRc)&&total>0;
-    if(processRamStatsAvailable) {
-        processRamUsed=used;
-        processRamTotal=total;
-    } else {
-        processRamUsed=processRamTotal=0;
-    }
+    // Process memory is sampled by the system telemetry worker.
+    gSystemTelemetry.requestDiagnostics();
 }
 void refreshSystemMonitor() {
-    if(!hasWidgetKind(Kind::System))return;
-    const Uint32 now=SDL_GetTicks();
-    const Uint32 interval=static_cast<Uint32>(configuredWidgetRefresh(Kind::System))*1000u;
-    if(lastSystemMonitorUpdate!=0&&now-lastSystemMonitorUpdate<interval)return;
-    lastSystemMonitorUpdate=now;
-    systemPcbTemperatureAvailable=false;
-    systemSocTemperatureAvailable=false;
-    systemCpuClockAvailable=false;
-    systemGpuClockAvailable=false;
-
-    if(!tsServiceReady&&R_SUCCEEDED(tsInitialize()))tsServiceReady=true;
-    if(tsServiceReady) {
-        if(hosversionGet()>=MAKEHOSVERSION(10,0,0)) {
-            if(!tsInternalOpen&&R_SUCCEEDED(tsOpenSession(
-                &tsInternalSession,TsDeviceCode_LocationInternal)))tsInternalOpen=true;
-            if(!tsSocOpen&&R_SUCCEEDED(tsOpenSession(
-                &tsSocSession,TsDeviceCode_LocationExternal)))tsSocOpen=true;
-            float temperature=0.0f;
-            if(tsInternalOpen&&R_SUCCEEDED(tsSessionGetTemperature(
-                &tsInternalSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
-                systemPcbTemperature=temperature;
-                systemPcbTemperatureAvailable=true;
-            }
-            temperature=0.0f;
-            if(tsSocOpen&&R_SUCCEEDED(tsSessionGetTemperature(
-                &tsSocSession,&temperature))&&temperature>=-20.0f&&temperature<=120.0f) {
-                systemSocTemperature=temperature;
-                systemSocTemperatureAvailable=true;
-            }
-        } else {
-            s32 temperature=0;
-            if(R_SUCCEEDED(tsGetTemperature(TsLocation_Internal,&temperature))&&
-               temperature>=-20&&temperature<=120) {
-                systemPcbTemperature=static_cast<float>(temperature);
-                systemPcbTemperatureAvailable=true;
-            }
-            temperature=0;
-            if(R_SUCCEEDED(tsGetTemperature(TsLocation_External,&temperature))&&
-               temperature>=-20&&temperature<=120) {
-                systemSocTemperature=static_cast<float>(temperature);
-                systemSocTemperatureAvailable=true;
-            }
-        }
-    }
-
-    if(hosversionGet()>=MAKEHOSVERSION(8,0,0)) {
-        if(!clkrstServiceReady&&R_SUCCEEDED(clkrstInitialize()))clkrstServiceReady=true;
-        if(clkrstServiceReady) {
-            if(!cpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
-                &cpuClockSession,PcvModuleId_CpuBus,3)))cpuClockOpen=true;
-            if(!gpuClockOpen&&R_SUCCEEDED(clkrstOpenSession(
-                &gpuClockSession,PcvModuleId_GPU,3)))gpuClockOpen=true;
-            std::uint32_t rate=0;
-            if(cpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&cpuClockSession,&rate))&&
-               rate>=1000000u&&rate<=4000000000u) {
-                systemCpuClockHz=rate;
-                systemCpuClockAvailable=true;
-            }
-            rate=0;
-            if(gpuClockOpen&&R_SUCCEEDED(clkrstGetClockRate(&gpuClockSession,&rate))&&
-               rate>=1000000u&&rate<=4000000000u) {
-                systemGpuClockHz=rate;
-                systemGpuClockAvailable=true;
-            }
-        }
-    }
+    gSystemTelemetry.setDemandMask(SystemTelemetry::SystemDemand);
 }
-
 
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
