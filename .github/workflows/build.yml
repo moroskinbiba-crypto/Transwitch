@@ -157,6 +157,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/shutdown_persistence_test.cpp -o /tmp/desknx-shutdown-persistence-test
           /tmp/desknx-shutdown-persistence-test
 
+      - name: Test all six adaptive widget layouts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_layout_test.cpp -o /tmp/desknx-widget-layout-test
+          /tmp/desknx-widget-layout-test
+
       - name: Test widget configuration persistence and validation
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_config_test.cpp -o /tmp/desknx-widget-config-test
