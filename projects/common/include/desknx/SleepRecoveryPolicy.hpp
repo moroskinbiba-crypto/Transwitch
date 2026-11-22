@@ -12,29 +12,27 @@ enum class SleepRecoveryAction : std::uint8_t {
     RestoreGame,
 };
 
-// Decide how to recover when AM rejects the sleep sequence. A menu applet
-// that is still alive must be reused; a completed but not yet joined holder
-// must be reaped before LaunchMenu can be called again.
+// Decide how to recover when AM rejects the sleep sequence. A live menu is
+// reused even if the pre-sleep snapshot raced; a completed-but-still-owned
+// holder is always reaped before a new applet may be created.
 constexpr SleepRecoveryAction DecideSleepStartFailureRecovery(
     bool menuWasOpen,
     bool menuAlive,
     bool menuHolderRunning,
     bool menuReady,
     bool appRunning) noexcept {
-    if (menuWasOpen) {
-        if (menuAlive)
-            return menuReady ? SleepRecoveryAction::KeepMenuActive
-                             : SleepRecoveryAction::KeepMenuStarting;
-        if (menuHolderRunning)
-            return SleepRecoveryAction::ReapMenuHolder;
+    if (menuAlive)
+        return menuReady ? SleepRecoveryAction::KeepMenuActive
+                         : SleepRecoveryAction::KeepMenuStarting;
+    if (menuHolderRunning)
+        return SleepRecoveryAction::ReapMenuHolder;
+    if (menuWasOpen || !appRunning)
         return SleepRecoveryAction::LaunchMenu;
-    }
-    return appRunning ? SleepRecoveryAction::RestoreGame
-                      : SleepRecoveryAction::LaunchMenu;
+    return SleepRecoveryAction::RestoreGame;
 }
 
-// Same ownership rules after a successful wake event. The caller supplies the
-// pre-sleep foreground intent separately from the current application state.
+// Same holder ownership rules after a successful wake event. Reuse any live
+// menu, reap a finished holder, then honor the pre-sleep menu/game intent.
 constexpr SleepRecoveryAction DecideSleepWakeRecovery(
     bool reopenMenu,
     bool menuAlive,
@@ -42,14 +40,13 @@ constexpr SleepRecoveryAction DecideSleepWakeRecovery(
     bool menuReady,
     bool appWasRunningBeforeSleep,
     bool appRunning) noexcept {
-    if (reopenMenu) {
-        if (menuAlive)
-            return menuReady ? SleepRecoveryAction::KeepMenuActive
-                             : SleepRecoveryAction::KeepMenuStarting;
-        if (menuHolderRunning)
-            return SleepRecoveryAction::ReapMenuHolder;
+    if (menuAlive)
+        return menuReady ? SleepRecoveryAction::KeepMenuActive
+                         : SleepRecoveryAction::KeepMenuStarting;
+    if (menuHolderRunning)
+        return SleepRecoveryAction::ReapMenuHolder;
+    if (reopenMenu)
         return SleepRecoveryAction::LaunchMenu;
-    }
     return appWasRunningBeforeSleep && appRunning
         ? SleepRecoveryAction::RestoreGame
         : SleepRecoveryAction::LaunchMenu;
