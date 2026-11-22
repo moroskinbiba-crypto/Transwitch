@@ -4676,6 +4676,18 @@ void drawScreen() {
     const bool emptyDesktopSurface=currentWorkspaceIsEmpty();
     refreshSurfaceManager();
     const bool modalSurfaceActive=gSurfaceManager.backdropActive();
+    // Publish the active desktop image before consuming a worker result. This
+    // prevents a just-completed image from the previous workspace being
+    // uploaded for one extra frame after a rapid desktop switch.
+    const std::string* activeBackground=nullptr;
+    if(deskIndex>=0&&static_cast<std::size_t>(deskIndex)<desks.size()&&
+       !desks[static_cast<std::size_t>(deskIndex)].backgroundPath.empty()) {
+        activeBackground=&desks[static_cast<std::size_t>(deskIndex)].backgroundPath;
+    } else if(!wallpaperPath.empty()) {
+        activeBackground=&wallpaperPath;
+    }
+    if(activeBackground)gWorkspaceBackgroundCache.setPriorityPath(*activeBackground);
+    else gWorkspaceBackgroundCache.clearPriority();
     gWorkspaceBackgroundCache.beginFrame();
     gIconCache.beginFrame();
     gFontRenderer.beginFrame();
