@@ -118,7 +118,6 @@ inline void scanDirectory(const std::string& root, int depth, bool isRoot,
         bool haveStat=false;
         if(type==EntryType::Unknown) {
             ++report.statChecks;++report.fallbackStatChecks;
-            if(hasNroExtension(name))++report.nroStatChecks;
             if(stat(path.c_str(),&st)!=0) {
                 const int error = errno;
                 if (error == ENOENT) ++report.changedEntries;
@@ -129,6 +128,7 @@ inline void scanDirectory(const std::string& root, int depth, bool isRoot,
             if(S_ISDIR(st.st_mode))type=EntryType::Directory;
             else if(S_ISREG(st.st_mode))type=EntryType::Regular;
             else type=EntryType::Other;
+            if(type==EntryType::Regular&&hasNroExtension(name))++report.nroStatChecks;
         } else ++report.dTypeClassifiedEntries;
         if(type==EntryType::Directory) {
             if (depth >= MaxDepth) {

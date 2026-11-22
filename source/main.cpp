@@ -4844,7 +4844,7 @@ void drawScreen() {
     softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
     if(editing) {
-        std::array<SDL_Rect,2048> dottedRects{};
+        static std::array<SDL_Rect,2048> dottedRects{};
         std::size_t dottedRectCount=0;
         for(int y=0;y<ROWS;++y)for(int x=0;x<COLS;++x)if(itemAt(d,x,y)<0) {
             const int px=LEFT+x*(CW+GX),py=TOP+y*(CH+GY);

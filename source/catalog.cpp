@@ -598,12 +598,13 @@ void CollectNrosIncremental(const std::string& root,int depth,
         struct stat childStat{};bool haveStat=false;
         if(type==EntryType::Unknown) {
             ++stats.statChecks;++stats.fallbackStatChecks;
-            if(desknx::nro_scan::hasNroExtension(name)&&name!="DeskNX.nro")++stats.nroStatChecks;
             if(stat(path.c_str(),&childStat)!=0){stats.complete=false;continue;}
             haveStat=true;
             if(S_ISDIR(childStat.st_mode))type=EntryType::Directory;
             else if(S_ISREG(childStat.st_mode))type=EntryType::Regular;
             else type=EntryType::Other;
+            if(type==EntryType::Regular&&desknx::nro_scan::hasNroExtension(name)&&name!="DeskNX.nro")
+                ++stats.nroStatChecks;
         } else ++stats.dTypeClassifiedEntries;
         if(type==EntryType::Directory) {
             if(depth<desknx::nro_scan::MaxDepth)
