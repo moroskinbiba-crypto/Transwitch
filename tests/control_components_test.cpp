@@ -47,6 +47,20 @@ int main() {
     assert(!quiet.drawBorder);
     assert(quiet.background.a==0);
 
+    const auto headerNormal=ResolveButtonStyle(ButtonVariant::HeaderToolbar,{});
+    assert(headerNormal.background.r==37&&headerNormal.background.g==47);
+    assert(headerNormal.background.a==230&&!headerNormal.drawBorder);
+    assert(headerNormal.foreground.r==179&&headerNormal.foreground.g==191);
+    const auto headerSelected=ResolveButtonStyle(ButtonVariant::HeaderToolbarSelected,{});
+    assert(headerSelected.background.r==48&&headerSelected.background.g==82);
+    assert(headerSelected.drawBorder&&headerSelected.border.g==174);
+    const auto headerPressed=ResolveButtonStyle(ButtonVariant::HeaderToolbar,
+        ControlState{false,true,false});
+    assert(headerPressed.background.r==28);
+    const auto headerFocused=ResolveButtonStyle(ButtonVariant::HeaderToolbarSelected,
+        ControlState{true,false,false});
+    assert(headerFocused.drawFocusRing);
+
     const auto current=ResolveSelectableRowStyle(SelectableRowState::Current);
     const auto focused=ResolveSelectableRowStyle(SelectableRowState::Focused);
     const auto disabledRow=ResolveSelectableRowStyle(SelectableRowState::Disabled);

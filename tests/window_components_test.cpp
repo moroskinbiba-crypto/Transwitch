@@ -98,6 +98,56 @@ int main() {
     assert(toolbar.buttonRect(6).width==72&&toolbar.buttonRect(6).height==30);
     assert(toolbar.buttonRect(-1).width==0);
 
+    const auto& header=LauncherToolbarControls;
+    assert(LauncherToolbarLayout::ButtonCount==4);
+    assert(header.buttonRect(0).x==64&&header.buttonRect(0).y==24);
+    assert(header.buttonRect(0).width==82&&header.buttonRect(0).height==48);
+    assert(header.buttonRect(3).x==334&&header.buttonRect(3).inside(header.surface));
+    assert(header.buttonRect(-1).width==0);
+    assert(header.buttonAt(64,16)==0&&header.buttonAt(145,82)==0);
+    assert(header.buttonAt(146,50)==-1&&header.buttonAt(154,16)==1);
+    assert(header.buttonAt(335,82)==3&&header.buttonAt(416,50)==-1);
+    assert(header.buttonAt(334,83)==-1);
+    assert(header.profileHitBounds.contains(470,16));
+    assert(header.profileHitBounds.contains(862,82));
+    assert(!header.profileHitBounds.contains(863,82));
+    assert(header.profileSurface.inside(header.surface));
+    assert(header.nextendoSurface.inside(header.surface));
+    assert(header.clockBatterySurface.inside(header.surface));
+
+    const auto& dock=WorkspaceDockControls;
+    assert(WorkspaceDockLayout::VisibleTabCount==5);
+    assert(dock.interactionBounds.inside(dock.surface));
+    assert(dock.tabStripBounds.x==50&&dock.tabStripBounds.width==710);
+    assert(dock.tabRect(0).x==50&&dock.tabRect(0).y==641);
+    assert(dock.tabRect(0).width==132&&dock.tabRect(0).height==48);
+    assert(dock.tabRect(4).x==618&&dock.tabRect(4).inside(dock.surface));
+    assert(dock.tabRect(-1).width==0);
+    assert(dock.tabHitBounds(0).contains(50,638));
+    assert(dock.tabHitBounds(0).contains(181,694));
+    assert(!dock.tabHitBounds(0).contains(182,660));
+    assert(dock.workspaceAt(50,638,2,8)==2);
+    assert(dock.workspaceAt(181,694,2,8)==2);
+    assert(dock.workspaceAt(182,660,2,8)==-1);
+    assert(dock.workspaceAt(618,694,2,8)==6);
+    assert(dock.workspaceAt(749,660,2,7)==-1);
+    assert(dock.workspaceAt(50,695,2,8)==-1);
+    assert(dock.actionAt(770,638)==WorkspaceDockAction::AddWorkspace);
+    assert(dock.actionAt(821,694)==WorkspaceDockAction::AddWorkspace);
+    assert(dock.actionAt(822,660)==WorkspaceDockAction::None);
+    assert(dock.actionAt(832,638)==WorkspaceDockAction::OpenMenu);
+    assert(dock.actionAt(883,694)==WorkspaceDockAction::OpenMenu);
+    assert(dock.actionAt(884,660)==WorkspaceDockAction::None);
+    assert(dock.actionAt(900,638)==WorkspaceDockAction::OpenPicker);
+    assert(dock.actionAt(1049,694)==WorkspaceDockAction::OpenPicker);
+    assert(dock.actionAt(1050,660)==WorkspaceDockAction::None);
+    assert(dock.actionAt(1096,638)==WorkspaceDockAction::ToggleEdit);
+    assert(dock.actionAt(1223,694)==WorkspaceDockAction::ToggleEdit);
+    assert(dock.actionAt(1224,660)==WorkspaceDockAction::None);
+    assert(dock.actionAt(770,695)==WorkspaceDockAction::None);
+    assert(dock.addButton.inside(dock.surface)&&dock.menuButton.inside(dock.surface));
+    assert(dock.editButton.inside(dock.surface));
+
     // Recent dialog: ten visible history rows and two exact header buttons.
     const auto& recent=RecentWindowControls;
     assert(RecentWindowLayout::VisibleEntries==10);

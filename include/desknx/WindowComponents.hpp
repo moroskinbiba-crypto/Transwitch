@@ -189,6 +189,60 @@ inline constexpr ItemListLayout AppLibraryListRows{
     {137,180,730,400},10,35,40
 };
 
+// Shared main-screen chrome: visual rectangles and pointer hit areas are
+// separate where the existing controls intentionally have forgiving margins.
+struct LauncherToolbarLayout {
+    static constexpr int ButtonCount=4, ButtonStartX=64, ButtonWidth=82, ButtonStep=90;
+    ModalRect surface{56,16,1168,64}, touchBand{0,16,1280,67};
+    ModalRect profileSurface{470,24,392,48}, profileHitBounds{470,16,393,67};
+    ModalRect nextendoSurface{870,24,142,48}, clockBatterySurface{1022,24,180,48};
+    constexpr ModalRect buttonRect(int i) const noexcept {
+        return i>=0&&i<ButtonCount?ModalRect{ButtonStartX+i*ButtonStep,24,ButtonWidth,48}:ModalRect{};
+    }
+    constexpr ModalRect buttonHitBounds(int i) const noexcept {
+        return i>=0&&i<ButtonCount?ModalRect{ButtonStartX+i*ButtonStep,16,ButtonWidth,67}:ModalRect{};
+    }
+    constexpr int buttonAt(int x,int y) const noexcept {
+        for(int i=0;i<ButtonCount;++i)if(buttonHitBounds(i).contains(x,y))return i;
+        return -1;
+    }
+};
+inline constexpr LauncherToolbarLayout LauncherToolbarControls{};
+
+enum class WorkspaceDockAction : std::uint8_t { None, AddWorkspace, OpenMenu, OpenPicker, ToggleEdit };
+
+struct WorkspaceDockLayout {
+    static constexpr int VisibleTabCount=5, TabStartX=50, TabWidth=132, TabStep=142;
+    ModalRect surface{28,624,1224,82}, interactionBounds{28,638,1224,57};
+    ModalRect tabStripBounds{50,638,VisibleTabCount*TabStep,57};
+    ModalRect dragActivationBounds{50,638,1230,57};
+    ModalRect addButton{770,641,52,48}, addHitBounds{770,638,52,57};
+    ModalRect menuButton{832,641,52,48}, menuHitBounds{832,638,52,57};
+    ModalRect pageIndicator{900,641,150,48}, pageIndicatorHitBounds{900,638,150,57};
+    ModalRect editButton{1096,638,128,54}, editHitBounds{1096,638,128,57};
+    constexpr ModalRect tabRect(int slot) const noexcept {
+        return slot>=0&&slot<VisibleTabCount?ModalRect{TabStartX+slot*TabStep,641,TabWidth,48}:ModalRect{};
+    }
+    constexpr ModalRect tabHitBounds(int slot) const noexcept {
+        return slot>=0&&slot<VisibleTabCount?ModalRect{TabStartX+slot*TabStep,638,TabWidth,57}:ModalRect{};
+    }
+    constexpr int workspaceAt(int x,int y,int first,int count) const noexcept {
+        for(int slot=0;slot<VisibleTabCount;++slot)if(tabHitBounds(slot).contains(x,y)) {
+            const int target=first+slot;
+            return target>=0&&target<count?target:-1;
+        }
+        return -1;
+    }
+    constexpr WorkspaceDockAction actionAt(int x,int y) const noexcept {
+        if(addHitBounds.contains(x,y))return WorkspaceDockAction::AddWorkspace;
+        if(menuHitBounds.contains(x,y))return WorkspaceDockAction::OpenMenu;
+        if(pageIndicatorHitBounds.contains(x,y))return WorkspaceDockAction::OpenPicker;
+        if(editHitBounds.contains(x,y))return WorkspaceDockAction::ToggleEdit;
+        return WorkspaceDockAction::None;
+    }
+};
+inline constexpr WorkspaceDockLayout WorkspaceDockControls{};
+
 struct AppLibraryToolbarLayout {
     static constexpr int ButtonCount=7;
     std::array<ModalRect,ButtonCount> buttons{};

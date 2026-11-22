@@ -56,9 +56,15 @@ namespace {
 using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
-constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
-constexpr int ToolbarStartX=64, ToolbarButtonWidth=82, ToolbarButtonStep=90, ToolbarButtonCount=4;
-constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarButtonStep; }
+constexpr int DeskTabX=desknx::ui::WorkspaceDockLayout::TabStartX;
+constexpr int DeskTabWidth=desknx::ui::WorkspaceDockLayout::TabWidth;
+constexpr int DeskTabStep=desknx::ui::WorkspaceDockLayout::TabStep;
+constexpr int VisibleDeskTabs=desknx::ui::WorkspaceDockLayout::VisibleTabCount;
+constexpr int ToolbarStartX=desknx::ui::LauncherToolbarLayout::ButtonStartX;
+constexpr int ToolbarButtonWidth=desknx::ui::LauncherToolbarLayout::ButtonWidth;
+constexpr int ToolbarButtonStep=desknx::ui::LauncherToolbarLayout::ButtonStep;
+constexpr int ToolbarButtonCount=desknx::ui::LauncherToolbarLayout::ButtonCount;
+constexpr int toolbarButtonX(int i) { return desknx::ui::LauncherToolbarControls.buttonRect(i).x; }
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
 constexpr u32 NsViewFlagIsGameCard = BIT(6);
@@ -974,12 +980,13 @@ Color controlColor(desknx::ui::ControlColor c) {
 void drawButton(const desknx::ui::ButtonControl& control,
                 const std::string& label,int labelX,int labelY,
                 int textRight,
-                desknx::ui::TextRole role=desknx::ui::TextRole::Body) {
+                desknx::ui::TextRole role=desknx::ui::TextRole::Body,
+                int cornerRadius=desknx::ui::ButtonCornerRadius) {
     const auto& bounds=control.bounds;
     if(bounds.width<=0||bounds.height<=0)return;
     const auto style=desknx::ui::ResolveButtonStyle(control.variant,control.state);
     roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
-        desknx::ui::ButtonCornerRadius,controlColor(style.background));
+        cornerRadius,controlColor(style.background));
     if(style.drawBorder)
         outline(bounds.x,bounds.y,bounds.width,bounds.height,controlColor(style.border));
     if(style.drawFocusRing)
@@ -2819,36 +2826,45 @@ void drawScreen() {
     else
         drawWallpaper();
 
-    // Compact, labelled system toolbar. Each control has a generous touch
-    // target and a visible name; the same tools are available from the gamepad.
-    softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
+    // Main toolbar and profile/status panels use one shared chrome layout.
+    const auto& toolbarLayout=desknx::ui::LauncherToolbarControls;
+    softCard(toolbarLayout.surface.x,toolbarLayout.surface.y,
+        toolbarLayout.surface.width,toolbarLayout.surface.height,
+        Color{24,32,45,224},Color{255,255,255,28});
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
         {2,false,"GALLERY"},{0,appSettingsMenu,"SETTINGS"},
         {1,false,"PADS"},{8,systemMenu,"TOOLS"}
     };
-    for(int i=0;i<ToolbarButtonCount;++i) {
+    for(int i=0;i<desknx::ui::LauncherToolbarLayout::ButtonCount;++i) {
         const auto& item=headerTools[i];
-        const int x=toolbarButtonX(i);
-        roundRect(x,24,ToolbarButtonWidth,48,13,
-            item.active?Color{48,82,124,255}:Color{37,47,62,230});
-        if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
-        drawSystemIcon(item.icon,x+12,31,24,item.active?WHITE:Color{204,214,228,255});
+        const auto bounds=toolbarLayout.buttonRect(i);
+        const auto variant=item.active?desknx::ui::ButtonVariant::HeaderToolbarSelected:
+            desknx::ui::ButtonVariant::HeaderToolbar;
+        const desknx::ui::ButtonControl button{bounds,variant,{}};
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
-        text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),56,1,
-             item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
+        drawButton(button,item.label,
+            bounds.x+std::max(5,(bounds.width-labelWidth)/2),56,
+            bounds.x+bounds.width-4,desknx::ui::TextRole::Metadata,13);
+        drawSystemIcon(item.icon,bounds.x+12,bounds.y+7,24,
+            item.active?WHITE:Color{204,214,228,255});
     }
-    softCard(470,24,392,48,Color{32,43,59,235},Color{255,255,255,24});
-    drawSystemIcon(7,486,34,27,Color{215,228,246,255});
-    text(selectedUserLabel,526,41,2,WHITE,760);
-    text("CHANGE",780,43,1,BLUE,850);
-    roundRect(870,24,142,48,18,Color{32,43,59,235});
-    text(nextendoTotalLabel(),882,43,1,GREEN,1003);
-    roundRect(1022,24,180,48,18,Color{32,43,59,235});
-    text(clockText(),1040,37,3,WHITE,1136);
-    rect(1148,34,1,26,Color{255,255,255,30});
-    text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
-         battery>=20?GREEN:RED,1198);
+    const auto profile=toolbarLayout.profileSurface;
+    softCard(profile.x,profile.y,profile.width,profile.height,
+        Color{32,43,59,235},Color{255,255,255,24});
+    drawSystemIcon(7,profile.x+16,profile.y+10,27,Color{215,228,246,255});
+    text(selectedUserLabel,profile.x+56,profile.y+17,2,WHITE,profile.x+290);
+    text("CHANGE",profile.x+310,profile.y+19,1,BLUE,profile.x+380);
+    const auto nextendo=toolbarLayout.nextendoSurface;
+    roundRect(nextendo.x,nextendo.y,nextendo.width,nextendo.height,18,Color{32,43,59,235});
+    text(nextendoTotalLabel(),nextendo.x+12,nextendo.y+19,1,GREEN,nextendo.x+nextendo.width-9);
+    const auto clockBattery=toolbarLayout.clockBatterySurface;
+    roundRect(clockBattery.x,clockBattery.y,clockBattery.width,clockBattery.height,
+        18,Color{32,43,59,235});
+    text(clockText(),clockBattery.x+18,clockBattery.y+13,3,WHITE,clockBattery.x+114);
+    rect(clockBattery.x+126,clockBattery.y+10,1,26,Color{255,255,255,30});
+    text(battery>=0?std::to_string(battery)+"%":"BAT --",clockBattery.x+136,
+        clockBattery.y+19,1,battery>=20?GREEN:RED,clockBattery.x+176);
 
     // Single desktop surface under the tiles and widgets.
     softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
@@ -2903,29 +2919,38 @@ void drawScreen() {
     }
     // Workspace switcher anchors the lower edge, matching a familiar
     // console desktop rather than duplicating navigation in a second dock.
-    softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    const auto& dock=desknx::ui::WorkspaceDockControls;
+    softCard(dock.surface.x,dock.surface.y,dock.surface.width,dock.surface.height,
+        Color{18,26,39,242},Color{255,255,255,24});
     const int deskStart=visibleStart();
-    for(int i=0;i<VisibleDeskTabs&&deskStart+i<static_cast<int>(desks.size());++i) {
-        const int index=deskStart+i;
-        const int x=DeskTabX+i*DeskTabStep;
+    for(int slot=0;slot<desknx::ui::WorkspaceDockLayout::VisibleTabCount&&
+        deskStart+slot<static_cast<int>(desks.size());++slot) {
+        const int index=deskStart+slot;
+        const auto bounds=dock.tabRect(slot);
         const bool active=index==deskIndex;
-        roundRect(x,641,DeskTabWidth,48,14,
+        roundRect(bounds.x,bounds.y,bounds.width,bounds.height,14,
             active?Color{53,91,139,255}:Color{34,43,58,235});
-        if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
-        text(desks[static_cast<size_t>(index)].name,x+12,658,1,
-             active?WHITE:MUTED,x+DeskTabWidth-8);
+        if(active)outline(bounds.x,bounds.y,bounds.width,bounds.height,Color{144,189,244,110});
+        text(desks[static_cast<size_t>(index)].name,bounds.x+12,bounds.y+17,1,
+            active?WHITE:MUTED,bounds.x+bounds.width-8);
     }
-    roundRect(770,641,52,48,14,desks.size()<static_cast<size_t>(MAX_DESKS)?
-        Color{35,70,105,255}:Color{34,43,58,235});
-    text("+",787,652,3,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,812);
-    roundRect(832,641,52,48,14,Color{34,43,58,235});
-    text("...",842,660,2,WHITE,876);
+    const auto addBounds=dock.addButton;
+    roundRect(addBounds.x,addBounds.y,addBounds.width,addBounds.height,14,
+        desks.size()<static_cast<size_t>(MAX_DESKS)?Color{35,70,105,255}:Color{34,43,58,235});
+    text("+",addBounds.x+17,addBounds.y+11,3,
+        desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,addBounds.x+addBounds.width-10);
+    const auto menuBounds=dock.menuButton;
+    roundRect(menuBounds.x,menuBounds.y,menuBounds.width,menuBounds.height,14,Color{34,43,58,235});
+    text("...",menuBounds.x+10,menuBounds.y+19,2,WHITE,menuBounds.x+menuBounds.width-8);
     text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
-         916,658,1,MUTED,1040);
-    roundRect(1096,638,128,54,16,
+        dock.pageIndicator.x+16,dock.pageIndicator.y+17,1,MUTED,
+        dock.pageIndicator.x+dock.pageIndicator.width-10);
+    const auto editBounds=dock.editButton;
+    roundRect(editBounds.x,editBounds.y,editBounds.width,editBounds.height,16,
         editing?Color{53,100,156,255}:Color{34,46,64,255});
-    drawSystemIcon(5,1108,650,30,WHITE);
-    text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
+    drawSystemIcon(5,editBounds.x+12,editBounds.y+12,30,WHITE);
+    text(editing?"DONE":"EDIT",editBounds.x+52,editBounds.y+19,2,WHITE,
+        editBounds.x+editBounds.width-8);
     if(modalStack.contains(desknx::ui::ModalLayer::AppLibrary)) {
         drawModalBackdrop(194);
         const int mx=110,my=70,mw=1060,mh=570;
@@ -4794,15 +4819,14 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(deletePrompt)return;
-        // Four permanent shortcuts: Gallery, Settings, Pads and Tools.
-        if(y>=16&&y<=82) {
-            if(x>=470&&x<=862) {
+        const auto& toolbarLayout=desknx::ui::LauncherToolbarControls;
+        if(toolbarLayout.touchBand.contains(x,y)) {
+            if(toolbarLayout.profileHitBounds.contains(x,y)) {
                 openUserProfile();
                 return;
             }
-            const int index=(x-ToolbarStartX)/ToolbarButtonStep;
-            if(x>=ToolbarStartX&&index>=0&&index<ToolbarButtonCount&&
-               x<toolbarButtonX(index)+ToolbarButtonWidth) {
+            const int index=toolbarLayout.buttonAt(x,y);
+            if(index>=0) {
                 switch(index) {
                     case 0: {
                         const Uint64 galleryStarted=SDL_GetTicks64();
@@ -4828,15 +4852,11 @@ void touchInput(const SDL_Event&e) {
             }
             return;
         }
-        // Workspace tabs and their controls live at the bottom of the screen.
-        if(y>=638&&y<=694) {
-            if(x>=DeskTabX&&x<DeskTabX+VisibleDeskTabs*DeskTabStep) {
-                const int offset=x-DeskTabX;
-                const int slot=offset/DeskTabStep;
-                const int tabX=DeskTabX+slot*DeskTabStep;
-                const int target=tabStart()+slot;
-                if(x>=tabX&&x<tabX+DeskTabWidth&&target>=0&&
-                   target<static_cast<int>(desks.size())&&target<tabStart()+VisibleDeskTabs) {
+        const auto& dock=desknx::ui::WorkspaceDockControls;
+        if(dock.interactionBounds.contains(x,y)) {
+            if(dock.tabStripBounds.contains(x,y)) {
+                const int target=dock.workspaceAt(x,y,tabStart(),static_cast<int>(desks.size()));
+                if(target>=0) {
                     const Uint32 now=SDL_GetTicks();
                     if(target==deskIndex&&lastWorkspaceTabTap==target&&
                        now-lastWorkspaceTabTapTick<=500) {
@@ -4854,21 +4874,17 @@ void touchInput(const SDL_Event&e) {
                 } else lastWorkspaceTabTap=-1;
                 return;
             }
-            if(x>=770&&x<822) {newDesk();return;}
-            if(x>=832&&x<884) {
-                workspaceMenu=true;
-                workspaceMenuIndex=0;
-                return;
-            }
-            if(x>=900&&x<1050) {
-                openWorkspacePicker(false);
-                return;
-            }
-            if(x>=1096&&x<1224) {
-                editing=!editing;
-                if(!editing&&dragging){dragging=false;saveNow();}
-                setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-                return;
+            switch(dock.actionAt(x,y)) {
+                case desknx::ui::WorkspaceDockAction::AddWorkspace:newDesk();return;
+                case desknx::ui::WorkspaceDockAction::OpenMenu:
+                    workspaceMenu=true;workspaceMenuIndex=0;return;
+                case desknx::ui::WorkspaceDockAction::OpenPicker:openWorkspacePicker(false);return;
+                case desknx::ui::WorkspaceDockAction::ToggleEdit:
+                    editing=!editing;
+                    if(!editing&&dragging){dragging=false;saveNow();}
+                    setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
+                    return;
+                case desknx::ui::WorkspaceDockAction::None:default:break;
             }
         }
         if(desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
@@ -4943,28 +4959,20 @@ void touchInput(const SDL_Event&e) {
             dragging=true;
             touchDragging=true;
             touchDragTabStart=tabStart();
-            if(y>=638&&y<=694&&x>=DeskTabX) {
-                const int start=tabStart();
-                const int slot=(x-DeskTabX)/DeskTabStep;
-                const int target=start+slot;
-                const int tabX=DeskTabX+slot*DeskTabStep;
-                if(slot>=0&&slot<VisibleDeskTabs&&x<tabX+DeskTabWidth&&
-                   target>=0&&target<static_cast<int>(desks.size()))
-                    moveToDesk(target);
+            const auto& dock=desknx::ui::WorkspaceDockControls;
+            if(dock.dragActivationBounds.contains(x,y)) {
+                const int target=dock.workspaceAt(x,y,tabStart(),static_cast<int>(desks.size()));
+                if(target>=0)moveToDesk(target);
             } else {
                 (void)touchSelect(x,y);
             }
         }
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=638&&y<=694&&x>=DeskTabX) {
-            const int start=tabStart();
-            const int slot=(x-DeskTabX)/DeskTabStep;
-            const int target=start+slot;
-            const int tabX=DeskTabX+slot*DeskTabStep;
-            if(slot>=0&&slot<VisibleDeskTabs&&x<tabX+DeskTabWidth&&
-               target>=0&&target<static_cast<int>(desks.size()))
-                moveToDesk(target);
+        const auto& dock=desknx::ui::WorkspaceDockControls;
+        if(dock.dragActivationBounds.contains(x,y)) {
+            const int target=dock.workspaceAt(x,y,tabStart(),static_cast<int>(desks.size()));
+            if(target>=0)moveToDesk(target);
         } else {
             touchSelect(x,y);
         }

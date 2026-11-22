@@ -110,7 +110,10 @@ Successful compilation alone does not close a runtime acceptance item.
       selectable rows into shared window layouts with exact touch boundaries.
 - [x] Align App Library visible list rows and add action with shared control geometry;
       preserve the double-tap launch path and make list gutters non-interactive.
-- [ ] Migrate remaining modal, toolbar, footer and workspace controls to shared styles.
+- [x] Move the main header toolbar and workspace dock into shared chrome layouts;
+      rendering, pointer hit targets and drag-to-workspace use one geometry source.
+- [ ] Migrate remaining status/footer hint controls and the rest of the workspace chrome
+      to shared control styles.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,
       library and workspace-picker surfaces.
