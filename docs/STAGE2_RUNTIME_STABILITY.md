@@ -16,7 +16,7 @@ This increment is deliberately limited to runtime ownership and recovery paths. 
 - **Sleep re-entry and failure recovery.** Duplicate sleep notifications are ignored while a sleep sequence is active. If AM refuses `appletStartSleepSequence()`, the backend returns to a valid menu/game/recovery state instead of waiting indefinitely for a wake event that may never arrive.
 - **Wake recovery.** A live menu applet is reused after wake; a finished holder is reaped before another menu is launched. Stale wake notifications outside the Sleeping state are ignored.
 - **Sleep-loop quiescence.** The backend continues pumping lifecycle messages while sleeping, but skips menu IPC, watchdog checks, process polling and periodic service retries until the wake transition is received.
-- **Regression tests in both host CI workflows.** Added tests for the pending-operation gate and application-holder release policy.
+- **Regression tests in both host CI workflows.** Added tests for the pending-operation gate, application-holder release policy, and all sleep/wake recovery decisions.
 
 ### Host tests
 
@@ -33,6 +33,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
 ```
 
 Both commands are now part of `.github/workflows/build.yml` and `.github/workflows/build-system-backend.yml`.
+
+c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+  tests/sleep_recovery_policy_test.cpp -o /tmp/sleep-recovery-test
+/tmp/sleep-recovery-test
 
 ### Remaining Stage 2 work
 
