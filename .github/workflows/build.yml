@@ -101,6 +101,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/typography_test.cpp -o /tmp/desknx-typography-test
           /tmp/desknx-typography-test
 
+      - name: Test UTF-8 multiline text layout and truncation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/text_layout_test.cpp -o /tmp/desknx-text-layout-test
+          /tmp/desknx-text-layout-test
+
       - name: Test modal stack precedence and layer invariants
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/modal_stack_test.cpp -o /tmp/desknx-modal-stack-test

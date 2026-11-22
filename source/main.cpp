@@ -894,6 +894,15 @@ void textRole(const std::string& value,int x,int y,desknx::ui::TextRole role,
     text(value,x,y,style.fontScale,c,right);
 }
 
+void textBlock(const std::string& value,int x,int y,desknx::ui::TextRole role,
+               Color c,int right=1260) {
+    const auto style=desknx::ui::TypographyFor(role);
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    if(gFontRenderer.drawWrapped(localized,x,y,style.fontScale,
+        SDL_Color{c.r,c.g,c.b,c.a},right,style.maxLines,style.lineHeight))return;
+    text(localized,x,y,style.fontScale,c,right);
+}
+
 Color controlColor(desknx::ui::ControlColor c) {
     return Color{c.r,c.g,c.b,c.a};
 }
@@ -940,8 +949,9 @@ void drawConfirmationDialog(
         WHITE,layout.surface.x+layout.surface.width-30);
     textRole(subtitle,layout.subtitleX,layout.subtitleY,desknx::ui::TextRole::Subheading,
         MUTED,layout.surface.x+layout.surface.width-30);
-    textRole(description,layout.descriptionX,layout.descriptionY,desknx::ui::TextRole::Caption,
-        MUTED,layout.surface.x+layout.surface.width-30);
+    textBlock(description,layout.descriptionX,layout.descriptionY,
+        desknx::ui::TextRole::Caption,MUTED,
+        layout.surface.x+layout.surface.width-30);
     const desknx::ui::ButtonVariant primaryVariant=destructive
         ?desknx::ui::ButtonVariant::Destructive
         :desknx::ui::ButtonVariant::Primary;

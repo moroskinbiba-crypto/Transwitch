@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+#include "../include/desknx/TextLayout.hpp"
 
 class FontRenderer {
 public:
@@ -32,6 +34,7 @@ public:
         if (path == customFontPath_) return true;
         clearCache();
         fittedTextCache_.clear();
+        wrappedTextCache_.clear();
         for (auto*& font : fonts_) {
             if (font) TTF_CloseFont(font);
             font = nullptr;
@@ -76,9 +79,28 @@ public:
         return true;
     }
 
+    bool drawWrapped(const std::string& value,int x,int y,int scale,
+                     SDL_Color color,int right,int maxLines,int lineHeight) {
+        if(!ttfReady_||!renderer_||value.empty())return false;
+        const int maxWidth=std::max(0,right-x);
+        if(maxWidth==0||maxLines<=0)return true;
+        TTF_Font* font=fontForScale(scale);
+        if(!font)return false;
+        const auto& lines=wrappedLines(value,font,scale,maxWidth,maxLines);
+        const int resolvedLineHeight=lineHeight>0?lineHeight:
+            std::max(1,TTF_FontLineSkip(font));
+        for(std::size_t i=0;i<lines.size();++i) {
+            if(!lines[i].empty())
+                (void)draw(lines[i],x,y+static_cast<int>(i)*resolvedLineHeight,
+                    scale,color,right);
+        }
+        return true;
+    }
+
     void shutdown() {
         clearCache();
         fittedTextCache_.clear();
+        wrappedTextCache_.clear();
         for (auto*& font : fonts_) {
             if (font) TTF_CloseFont(font);
             font = nullptr;
@@ -100,6 +122,7 @@ private:
 
     static constexpr size_t CacheLimit = 384;
     static constexpr size_t FitCacheLimit = 512;
+    static constexpr size_t WrappedCacheLimit = 256;
     static int fontPixelSize(int index) {
         // Small labels are noticeably clearer at 10 px; larger scale steps
         // retain a consistent, predictable hierarchy for cards and headings.
@@ -112,9 +135,29 @@ private:
     std::string customFontPath_;
     std::unordered_map<std::string, CacheEntry> cache_;
     std::unordered_map<std::string, std::string> fittedTextCache_;
+    std::unordered_map<std::string, std::vector<std::string>> wrappedTextCache_;
     unsigned long long clock_{0};
     bool ttfReady_{false};
     bool plReady_{false};
+
+    const std::vector<std::string>& wrappedLines(
+        const std::string& value,TTF_Font* font,int scale,
+        int maxWidth,int maxLines) {
+        const std::string key=std::to_string(scale)+":"+
+            std::to_string(maxWidth)+":"+std::to_string(maxLines)+":"+value;
+        auto cached=wrappedTextCache_.find(key);
+        if(cached!=wrappedTextCache_.end())return cached->second;
+        const auto measure=[font](const std::string& candidate) {
+            int width=0,height=0;
+            if(TTF_SizeUTF8(font,candidate.c_str(),&width,&height)!=0)
+                return INT_MAX;
+            return width;
+        };
+        auto lines=desknx::ui::WrapUtf8Text(value,maxWidth,maxLines,measure);
+        if(wrappedTextCache_.size()>=WrappedCacheLimit)
+            wrappedTextCache_.clear();
+        return wrappedTextCache_.emplace(key,std::move(lines)).first->second;
+    }
 
     TTF_Font* fontForScale(int scale) {
         const int index = std::max(0, std::min(7, scale - 1));

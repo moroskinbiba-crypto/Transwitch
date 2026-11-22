@@ -154,3 +154,21 @@ dispatch. The workspace "Move selected tile" action remains in the menu when
 unavailable and reports why it cannot be activated; the visual Disabled state
 and activation policy use the same shared predicate.
 ```
+
+## Typography Engine implementation update
+
+`TextLayout.hpp` now provides host-testable UTF-8 code-point traversal, word wrapping,
+long-word splitting and max-line ellipsis. `FontRenderer::drawWrapped` applies the
+semantic role's line-height and max-lines policy, with a bounded 256-entry wrapped-layout
+cache keyed by text, scale, width and line count. Changing the custom font clears both
+the fitted-text and wrapped-layout caches.
+
+The confirmation dialog description is the first real text-block migration. Existing
+single-line `textRole` calls and the normal text texture cache remain unchanged.
+Tests cover word boundaries, Cyrillic code points, long words, explicit newlines,
+truncation and malformed UTF-8 input.
+
+Important remaining limits: the bitmap fallback still cannot render full Cyrillic,
+and TTF surface creation / SDL texture upload still occur synchronously on a cache miss.
+The new layout cache removes repeated wrapping work; it does not claim to solve that
+separate frame-time issue.

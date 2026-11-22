@@ -91,8 +91,10 @@ Successful compilation alone does not close a runtime acceptance item.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,
       library and workspace-picker surfaces.
-- [ ] Apply role line-height and multiline wrapping to text blocks; current renderer
-      remains single-line/ellipsis based.
+- [x] Apply role line-height and UTF-8-safe multiline wrapping to confirmation text;
+      wrapped layouts are cached by text, scale, width and line limit.
+- [ ] Extend multiline role rendering to remaining content blocks and add a
+      deterministic font-cache miss budget without causing visible blank labels.
 - [ ] Verify Cyrillic fallback when both custom and shared TTF fonts are unavailable;
       bitmap fallback still cannot render full Cyrillic.
 - [x] Add a deterministic motion controller with Full, Reduced and LowPerformance
