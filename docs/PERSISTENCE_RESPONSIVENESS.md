@@ -8,10 +8,12 @@ Frequent workspace actions previously called the persistence enqueue path synchr
 
 1. **Input changes memory first.** Workspace controls update the in-memory model and set a save deadline. No file serialization, SD commit or worker join occurs in the key/touch handler.
 2. **Coalesced layout scheduler.** Full workspace changes use a 450 ms quiet period; active-workspace marker updates use 550 ms. A 2000 ms maximum deferral ensures sustained drag/resize activity is periodically persisted rather than postponing a write forever. A full-layout save dominates a marker-only request in the same burst.
-3. **Immutable snapshot.** When the deadline expires, the UI thread copies the current workspace value model once. The low-priority worker performs all layout serialization, shape hashing, file metadata checks, atomic replace and SD commits.
+3. **Immutable snapshot.** For a content/layout edit, the UI thread copies the workspace value model once after the debounce deadline; the low-priority worker performs serialization, shape hashing, file metadata checks, atomic replace and SD commits. For an ordinary active-desktop switch, the UI thread copies only the active index/name and the already-known persisted shape hash. The worker writes the small marker without copying or serializing any tiles.
 4. **One in-flight layout writer.** While a save runs, newer edits are coalesced into the scheduler. The worker is reaped only after its completion flag is set; an immutable snapshot is never modified while the worker reads it.
 5. **Auxiliary save queue.** Favorites, history, calendar notes and game-name overrides each have a replaceable pending snapshot. Game-icon copying and SteamGridDB durability commits use the same low-priority worker. Renderer cache invalidation happens on the UI thread after the background commit succeeds.
 6. **Explicit durability boundaries.** Before handing control to a launched title/homebrew and during normal shutdown, pending snapshots are drained. Startup repair/migration and the final checked shutdown snapshot retain their synchronous fallback path.
+
+7. **Asynchronous diagnostics.** Status messages and save-scheduler events enqueue bounded, fixed-size records. A low-priority writer batches and flushes the log; input handlers and the render loop never open, flush or close `diagnostics.log`. If the bounded queue is full, excess records are counted and dropped rather than blocking UI work.
 
 ## Failure handling
 
