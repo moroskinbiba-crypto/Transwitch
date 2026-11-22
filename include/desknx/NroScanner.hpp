@@ -32,9 +32,9 @@ struct Report {
     int firstError{0};
 };
 
-// NROs commonly live in nested folders below sdmc:/switch. Eight directory
-// levels cover normal pack layouts without allowing an accidental deep tree
-// to turn every startup into an unbounded SD traversal.
+// NROs commonly live in nested folders below sdmc:/switch. Twelve directory
+// levels cover nested pack layouts while the independent directory/entry caps
+// prevent accidental pathological trees from making the scan unbounded.
 constexpr int MaxDepth = 12;
 constexpr std::size_t MaxFiles = 512;
 constexpr std::size_t MaxEntries = 65536;
@@ -75,8 +75,7 @@ inline void rememberError(Report& report, int error) {
 
 inline void scanDirectory(const std::string& root, int depth, bool isRoot,
                           std::vector<File>& output, Report& report) {
-    if (output.size() >= MaxFiles ||
-        report.directoriesVisited >= MaxDirectories) {
+    if (report.directoriesVisited >= MaxDirectories) {
         report.complete = false;
         report.limitReached = true;
         return;
@@ -138,11 +137,6 @@ inline void scanDirectory(const std::string& root, int depth, bool isRoot,
                 continue;
             }
             scanDirectory(path, depth + 1, false, output, report);
-            if (output.size() >= MaxFiles) {
-                report.complete = false;
-                report.limitReached = true;
-                break;
-            }
             continue;
         }
 

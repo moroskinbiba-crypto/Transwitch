@@ -1251,7 +1251,8 @@ ScanResult Scan(ProgressCallback progress, void* context, bool forceRefresh) {
         return result;
     }
     result.nroCount = nros.size();
-    LogDiagnostic("nro_scan root=switch depth_limit=8 count=%zu", nros.size());
+    LogDiagnostic("nro_scan root=switch depth_limit=%d count=%zu",
+        desknx::nro_scan::MaxDepth,nros.size());
     std::sort(nros.begin(), nros.end(), [](const NroFile& a, const NroFile& b) {
         return a.path < b.path;
     });

@@ -79,6 +79,23 @@ int main() {
     assert(report.entriesVisited > 8192);
     assert(report.fallbackStatChecks <= report.statChecks);
 
+    // Exactly 512 NROs remain a complete inventory even if an additional
+    // empty directory follows them. A real 513th NRO must mark it incomplete.
+    const fs::path exactRoot=root/"exact-cap";
+    const fs::path exactFiles=exactRoot/"first";
+    const fs::path nextDirectory=exactRoot/"second";
+    fs::create_directories(exactFiles);
+    fs::create_directories(nextDirectory);
+    for(std::size_t i=0;i<desknx::nro_scan::MaxFiles;++i)
+        writeFile(exactFiles/("game-"+std::to_string(i)+".nro"));
+    report=desknx::nro_scan::Collect(exactRoot.string(),files);
+    assert(report.complete&&!report.limitReached);
+    assert(files.size()==desknx::nro_scan::MaxFiles);
+    writeFile(nextDirectory/"over-limit.nro");
+    report=desknx::nro_scan::Collect(exactRoot.string(),files);
+    assert(!report.complete&&report.limitReached);
+    assert(files.size()==desknx::nro_scan::MaxFiles);
+
     // An unavailable root is not a successful empty scan.
     report = desknx::nro_scan::Collect((root / "missing").string(), files);
     assert(!report.rootOpened && !report.complete);
