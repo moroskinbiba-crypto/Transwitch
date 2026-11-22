@@ -5860,14 +5860,15 @@ void drawScreen() {
             fontStats.pendingRasterJobs,fontStats.staleJobsDiscarded);
         text(perfText,176,604,1,MUTED,1060);
         std::snprintf(perfText,sizeof(perfText),
-            "TEXT PREP %.2F MS / RASTER %.2F MS / UPLOAD %.2F MS",
-            fontStats.textPreparationMs,fontStats.rasterizationMs,
-            fontStats.textureUploadMs);
+            "PREP %.2F / FONT OPEN %.2F PEAK (%u) / RASTER %.2F MS",
+            fontStats.textPreparationMs,fontStats.maximumFontOpenMs,
+            fontStats.fontOpenOperations,fontStats.rasterizationMs);
         text(perfText,176,628,1,BLUE,1060);
         std::snprintf(perfText,sizeof(perfText),
-            "TEXT DESTROY %.2F MS / CLEAR %.2F MS / EVICT %u / OLD FONT %u",
-            fontStats.textureDestroyMs,gFontRenderer.lastCacheClearMs(),
-            fontStats.cacheEvictions,fontStats.obsoleteTexturesPruned);
+            "UPLOAD %.2F / DESTROY %.2F / CLEAR %.2F / EVICT %u / OLD %u",
+            fontStats.textureUploadMs,fontStats.textureDestroyMs,
+            gFontRenderer.lastCacheClearMs(),fontStats.cacheEvictions,
+            fontStats.obsoleteTexturesPruned);
         text(perfText,176,652,1,MUTED,1060);
     }
     if(gSurfaceManager.contains(SurfaceId::MediaPicker)) {
