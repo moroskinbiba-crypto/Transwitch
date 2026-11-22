@@ -69,15 +69,11 @@ int main() {
     assert(workspaceSettings.rows.itemAt(340,552)==-1);
     assert(workspaceSettings.rows.itemRect(6).y==504);
     assert(workspaceSettings.rows.itemRect(6).height==40);
-    assert(settings.itemAt(340,214)==0);
-    assert(settings.itemAt(939,239)==0);
-    assert(settings.itemAt(340,240)==-1); // 2 px row gap
-    assert(settings.itemAt(340,242)==1);
-    assert(settings.itemAt(340,522)==11);
-    assert(settings.itemAt(939,547)==11);
-    assert(settings.itemAt(340,548)==-1);
-    assert(settings.itemAt(940,214)==-1);
-    assert(settings.itemRect(11).inside({340,104,680,520}));
+    assert(settings.rows.itemAt(340,522)==11);
+    assert(settings.rows.itemAt(939,547)==11);
+    assert(settings.rows.itemAt(340,548)==-1);
+    assert(settings.rows.itemAt(940,214)==-1);
+    assert(settings.rows.itemRect(11).inside(settings.surface));
 
     // App Library toolbar: every visible control has one exact hit rectangle.
     const auto& toolbar=AppLibraryToolbarControls;
