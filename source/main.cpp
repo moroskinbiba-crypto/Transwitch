@@ -2187,11 +2187,26 @@ void reportRuntimeMetrics() {
         static_cast<unsigned int>(desknx::ui::MaxTextTextureBuildsPerFrame));
 }
 std::string initials(const std::string& name) {
-    // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
-    // through, multibyte sequences contribute their lead byte which yields
-    // '?' via fallbackAscii and is skipped as a word separator below.
-    std::string s=fallbackAscii(name),out;bool begin=true;
-    for(char c:s){if(c==' '||c=='-'||c=='_'||c=='.'){begin=true;continue;}if(begin){out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));begin=false;if(out.size()==2)break;}}
+    std::string out;
+    bool begin=true;
+    std::size_t offset=0;
+    int count=0;
+    while(offset<name.size()) {
+        const auto decoded=desknx::ui::DecodeUtf8Codepoint(name,offset);
+        offset+=decoded.length>0?decoded.length:1;
+        const std::uint32_t codepoint=decoded.codepoint;
+        if(codepoint==' '||codepoint=='-'||codepoint=='_'||codepoint=='.'||
+           codepoint=='\\t'||codepoint=='\\r'||codepoint=='\\n') {
+            begin=true;
+            continue;
+        }
+        if(begin) {
+            desknx::ui::AppendUtf8Codepoint(out,
+                desknx::ui::UppercaseUnicodeInitial(codepoint));
+            begin=false;
+            if(++count==2)break;
+        }
+    }
     return out.empty()?"APP":out;
 }
 SDL_Rect tileRect(const Tile&t) {

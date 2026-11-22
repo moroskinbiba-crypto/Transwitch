@@ -52,10 +52,24 @@ int main() {
             desknx::ui::DecodeUtf8Codepoint(lowerAlphabet, offset);
         assert(decoded.valid);
         assert(desknx::ui::IsRussianBitmapLetter(decoded.codepoint));
+        assert(desknx::ui::UppercaseUnicodeInitial(decoded.codepoint) ==
+            expected[count]);
         offset += decoded.length;
         ++count;
     }
     assert(count == expected.size());
+
+    std::string initials;
+    desknx::ui::AppendUtf8Codepoint(initials,
+        desknx::ui::UppercaseUnicodeInitial(0x0442));
+    desknx::ui::AppendUtf8Codepoint(initials,
+        desknx::ui::UppercaseUnicodeInitial(0x044F));
+    assert(initials == u8"ТЯ");
+
+    std::string asciiInitial;
+    desknx::ui::AppendUtf8Codepoint(asciiInitial,
+        desknx::ui::UppercaseUnicodeInitial('s'));
+    assert(asciiInitial == "S");
 
     const std::string incomplete(1, static_cast<char>(0xD0));
     const auto truncated =

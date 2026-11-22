@@ -60,6 +60,35 @@ inline Utf8DecodeResult DecodeUtf8Codepoint(
     return {codepoint, length, true};
 }
 
+inline std::uint32_t UppercaseUnicodeInitial(
+    std::uint32_t codepoint) noexcept {
+    if (codepoint >= 'a' && codepoint <= 'z') return codepoint - 0x20;
+    return NormalizeRussianBitmapCodepoint(codepoint);
+}
+
+inline void AppendUtf8Codepoint(std::string& output,
+                                std::uint32_t codepoint) {
+    if (codepoint > 0x10FFFF ||
+        (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        codepoint = 0xFFFD;
+    }
+    if (codepoint <= 0x7F) {
+        output.push_back(static_cast<char>(codepoint));
+    } else if (codepoint <= 0x7FF) {
+        output.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint <= 0xFFFF) {
+        output.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+        output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+        output.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+        output.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+        output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+}
+
 inline std::uint32_t NormalizeRussianBitmapCodepoint(
     std::uint32_t codepoint) noexcept {
     if (codepoint >= 0x0430 && codepoint <= 0x044F)
