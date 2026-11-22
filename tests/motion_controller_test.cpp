@@ -28,6 +28,9 @@ int main() {
     assert(std::fabs(motion.sample(low,3040)-0.5f)<0.001f);
     assert(motion.sample(low,3080)==1.0f);
 
+    // Reset the previous LowPerformance policy: the midpoint assertion below
+    // deliberately checks the full 100 ms transition.
+    motion.setMode(MotionMode::Full);
     const auto inOut=motion.begin(0.0f,1.0f,4000,100,MotionCurve::EaseInOutCubic);
     assert(std::fabs(motion.sample(inOut,4050)-0.5f)<0.001f);
 
