@@ -3126,6 +3126,9 @@ void scheduleActiveWorkspaceSave() {
 bool flushActiveWorkspaceSave() {
     if(!activeWorkspaceMarkerPending) return true;
     if(enqueueLayoutSave(true)) {
+        // This function is called only after the active-workspace quiet deadline
+        // has elapsed. Do not apply the scheduler's 550 ms debounce a second time.
+        layoutSaveScheduler.forceDue(SDL_GetTicks());
         activeWorkspaceMarkerPending=false;
         activeWorkspaceMarkerDue=0;
         return true;
