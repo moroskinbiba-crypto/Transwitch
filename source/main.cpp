@@ -3792,6 +3792,22 @@ bool loadLayoutFrom(const char* path) {
         layoutSchema.sourceVersion,layoutSchema.targetVersion,
         static_cast<unsigned int>(layoutSchema.status),
         static_cast<unsigned int>(layoutMigrationPlan.status));
+    if(layoutSchema.status==desknx::migration::InspectionStatus::NeedsMigration) {
+        const std::string canonical=desknx::layout::serialize(
+            loaded.workspaces,loaded.activeWorkspace);
+        if(layoutMigrationPlan.status!=desknx::migration::RunStatus::AppliedInMemory ||
+           canonical.empty() || canonical!=layoutMigrationPreview) {
+            layoutSaveBlocked=true;
+            desknx::diag::Write("migration","workspace_migration_blocked",
+                "source_version=%u reason=canonical_output_mismatch",
+                layoutSchema.sourceVersion);
+        } else {
+            desknx::diag::Write("migration","workspace_migration_validated",
+                "source_version=%u target_version=%u bytes=%zu",
+                layoutSchema.sourceVersion,layoutSchema.targetVersion,
+                layoutMigrationPreview.size());
+        }
+    }
     struct stat layoutStat{};
     const size_t bytes=(path&&stat(path,&layoutStat)==0&&layoutStat.st_size>0)
         ?static_cast<size_t>(layoutStat.st_size):0u;
@@ -8746,6 +8762,8 @@ int main(int,char**) {
         visualProfile.maxTextureWidth,visualProfile.maxTextureHeight);
     catalogueMutex=SDL_CreateMutex();ipcMutex=SDL_CreateMutex();
     storageCommitMutex=SDL_CreateMutex();
+    desknx::diag::Write("storage","commit_mutex_ready",
+        "available=%d",storageCommitMutex?1:0);
     playStatsMutex=SDL_CreateMutex();
     nextendoMutex=SDL_CreateMutex();
     storageStatsMutex=SDL_CreateMutex();
