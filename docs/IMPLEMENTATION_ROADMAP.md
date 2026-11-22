@@ -129,8 +129,10 @@ Successful compilation alone does not close a runtime acceptance item.
       consistent across all lines.
 - [x] Measure fallback text by decoded Unicode code points, including tab/newline
       advances, and test Cyrillic wrapping, max-line ellipsis and malformed UTF-8.
-- [ ] Extend semantic multiline role rendering to remaining content blocks and profile
-      fallback legibility at all UI scales on a physical Switch.
+- [x] Extend semantic role rendering across Recent, System Tools, Launcher Settings,
+      Workspace Settings, Media Picker, Power and User Picker; migrate helper copy to
+      cached multiline TextBlock rendering without changing its existing geometry.
+- [ ] Profile role/fallback legibility at all UI scales on a physical Switch.
 - [x] Add a UTF-8-aware 5x7 Cyrillic bitmap fallback with upper/lowercase mapping,
       including Ё/ё, and host tests for all 33 Russian letters plus malformed UTF-8.
 - [ ] Verify fallback legibility at all UI scales and on-device when both custom and
