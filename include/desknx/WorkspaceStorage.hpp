@@ -197,10 +197,11 @@ inline persist::WriteStatus writeActiveWorkspace(
 // the new marker to the previous layout: loadSnapshot falls back to the
 // matching marker backup. Both temp files are committed before either rename,
 // and the published pair is committed once more.
-inline SnapshotWriteResult writeSnapshot(
-    const Paths& paths, const std::vector<model::Workspace>& workspaces,
-    int activeWorkspace, persist::CommitCallback commit, void* context,
-    const char* tempCommitPhase, const char* publishCommitPhase,
+inline SnapshotWriteResult writeSnapshotBytes(
+    const Paths& paths, const std::string& layoutBytes,
+    const std::string& activeBytes, persist::CommitCallback commit,
+    void* context, const char* tempCommitPhase,
+    const char* publishCommitPhase,
     const safeio::ReplaceOperations* replaceOperations = nullptr,
     persist::TemporaryWriteCallback writeTemporary = persist::writeTemporaryFile,
     void* writeContext = nullptr) {
@@ -209,22 +210,12 @@ inline SnapshotWriteResult writeSnapshot(
         paths.layoutBackup.empty() || paths.activeTemp.empty() ||
         paths.active.empty() || paths.activeBackup.empty() ||
         !tempCommitPhase || !publishCommitPhase || !writeTemporary ||
-        workspaces.empty() ||
-        activeWorkspace < 0 ||
-        activeWorkspace >= static_cast<int>(workspaces.size())) {
+        layoutBytes.empty() || activeBytes.empty()) {
         result.status = persist::WriteStatus::InvalidArgument;
         return result;
     }
     if (!commit)
         commit = detail::commitNothing;
-
-    const std::string layoutBytes = layout::serialize(workspaces, activeWorkspace);
-    const std::string activeBytes =
-        layout::serializeActiveWorkspaceState(workspaces, activeWorkspace);
-    if (layoutBytes.empty() || activeBytes.empty()) {
-        result.status = persist::WriteStatus::InvalidArgument;
-        return result;
-    }
 
     const auto layoutWrite =
         writeTemporary(writeContext, paths.layoutTemp.c_str(), layoutBytes);
@@ -273,6 +264,29 @@ inline SnapshotWriteResult writeSnapshot(
 
     result.status = persist::WriteStatus::Success;
     return result;
+}
+
+inline SnapshotWriteResult writeSnapshot(
+    const Paths& paths, const std::vector<model::Workspace>& workspaces,
+    int activeWorkspace, persist::CommitCallback commit, void* context,
+    const char* tempCommitPhase, const char* publishCommitPhase,
+    const safeio::ReplaceOperations* replaceOperations = nullptr,
+    persist::TemporaryWriteCallback writeTemporary = persist::writeTemporaryFile,
+    void* writeContext = nullptr) {
+    if (workspaces.empty() || activeWorkspace < 0 ||
+        activeWorkspace >= static_cast<int>(workspaces.size())) {
+        SnapshotWriteResult invalid{};
+        invalid.status = persist::WriteStatus::InvalidArgument;
+        return invalid;
+    }
+
+    const std::string layoutBytes = layout::serialize(workspaces, activeWorkspace);
+    const std::string activeBytes =
+        layout::serializeActiveWorkspaceState(workspaces, activeWorkspace);
+    return writeSnapshotBytes(
+        paths, layoutBytes, activeBytes, commit, context,
+        tempCommitPhase, publishCommitPhase, replaceOperations,
+        writeTemporary, writeContext);
 }
 
 } // namespace desknx::workspace_storage
