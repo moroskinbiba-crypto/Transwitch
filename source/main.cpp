@@ -5178,10 +5178,6 @@ void drawScreen() {
     if(themeIndex==1) {
         rect(0,0,SW,86,Color{6,12,18,255});
         rect(0,84,SW,2,BLUE);
-        rect(10,12,44,56,Color{13,27,38,255});
-        outline(10,12,44,56,Color{68,116,140,210});
-        text("TX",19,22,2,BLUE,50);
-        text("OS",19,47,1,MUTED,50);
     }
     // Three interchangeable header compositions. The same hit targets and
     // controller mappings are retained; SOCOMA overrides only their visual skin.
@@ -5198,6 +5194,12 @@ void drawScreen() {
         rect(0,0,SW,82,headerRailSurface);
         rect(0,79,SW,2,BLUE);
     }
+    if(themeIndex==1) {
+        rect(10,12,44,56,Color{13,27,38,255});
+        outline(10,12,44,56,Color{68,116,140,210});
+        text("TX",19,22,2,BLUE,50);
+        text("OS",19,47,1,MUTED,50);
+    }
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
         {2,false,"GALLERY"},{0,appSettingsMenu,"SETTINGS"},
@@ -5207,7 +5209,7 @@ void drawScreen() {
         const auto& item=headerTools[i];
         const int x=toolbarButtonX(i);
         const Color activeColor=themeIndex==1?Color{35,75,94,255}:Color{48,82,124,255};
-        if(headerStyle==0) {
+        if(themeIndex==1||headerStyle==0) {
             uiButton(x,24,ToolbarButtonWidth,48,13,
                 desknx::ui::ButtonVariant::Glass,
                 item.active?activeColor:Color{37,47,62,230},
