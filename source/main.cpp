@@ -20,7 +20,7 @@
 #include "../include/desknx/ProductionPersistence.hpp"
 #include "../include/desknx/WorkspaceStorage.hpp"
 #include "../include/desknx/StorageControlPlane.hpp"
-#include "../include/desknx/StorageMigration.hpp"
+#include "../include/desknx/StorageMigrations.hpp"
 #include "../include/desknx/SettingsFile.hpp"
 #include "../include/desknx/LaunchHistory.hpp"
 #include "catalog.hpp"
@@ -1029,6 +1029,9 @@ bool validateLauncherSettingsSnapshot(const std::string& contents,void*) {
     return desknx::settings_file::parse(contents,entries);
 }
 
+LauncherSettingsSaveStatus writeLauncherSettingsSnapshot(
+    const std::string& contents);
+
 void loadLauncherSettings() {
     gMotionController.setMode(desknx::ui::MotionMode::Reduced);
     if(!sdMounted){motionEffects=false;applyThemePalette();return;}
@@ -1050,10 +1053,16 @@ void loadLauncherSettings() {
     }
     const auto settingsSchema=desknx::migration::inspect(
         serialized,desknx::migration::SettingsSchema);
+    std::string settingsMigrationPreview;
+    const auto settingsMigrationPlan=desknx::migration::run(
+        serialized,desknx::migration::SettingsSchema,
+        desknx::migration::SettingsSteps,desknx::migration::SettingsStepCount,
+        true,settingsMigrationPreview,validateLauncherSettingsSnapshot);
     desknx::diag::Write("migration","schema_inspected",
-        "domain=settings source_version=%u target_version=%u status=%u",
+        "domain=settings source_version=%u target_version=%u status=%u plan=%u",
         settingsSchema.sourceVersion,settingsSchema.targetVersion,
-        static_cast<unsigned int>(settingsSchema.status));
+        static_cast<unsigned int>(settingsSchema.status),
+        static_cast<unsigned int>(settingsMigrationPlan.status));
     if(source==desknx::persist::FileSource::Backup) {
         desknx::diag::Write("settings","backup_restored","path=%s",SETTINGS_BAK);
         setStatus("APPEARANCE SETTINGS RESTORED FROM BACKUP",4000);
@@ -1145,6 +1154,32 @@ void loadLauncherSettings() {
     else
         motionEffects=gMotionController.mode()!=desknx::ui::MotionMode::Reduced;
     applyThemePalette();
+
+    // Do not rewrite a recovered backup in place: it may be the only known-good
+    // copy while the primary is corrupt. A primary v1 file can be migrated
+    // through the atomic writer, which keeps its exact original bytes in .bak.
+    if(source==desknx::persist::FileSource::Primary &&
+       settingsMigrationPlan.status==desknx::migration::RunStatus::DryRunReady) {
+        std::string migratedSettings;
+        const auto migrationResult=desknx::migration::run(
+            serialized,desknx::migration::SettingsSchema,
+            desknx::migration::SettingsSteps,desknx::migration::SettingsStepCount,
+            false,migratedSettings,validateLauncherSettingsSnapshot);
+        if(migrationResult.status==desknx::migration::RunStatus::AppliedInMemory) {
+            const auto saveStatus=writeLauncherSettingsSnapshot(migratedSettings);
+            desknx::diag::Write("migration","settings_migration_publish",
+                "status=%u source_version=%u target_version=%u backup_preserved=1",
+                static_cast<unsigned int>(saveStatus),
+                migrationResult.sourceVersion,migrationResult.targetVersion);
+            if(saveStatus==LauncherSettingsSaveStatus::Success)
+                setStatus("SETTINGS FORMAT UPDATED",2500);
+        } else {
+            desknx::diag::Write("migration","settings_migration_rejected",
+                "status=%u source_version=%u",
+                static_cast<unsigned int>(migrationResult.status),
+                migrationResult.sourceVersion);
+        }
+    }
 }
 
 std::string serializeLauncherSettingsSnapshot() {
@@ -3739,10 +3774,16 @@ bool loadLayoutFrom(const char* path) {
     }
     const auto layoutSchema=desknx::migration::inspect(
         rawLayout,desknx::migration::WorkspaceSchema);
+    std::string layoutMigrationPreview;
+    const auto layoutMigrationPlan=desknx::migration::run(
+        rawLayout,desknx::migration::WorkspaceSchema,
+        desknx::migration::WorkspaceSteps,desknx::migration::WorkspaceStepCount,
+        true,layoutMigrationPreview,desknx::migration::validateWorkspaceV4);
     desknx::diag::Write("migration","schema_inspected",
-        "domain=workspace source_version=%u target_version=%u status=%u",
+        "domain=workspace source_version=%u target_version=%u status=%u plan=%u",
         layoutSchema.sourceVersion,layoutSchema.targetVersion,
-        static_cast<unsigned int>(layoutSchema.status));
+        static_cast<unsigned int>(layoutSchema.status),
+        static_cast<unsigned int>(layoutMigrationPlan.status));
     struct stat layoutStat{};
     const size_t bytes=(path&&stat(path,&layoutStat)==0&&layoutStat.st_size>0)
         ?static_cast<size_t>(layoutStat.st_size):0u;
