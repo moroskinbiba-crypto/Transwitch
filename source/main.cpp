@@ -2169,6 +2169,18 @@ void reportRuntimeMetrics() {
         present.averageMs,present.p95Ms,present.maximumMs,static_cast<unsigned int>(present.samples),
         input.averageMs,input.p95Ms,input.maximumMs,static_cast<unsigned int>(input.samples),
         workspace.averageMs,workspace.p95Ms,workspace.maximumMs,static_cast<unsigned int>(workspace.samples));
+    const auto fontStats=gFontRenderer.stats();
+    const double textBuildMs=gPerformanceFrequency
+        ?1000.0*static_cast<double>(fontStats.textureBuildTicks)/
+            static_cast<double>(gPerformanceFrequency):0.0;
+    desknx::diag::Write("performance","font_cache",
+        "misses_total=%llu deferred_total=%llu build_attempts=%llu build_ms_total=%.3f max_builds_frame=%u resident=%u budget=%u",
+        static_cast<unsigned long long>(fontStats.cacheMisses),
+        static_cast<unsigned long long>(fontStats.deferredMisses),
+        static_cast<unsigned long long>(fontStats.textureBuildAttempts),
+        textBuildMs,fontStats.maxBuildAttemptsPerFrame,
+        fontStats.residentTextures,
+        static_cast<unsigned int>(desknx::ui::MaxTextTextureBuildsPerFrame));
 }
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
@@ -2758,6 +2770,7 @@ void drawScreen() {
             0.0f,1.0f,motionNow,160,desknx::ui::MotionCurve::EaseOutCubic);
     }
     gTileFocusProgress=gMotionController.sample(gTileFocusTransition,motionNow);
+    gFontRenderer.beginFrame();
     gIconCache.beginFrame();
     // Report state left behind by the previous frame before establishing
     // the known full-frame baseline.

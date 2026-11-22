@@ -10,9 +10,35 @@
 #include <utility>
 #include <vector>
 #include "../include/desknx/TextLayout.hpp"
+#include "../include/desknx/TextTextureBudget.hpp"
+#include <cstdint>
 
 class FontRenderer {
 public:
+    struct Stats {
+        std::uint64_t cacheMisses{0};
+        std::uint64_t deferredMisses{0};
+        std::uint64_t textureBuildAttempts{0};
+        std::uint64_t textureBuildTicks{0};
+        std::uint32_t maxBuildAttemptsPerFrame{0};
+        std::uint32_t residentTextures{0};
+    };
+
+    void beginFrame() noexcept {
+        textureBudget_.beginFrame();
+    }
+
+    Stats stats() const noexcept {
+        return {
+            cacheMisses_,
+            deferredMisses_,
+            textureBuildAttempts_,
+            textureBuildTicks_,
+            maxBuildAttemptsPerFrame_,
+            static_cast<std::uint32_t>(cache_.size())
+        };
+    }
+
     bool initialize() {
         if (TTF_Init() != 0) return false;
         ttfReady_ = true;
@@ -62,11 +88,22 @@ public:
         const std::string key = makeKey(fitted, scale, color);
         CacheEntry* entry = find(key);
         if (!entry) {
+            ++cacheMisses_;
+            if (!textureBudget_.tryConsume()) {
+                ++deferredMisses_;
+                return false;
+            }
+            ++textureBuildAttempts_;
+            const Uint64 buildStarted=SDL_GetPerformanceCounter();
             SDL_Surface* surface = TTF_RenderUTF8_Blended(font, fitted.c_str(), color);
-            if (!surface) return false;
+            if (!surface) {
+                recordTextureBuildTime(buildStarted);
+                return false;
+            }
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
             const int width = surface->w, height = surface->h;
             SDL_FreeSurface(surface);
+            recordTextureBuildTime(buildStarted);
             if (!texture) return false;
             SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
             entry = insert(key, texture, width, height);
@@ -87,12 +124,25 @@ public:
         TTF_Font* font=fontForScale(scale);
         if(!font)return false;
         const auto& lines=wrappedLines(value,font,scale,maxWidth,maxLines);
+        // Avoid drawing only the first line when the frame budget cannot create
+        // all remaining line textures. textBlock() can then use its established
+        // single-line fallback, and the next frame retries with a fresh budget.
+        std::uint32_t missingTextures=0;
+        for(const auto& line:lines) {
+            if(line.empty())continue;
+            const std::string& fitted=fitToWidth(line,font,scale,maxWidth);
+            if(!fitted.empty()&&find(makeKey(fitted,scale,color))==nullptr)
+                ++missingTextures;
+        }
+        if(missingTextures>textureBudget_.remaining()) {
+            deferredMisses_+=missingTextures;
+            return false;
+        }
         const int resolvedLineHeight=lineHeight>0?lineHeight:
             std::max(1,TTF_FontLineSkip(font));
         for(std::size_t i=0;i<lines.size();++i) {
-            if(!lines[i].empty())
-                (void)draw(lines[i],x,y+static_cast<int>(i)*resolvedLineHeight,
-                    scale,color,right);
+            if(!lines[i].empty()&&!draw(lines[i],x,y+static_cast<int>(i)*resolvedLineHeight,
+                scale,color,right))return false;
         }
         return true;
     }
@@ -137,8 +187,21 @@ private:
     std::unordered_map<std::string, std::string> fittedTextCache_;
     std::unordered_map<std::string, std::vector<std::string>> wrappedTextCache_;
     unsigned long long clock_{0};
+    desknx::ui::TextTextureFrameBudget textureBudget_{};
+    std::uint64_t cacheMisses_{0};
+    std::uint64_t deferredMisses_{0};
+    std::uint64_t textureBuildAttempts_{0};
+    std::uint64_t textureBuildTicks_{0};
+    std::uint32_t maxBuildAttemptsPerFrame_{0};
     bool ttfReady_{false};
     bool plReady_{false};
+
+    void recordTextureBuildTime(Uint64 started) noexcept {
+        const Uint64 finished=SDL_GetPerformanceCounter();
+        if(finished>=started)textureBuildTicks_+=finished-started;
+        const auto frameAttempts=static_cast<std::uint32_t>(textureBudget_.used());
+        maxBuildAttemptsPerFrame_=std::max(maxBuildAttemptsPerFrame_,frameAttempts);
+    }
 
     const std::vector<std::string>& wrappedLines(
         const std::string& value,TTF_Font* font,int scale,

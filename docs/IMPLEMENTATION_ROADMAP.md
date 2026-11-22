@@ -113,8 +113,10 @@ Successful compilation alone does not close a runtime acceptance item.
       library and workspace-picker surfaces.
 - [x] Apply role line-height and UTF-8-safe multiline wrapping to confirmation text;
       wrapped layouts are cached by text, scale, width and line limit.
-- [ ] Extend multiline role rendering to remaining content blocks and add a
-      deterministic font-cache miss budget without causing visible blank labels.
+- [x] Add a deterministic 12-new-texture-attempts-per-frame budget, defer overflow
+      to subsequent frames, and report cache misses/deferred misses/texture build time.
+- [ ] Extend multiline role rendering to remaining content blocks and profile the
+      deferred-label fallback quality on a physical Switch.
 - [ ] Verify Cyrillic fallback when both custom and shared TTF fonts are unavailable;
       bitmap fallback still cannot render full Cyrillic.
 - [x] Add a deterministic motion controller with Full, Reduced and LowPerformance

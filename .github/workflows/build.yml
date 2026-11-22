@@ -111,6 +111,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_state_policy_test.cpp -o /tmp/desknx-renderer-state-test
           /tmp/desknx-renderer-state-test
 
+      - name: Test per-frame text texture creation budget
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/text_texture_budget_test.cpp -o /tmp/desknx-text-budget-test
+          /tmp/desknx-text-budget-test
+
       - name: Test modal stack precedence and layer invariants
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/modal_stack_test.cpp -o /tmp/desknx-modal-stack-test

@@ -300,3 +300,24 @@ the default screen target before applying clip/blend baseline. Any restore failu
 reported separately. The normal path does not change the target because it is already
 null. This guards one additional class of accidental blank-frame composition; actual
 Switch modal/sleep/resume verification remains open.
+
+## Text cache miss budget and telemetry
+
+The TTF renderer now limits new texture build attempts to 12 per frame. This counts
+attempts, not only successful uploads, so SDL/TTF failures cannot cause a retry storm
+within one frame. Excess cache misses are deferred to later frames; existing cache hits
+remain unrestricted. Wrapped text preflights its line-cache misses to avoid rendering
+a partial multiline block when its lines do not fit the remaining frame budget.
+
+The renderer exposes cumulative cache misses, deferred misses, texture-build attempts,
+build time, maximum attempts in a single frame and resident texture count. The existing
+10-second performance report writes these values as a separate `font_cache` diagnostic.
+A pure `TextTextureFrameBudget` policy and CI test verify the 12-attempt cap, reset and
+small-budget edge cases.
+
+Texture rasterization and SDL texture creation still execute on the renderer thread;
+this is intentional because SDL renderer resources must remain renderer-thread-owned.
+The budget bounds burst work but is not a claim that every cache miss is asynchronous.
+On budget overflow, existing bitmap fallback is used for that frame and TTF rendering
+retries on the next frame. Its Cyrillic fallback appearance must still be checked on
+device.
