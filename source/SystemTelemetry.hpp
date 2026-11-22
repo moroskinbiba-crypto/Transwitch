@@ -275,13 +275,24 @@ private:
         }
         if (psmReady) {
             u32 percent = 0;
-            if (R_SUCCEEDED(psmGetBatteryChargePercentage(&percent)) && percent <= 100u)
+            const Result batteryRc = psmGetBatteryChargePercentage(&percent);
+            const bool batteryOk = R_SUCCEEDED(batteryRc) && percent <= 100u;
+            if (batteryOk)
                 out.battery = static_cast<int>(percent);
             PsmChargerType charger = PsmChargerType_Unconnected;
-            if (R_SUCCEEDED(psmGetChargerType(&charger)))
-                out.chargerType = static_cast<int>(charger);
-            else
+            const Result chargerRc = psmGetChargerType(&charger);
+            const bool chargerOk = R_SUCCEEDED(chargerRc);
+            out.chargerType = chargerOk ? static_cast<int>(charger) : -1;
+            // A resumed console can leave the PSM session stale. Drop the
+            // session only when both readings fail; the bounded retry below
+            // reinitializes it without blocking the UI.
+            if (!batteryOk && !chargerOk) {
+                psmExit();
+                psmReady = false;
+                out.battery = -1;
                 out.chargerType = -1;
+                nextPsmRetry = now + 5000;
+            }
         }
         sampleJoycons(out);
         out.batteryUpdatedAt = now;
@@ -308,18 +319,32 @@ private:
                 if (!tsSocOpen && R_SUCCEEDED(tsOpenSession(
                     &tsSoc, TsDeviceCode_LocationExternal))) tsSocOpen = true;
                 float temperature = 0.0f;
-                if (tsInternalOpen && R_SUCCEEDED(tsSessionGetTemperature(
-                    &tsInternal, &temperature)) &&
-                    temperature >= -20.0f && temperature <= 120.0f) {
-                    out.pcbTemperature = temperature;
-                    out.pcbTemperatureAvailable = true;
+                if (tsInternalOpen) {
+                    const Result readRc = tsSessionGetTemperature(
+                        &tsInternal, &temperature);
+                    if (R_SUCCEEDED(readRc)) {
+                        if (temperature >= -20.0f && temperature <= 120.0f) {
+                            out.pcbTemperature = temperature;
+                            out.pcbTemperatureAvailable = true;
+                        }
+                    } else {
+                        (void)tsSessionClose(&tsInternal);
+                        tsInternalOpen = false;
+                    }
                 }
                 temperature = 0.0f;
-                if (tsSocOpen && R_SUCCEEDED(tsSessionGetTemperature(
-                    &tsSoc, &temperature)) &&
-                    temperature >= -20.0f && temperature <= 120.0f) {
-                    out.socTemperature = temperature;
-                    out.socTemperatureAvailable = true;
+                if (tsSocOpen) {
+                    const Result readRc = tsSessionGetTemperature(
+                        &tsSoc, &temperature);
+                    if (R_SUCCEEDED(readRc)) {
+                        if (temperature >= -20.0f && temperature <= 120.0f) {
+                            out.socTemperature = temperature;
+                            out.socTemperatureAvailable = true;
+                        }
+                    } else {
+                        (void)tsSessionClose(&tsSoc);
+                        tsSocOpen = false;
+                    }
                 }
             }
         } else {
@@ -329,16 +354,27 @@ private:
             }
             if (tsReady) {
                 s32 temperature = 0;
-                if (R_SUCCEEDED(tsGetTemperature(TsLocation_Internal, &temperature)) &&
-                    temperature >= -20 && temperature <= 120) {
-                    out.pcbTemperature = static_cast<float>(temperature);
-                    out.pcbTemperatureAvailable = true;
+                const Result internalRc =
+                    tsGetTemperature(TsLocation_Internal, &temperature);
+                if (R_SUCCEEDED(internalRc)) {
+                    if (temperature >= -20 && temperature <= 120) {
+                        out.pcbTemperature = static_cast<float>(temperature);
+                        out.pcbTemperatureAvailable = true;
+                    }
                 }
                 temperature = 0;
-                if (R_SUCCEEDED(tsGetTemperature(TsLocation_External, &temperature)) &&
-                    temperature >= -20 && temperature <= 120) {
-                    out.socTemperature = static_cast<float>(temperature);
-                    out.socTemperatureAvailable = true;
+                const Result externalRc =
+                    tsGetTemperature(TsLocation_External, &temperature);
+                if (R_SUCCEEDED(externalRc)) {
+                    if (temperature >= -20 && temperature <= 120) {
+                        out.socTemperature = static_cast<float>(temperature);
+                        out.socTemperatureAvailable = true;
+                    }
+                }
+                if (R_FAILED(internalRc) && R_FAILED(externalRc)) {
+                    tsExit();
+                    tsReady = false;
+                    nextTsRetry = now + 5000;
                 }
             }
         }
@@ -354,16 +390,28 @@ private:
                 if (!gpuOpen && R_SUCCEEDED(clkrstOpenSession(
                     &gpuSession, PcvModuleId_GPU, 3))) gpuOpen = true;
                 std::uint32_t rate = 0;
-                if (cpuOpen && R_SUCCEEDED(clkrstGetClockRate(&cpuSession, &rate)) &&
-                    rate >= 1000000u && rate <= 4000000000u) {
-                    out.cpuClockHz = rate;
-                    out.cpuClockAvailable = true;
+                if (cpuOpen) {
+                    const Result readRc = clkrstGetClockRate(&cpuSession, &rate);
+                    if (R_SUCCEEDED(readRc) &&
+                        rate >= 1000000u && rate <= 4000000000u) {
+                        out.cpuClockHz = rate;
+                        out.cpuClockAvailable = true;
+                    } else if (R_FAILED(readRc)) {
+                        (void)clkrstCloseSession(&cpuSession);
+                        cpuOpen = false;
+                    }
                 }
                 rate = 0;
-                if (gpuOpen && R_SUCCEEDED(clkrstGetClockRate(&gpuSession, &rate)) &&
-                    rate >= 1000000u && rate <= 4000000000u) {
-                    out.gpuClockHz = rate;
-                    out.gpuClockAvailable = true;
+                if (gpuOpen) {
+                    const Result readRc = clkrstGetClockRate(&gpuSession, &rate);
+                    if (R_SUCCEEDED(readRc) &&
+                        rate >= 1000000u && rate <= 4000000000u) {
+                        out.gpuClockHz = rate;
+                        out.gpuClockAvailable = true;
+                    } else if (R_FAILED(readRc)) {
+                        (void)clkrstCloseSession(&gpuSession);
+                        gpuOpen = false;
+                    }
                 }
             }
         }
