@@ -299,6 +299,18 @@ bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
 desknx::runtime::RollingMetrics gRuntimeMetrics;
+desknx::ui::MotionController gMotionController;
+desknx::ui::MotionTrack gTileFocusTransition{};
+int gMotionWorkspace=-1,gMotionSelectedX=-1,gMotionSelectedY=-1;
+float gTileFocusProgress=1.0f;
+
+void changeMotionMode(int direction) noexcept {
+    const int current=static_cast<int>(gMotionController.mode());
+    const int next=(current+direction+3)%3;
+    const auto mode=static_cast<desknx::ui::MotionMode>(next);
+    gMotionController.setMode(mode);
+    motionEffects=mode!=desknx::ui::MotionMode::Reduced;
+}
 WorkspaceBackgroundCache gWorkspaceBackgroundCache;
 desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
 enum class SteamGridDbPickerView { Matches, Assets };
@@ -951,7 +963,8 @@ bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
 }
 
 void loadLauncherSettings() {
-    if(!sdMounted){applyThemePalette();return;}
+    gMotionController.setMode(desknx::ui::MotionMode::Reduced);
+    if(!sdMounted){motionEffects=false;applyThemePalette();return;}
     languageRussian=true;
     iconStyle=0;
     headerStyle=0;
@@ -988,6 +1001,7 @@ void loadLauncherSettings() {
     }
     const bool settingsV2=line=="DESKNXSET2";
     bool modernSteamGridKeySeen=false;
+    bool motionModeSeen=false;
     while(std::getline(in,line)) {
         const size_t eq=line.find('=');
         if(eq==std::string::npos)continue;
@@ -1047,6 +1061,12 @@ void loadLauncherSettings() {
             if(end&&*end=='\0'&&parsed>=0&&parsed<=3)selectionStyle=static_cast<int>(parsed);
         } else if(key=="effects") {
             motionEffects=(value=="1"||value=="true"||value=="on");
+        } else if(key=="motion") {
+            desknx::ui::MotionMode parsedMode{};
+            if(desknx::ui::ParseMotionModeSetting(value.c_str(),parsedMode)) {
+                gMotionController.setMode(parsedMode);
+                motionModeSeen=true;
+            }
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -1055,6 +1075,11 @@ void loadLauncherSettings() {
                 iconPackPath=value;
         }
     }
+    if(!motionModeSeen)
+        gMotionController.setMode(motionEffects
+            ?desknx::ui::MotionMode::Full:desknx::ui::MotionMode::Reduced);
+    else
+        motionEffects=gMotionController.mode()!=desknx::ui::MotionMode::Reduced;
     applyThemePalette();
 }
 
@@ -1067,6 +1092,7 @@ std::string serializeLauncherSettingsSnapshot() {
        <<"surfaceopacity="<<surfaceOpacity<<"\n"
        <<"selectionstyle="<<selectionStyle<<"\n"
        <<"effects="<<(motionEffects?1:0)<<"\n"
+       <<"motion="<<desknx::ui::MotionModeSettingName(gMotionController.mode())<<"\n"
        <<"accent="<<accentColorIndex<<"\n"
        <<"steamgriddb_key="<<steamGridDbApiKey<<"\n"
        <<"nextendo_client_id="<<nextendoClientId<<"\n"
@@ -3948,10 +3974,13 @@ void drawSystemIcon(desknx::ui::IconId icon,int x,int y,int size,Color c) {
     drawSystemIcon(desknx::ui::iconIdFromLegacyIndex(legacyKind),x,y,size,c);
 }
 void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
-    const float pulse=motionEffects
+    const bool fullMotion=motionEffects&&
+        gMotionController.mode()==desknx::ui::MotionMode::Full;
+    const float pulse=fullMotion
         ?desknx::ui::motion::pingPongEase(SDL_GetTicks(),1000u)
         :static_cast<float>(70.0f/95.0f);
-    accent.a=static_cast<Uint8>(150.0f+pulse*95.0f+0.5f);
+    const float focus=std::max(0.0f,std::min(1.0f,gTileFocusProgress));
+    accent.a=static_cast<Uint8>(150.0f+pulse*95.0f*focus+0.5f);
     switch(selectionStyle) {
         case 1:
             rect(x,y,4,h,accent);
@@ -4759,6 +4788,15 @@ void diagnoseAndRestoreRendererFrameState(const char* phase) {
 
 void drawScreen() {
     using desknx::ui::SurfaceId;
+    const Uint32 motionNow=SDL_GetTicks();
+    if(deskIndex!=gMotionWorkspace||selectedX!=gMotionSelectedX||selectedY!=gMotionSelectedY) {
+        gMotionWorkspace=deskIndex;
+        gMotionSelectedX=selectedX;
+        gMotionSelectedY=selectedY;
+        gTileFocusTransition=gMotionController.begin(
+            0.0f,1.0f,motionNow,160,desknx::ui::MotionCurve::EaseOutCubic);
+    }
+    gTileFocusProgress=gMotionController.sample(gTileFocusTransition,motionNow);
     diagnoseAndRestoreRendererFrameState("frame_begin");
     gVisualEngine.beginFrame();
     gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
@@ -5747,11 +5785,12 @@ void drawScreen() {
             "RESCAN GAME LIBRARY","RESET APPEARANCE",
             languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH",
             "ICON STYLE","RUNTIME DIAGNOSTICS","HEADER STYLE","DOCK STYLE",
-            "SURFACE OPACITY","SELECTION EFFECT","MOTION EFFECTS"};
+            "SURFACE OPACITY","SELECTION EFFECT","MOTION MODE"};
         const char* iconStyles[]={"CLEAN SVG","SOFT SVG","SVG BADGE"};
         const char* headerStyles[]={"GLASS BAR","TACTICAL RAIL","MINIMAL FLOAT"};
         const char* dockStyles[]={"GLASS DOCK","SEGMENTED RAIL","FLOATING DOCK"};
         const char* selectionStyles[]={"OUTLINE","ACCENT RAIL","PULSE","CORNER BRACKETS"};
+        const char* motionModes[]={"FULL","REDUCED","LOW POWER"};
         constexpr int VisibleSettingsRows=8;
         appSettingsIndex=std::max(0,std::min(18,appSettingsIndex));
         appSettingsOffset=std::max(0,std::min(11,appSettingsOffset));
@@ -5775,7 +5814,10 @@ void drawScreen() {
             if(i==15)text(dockStyles[static_cast<size_t>(dockStyle)],800,yy+14,1,BLUE,1024);
             if(i==16)text(std::to_string(surfaceOpacity*100/255)+"%",800,yy+14,1,BLUE,1024);
             if(i==17)text(selectionStyles[static_cast<size_t>(selectionStyle)],800,yy+14,1,BLUE,1024);
-            if(i==18)text(motionEffects?"ON":"OFF",800,yy+14,1,motionEffects?GREEN:MUTED,1024);
+            if(i==18) {
+                const int motionIndex=std::max(0,std::min(2,static_cast<int>(gMotionController.mode())));
+                text(motionModes[motionIndex],800,yy+14,1,motionIndex==1?MUTED:BLUE,1024);
+            }
         }
         uiButton(1040,170,36,42,9,desknx::ui::ButtonVariant::Chip,
             Color{34,46,64,255},Color{255,255,255,18});
@@ -6247,10 +6289,10 @@ void drawScreen() {
 
     if(motionEffects&&uiTransitionStart!=0) {
         const Uint32 elapsed=SDL_GetTicks()-uiTransitionStart;
-        constexpr Uint32 TransitionDurationMs=150;
-        if(elapsed<TransitionDurationMs) {
+        const Uint32 transitionDuration=gMotionController.resolveDuration(150);
+        if(transitionDuration>0&&elapsed<transitionDuration) {
             const Uint8 alpha=desknx::ui::motion::fadeAlpha(
-                elapsed,TransitionDurationMs,70);
+                elapsed,transitionDuration,70);
             rect(0,0,SW,SH,Color{0,0,0,alpha});
         } else {
             uiTransitionStart=0;
@@ -7050,6 +7092,7 @@ void activateAppSettings(int action) {
             themeIndex=0;accentColorIndex=-1;iconStyle=0;
             headerStyle=0;dockStyle=0;surfaceOpacity=255;
             selectionStyle=0;motionEffects=false;
+            gMotionController.setMode(desknx::ui::MotionMode::Reduced);
             (void)loadWallpaperTexture("");
             gIconCache.setCustomIconPackDir("");
             applyThemePalette();
@@ -7078,7 +7121,7 @@ void activateAppSettings(int action) {
                     break;
                 }
                 case 17: selectionStyle=(selectionStyle+1)%4; break;
-                case 18: motionEffects=!motionEffects; break;
+                case 18: changeMotionMode(1); break;
                 default: break;
             }
             applyThemePalette();
@@ -7523,7 +7566,7 @@ void keyInput(u64 keys, bool fromRepeat) {
                     break;
                 }
                 case 17: selectionStyle=(selectionStyle+direction+4)%4; break;
-                case 18: motionEffects=!motionEffects; break;
+                case 18: changeMotionMode(direction); break;
                 default: return;
             }
             applyThemePalette();

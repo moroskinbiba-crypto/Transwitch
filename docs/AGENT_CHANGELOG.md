@@ -373,3 +373,18 @@ adapters over the existing renderer; TTF misses stay asynchronous and use whole-
 Cyrillic bitmap fallback until cached. Added shared footer/dock geometry so visible
 buttons and tap targets match exactly. The broad hold-to-drag/page-swipe band and
 five-tab paging behavior are retained. Host coverage is in visual_contracts_test.cpp.
+
+
+## MotionController integration — SVG recovery branch
+
+Added the Full / Reduced / Low Performance motion policy from the runtime-stability
+line to the recovered SVG engine. The mode is persisted in DESKNXSET2 while legacy
+`effects=` settings remain readable; the existing motion-effects toggle maps old
+settings to Full or Reduced when no mode is present. Selection emphasis now animates
+only on focus changes, and screen fades use mode-specific durations. The existing
+UiMotion easing helpers remain in place.
+
+SensorService and ModalStack were deliberately not copied: the recovered build already
+has SystemTelemetry plus a separate off-render-thread SD statistics worker, and its
+SurfaceManager/ModalLayer is the authoritative surface/compositor owner. Adding the
+parallel services would duplicate PSM and modal ownership rather than improve them.

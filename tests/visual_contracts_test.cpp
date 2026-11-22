@@ -13,6 +13,32 @@ int main() {
  assert(TypographyFor(TextRole::Metadata).maxLines==1);
  assert(TypographyFor(TextRole::Body).maxLines==3);
 
+ assert(MotionModeSettingName(MotionMode::Full)==std::string("full"));
+ assert(MotionModeSettingName(MotionMode::Reduced)==std::string("reduced"));
+ assert(MotionModeSettingName(MotionMode::LowPerformance)==std::string("lowperformance"));
+ MotionMode parsedMode=MotionMode::Full;
+ assert(ParseMotionModeSetting("reduced",parsedMode)&&parsedMode==MotionMode::Reduced);
+ assert(ParseMotionModeSetting("lowperformance",parsedMode)&&parsedMode==MotionMode::LowPerformance);
+ assert(!ParseMotionModeSetting("unknown",parsedMode));
+ assert(!ParseMotionModeSetting(nullptr,parsedMode));
+ MotionController motion;
+ assert(motion.mode()==MotionMode::Full);
+ assert(motion.resolveDuration(160)==160);
+ auto track=motion.begin(0.0f,1.0f,100,160,MotionCurve::EaseOutCubic);
+ assert(track.durationMs==160&&motion.active(track,100));
+ assert(motion.sample(track,100)==0.0f);
+ assert(motion.sample(track,260)==1.0f&&!motion.active(track,260));
+ assert(motion.sample(track,180)>0.8f&&motion.sample(track,180)<0.9f);
+ motion.setMode(MotionMode::Reduced);
+ track=motion.begin(0.0f,1.0f,200,160);
+ assert(track.durationMs==0&&motion.sample(track,200)==1.0f);
+ motion.setMode(MotionMode::LowPerformance);
+ assert(motion.resolveDuration(160)==80);
+ track=motion.begin(0.0f,1.0f,0xFFFFFFF0u,160,MotionCurve::Linear);
+ assert(track.durationMs==80&&motion.sample(track,0xFFFFFFF0u)==0.0f);
+ assert(motion.active(track,0x00000020u));
+ assert(motion.sample(track,0x00000040u)==1.0f);
+
  const auto measure=[](const std::string& s){return MeasureBitmapTextWidth(s,1);};
  assert(MeasureBitmapTextWidth("ABC",1)==18);
  assert(MeasureBitmapTextWidth(u8"Ёж",1)==12);
