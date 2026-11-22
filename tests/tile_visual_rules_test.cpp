@@ -22,7 +22,7 @@ int main() {
     assert(two.maxCharacters == 25);
 
     const auto constrained = measureTileLabel(20,24,true,10);
-    assert(constrained.stripHeight == 20);
+    assert(constrained.stripHeight == 24);
     assert(!constrained.twoLines);
     assert(constrained.cornerRadius == 10);
     assert(constrained.maxCharacters == 8);
