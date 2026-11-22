@@ -27,6 +27,7 @@
 #include "../include/desknx/ControlComponents.hpp"
 #include "../include/desknx/RendererStatePolicy.hpp"
 #include "../include/desknx/RendererStateRecovery.hpp"
+#include "../include/desknx/BitmapFont.hpp"
 #include "../include/desknx/Typography.hpp"
 #include "../include/desknx/MotionController.hpp"
 
@@ -915,33 +916,38 @@ std::array<Uint8,7> glyph(char input) {
         default:return {{31,17,1,2,4,0,4}};
     }
 }
-// Bitmap fallback pre-processing: keep printable ASCII as-is, map every other
-// UTF-8 sequence to a single '?' replacement cell (glyph() draws it as a box).
-std::string fallbackAscii(const std::string& input) {
-    std::string out;
-    for(size_t i=0;i<input.size();) {
-        const unsigned char b=static_cast<unsigned char>(input[i]);
-        if(b<128) { out.push_back(static_cast<char>(b)); ++i; continue; }
-        size_t n=1;
-        if((b&0xE0)==0xC0) n=2; else if((b&0xF0)==0xE0) n=3; else if((b&0xF8)==0xF0) n=4;
-        if(i+n>input.size()) n=input.size()-i;
-        i+=n; out.push_back('?');
-    }
-    return out;
-}
-// UI-20: the transliteration helper is removed. When the shared-font path is
-// unavailable (pl/TTF init failed) we fall back to the bitmap glyphs, which
-// pass ASCII through and draw U+FFFD-style replacement boxes for anything
-// else (default glyph in glyph()) instead of silently dropping characters.
+// Bitmap fallback remains fully readable for Russian labels when both the
+// custom font and Horizon shared-font service are unavailable.
 void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
     const std::string localized=desknx::i18n::translate(value,languageRussian);
     if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
-    const std::string s=fallbackAscii(localized); color(c); int px=x;
-    for(char ch:s) {
-        if(px+5*scale>right) break;
-        const auto rows=glyph(ch);
+    color(c);
+    int px=x;
+    int py=y;
+    for(size_t offset=0;offset<localized.size();) {
+        const auto decoded=desknx::ui::DecodeUtf8Codepoint(localized,offset);
+        offset+=decoded.length>0?decoded.length:1;
+        const std::uint32_t codepoint=decoded.codepoint;
+        if(codepoint=='\\r'||codepoint=='\\n') {
+            if(codepoint=='\\r'&&offset<localized.size()) {
+                const auto next=desknx::ui::DecodeUtf8Codepoint(localized,offset);
+                if(next.valid&&next.codepoint=='\\n')offset+=next.length;
+            }
+            px=x;
+            py+=8*scale;
+            continue;
+        }
+        if(codepoint=='\\t') {
+            px+=24*scale;
+            continue;
+        }
+        if(px+5*scale>right)break;
+        const auto rows=codepoint<0x80
+            ?glyph(static_cast<char>(codepoint))
+            :desknx::ui::RussianBitmapGlyph(codepoint);
         for(int ry=0;ry<7;++ry) for(int rx=0;rx<5;++rx) if(rows[ry]&(1u<<(4-rx))) {
-            SDL_Rect p{px+rx*scale,y+ry*scale,scale,scale}; SDL_RenderFillRect(renderer,&p);
+            SDL_Rect pixel{px+rx*scale,py+ry*scale,scale,scale};
+            SDL_RenderFillRect(renderer,&pixel);
         }
         px+=6*scale;
     }

@@ -120,8 +120,10 @@ Successful compilation alone does not close a runtime acceptance item.
       to subsequent frames, and report cache misses/deferred misses/texture build time.
 - [ ] Extend multiline role rendering to remaining content blocks and profile the
       deferred-label fallback quality on a physical Switch.
-- [ ] Verify Cyrillic fallback when both custom and shared TTF fonts are unavailable;
-      bitmap fallback still cannot render full Cyrillic.
+- [x] Add a UTF-8-aware 5x7 Cyrillic bitmap fallback with upper/lowercase mapping,
+      including Ё/ё, and host tests for all 33 Russian letters plus malformed UTF-8.
+- [ ] Verify fallback legibility at all UI scales and on-device when both custom and
+      shared TTF fonts are unavailable.
 - [x] Add a deterministic motion controller with Full, Reduced and LowPerformance
       timing modes; use its 160 ms eased transition for desktop tile focus feedback.
 - [x] Expose Full / Reduced / Low Power motion modes in Launcher Settings and persist
