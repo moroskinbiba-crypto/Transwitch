@@ -405,6 +405,7 @@ struct RuntimeFrameMetrics {
 };
 RuntimeFrameMetrics runtimeFrameMetrics;
 SystemTelemetry gSystemTelemetry;
+bool gSystemTelemetryReady=false;
 std::uint64_t lastSystemCommandSequence=0;
 double gLastPresentWaitMs=0.0;
 Uint64 workspaceSwitchStartedAt=0;
@@ -527,6 +528,15 @@ void pumpSystemTelemetrySnapshot() {
 
 void refreshQuickSettingsSnapshot(bool force=false) {
     const Uint32 now=SDL_GetTicks();
+    if(!gSystemTelemetryReady) {
+        quickSettingsSnapshotLoaded=true;
+        quickSettingsSnapshotLoading=false;
+        quickSettingsSnapshotTick=0;
+        quickNetworkStatus=languageRussian
+            ?"СИСТЕМНАЯ СЛУЖБА НЕДОСТУПНА"
+            :"SYSTEM TELEMETRY UNAVAILABLE";
+        return;
+    }
     if(!force&&(quickSettingsSnapshotLoading||
        (quickSettingsSnapshotLoaded&&now-quickSettingsSnapshotTick<3500)))return;
     quickSettingsSnapshotTick=now;
@@ -8584,7 +8594,8 @@ int main(int,char**) {
     }
     SDL_AtomicSet(&nextendoConfiguredRefreshMs,
         configuredWidgetRefresh(Kind::Nextendo)*1000);
-    if(!gSystemTelemetry.start(setsysServiceReady))
+    gSystemTelemetryReady=gSystemTelemetry.start(setsysServiceReady);
+    if(!gSystemTelemetryReady)
         desknx::diag::Write("telemetry","worker_start_failed",
             "system widgets will show unavailable values");
     if(storageStatsMutex)
@@ -8783,6 +8794,7 @@ int main(int,char**) {
     stopHeartbeatThread();
 #endif
     gSystemTelemetry.stop();
+    gSystemTelemetryReady=false;
     SDL_AtomicSet(&nextendoStop,1);
     drainLauncherSettingsSave();
     drainAuxiliarySaves();
