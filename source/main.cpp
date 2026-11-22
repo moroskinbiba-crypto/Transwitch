@@ -1603,7 +1603,7 @@ Color themeEdgeTint(Color source) {
 }
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
     fill=themeSurfaceTint(fill);edge=themeEdgeTint(edge);
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         const int opacity=std::max(0,std::min(255,surfaceOpacity));
         fill.a=static_cast<Uint8>((static_cast<unsigned>(fill.a)*opacity)/255u);
         edge.a=static_cast<Uint8>((static_cast<unsigned>(edge.a)*opacity)/255u);
@@ -1631,7 +1631,7 @@ void modalCard(int x,int y,int w,int h,Color fill,
                Color edge=Color{255,255,255,24},bool dialog=false) {
     fill=themeSurfaceTint(fill);
     edge=themeEdgeTint(edge);
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         softCard(x,y,w,h,fill,edge);
         return;
     }
@@ -1648,7 +1648,7 @@ void sidePanelCard(int x,int y,int w,int h,Color fill,
                    Color edge=Color{255,255,255,20}) {
     fill=themeSurfaceTint(fill);
     edge=themeEdgeTint(edge);
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         softCard(x,y,w,h,fill,edge);
         return;
     }
@@ -5176,7 +5176,7 @@ void drawScreen() {
 
     // SOCOMA is a separate layout language, not a palette variation: a
     // technical top rail, rectangular controls and a visible modular desktop.
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         rect(0,0,SW,86,Color{6,12,18,255});
         rect(0,84,SW,2,BLUE);
     }
@@ -5195,7 +5195,7 @@ void drawScreen() {
         rect(0,0,SW,82,headerRailSurface);
         rect(0,79,SW,2,BLUE);
     }
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         rect(10,12,44,56,Color{13,27,38,255});
         outline(10,12,44,56,Color{68,116,140,210});
         text("TX",19,22,2,BLUE,50);
@@ -5269,7 +5269,7 @@ void drawScreen() {
 
     // A flat framed workspace surface and persistent 6x3 grid are SOCOMA's
     // structural baseline; v0.1 keeps its original single glass card.
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         rect(56,96,1168,454,Color{6,14,21,174});
         outline(56,96,1168,454,Color{43,79,96,185});
         rect(56,96,1168,3,BLUE);
@@ -5458,7 +5458,7 @@ void drawScreen() {
         modalCard(mx,my,mw,mh,
             themeIndex==1?Color{10,20,30,252}:Color{17,24,36,255},
             themeIndex==1?Color{89,144,169,110}:Color{255,255,255,25});
-        if(themeIndex==1) {
+        if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
             softCard(mx+18,my+14,mw-36,88,Color{15,32,46,246},
                      Color{100,157,181,68});
             rect(mx+18,my+14,4,88,BLUE);
