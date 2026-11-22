@@ -88,7 +88,7 @@ int main() {
 
     assert(run(legacy, testSchema, nullptr, 0, true, migrated).status ==
            RunStatus::MissingStep);
-    const Step brokenPlan[] = {{1, 3, migrate1to2, validTest}};
+    const Step brokenPlan[] = {{1, 1, migrate1to2, validTest}};
     assert(run(legacy, testSchema, brokenPlan, 1, true, migrated).status ==
            RunStatus::InvalidPlan);
     const Step badOutput[] = {{1, 2, invalidTransform, validTest},
