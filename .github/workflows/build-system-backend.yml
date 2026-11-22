@@ -103,6 +103,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_contracts_test.cpp -o /tmp/desknx-visual-contracts-test
           /tmp/desknx-visual-contracts-test
 
+      - name: Test all six adaptive widget layouts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_layout_test.cpp -o /tmp/desknx-widget-layout-test
+          /tmp/desknx-widget-layout-test
+
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test
