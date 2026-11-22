@@ -4695,7 +4695,15 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else if(compact) {
                 textCentered(std::to_string(current.tm_mday),center,r.y+18,5,WHITE,left,right);
                 textCentered(monthName,center,r.y+78,1,BLUE,left,right);
-            } else if(banner) {
+            } else if(banner3) {
+                label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
+                text(std::to_string(current.tm_mday),left,r.y+33,5,WHITE,left+86);
+                text(std::string(monthName)+" "+std::to_string(current.tm_year+1900),
+                     left+92,r.y+53,2,BLUE,left+innerWidth*2/3);
+                text(weekday,left+innerWidth*2/3,r.y+41,2,WHITE,right);
+                if(dataB)text(clockText(),left+innerWidth*2/3,r.y+80,1,MUTED,right);
+                else drawSystemIcon(desknx::ui::IconId::Calendar,right-32,r.y+78,24,accent);
+            } else if(banner2) {
                 label(languageRussian?"СЕГОДНЯ":"TODAY",r.y+13);
                 text(std::to_string(current.tm_mday)+" "+monthName+" "+std::to_string(current.tm_year+1900),
                      left,r.y+42,3,WHITE,right);
