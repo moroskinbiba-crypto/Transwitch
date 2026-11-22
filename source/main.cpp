@@ -4757,7 +4757,6 @@ void drawScreen() {
     if(activeBackground)gWorkspaceBackgroundCache.setPriorityPath(*activeBackground);
     else gWorkspaceBackgroundCache.clearPriority();
     gWorkspaceBackgroundCache.beginFrame();
-    gIconCache.beginFrame();
     gFontRenderer.beginFrame();
     std::uint32_t telemetryDemand=0;
     if(hasWidgetKind(Kind::Battery))telemetryDemand|=SystemTelemetry::BatteryDemand;
@@ -4805,11 +4804,11 @@ void drawScreen() {
                 std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
             gIconCache.prefetchWorkspace(activeDesk,selectedX,selectedY);
         }
-        prefetchValid=true;        }
         prefetchValid=true;previousListOpen=listOpen;previousDesk=deskIndex;
         previousX=selectedX;previousY=selectedY;previousList=listIndex;
         previousCatalogue=currentCatalogue;previousLayout=layoutMutationRevision;
     }
+    gIconCache.beginFrame();
     refreshStorageStats();
     rect(0,0,SW,SH,BG);
     const SDL_Color gradientTop{
