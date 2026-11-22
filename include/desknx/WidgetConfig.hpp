@@ -38,13 +38,13 @@ inline Config defaults(model::Kind kind) {
         case model::Kind::Clock:       return {0, 5, 3u, 4};
         case model::Kind::Battery:     return {0, 15, 3u, 4};
         case model::Kind::System:      return {0, 5, 3u, 4};
-        case model::Kind::Recent:      return {1, 15, 3u, 4};
+        case model::Kind::Recent:      return {1, 15, 3u, 6};
         case model::Kind::Storage:     return {0, 30, 3u, 4};
         case model::Kind::Calendar:    return {0, 60, 3u, 4};
-        case model::Kind::Nextendo:    return {0, 180, 3u, 4};
-        case model::Kind::Favorites:   return {1, 30, 3u, 4};
-        case model::Kind::GameLibrary: return {1, 30, 3u, 4};
-        case model::Kind::QuickSettings: return {0, 15, 3u, 4};
+        case model::Kind::Nextendo:    return {0, 180, 3u, 6};
+        case model::Kind::Favorites:   return {1, 30, 3u, 6};
+        case model::Kind::GameLibrary: return {1, 30, 3u, 6};
+        case model::Kind::QuickSettings: return {0, 15, 3u, 6};
         default: return {};
     }
 }
