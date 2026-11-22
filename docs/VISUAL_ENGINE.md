@@ -24,7 +24,8 @@ The existing 0.1 and SOCOMA themes are not changed by this engine milestone. A s
 - Gradients use two lazily-created 256-sample ramps (vertical and horizontal), reused until endpoint colors change.
 - Focus glow uses one lazily-created 96×96 radial alpha mask, tinted at draw time.
 - Soft shadows use three low-alpha rounded silhouettes. This is deliberately not a Gaussian blur; it avoids render-target support, framebuffer copies and expensive per-frame blur passes.
-- Modal backdrops stay on the normal window target. The engine must never introduce whole-screen capture or render-target switching for a standard dialog.
+- Modal backdrops stay on the normal logical window target. Modal composition must not switch render targets or modify SDL viewport/scale. It saves and restores draw color, blend mode and clip state around the scrim.
+- All visible modal surfaces draw back-to-front. Only the top input-owning surface receives controller/touch input; lower parent surfaces remain visible under nested windows.
 - Every primitive validates dimensions and tracks failures. Failure in an optional visual effect must not prevent input, state updates, launching or persistence.
 
 ## Tokens
@@ -38,7 +39,8 @@ include/desknx/VisualTokens.hpp defines the shared visual contract: semantic sur
 - **Button** — Glass, Rail, Minimal, Chip and Solid variants. Active, hover, focus, pressed and disabled are independent presentation states. The input/controller code owns all actions and hitboxes.
 - **Progress bar** — bounded normalized progress, themed track/fill and rounded ends.
 - **Divider** — one-pixel semantic separator.
-- **Artwork tile** — shared surface/elevation, cached gradient title scrim and measured title layout. Texture selection/crop remains on the artwork path; the visual component does not change tile bounds or input hitboxes.
+- **Artwork tile** — shared desktop/library renderer for image destination, cover/contain/stretch fit, clip save/restore, cached rounded-corner mask, title scrim and badge shells. Tile model identity, text shaping, selection actions and input hitboxes remain in the launcher.
+- **Modal surface / dialog surface** — common token-driven elevated containers for modal panels and confirmation dialogs.
 
 ## Performance and memory budgets
 
@@ -72,17 +74,20 @@ Status: in progress.
 - [x] Replace flat game-title strips with cached vertical alpha gradients.
 - [x] Extract tile label sizing into SDL-independent measured layout rules and host tests.
 - [x] Preserve the current cover/contain fit policy, rounded-corner mask, tile geometry and selection/input hitboxes.
-- [ ] Move remaining badge, title and image-fit drawing paths behind reusable tile component APIs.
-- [ ] Migrate the library's artwork cards to the same component contract.
-- [ ] Add visual fixtures for all tile sizes and both legacy themes.
+- [x] Move image fit, clipping, rounded-corner masking and reusable badge shells behind TileRenderer.
+- [x] Migrate library game/homebrew artwork cards to the same TileRenderer contract.
+- [x] Add host coverage for cover/contain/stretch math and library-card title layout.
+- [ ] Add rendered screenshot fixtures for all tile sizes and both legacy themes.
 - [ ] Verify cover crop, label contrast, focus and selection styles on console.
 
 ### VE-3 — windows and motion integration
 
-- [ ] Reuse surface and focus tokens across all modals and panels.
+- [x] Reuse shared modal/dialog surface shells across current windows.
+- [x] Draw visible surfaces in registered z-order while keeping input on the top owner.
+- [x] Keep modal scrim on the normal logical target and preserve renderer state without viewport/scale switching.
 - [ ] Standardize transitions and reduced-motion behavior.
-- [ ] Confirm z-order, touch/controller focus and backdrop behavior.
-- [ ] Verify open/close/reopen loops and applet return.
+- [ ] Add automated open/close/reopen cycle tests where the state can be isolated from SDL.
+- [ ] Verify full open/close/reopen loops and applet return on physical Switch.
 
 ### VE-4 — runtime validation
 
