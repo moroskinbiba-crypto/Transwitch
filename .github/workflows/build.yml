@@ -100,7 +100,32 @@ jobs:
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev libsodium-dev pkg-config
+          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev libsodium-dev pkg-config libsdl2-dev
+
+      - name: Test artwork prefetch priority policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/artwork_request_policy_test.cpp -o /tmp/desknx-artwork-priority-test
+          /tmp/desknx-artwork-priority-test
+
+      - name: Test Russian UTF-8 bitmap fallback
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/bitmap_font_test.cpp -o /tmp/desknx-bitmap-font-test
+          /tmp/desknx-bitmap-font-test
+
+      - name: Test renderer state baseline policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_state_policy_test.cpp -o /tmp/desknx-renderer-state-test
+          /tmp/desknx-renderer-state-test
+
+      - name: Test SDL renderer frame recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_frame_recovery_test.cpp -lSDL2 -o /tmp/desknx-renderer-recovery-test
+          /tmp/desknx-renderer-recovery-test
+
+      - name: Test bounded rolling runtime metrics
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/runtime_metrics_test.cpp -o /tmp/desknx-runtime-metrics-test
+          /tmp/desknx-runtime-metrics-test
 
       - name: Test compressed NACP title normalization
         run: |
