@@ -200,7 +200,8 @@ inline bool firstFree(const Workspace& desk, const Tile& tile, int& x, int& y) {
 // Search wraps once, and ignore may exclude the tile being repositioned.
 inline bool firstFreeFrom(const Workspace& desk, const Tile& tile,
                           int startX, int startY,
-                          int& resultX, int& resultY, int ignore = -1) {
+                          int& resultX, int& resultY, int ignore = -1,
+                          int avoidX = -1, int avoidY = -1) {
     const int x = std::max(0, std::min(Columns - 1, startX));
     const int y = std::max(0, std::min(Rows - 1, startY));
     const int start = y * Columns + x;
@@ -209,7 +210,8 @@ inline bool firstFreeFrom(const Workspace& desk, const Tile& tile,
         const int index = (start + offset) % total;
         const int candidateX = index % Columns;
         const int candidateY = index / Columns;
-        if (placeable(desk, tile, candidateX, candidateY, ignore)) {
+        if ((candidateX != avoidX || candidateY != avoidY) &&
+            placeable(desk, tile, candidateX, candidateY, ignore)) {
             resultX = candidateX;
             resultY = candidateY;
             return true;
