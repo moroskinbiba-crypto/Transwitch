@@ -43,7 +43,7 @@ int main() {
  assert(Dock::dragBand.contains(0,638)&&Dock::dragBand.contains(1279,694));
  assert(!Dock::dragBand.contains(1279,695));
  assert(Dock::actionAt(50,641,0,0,12)==WorkspaceDockAction::SelectWorkspace);
- assert(Dock::actionAt(770,641,0,0,12)==WorkspaceDockAction::AddWorkspace);
+ assert(Dock::actionAt(770,641,0,0,5)==WorkspaceDockAction::AddWorkspace);
  assert(Dock::actionAt(770,641,0,0,12,12)==WorkspaceDockAction::None);
  assert(Dock::actionAt(832,641,0,0,12)==WorkspaceDockAction::OpenWorkspaceMenu);
  assert(Dock::actionAt(900,641,0,0,12)==WorkspaceDockAction::OpenWorkspacePicker);
