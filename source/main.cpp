@@ -5428,7 +5428,7 @@ void drawScreen() {
             favoritesIndex=std::max(0,std::min(favoritesIndex,
                 static_cast<int>(favoritesView.size())-1));
     
-            softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+            modalCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
             text("FAVORITE GAMES",266,104,3,WHITE,850);
             roundRect(838,108,78,30,9,Color{49,52,61,255});
             text("B BACK",850,118,1,WHITE,912);
