@@ -97,6 +97,8 @@ Successful compilation alone does not close a runtime acceptance item.
       touch no longer activates invisible row gutters or pixels beyond drawn controls.
 - [x] Migrate User Picker and Power dialog rows/buttons to shared layouts; remove
       touch activation from row gaps and out-of-bounds button edges.
+- [x] Migrate Recent header actions and history rows to shared geometry; row gaps and
+      pixels beyond the painted Back/Launch buttons remain inert.
 - [ ] Migrate remaining modal, toolbar, footer and workspace controls to shared styles.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,

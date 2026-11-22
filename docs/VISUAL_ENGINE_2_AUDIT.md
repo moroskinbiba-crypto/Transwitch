@@ -237,3 +237,15 @@ Row selection is separate from execution: tapping an action only moves the selec
 row; tapping Execute retains the existing keyInput(A) flow. Gamepad input is unchanged.
 The test suite verifies row gaps, each button's half-open bounds and containment inside
 the parent dialog.
+
+## Recent dialog geometry update
+
+Recent uses `RecentWindowControls` for the surface, Back/Launch buttons and ten
+history rows. The history is already capped at ten entries by the persistence layer,
+so the fixed ten-row layout fully covers the visible list without introducing paging.
+Each row uses a 35 px hit target on a 39 px stride; the 4 px visual gutters are inert.
+The Back and Launch actions now use the exact drawn bounds.
+
+Keyboard Up/Down/A/B behaviour is unchanged. A tap on a history row only selects it;
+the separate Launch button retains the existing launch path. Tests cover first/last
+row bounds, gutters, button edges and containment.

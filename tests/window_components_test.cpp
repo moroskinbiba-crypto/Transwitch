@@ -75,6 +75,31 @@ int main() {
     assert(toolbar.buttonRect(6).width==72&&toolbar.buttonRect(6).height==30);
     assert(toolbar.buttonRect(-1).width==0);
 
+    // Recent dialog: ten visible history rows and two exact header buttons.
+    const auto& recent=RecentWindowControls;
+    assert(RecentWindowLayout::VisibleEntries==10);
+    assert(recent.surface.contains(230,78));
+    assert(recent.backButton.inside(recent.surface));
+    assert(recent.launchButton.inside(recent.surface));
+    assert(recent.entries.bounds.inside(recent.surface));
+    assert(recent.entries.itemAt(278,190)==0);
+    assert(recent.entries.itemAt(1001,224)==0);
+    assert(recent.entries.itemAt(278,225)==-1);
+    assert(recent.entries.itemAt(278,228)==-1);
+    assert(recent.entries.itemAt(278,229)==1);
+    assert(recent.entries.itemAt(1001,575)==9);
+    assert(recent.entries.itemAt(1001,576)==-1);
+    assert(recent.entries.itemAt(1002,220)==-1);
+    assert(recent.entries.itemAt(277,220)==-1);
+    assert(recent.backButton.contains(838,108));
+    assert(recent.backButton.contains(915,137));
+    assert(!recent.backButton.contains(916,137));
+    assert(!recent.backButton.contains(915,138));
+    assert(recent.launchButton.contains(924,108));
+    assert(recent.launchButton.contains(1011,137));
+    assert(!recent.launchButton.contains(1012,137));
+    assert(!recent.launchButton.contains(1011,138));
+
     // User Picker: Horizon account list is capped at eight; gaps are not tappable.
     const auto& users=UserPickerDialogControls;
     assert(UserPickerDialogLayout::MaxUsers==8);

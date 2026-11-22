@@ -3108,29 +3108,45 @@ void drawScreen() {
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(modalStack.contains(desknx::ui::ModalLayer::Recent)) {
+        const auto& recentLayout=desknx::ui::RecentWindowControls;
         drawModalBackdrop(190);
-        drawModalSurface(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+        drawModalSurface(recentLayout.surface.x,recentLayout.surface.y,
+            recentLayout.surface.width,recentLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,25});
         text("RECENTLY OPENED",266,104,3,WHITE,850);
-        roundRect(838,108,78,30,9,Color{49,52,61,255});
-        text("B BACK",850,118,1,WHITE,912);
-        roundRect(924,108,88,30,9,Color{10,132,255,255});
-        text("LAUNCH",936,118,1,WHITE,1006);
+        const desknx::ui::ButtonControl backButton{
+            recentLayout.backButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B BACK",recentLayout.backButton.x+12,
+            recentLayout.backButton.y+10,
+            recentLayout.backButton.x+recentLayout.backButton.width-4,
+            desknx::ui::TextRole::Metadata);
+        const desknx::ui::ButtonControl launchButton{
+            recentLayout.launchButton,desknx::ui::ButtonVariant::Primary,{}};
+        drawButton(launchButton,"LAUNCH",recentLayout.launchButton.x+12,
+            recentLayout.launchButton.y+10,
+            recentLayout.launchButton.x+recentLayout.launchButton.width-6,
+            desknx::ui::TextRole::Metadata);
         text("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,1,MUTED,850);
         if(recentLaunches.empty()) {
             text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
             text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
         } else {
             recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-            const int visible=std::min(10,static_cast<int>(recentLaunches.size()));
+            const int visible=std::min(recentLayout.entries.itemCount,
+                static_cast<int>(recentLaunches.size()));
             for(int row=0;row<visible;++row) {
                 const auto& entry=recentLaunches[static_cast<size_t>(row)];
-                const int yy=190+row*39;
-                if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                const auto rowBounds=recentLayout.entries.itemRect(row);
+                if(row==recentIndex)
+                    drawSelectableRowBackground(rowBounds,
+                        desknx::ui::SelectableRowState::Focused,9);
                 Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
-                drawTileIcon(iconTile,290,yy+4,27);
-                text(entry.title,330,yy+8,2,row==recentIndex?WHITE:MUTED,850);
-                text(entry.kind==Kind::Game?"GAME":"HOMEBREW",870,yy+11,1,
-                     row==recentIndex?BLUE:MUTED,990);
+                drawTileIcon(iconTile,rowBounds.x+12,rowBounds.y+4,27);
+                text(entry.title,rowBounds.x+52,rowBounds.y+8,2,
+                    row==recentIndex?WHITE:MUTED,rowBounds.x+572);
+                text(entry.kind==Kind::Game?"GAME":"HOMEBREW",
+                    rowBounds.x+592,rowBounds.y+11,1,
+                    row==recentIndex?BLUE:MUTED,rowBounds.x+rowBounds.width-12);
             }
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
@@ -4569,19 +4585,25 @@ void touchInput(const SDL_Event&e) {
     if(activeModal==desknx::ui::ModalLayer::Recent) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-            if(x>=838&&x<=916&&y>=104&&y<=150) {
+            const auto& layout=desknx::ui::RecentWindowControls;
+            const desknx::ui::ButtonControl backButton{
+                layout.backButton,desknx::ui::ButtonVariant::Secondary,{}};
+            const desknx::ui::ButtonControl launchButton{
+                layout.launchButton,desknx::ui::ButtonVariant::Primary,{}};
+            if(backButton.hitTest(x,y)) {
                 recentOpen=false;
-            } else if(x>=924&&x<=1012&&y>=104&&y<=150) {
+            } else if(launchButton.hitTest(x,y)) {
                 if(!recentLaunches.empty()) {
-                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+                    recentIndex=std::max(0,std::min(recentIndex,
+                        static_cast<int>(recentLaunches.size())-1));
                     const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
                     recentOpen=false;
                     launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
                 }
-            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
-                const int index=(y-190)/39;
-                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size())
-                    recentIndex=index;
+            } else {
+                const int row=layout.entries.itemAt(x,y);
+                if(row>=0&&row<static_cast<int>(recentLaunches.size()))
+                    recentIndex=row;
             }
         }
         return;

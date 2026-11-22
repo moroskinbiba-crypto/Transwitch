@@ -86,6 +86,21 @@ inline constexpr ItemListLayout LauncherSettingsOptionsLayout{
     {340,214,600,334},12,26,28
 };
 
+struct RecentWindowLayout {
+    static constexpr int VisibleEntries=10;
+    ModalRect surface;
+    ModalRect backButton;
+    ModalRect launchButton;
+    ItemListLayout entries;
+};
+
+inline constexpr RecentWindowLayout RecentWindowControls{
+    {230,78,820,544},
+    {838,108,78,30},
+    {924,108,88,30},
+    {{278,190,724,390},RecentWindowLayout::VisibleEntries,35,39}
+};
+
 struct UserPickerDialogLayout {
     static constexpr int MaxUsers=8;
     ModalRect surface;
