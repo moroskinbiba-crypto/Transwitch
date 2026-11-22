@@ -167,6 +167,22 @@ int main() {
     assert(markerSource == persist::FileSource::Primary);
     assert(recovered.parsed.activeWorkspace == 0);
 
+    // The production background marker-only path already owns a compact,
+    // pre-serialized marker and must not need a copy of the whole workspace.
+    const std::string compactMarker =
+        layout::serializeActiveWorkspaceState(recovered.parsed.workspaces, 1);
+    CommitPlan compactCommit{};
+    const auto compactStatus = workspace_storage::writeActiveWorkspaceBytes(
+        paths, compactMarker, commit, &compactCommit,
+        "marker-temp", "marker-publish", false);
+    assert(compactStatus == persist::WriteStatus::Success);
+    assert(compactCommit.calls == 1);
+    int compactActive = 0;
+    assert(workspace_storage::readActiveWorkspace(
+        paths, recovered.parsed.workspaces, compactActive) ==
+        persist::FileSource::Primary);
+    assert(compactActive == 1);
+
     std::filesystem::remove_all(root);
     return 0;
 }
