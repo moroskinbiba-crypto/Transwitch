@@ -32,6 +32,13 @@ public:
         std::size_t completedImages{0};
         std::size_t failedKeys{0};
         bool workerRunning{false};
+        std::uint32_t lastFrameDecoded{0};
+        std::uint32_t lastFrameUploads{0};
+        std::uint32_t lastFrameUploadFailures{0};
+        std::size_t lastFrameUploadedBytes{0};
+        double lastFrameDecodeMs{0.0};
+        double lastFrameQueueWaitMs{0.0};
+        double lastFrameUploadMs{0.0};
     };
 
     Stats stats() const {
@@ -39,6 +46,13 @@ public:
         result.residentTextures = entries_.size();
         result.textureBytes = textureBytes_;
         result.failedKeys = failedUntil_.size();
+        result.lastFrameDecoded = lastFrameMetrics_.decodedResults;
+        result.lastFrameUploads = lastFrameMetrics_.uploads;
+        result.lastFrameUploadFailures = lastFrameMetrics_.uploadFailures;
+        result.lastFrameUploadedBytes = lastFrameMetrics_.uploadedBytes;
+        result.lastFrameDecodeMs = lastFrameMetrics_.decodeMs;
+        result.lastFrameQueueWaitMs = lastFrameMetrics_.queueWaitMs;
+        result.lastFrameUploadMs = lastFrameMetrics_.uploadMs;
         if (mutex_) {
             SDL_LockMutex(mutex_);
             result.pendingRequests = requests_.size();
@@ -73,6 +87,8 @@ public:
     // Called once at the beginning of a frame. At most one completed image is
     // uploaded to the GPU per frame, so a large desktop cannot monopolise draw.
     void beginFrame() {
+        lastFrameMetrics_ = frameMetrics_;
+        frameMetrics_ = FrameMetrics{};
         loadBudget_ = 1;
         const Uint32 now = SDL_GetTicks();
         if (lastPruneTick_ == 0 || now - lastPruneTick_ >= CachePruneIntervalMs) {
@@ -288,6 +304,16 @@ void setGameIconOverridesDir(const std::string& path) {
     }
 
 private:
+    struct FrameMetrics {
+        std::uint32_t decodedResults{0};
+        std::uint32_t uploads{0};
+        std::uint32_t uploadFailures{0};
+        std::size_t uploadedBytes{0};
+        double decodeMs{0.0};
+        double queueWaitMs{0.0};
+        double uploadMs{0.0};
+    };
+
     struct Request {
         desknx::model::Kind kind{desknx::model::Kind::Game};
         std::string title;
@@ -298,6 +324,7 @@ private:
         std::uint64_t generation{0};
         std::uint64_t keyGeneration{0};
         int priority{0};
+        Uint64 enqueuedAtMs{0};
     };
 
     struct Decoded {
@@ -310,6 +337,8 @@ private:
         int priority{0};
         int width{0};
         int height{0};
+        double decodeMs{0.0};
+        double queueWaitMs{0.0};
         bool isCustom{false};
         bool success{false};
         std::vector<Uint8> rgba;
@@ -401,7 +430,18 @@ private:
             // The Switch target is built with -fno-exceptions. Input file
             // size and decoded dimensions are bounded before allocating RGBA
             // storage, so decoder failures are reported through Decoded::success.
+            const Uint64 decodeStarted = SDL_GetPerformanceCounter();
+            const Uint64 decodeStartedMs = SDL_GetTicks64();
             Decoded decoded = decode(request);
+            const Uint64 decodeFinished = SDL_GetPerformanceCounter();
+            const Uint64 frequency = SDL_GetPerformanceFrequency();
+            decoded.decodeMs = frequency > 0 && decodeFinished >= decodeStarted
+                ? static_cast<double>(decodeFinished - decodeStarted) * 1000.0 /
+                    static_cast<double>(frequency)
+                : 0.0;
+            decoded.queueWaitMs = decodeStartedMs >= request.enqueuedAtMs
+                ? static_cast<double>(decodeStartedMs - request.enqueuedAtMs)
+                : 0.0;
 
             SDL_LockMutex(mutex_);
             const auto version = keyGenerations_.find(request.key);
@@ -479,6 +519,7 @@ private:
         request.priority = priority;
         request.generation = generation_;
         request.keyGeneration = keyGenerations_[key];
+        request.enqueuedAtMs = SDL_GetTicks64();
         const auto position = std::find_if(
             requests_.begin(), requests_.end(),
             [&](const Request& queued) { return queued.priority < priority; });
@@ -613,6 +654,11 @@ private:
             requestRetryAt_.erase(decoded.key);
             priorityRetryAt_.erase(decoded.key);
             if (!currentGeneration) continue;
+            ++frameMetrics_.decodedResults;
+            frameMetrics_.decodeMs = std::max(
+                frameMetrics_.decodeMs, decoded.decodeMs);
+            frameMetrics_.queueWaitMs = std::max(
+                frameMetrics_.queueWaitMs, decoded.queueWaitMs);
 
             if (!decoded.success || decoded.rgba.empty() ||
                 decoded.width <= 0 || decoded.height <= 0) {
@@ -627,28 +673,48 @@ private:
                 continue;
             }
 
+            const Uint64 uploadStarted = SDL_GetPerformanceCounter();
             SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
                 decoded.rgba.data(), decoded.width, decoded.height, 32,
                 decoded.width * 4, SDL_PIXELFORMAT_RGBA32);
             if (!surface) {
+                recordUploadTime(uploadStarted);
+                ++frameMetrics_.uploadFailures;
                 rememberFailure(decoded.key);
                 continue;
             }
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
             SDL_FreeSurface(surface);
             if (!texture) {
+                recordUploadTime(uploadStarted);
+                ++frameMetrics_.uploadFailures;
                 rememberFailure(decoded.key);
                 continue;
             }
 
             SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+            recordUploadTime(uploadStarted);
             entries_.push_back({decoded.kind, std::move(decoded.data),
                                 std::move(decoded.path), texture, ++clock_,
                                 SDL_GetTicks(), bytes});
             textureBytes_ += bytes;
+            frameMetrics_.uploadedBytes += bytes;
+            ++frameMetrics_.uploads;
             failedUntil_.erase(decoded.key);
             --loadBudget_;
         }
+    }
+
+    static double elapsedMs(Uint64 start, Uint64 finish) noexcept {
+        const Uint64 frequency = SDL_GetPerformanceFrequency();
+        if (frequency == 0 || finish < start) return 0.0;
+        return static_cast<double>(finish - start) * 1000.0 /
+               static_cast<double>(frequency);
+    }
+
+    void recordUploadTime(Uint64 started) {
+        frameMetrics_.uploadMs +=
+            elapsedMs(started, SDL_GetPerformanceCounter());
     }
 
     void rememberFailure(const std::string& key) {
@@ -978,5 +1044,7 @@ private:
     Uint32 lastPruneTick_{0};
     std::size_t loadBudget_{1};
     std::size_t textureBytes_{0};
+    FrameMetrics frameMetrics_{};
+    FrameMetrics lastFrameMetrics_{};
     std::vector<Entry> entries_;
 };
