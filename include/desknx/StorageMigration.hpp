@@ -137,7 +137,8 @@ inline Inspection inspect(const std::string& contents,
 
 inline RunResult run(const std::string& input, const SchemaDescriptor& schema,
                      const Step* steps, std::size_t stepCount,
-                     bool dryRun, Validator validateCurrent = nullptr,
+                     bool dryRun, std::string& migratedOutput,
+                     Validator validateCurrent = nullptr,
                      void* context = nullptr) {
     const Inspection inspection = inspect(input, schema);
     RunResult result{};
@@ -153,6 +154,7 @@ inline RunResult run(const std::string& input, const SchemaDescriptor& schema,
                 result.status = RunStatus::ValidationFailed;
                 return result;
             }
+            migratedOutput = input;
             result.status = RunStatus::Current;
             return result;
         case InspectionStatus::UnsupportedLegacy:
@@ -239,6 +241,7 @@ inline RunResult run(const std::string& input, const SchemaDescriptor& schema,
 
     // The caller publishes this buffer with ProductionPersistence::writeAtomically
     // so the pre-migration source remains in the normal .bak recovery slot.
+    migratedOutput.swap(current);
     result.status = RunStatus::AppliedInMemory;
     result.stepsApplied = applied;
     return result;
