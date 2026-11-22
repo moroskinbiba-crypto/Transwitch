@@ -35,6 +35,7 @@
 #include "VisualEngine.hpp"
 #include "UiComponents.hpp"
 #include "TileRenderer.hpp"
+#include "SystemTelemetry.hpp"
 #include "../include/desknx/UiMotion.hpp"
 #include "../include/desknx/ModalLayer.hpp"
 #include "../include/desknx/SurfaceManager.hpp"
@@ -337,7 +338,7 @@ struct JoyconBatteryState {
     bool charging{false};
 };
 JoyconBatteryState joyconLeft{},joyconRight{};
-Uint32 lastJoyconBatteryTick=0;
+
 bool joyconBatteryAvailable=false;
 std::string atmosphereVersion;
 bool atmosphereVersionAvailable=false,atmosphereVersionChecked=false;
@@ -352,13 +353,8 @@ SDL_atomic_t storageStatsStop{};
 uint64_t backgroundSdFreeBytes=0,backgroundSdTotalBytes=0;
 bool backgroundStorageStatsAvailable=false;
 
-bool tsServiceReady=false, tsInternalOpen=false, tsSocOpen=false;
-TsSession tsInternalSession{}, tsSocSession{};
 bool systemPcbTemperatureAvailable=false, systemSocTemperatureAvailable=false;
 float systemPcbTemperature=-1.0f, systemSocTemperature=-1.0f;
-Uint32 lastSystemMonitorUpdate=0;
-bool clkrstServiceReady=false, cpuClockOpen=false, gpuClockOpen=false;
-ClkrstSession cpuClockSession{}, gpuClockSession{};
 bool systemCpuClockAvailable=false, systemGpuClockAvailable=false;
 std::uint32_t systemCpuClockHz=0, systemGpuClockHz=0;
 
@@ -383,6 +379,7 @@ int nextendoSelected=0;
 bool quickSettingsOpen=false;
 int quickSettingsIndex=0;
 bool quickSettingsSnapshotLoaded=false;
+bool quickSettingsSnapshotLoading=false;
 Uint32 quickSettingsSnapshotTick=0;
 bool quickAirplaneMode=false,quickWifiEnabled=false,quickBluetoothEnabled=false,quickSoundMuted=false;
 bool quickAirplaneAvailable=false,quickWifiAvailable=false,quickBluetoothAvailable=false,
@@ -396,10 +393,27 @@ struct RuntimeFrameMetrics {
     double averageFrameMs{0.0};
     double averageRenderMs{0.0};
     double maximumFrameMs{0.0};
+    double averageInputMs{0.0};
+    double averagePresentWaitMs{0.0};
+    double maximumInputMs{0.0};
+    double maximumPresentWaitMs{0.0};
+    double lastWorkspaceSwitchMs{0.0};
+    double maximumWorkspaceSwitchMs{0.0};
+    std::uint64_t workspaceSwitches{0};
     std::uint64_t slowFrames{0};
     Uint32 updatedAt{0};
 };
 RuntimeFrameMetrics runtimeFrameMetrics;
+SystemTelemetry gSystemTelemetry;
+std::uint64_t lastSystemCommandSequence=0;
+double gLastPresentWaitMs=0.0;
+Uint64 workspaceSwitchStartedAt=0;
+bool workspaceSwitchPending=false;
+
+void markWorkspaceSwitchBegin() {
+    workspaceSwitchStartedAt=SDL_GetPerformanceCounter();
+    workspaceSwitchPending=true;
+}
 Uint32 lastDiagnosticsRefresh=0;
 std::uint64_t diagnosticsCacheBytes=0;
 std::size_t diagnosticsCacheFiles=0;
@@ -410,9 +424,9 @@ Uint32 lastWorkspaceTabTapTick=0;
 // locally through the applet power APIs, which are available to NROs too.
 bool powerMenu=false;
 s32 powerIndex=0;
-bool sdMounted=false, psmReady=false, touchDragging=false;
+bool sdMounted=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   L3 TOOLS", lastLaunched="Nothing launched yet";
-Uint32 statusUntil=0, lastBatteryTick=0;
+Uint32 statusUntil=0;
 #ifdef DESKNX_SYSTEM_APPLET
 // Backend -> menu state (IPC-06/§4.4). The menu keeps no app state of its own:
 // everything here comes from the initial block or live events.
