@@ -85,7 +85,8 @@ int main() {
     assert(users.users.itemAt(370,214)==0);
     assert(users.users.itemAt(909,253)==0);
     assert(users.users.itemAt(370,254)==-1);
-    assert(users.users.itemAt(370,259)==1);
+    assert(users.users.itemAt(370,259)==-1); // 6 px gap after the first row
+    assert(users.users.itemAt(370,260)==1);
     assert(users.users.itemAt(909,575)==7);
     assert(users.users.itemAt(909,576)==-1);
     assert(users.users.itemAt(910,260)==-1);
