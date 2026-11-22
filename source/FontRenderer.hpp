@@ -14,7 +14,25 @@
 
 class FontRenderer {
 public:
+    struct FrameStats {
+        std::uint32_t drawCalls{0};
+        std::uint32_t cacheHits{0};
+        std::uint32_t cacheMisses{0};
+        std::uint32_t texturesCreated{0};
+        std::uint32_t deferredByBudget{0};
+        std::uint32_t rasterFailures{0};
+        std::uint32_t uploadFailures{0};
+        double textPreparationMs{0.0};
+        double rasterizationMs{0.0};
+        double textureUploadMs{0.0};
+        double maximumRasterizationMs{0.0};
+        double maximumTextureUploadMs{0.0};
+    };
+
+    FrameStats lastFrameStats() const noexcept { return lastFrameStats_; }
+
     bool initialize() {
+        performanceFrequency_ = SDL_GetPerformanceFrequency();
         if (TTF_Init() != 0) return false;
         ttfReady_ = true;
         fontLoadMutex_ = SDL_CreateMutex();
@@ -79,7 +97,11 @@ public:
         return failed;
     }
 
-    void beginFrame() { newTexturesRemaining_ = NewTextureBudget; }
+    void beginFrame() {
+        lastFrameStats_ = frameStats_;
+        frameStats_ = FrameStats{};
+        newTexturesRemaining_ = NewTextureBudget;
+    }
 
     // Open one additional point size from RAM every three frames. Until that
     // size is ready, rendering falls back to the shared system font rather
@@ -195,6 +217,9 @@ private:
     int customWarmupIndex_{8};
     int warmupFrameCounter_{0};
     int newTexturesRemaining_{NewTextureBudget};
+    Uint64 performanceFrequency_{0};
+    FrameStats frameStats_{};
+    FrameStats lastFrameStats_{};
     bool ttfReady_{false};
     bool plReady_{false};
     SDL_Thread* fontLoadThread_{nullptr};
@@ -287,17 +312,33 @@ private:
         return fonts_[index];
     }
 
+    double elapsedMs(Uint64 start, Uint64 finish) const noexcept {
+        if (performanceFrequency_ == 0 || finish < start) return 0.0;
+        return static_cast<double>(finish - start) * 1000.0 /
+               static_cast<double>(performanceFrequency_);
+    }
+
     bool drawImpl(const std::string& value, int x, int y, int scale,
                   SDL_Color color, int left, int right,
                   bool centered, int centerX) {
         if (!ttfReady_ || !renderer_ || value.empty()) return false;
+        ++frameStats_.drawCalls;
         const int maxWidth = std::max(0, right - left);
         if (maxWidth == 0) return true;
         const int fontIndex = std::max(0, std::min(7, scale - 1));
+        const Uint64 prepareStarted = SDL_GetPerformanceCounter();
         TTF_Font* font = fontForScale(scale);
-        if (!font) return false;
+        if (!font) {
+            frameStats_.textPreparationMs +=
+                elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
+            return false;
+        }
         const std::string* fitted = &fitToWidth(value, font, scale, maxWidth);
-        if (fitted->empty()) return true;
+        if (fitted->empty()) {
+            frameStats_.textPreparationMs +=
+                elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
+            return true;
+        }
 
         std::string key = makeKey(*fitted, scale, color, font);
         CacheEntry* entry = find(key);
@@ -311,16 +352,43 @@ private:
             key = makeKey(*fitted, scale, color, font);
             entry = find(key);
         }
-        if (!entry) {
-            if (newTexturesRemaining_ <= 0) return false;
+        frameStats_.textPreparationMs +=
+            elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
+        if (entry) {
+            ++frameStats_.cacheHits;
+        } else {
+            ++frameStats_.cacheMisses;
+            if (newTexturesRemaining_ <= 0) {
+                ++frameStats_.deferredByBudget;
+                return false;
+            }
+            const Uint64 rasterStarted = SDL_GetPerformanceCounter();
             SDL_Surface* surface = TTF_RenderUTF8_Blended(font, fitted->c_str(), color);
-            if (!surface) return false;
-            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
+            const double rasterMs =
+                elapsedMs(rasterStarted, SDL_GetPerformanceCounter());
+            frameStats_.rasterizationMs += rasterMs;
+            frameStats_.maximumRasterizationMs =
+                std::max(frameStats_.maximumRasterizationMs, rasterMs);
+            if (!surface) {
+                ++frameStats_.rasterFailures;
+                return false;
+            }
             const int width = surface->w, height = surface->h;
+            const Uint64 uploadStarted = SDL_GetPerformanceCounter();
+            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
             SDL_FreeSurface(surface);
-            if (!texture) return false;
+            const double uploadMs =
+                elapsedMs(uploadStarted, SDL_GetPerformanceCounter());
+            frameStats_.textureUploadMs += uploadMs;
+            frameStats_.maximumTextureUploadMs =
+                std::max(frameStats_.maximumTextureUploadMs, uploadMs);
+            if (!texture) {
+                ++frameStats_.uploadFailures;
+                return false;
+            }
             SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
             entry = insert(key, texture, width, height);
+            ++frameStats_.texturesCreated;
             --newTexturesRemaining_;
         }
         entry->lastUse = ++clock_;
