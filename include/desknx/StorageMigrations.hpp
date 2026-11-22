@@ -5,6 +5,7 @@
 #include "StorageMigration.hpp"
 
 #include <string>
+#include <cstdlib>
 
 namespace desknx::migration {
 
@@ -30,8 +31,30 @@ inline bool migrateSettingsV1ToV2(const std::string& input,
     const std::size_t newline = input.find('\n');
     if (newline == std::string::npos)
         return false;
+
     output = "DESKNXSET2\n";
-    output.append(input, newline + 1, std::string::npos);
+    std::size_t position = newline + 1;
+    while (position < input.size()) {
+        const std::size_t lineEnd = input.find('\n', position);
+        const std::size_t end = lineEnd == std::string::npos
+            ? input.size() : lineEnd;
+        const std::string line = input.substr(position, end - position);
+        if (line.compare(0, 6, "theme=") == 0) {
+            char* valueEnd = nullptr;
+            const long legacyTheme = std::strtol(line.c_str() + 6, &valueEnd, 10);
+            if (valueEnd && *valueEnd == '\0' &&
+                legacyTheme >= 0 && legacyTheme <= 8) {
+                output += "theme=";
+                output += legacyTheme == 8 ? "1" : "0";
+            } else {
+                output += line;
+            }
+        } else {
+            output += line;
+        }
+        output.push_back('\n');
+        position = lineEnd == std::string::npos ? input.size() : lineEnd + 1;
+    }
     return !output.empty();
 }
 
