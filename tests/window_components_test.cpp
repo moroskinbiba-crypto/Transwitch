@@ -75,6 +75,31 @@ int main() {
     assert(toolbar.buttonRect(6).width==72&&toolbar.buttonRect(6).height==30);
     assert(toolbar.buttonRect(-1).width==0);
 
+    // Media Picker uses shared button and list-row geometry. Row gutters are inert.
+    const auto& media=MediaPickerWindowControls;
+    assert(media.surface.contains(220,58));
+    assert(media.directoryButton.inside(media.surface));
+    assert(media.closeButton.inside(media.surface));
+    assert(media.entries.bounds.inside(media.surface));
+    assert(media.entries.itemAt(260,166)==0);
+    assert(media.entries.itemAt(1019,195)==0);
+    assert(media.entries.itemAt(260,196)==-1);
+    assert(media.entries.itemAt(260,199)==-1);
+    assert(media.entries.itemAt(260,200)==1);
+    assert(media.entries.itemAt(1019,569)==11);
+    assert(media.entries.itemAt(1019,570)==-1);
+    assert(media.entries.itemAt(1020,200)==-1);
+    assert(media.entries.itemAt(259,200)==-1);
+    assert(media.entries.itemAt(260,574)==-1);
+    assert(media.directoryButton.contains(782,86));
+    assert(media.directoryButton.contains(913,119));
+    assert(!media.directoryButton.contains(914,119));
+    assert(!media.directoryButton.contains(913,120));
+    assert(media.closeButton.contains(930,86));
+    assert(media.closeButton.contains(1021,119));
+    assert(!media.closeButton.contains(1022,119));
+    assert(!media.closeButton.contains(1021,120));
+
     // System Tools cards and Back button share one drawing/hit-test layout.
     const auto& system=SystemToolsWindowControls;
     assert(system.surface.contains(110,104));

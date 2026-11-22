@@ -86,6 +86,20 @@ inline constexpr ItemListLayout LauncherSettingsOptionsLayout{
     {340,214,600,334},12,26,28
 };
 
+struct MediaPickerWindowLayout {
+    ModalRect surface;
+    ModalRect directoryButton;
+    ModalRect closeButton;
+    ItemListLayout entries;
+};
+
+inline constexpr MediaPickerWindowLayout MediaPickerWindowControls{
+    {220,58,840,604},
+    {782,86,132,34},
+    {930,86,92,34},
+    {{260,166,760,408},12,30,34}
+};
+
 struct SystemToolsWindowLayout {
     ModalRect surface;
     ModalRect closeButton;

@@ -3251,7 +3251,10 @@ void drawScreen() {
     }
     if(modalStack.contains(desknx::ui::ModalLayer::MediaPicker)) {
         drawModalBackdrop(205);
-        drawModalSurface(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
+        const auto& mediaLayout=desknx::ui::MediaPickerWindowControls;
+        drawModalSurface(mediaLayout.surface.x,mediaLayout.surface.y,
+            mediaLayout.surface.width,mediaLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,25});
         text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
              mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
              mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
@@ -3260,11 +3263,19 @@ void drawScreen() {
             0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0;
         text(browsingAlbum?"NINTENDO ALBUM":"MEDIA LIBRARY",266,128,1,MUTED,1000);
         if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
-            roundRect(782,86,132,34,10,Color{38,76,119,255});
-            text(browsingAlbum?"MEDIA":"ALBUM",808,98,1,WHITE,908);
+            const desknx::ui::ButtonControl directoryButton{
+                mediaLayout.directoryButton,desknx::ui::ButtonVariant::ToolbarSelected,{}};
+            drawButton(directoryButton,browsingAlbum?"MEDIA":"ALBUM",
+                mediaLayout.directoryButton.x+26,mediaLayout.directoryButton.y+12,
+                mediaLayout.directoryButton.x+mediaLayout.directoryButton.width-6,
+                desknx::ui::TextRole::Metadata);
         }
-        roundRect(930,86,92,34,10,Color{54,57,66,255});
-        text("B  BACK",944,98,1,WHITE,1012);
+        const desknx::ui::ButtonControl backButton{
+            mediaLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B  BACK",mediaLayout.closeButton.x+14,
+            mediaLayout.closeButton.y+12,
+            mediaLayout.closeButton.x+mediaLayout.closeButton.width-10,
+            desknx::ui::TextRole::Metadata);
         if(mediaPickerEntries.empty()) {
             text("NO SUPPORTED FILES FOUND",286,220,2,WHITE,980);
             text(mediaPickerType==MediaPickerType::IconPack
@@ -3272,16 +3283,21 @@ void drawScreen() {
                  :"COPY JPG / PNG OR TTF / OTF FILES INTO THIS FOLDER",
                  286,256,1,MUTED,1000);
         }
-        for(int row=0;row<12;++row) {
+        const auto& mediaRows=mediaLayout.entries;
+        for(int row=0;row<mediaRows.itemCount;++row) {
             const int index=mediaPickerOffset+row;
             if(index>=static_cast<int>(mediaPickerEntries.size()))break;
             const auto& entry=mediaPickerEntries[static_cast<size_t>(index)];
-            const int yy=166+row*34;
-            if(index==mediaPickerIndex)roundRect(260,yy,760,30,8,Color{35,61,93,255});
+            const auto rowBounds=mediaRows.itemRect(row);
+            if(index==mediaPickerIndex)
+                drawSelectableRowBackground(rowBounds,
+                    desknx::ui::SelectableRowState::Focused,8);
             const char* entryType=entry.directory?"FOLDER":
                 (mediaPickerType==MediaPickerType::Font?"FONT":"IMAGE");
-            text(entryType,278,yy+10,1,entry.directory?BLUE:MUTED,370);
-            text(entry.name,388,yy+10,1,index==mediaPickerIndex?WHITE:MUTED,1004);
+            text(entryType,rowBounds.x+18,rowBounds.y+10,1,
+                entry.directory?BLUE:MUTED,rowBounds.x+110);
+            text(entry.name,rowBounds.x+128,rowBounds.y+10,1,
+                index==mediaPickerIndex?WHITE:MUTED,rowBounds.x+rowBounds.width-16);
         }
         text(std::to_string(mediaPickerIndex+1)+" / "+std::to_string(mediaPickerEntries.size())+
              "    A OPEN / APPLY",266,590,1,MUTED,650);
@@ -4388,18 +4404,29 @@ void touchInput(const SDL_Event&e) {
     }
     if(activeModal==desknx::ui::ModalLayer::MediaPicker ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=930&&x<=1022&&y>=86&&y<=120) {
+        const auto& layout=desknx::ui::MediaPickerWindowControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)) {
             mediaPickerBack();
-        } else if(mediaPickerType==MediaPickerType::WorkspaceBackground &&
-                  x>=782&&x<=914&&y>=86&&y<=120) {
-            mediaPickerDirectory=mediaPickerDirectory.compare(
-                0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0
-                ?std::string(MEDIA_ROOT):std::string(ALBUM_ROOT);
-            mediaPickerIndex=mediaPickerOffset=0;
-            refreshMediaPicker();
-        } else if(x>=260&&x<=1020&&y>=166&&y<574) {
-            const int row=(y-166)/34;
-            applyMediaPickerSelection(mediaPickerOffset+row);
+        } else if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
+            const desknx::ui::ButtonControl directoryButton{
+                layout.directoryButton,desknx::ui::ButtonVariant::ToolbarSelected,{}};
+            if(directoryButton.hitTest(x,y)) {
+                mediaPickerDirectory=mediaPickerDirectory.compare(
+                    0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0
+                    ?std::string(MEDIA_ROOT):std::string(ALBUM_ROOT);
+                mediaPickerIndex=mediaPickerOffset=0;
+                refreshMediaPicker();
+                return;
+            }
+            const int row=layout.entries.itemAt(x,y);
+            if(row>=0)
+                applyMediaPickerSelection(mediaPickerOffset+row);
+        } else {
+            const int row=layout.entries.itemAt(x,y);
+            if(row>=0)
+                applyMediaPickerSelection(mediaPickerOffset+row);
         }
         return;
     }

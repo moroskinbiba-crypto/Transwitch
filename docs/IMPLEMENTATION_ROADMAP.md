@@ -93,6 +93,8 @@ Successful compilation alone does not close a runtime acceptance item.
       geometry for rendering and touch hit testing.
 - [x] Migrate System Tools cards and Back action to one shared layout for drawing and
       touch dispatch; preserve the six-card keyboard navigation order.
+- [x] Migrate Media Picker header controls and file rows to shared hit-test geometry;
+      touch no longer activates invisible row gutters or pixels beyond drawn controls.
 - [ ] Migrate remaining modal, toolbar, footer and workspace controls to shared styles.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,

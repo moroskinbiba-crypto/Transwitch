@@ -11,7 +11,8 @@ enum class ButtonVariant : std::uint8_t {
     Secondary,
     Destructive,
     Quiet,
-    Toolbar
+    Toolbar,
+    ToolbarSelected
 };
 
 struct ControlState {
@@ -98,6 +99,15 @@ constexpr ButtonStyle ResolveButtonStyle(ButtonVariant variant,
                 return {{48,78,115,255},{131,183,242,230},{255,255,255,255},
                         {83,157,255,175},true,true};
             return {{31,43,61,255},{255,255,255,22},{246,248,252,255},
+                    {0,0,0,0},true,false};
+        case ButtonVariant::ToolbarSelected:
+            if(state.pressed)
+                return {{29,61,98,255},{111,165,220,220},{255,255,255,255},
+                        {0,0,0,0},true,false};
+            if(state.focused)
+                return {{47,91,140,255},{153,196,242,255},{255,255,255,255},
+                        {83,157,255,175},true,true};
+            return {{38,76,119,255},{88,143,205,150},{255,255,255,255},
                     {0,0,0,0},true,false};
     }
     return {};

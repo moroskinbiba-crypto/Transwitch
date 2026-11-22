@@ -213,3 +213,14 @@ navigation remains row-major and unchanged.
 This removes the old independent x/y ranges for card taps, including inclusive right
 and bottom edges that were one pixel outside the painted surface. Tests cover all six
 cards, row gutters, outer edges and the Back button's half-open bounds.
+
+## Media Picker geometry update
+
+Media Picker now uses `MediaPickerWindowControls` for the surface, directory toggle,
+Back action and 12 file rows. Buttons are drawn with shared ToolbarSelected/Secondary
+variants and use their `ButtonControl` bounds for touch dispatch. File rows use the
+same `ItemListLayout` for drawing and hit testing; 4 px gaps between 30 px rows are
+now deliberately inert instead of selecting the adjacent row.
+
+Keyboard navigation and file-selection semantics are unchanged. The new layout test
+checks the first/last row, row gutters, all button edges and the outer list bounds.
