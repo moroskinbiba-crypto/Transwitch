@@ -1610,6 +1610,15 @@ void RunMainLoop() {
     LaunchMenu();
 
     while (true) {
+        // Lifecycle messages are always pumped first. While the system is
+        // asleep, do not consume menu IPC, retry services, poll title processes,
+        // or run watchdog recovery against an applet paused by the sleep cycle.
+        PumpAppletMessages();
+        if (g_BackendState == BackendState::Sleeping) {
+            svcSleepThread(16'666'666ULL);
+            continue;
+        }
+
         RetryPmshellInitialization();
         RetryPendingHbloaderUnregister();
         const u64 loopNow = armGetSystemTick();
@@ -1619,7 +1628,6 @@ void RunMainLoop() {
             DaemonLog("ipc: Busy pause ended; heartbeat monitoring resumed");
 
         if (la::IsMenuAlive()) DrainMenuCommands();
-        PumpAppletMessages();
         TakeLaunchRequests();
 
         // Poll even while DeskNX is open. If a suspended game exits naturally,
