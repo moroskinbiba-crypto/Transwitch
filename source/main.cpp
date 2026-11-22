@@ -8522,11 +8522,12 @@ int main(int,char**) {
                 static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
             const auto& visualStats=gVisualEngine.lastFrameStats();
             desknx::diag::Write("visual","frame_primitives",
-                "fill_rect=%u rounded_rect=%u rounded_batches=%u outlines=%u gradient_draws=%u gradient_rebuilds=%u failures=%u",
+                "fill_rect=%u rounded_rect=%u rounded_batches=%u outlines=%u gradient_draws=%u gradient_rebuilds=%u texture_draws=%u radial_glows=%u shadow_layers=%u failures=%u",
                 visualStats.filledRectCalls,visualStats.roundedRectCalls,
                 visualStats.roundedFillBatches,visualStats.outlineCalls,
                 visualStats.gradientDrawCalls,visualStats.gradientTextureRebuilds,
-                visualStats.failedCalls);
+                visualStats.textureDrawCalls,visualStats.radialGlowDrawCalls,
+                visualStats.shadowLayers,visualStats.failedCalls);
             metricsWindowStart=frameEndCounter;
             metricsFrames=metricsSlowFrames=0;
             metricsFrameSumMs=metricsRenderSumMs=metricsMaximumFrameMs=0.0;
