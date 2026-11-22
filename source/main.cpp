@@ -2937,29 +2937,48 @@ void drawScreen() {
         const int index=deskStart+slot;
         const auto bounds=dock.tabRect(slot);
         const bool active=index==deskIndex;
-        roundRect(bounds.x,bounds.y,bounds.width,bounds.height,14,
-            active?Color{53,91,139,255}:Color{34,43,58,235});
-        if(active)outline(bounds.x,bounds.y,bounds.width,bounds.height,Color{144,189,244,110});
-        text(desks[static_cast<size_t>(index)].name,bounds.x+12,bounds.y+17,1,
-            active?WHITE:MUTED,bounds.x+bounds.width-8);
+        const desknx::ui::ButtonControl tab{
+            bounds,
+            active?desknx::ui::ButtonVariant::HeaderToolbarSelected
+                  :desknx::ui::ButtonVariant::HeaderToolbar,
+            {}};
+        drawButton(tab,desks[static_cast<size_t>(index)].name,
+            bounds.x+12,bounds.y+17,bounds.x+bounds.width-8,
+            desknx::ui::TextRole::Metadata,14);
     }
+
     const auto addBounds=dock.addButton;
-    roundRect(addBounds.x,addBounds.y,addBounds.width,addBounds.height,14,
-        desks.size()<static_cast<size_t>(MAX_DESKS)?Color{35,70,105,255}:Color{34,43,58,235});
-    text("+",addBounds.x+17,addBounds.y+11,3,
-        desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,addBounds.x+addBounds.width-10);
+    const bool canAddWorkspace=desks.size()<static_cast<size_t>(MAX_DESKS);
+    const desknx::ui::ButtonControl addWorkspace{
+        addBounds,desknx::ui::ButtonVariant::Primary,
+        {false,false,!canAddWorkspace}};
+    drawButton(addWorkspace,"+",addBounds.x+17,addBounds.y+10,
+        addBounds.x+addBounds.width-10,desknx::ui::TextRole::Heading,14);
+
     const auto menuBounds=dock.menuButton;
-    roundRect(menuBounds.x,menuBounds.y,menuBounds.width,menuBounds.height,14,Color{34,43,58,235});
-    text("...",menuBounds.x+10,menuBounds.y+19,2,WHITE,menuBounds.x+menuBounds.width-8);
-    text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
-        dock.pageIndicator.x+16,dock.pageIndicator.y+17,1,MUTED,
-        dock.pageIndicator.x+dock.pageIndicator.width-10);
+    const desknx::ui::ButtonControl openWorkspaceMenu{
+        menuBounds,desknx::ui::ButtonVariant::Secondary,{}};
+    drawButton(openWorkspaceMenu,"...",menuBounds.x+10,menuBounds.y+19,
+        menuBounds.x+menuBounds.width-8,desknx::ui::TextRole::Subheading,14);
+
+    const auto pageBounds=dock.pageIndicator;
+    const desknx::ui::ButtonControl openWorkspacePicker{
+        pageBounds,desknx::ui::ButtonVariant::Quiet,{}};
+    drawButton(openWorkspacePicker,
+        std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
+        pageBounds.x+16,pageBounds.y+17,pageBounds.x+pageBounds.width-10,
+        desknx::ui::TextRole::Metadata,10);
+
     const auto editBounds=dock.editButton;
-    roundRect(editBounds.x,editBounds.y,editBounds.width,editBounds.height,16,
-        editing?Color{53,100,156,255}:Color{34,46,64,255});
+    const desknx::ui::ButtonControl toggleEditMode{
+        editBounds,
+        editing?desknx::ui::ButtonVariant::HeaderToolbarSelected
+               :desknx::ui::ButtonVariant::HeaderToolbar,
+        {}};
+    drawButton(toggleEditMode,editing?"DONE":"EDIT",
+        editBounds.x+52,editBounds.y+19,editBounds.x+editBounds.width-8,
+        desknx::ui::TextRole::Subheading,16);
     drawSystemIcon(5,editBounds.x+12,editBounds.y+12,30,WHITE);
-    text(editing?"DONE":"EDIT",editBounds.x+52,editBounds.y+19,2,WHITE,
-        editBounds.x+editBounds.width-8);
     if(modalStack.contains(desknx::ui::ModalLayer::AppLibrary)) {
         drawModalBackdrop(194);
         const int mx=110,my=70,mw=1060,mh=570;
