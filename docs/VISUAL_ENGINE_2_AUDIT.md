@@ -1,9 +1,26 @@
 # Visual Engine 2.0 — baseline audit
 
-Baseline: `main` / current PR head `eb3b55a47881b448eb7bc4ecc3b1ed304fee192d`.
+Baseline: `main` / current implementation branch after modal-stack and surface-shell work.
 Scope inspected: `source/main.cpp`, `source/FontRenderer.hpp`, and current SDL draw /
 input paths. This is an architecture audit, not a claim that the white-screen defect
 has already been reproduced or fixed.
+
+## Implementation update
+
+The first Visual Engine 2.0 stability slice is now implemented in this branch:
+
+- `ModalStack` owns the single bottom-to-top z-order list.
+- `drawScreen()` builds the stack once and renders all active layers in that order.
+- `keyInput()` and `touchInput()` resolve the same stack and dispatch only to its top layer.
+- Parent/child surfaces such as Launcher Settings + Media Picker remain visible together,
+  while the child receives input.
+- Host tests cover overlapping modal precedence.
+- All outer modal shells now use the shared `drawModalBackdrop()` and
+  `drawModalSurface()` primitives.
+- The frame resets SDL clip and draw-blend state before composition and before Present.
+
+This closes the z-order mismatch described below. It does not yet prove the white-screen
+issue fixed; on-console reproduction and compositing regression tests remain open.
 
 ## Findings
 

@@ -754,6 +754,15 @@ void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20
     roundRect(x,y,w,h,UiCornerRadius,fill);
     roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
 }
+
+// Shared outer-window primitives. Keep all modal dimming and shell surfaces
+// here so later Dialog/SidePanel components share one visual and compositing base.
+void drawModalBackdrop(Uint8 alpha) {
+    rect(0,0,SW,SH,Color{3,7,14,alpha});
+}
+void drawModalSurface(int x,int y,int w,int h,Color fill,Color edge) {
+    softCard(x,y,w,h,fill,edge);
+}
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
     switch(c) {
@@ -2599,9 +2608,9 @@ void drawScreen() {
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
     if(modalStack.contains(desknx::ui::ModalLayer::AppLibrary)) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+        drawModalBackdrop(194);
         const int mx=110,my=70,mw=1060,mh=570;
-        softCard(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
+        drawModalSurface(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
         text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
         text("Installed games, homebrew and system widgets",
              mx+30,my+43,1,MUTED,mx+mw-24);
@@ -2755,8 +2764,8 @@ void drawScreen() {
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceMenu)) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
+        drawModalBackdrop(190);
+        drawModalSurface(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
         text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
@@ -2772,8 +2781,8 @@ void drawScreen() {
         text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceSettings)) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
-        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+        drawModalBackdrop(198);
+        drawModalSurface(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
         text(desk.name+"  /  PERSONAL APPEARANCE",346,168,1,MUTED,930);
@@ -2800,8 +2809,8 @@ void drawScreen() {
         text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::WorkspacePicker)) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
-        softCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
+        drawModalBackdrop(194);
+        drawModalSurface(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
         text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
              360,100,3,WHITE,920);
         text("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
@@ -2823,9 +2832,9 @@ void drawScreen() {
         text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::DeleteConfirmation)) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+        drawModalBackdrop(194);
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
-        softCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
+        drawModalSurface(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
         text("DELETE WORKSPACE?",405,270,3,WHITE,890);
         text(desks[static_cast<size_t>(deskIndex)].name,405,314,2,MUTED,890);
         text(std::to_string(tileCount)+" SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
@@ -2839,8 +2848,8 @@ void drawScreen() {
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(modalStack.contains(desknx::ui::ModalLayer::Recent)) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+        drawModalBackdrop(190);
+        drawModalSurface(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
         text("RECENTLY OPENED",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
         text("B BACK",850,118,1,WHITE,912);
@@ -2867,8 +2876,8 @@ void drawScreen() {
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::SystemTools)) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
+        drawModalBackdrop(190);
+        drawModalSurface(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
         text("TOOLS",146,130,3,WHITE,1020);
         text("Library, recent apps, widgets and system actions.",
              148,168,1,MUTED,1020);
@@ -2899,8 +2908,8 @@ void drawScreen() {
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::LauncherSettings)) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
-        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+        drawModalBackdrop(198);
+        drawModalSurface(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
         text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
         roundRect(842,132,92,32,10,Color{54,57,66,255});
@@ -2938,8 +2947,8 @@ void drawScreen() {
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::MediaPicker)) {
-        rect(0,0,SW,SH,Color{3,7,14,205});
-        softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
+        drawModalBackdrop(205);
+        drawModalSurface(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
         text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
              mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
              mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
@@ -2980,8 +2989,8 @@ void drawScreen() {
     }
     if(modalStack.contains(desknx::ui::ModalLayer::Power)) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
-        rect(0,0,SW,SH,Color{3,7,14,194});
-        softCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
+        drawModalBackdrop(194);
+        drawModalSurface(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
         text("POWER",454,238,3,WHITE,820);
         roundRect(780,238,52,30,9,Color{54,57,66,255});
         text("B",798,247,1,WHITE,828);
@@ -2995,8 +3004,8 @@ void drawScreen() {
         text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::UserPicker)) {
-        rect(0,0,SW,SH,Color{3,7,14,210});
-        softCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
+        drawModalBackdrop(210);
+        drawModalSurface(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
         text("SELECT PLAYER",374,142,3,WHITE,900);
         text("The selected profile is used for games that request a player account.",
              376,180,1,MUTED,914);

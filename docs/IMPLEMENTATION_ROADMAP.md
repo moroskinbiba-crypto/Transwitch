@@ -63,13 +63,22 @@ Successful compilation alone does not close a runtime acceptance item.
 - [x] Record the current renderer structure and the main window/composition risks in
       `docs/VISUAL_ENGINE_2_AUDIT.md`.
 
+### Implemented in this branch
+- [x] Introduce one authoritative modal z-order stack shared by rendering, keyboard and
+      touch dispatch. Parent surfaces may remain visible beneath child surfaces, but only
+      the top-most layer owns input.
+- [x] Add host tests for empty/single/nested modal stacks and previously mismatched
+      precedence pairs (Power/Media, Recent/Delete, System/Workspace Settings).
+- [x] Add shared ModalBackdrop and ModalSurface primitives and migrate the outer shell
+      of every current modal without changing its geometry, palette or hit regions.
+- [x] Reset SDL clip and draw-blend state at frame start and immediately before Present.
+
 ### Still open
-- [ ] Introduce one authoritative modal/layer state so rendering and input dispatch use
-      identical precedence; eliminate accidental simultaneous modal visibility.
-- [ ] Extract shared ModalSurface, Dialog, SidePanel, ContextMenu and ConfirmationDialog
-      components from the current hand-drawn window blocks.
-- [ ] Establish frame/render-state boundaries (clip rect, blend mode, texture modulation)
-      and add regression checks for full-frame recovery after every modal/window path.
+- [ ] Extract Dialog, SidePanel, ContextMenu and ConfirmationDialog content/layout
+      components; migrate one window at a time while preserving hit regions.
+- [ ] Add scoped clip and texture-modulation guards around every image/mask operation.
+- [ ] Add regression checks for full-frame recovery after every modal/window path.
+- [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [ ] Complete shared button, badge, toggle, field, card and indicator primitives.
 - [ ] Add semantic typography roles and consistent wrapping, line height and font fallback.
