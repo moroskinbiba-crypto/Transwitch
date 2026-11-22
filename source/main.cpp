@@ -2196,7 +2196,7 @@ std::string initials(const std::string& name) {
         offset+=decoded.length>0?decoded.length:1;
         const std::uint32_t codepoint=decoded.codepoint;
         if(codepoint==' '||codepoint=='-'||codepoint=='_'||codepoint=='.'||
-           codepoint=='\\t'||codepoint=='\\r'||codepoint=='\\n') {
+           codepoint==0x09||codepoint==0x0D||codepoint==0x0A) {
             begin=true;
             continue;
         }

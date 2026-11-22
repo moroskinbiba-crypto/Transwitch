@@ -60,6 +60,9 @@ inline Utf8DecodeResult DecodeUtf8Codepoint(
     return {codepoint, length, true};
 }
 
+inline std::uint32_t NormalizeRussianBitmapCodepoint(
+    std::uint32_t codepoint) noexcept;
+
 inline std::uint32_t UppercaseUnicodeInitial(
     std::uint32_t codepoint) noexcept {
     if (codepoint >= 'a' && codepoint <= 'z') return codepoint - 0x20;
