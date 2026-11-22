@@ -4302,7 +4302,12 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             r.x,r.y,r.w,r.h,t.w,t.h);
         const bool compact=metrics.compact();
         const bool banner=metrics.banner();
-        const bool wide=t.h==1&&t.w>=2;
+        const bool banner2=metrics.banner2();
+        const bool banner3=metrics.banner3();
+        const bool standard=metrics.standard();
+        const bool dashboard=metrics.dashboard();
+        const bool portrait=metrics.portrait();
+        const bool wide=metrics.horizontal();
         const auto config=widgetConfig(t);
         const bool dataA=desknx::widgets::enabled(config,0);
         const bool dataB=desknx::widgets::enabled(config,1);
