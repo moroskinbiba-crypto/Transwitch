@@ -76,6 +76,11 @@ jobs:
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
 
+      - name: Test modal stack precedence and layer invariants
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/modal_stack_test.cpp -o /tmp/desknx-modal-stack-test
+          /tmp/desknx-modal-stack-test
+
       - name: Test bounded runtime performance metrics
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/runtime_metrics_test.cpp -o /tmp/desknx-runtime-metrics-test

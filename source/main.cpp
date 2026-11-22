@@ -21,6 +21,7 @@
 #include "../include/desknx/ArtworkRequestPolicy.hpp"
 #include "../include/desknx/SensorService.hpp"
 #include "../include/desknx/RuntimeMetrics.hpp"
+#include "../include/desknx/ModalStack.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2443,8 +2444,29 @@ int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
 }
+desknx::ui::ModalStack collectModalStack() {
+    desknx::ui::ModalFlags flags{};
+    flags.appLibrary=listOpen;
+    flags.workspaceMenu=workspaceMenu;
+    flags.workspaceSettings=workspaceSettingsMenu;
+    flags.workspacePicker=workspacePicker;
+    flags.deleteConfirmation=deletePrompt;
+    flags.recent=recentOpen;
+    flags.systemTools=systemMenu;
+    flags.launcherSettings=appSettingsMenu;
+    flags.mediaPicker=mediaPickerOpen;
+    flags.power=powerMenu;
+    flags.userPicker=userPickerOpen;
+    return desknx::ui::ModalStack::build(flags);
+}
+
 void drawScreen() {
+    const desknx::ui::ModalStack modalStack=collectModalStack();
     gIconCache.beginFrame();
+    // Every frame starts from a known SDL clip/blend state. A previous image or
+    // modal path must never constrain the next full-screen clear or composition.
+    SDL_RenderSetClipRect(renderer,nullptr);
+    SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     bool catalogueNsAvailableNow=false;
@@ -2576,7 +2598,7 @@ void drawScreen() {
         editing?Color{53,100,156,255}:Color{34,46,64,255});
     drawSystemIcon(5,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
-    if(listOpen) {
+    if(modalStack.contains(desknx::ui::ModalLayer::AppLibrary)) {
         rect(0,0,SW,SH,Color{3,7,14,194});
         const int mx=110,my=70,mw=1060,mh=570;
         softCard(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
@@ -2732,7 +2754,7 @@ void drawScreen() {
             std::to_string(available.size())+" SHOWN";
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
-    if(workspaceMenu) {
+    if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceMenu)) {
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
         text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
@@ -2749,7 +2771,7 @@ void drawScreen() {
         }
         text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
     }
-    if(workspaceSettingsMenu) {
+    if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceSettings)) {
         rect(0,0,SW,SH,Color{3,7,14,198});
         softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
@@ -2777,7 +2799,7 @@ void drawScreen() {
         text("COVER FILLS THE TILE; CONTAIN SHOWS THE WHOLE IMAGE",346,568,1,MUTED,930);
         text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
     }
-    if(workspacePicker) {
+    if(modalStack.contains(desknx::ui::ModalLayer::WorkspacePicker)) {
         rect(0,0,SW,SH,Color{3,7,14,194});
         softCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
         text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
@@ -2800,7 +2822,7 @@ void drawScreen() {
         text("CANCEL",795,603,1,WHITE,875);
         text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
     }
-    if(deletePrompt) {
+    if(modalStack.contains(desknx::ui::ModalLayer::DeleteConfirmation)) {
         rect(0,0,SW,SH,Color{3,7,14,194});
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
         softCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
@@ -2816,7 +2838,7 @@ void drawScreen() {
         text("A CONFIRM     B CANCEL",405,444,1,MUTED,890);
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
-    if(recentOpen) {
+    if(modalStack.contains(desknx::ui::ModalLayer::Recent)) {
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
         text("RECENTLY OPENED",266,104,3,WHITE,850);
@@ -2844,7 +2866,7 @@ void drawScreen() {
         }
         text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
     }
-    if(systemMenu) {
+    if(modalStack.contains(desknx::ui::ModalLayer::SystemTools)) {
         rect(0,0,SW,SH,Color{3,7,14,190});
         softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
         text("TOOLS",146,130,3,WHITE,1020);
@@ -2876,7 +2898,7 @@ void drawScreen() {
         text("B BACK",1074,147,1,WHITE,1130);
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
-    if(appSettingsMenu) {
+    if(modalStack.contains(desknx::ui::ModalLayer::LauncherSettings)) {
         rect(0,0,SW,SH,Color{3,7,14,198});
         softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
@@ -2915,7 +2937,7 @@ void drawScreen() {
              346,592,1,MUTED,930);
         text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
     }
-    if(mediaPickerOpen) {
+    if(modalStack.contains(desknx::ui::ModalLayer::MediaPicker)) {
         rect(0,0,SW,SH,Color{3,7,14,205});
         softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
         text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
@@ -2956,7 +2978,7 @@ void drawScreen() {
              :"UP / DOWN SELECT     B BACK",
              682,590,1,BLUE,1018);
     }
-    if(powerMenu) {
+    if(modalStack.contains(desknx::ui::ModalLayer::Power)) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
         rect(0,0,SW,SH,Color{3,7,14,194});
         softCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
@@ -2972,7 +2994,7 @@ void drawScreen() {
         text("EXECUTE",674,445,2,WHITE,820);
         text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
     }
-    if(userPickerOpen) {
+    if(modalStack.contains(desknx::ui::ModalLayer::UserPicker)) {
         rect(0,0,SW,SH,Color{3,7,14,210});
         softCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
         text("SELECT PLAYER",374,142,3,WHITE,900);
@@ -3001,6 +3023,10 @@ void drawScreen() {
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
     }
+    // Restore the frame baseline before Present as a final guard against clip
+    // leakage from future modal components or early-return draw paths.
+    SDL_RenderSetClipRect(renderer,nullptr);
+    SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     if(gFrameRenderStartedCounter!=0) {
         const Uint64 beforePresent=SDL_GetPerformanceCounter();
         gRuntimeMetrics.record(desknx::runtime::Metric::RenderTime,
@@ -3674,11 +3700,12 @@ void launch(const Tile& t) {
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    const desknx::ui::ModalLayer activeModal=collectModalStack().top();
     // A live touch gesture owns focus until its initiating finger is released.
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
-    if(userPickerOpen) {
+    if(activeModal==desknx::ui::ModalLayer::UserPicker) {
         if(keys&HidNpadButton_B){userPickerOpen=false;return;}
         if(!consoleUsers.empty()) {
             if(keys&HidNpadButton_Up)
@@ -3690,7 +3717,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(mediaPickerOpen) {
+    if(activeModal==desknx::ui::ModalLayer::MediaPicker) {
         if(keys&HidNpadButton_B){mediaPickerBack();return;}
         if((keys&HidNpadButton_X)&&
            mediaPickerType==MediaPickerType::WorkspaceBackground) {
@@ -3715,21 +3742,21 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(appSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::LauncherSettings) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
         if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
         if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
-    if(workspaceSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceSettings) {
         if(keys&HidNpadButton_B){workspaceSettingsMenu=false;return;}
         if(keys&HidNpadButton_Up)workspaceSettingsIndex=(workspaceSettingsIndex+6)%7;
         if(keys&HidNpadButton_Down)workspaceSettingsIndex=(workspaceSettingsIndex+1)%7;
         if(keys&HidNpadButton_A)activateWorkspaceAppearance(workspaceSettingsIndex);
         return;
     }
-    if(systemMenu) {
+    if(activeModal==desknx::ui::ModalLayer::SystemTools) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
         if(systemMenuIndex<0||systemMenuIndex>5)systemMenuIndex=0;
         int row=systemMenuIndex/3;
@@ -3753,7 +3780,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(workspacePicker) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspacePicker) {
         const int count=static_cast<int>(desks.size());
         if(keys&HidNpadButton_B){workspacePicker=false;return;}
         if(count>0&&keys&HidNpadButton_Up)
@@ -3763,7 +3790,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A)selectWorkspace(workspacePickerIndex);
         return;
     }
-    if(workspaceMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
         if(keys&HidNpadButton_Up)
             workspaceMenuIndex=(workspaceMenuIndex+5)%6;
@@ -3780,7 +3807,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(recentOpen) {
+    if(activeModal==desknx::ui::ModalLayer::Recent) {
         if(keys&HidNpadButton_B){recentOpen=false;return;}
         if(recentLaunches.empty())return;
         recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
@@ -3795,7 +3822,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(powerMenu) {
+    if(activeModal==desknx::ui::ModalLayer::Power) {
         if(keys&HidNpadButton_B){powerMenu=false;return;}
         if(keys&HidNpadButton_Up)powerIndex=(powerIndex+2)%3;
         if(keys&HidNpadButton_Down)powerIndex=(powerIndex+1)%3;
@@ -3824,7 +3851,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(deletePrompt) {
+    if(activeModal==desknx::ui::ModalLayer::DeleteConfirmation) {
         if(keys&HidNpadButton_B){deletePrompt=false;return;}
         if(keys&HidNpadButton_A) {
             deletePrompt=false;
@@ -3843,7 +3870,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(listOpen) {
+    if(activeModal==desknx::ui::ModalLayer::AppLibrary) {
         const auto& available=visibleCatalogueSnapshot();
         if(keys&HidNpadButton_B){closeList();return;}
         if(keys&HidNpadButton_Y){searchCatalogue();return;}
@@ -3989,7 +4016,8 @@ int tabStart(){
         static_cast<int>(desks.size())-VisibleDeskTabs));
 }
 void touchInput(const SDL_Event&e) {
-    if(userPickerOpen) {
+    const desknx::ui::ModalLayer activeModal=collectModalStack().top();
+    if(activeModal==desknx::ui::ModalLayer::UserPicker) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
             if(x>=844&&x<=920&&y>=136&&y<=170) {
@@ -4003,6 +4031,9 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
+    // A modal owns the complete pointer stream. Non-tap events must not leak
+    // through to an underlying workspace drag or tile interaction.
+    if(activeModal!=desknx::ui::ModalLayer::None&&e.type!=SDL_FINGERDOWN)return;
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
     if(touchPressActive &&
@@ -4016,7 +4047,7 @@ void touchInput(const SDL_Event&e) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
     }
-    if(e.type==SDL_FINGERDOWN && mediaPickerOpen) {
+    if(activeModal==desknx::ui::ModalLayer::MediaPicker ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=930&&x<=1022&&y>=86&&y<=120) {
             mediaPickerBack();
@@ -4033,7 +4064,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::LauncherSettings ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
@@ -4043,7 +4074,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && workspaceSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceSettings ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164)workspaceSettingsMenu=false;
         else if(x>=340&&x<=940&&y>=216&&y<552) {
@@ -4052,7 +4083,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && systemMenu) {
+    if(activeModal==desknx::ui::ModalLayer::SystemTools ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=1058&&x<=1140&&y>=136&&y<=170){systemMenu=false;return;}
         if(y>=218&&y<354) {
@@ -4069,7 +4100,7 @@ void touchInput(const SDL_Event&e) {
         keyInput(HidNpadButton_A,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && workspacePicker) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspacePicker ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=744&&x<=920&&y>=590&&y<=628) {
             workspacePicker=false;
@@ -4079,7 +4110,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && workspaceMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceMenu ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=390&&x<=890&&y>=238&&y<502) {
             const int row=(y-238)/44;
@@ -4094,13 +4125,14 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && deletePrompt) {
+    if(activeModal==desknx::ui::ModalLayer::DeleteConfirmation ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
+    if(e.type==SDL_FINGERDOWN && editing && !dragging &&
+       activeModal==desknx::ui::ModalLayer::None) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(y>=566&&y<=614&&itemAt(
                desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
@@ -4110,7 +4142,7 @@ void touchInput(const SDL_Event&e) {
             return;
         }
     }
-    if(e.type==SDL_FINGERDOWN && powerMenu) {
+    if(activeModal==desknx::ui::ModalLayer::Power ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=780&&x<=832&&y>=238&&y<=270) {
             keyInput(HidNpadButton_B,false);
@@ -4121,7 +4153,7 @@ void touchInput(const SDL_Event&e) {
         }
         return;
     }
-    if(recentOpen) {
+    if(activeModal==desknx::ui::ModalLayer::Recent) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
             if(x>=838&&x<=916&&y>=104&&y<=150) {
@@ -4143,7 +4175,7 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(listOpen) {
+        if(activeModal==desknx::ui::ModalLayer::AppLibrary) {
             if(y>=122&&y<=151) {
                 if(x>=138&&x<234) searchCatalogue();
                 else if(x>=242&&x<324) cycleCatalogueSort();
