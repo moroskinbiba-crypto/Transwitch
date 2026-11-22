@@ -5737,9 +5737,13 @@ void drawScreen() {
         std::snprintf(perfText,sizeof(perfText),"RENDER %.2f MS AVG  /  PEAK %.2F MS",
             runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs);
         text(perfText,652,506,1,MUTED,1050);
-        std::snprintf(perfText,sizeof(perfText),"SLOW FRAMES IN WINDOW %llu",
-            static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
-        text(perfText,652,530,1,warnColor,1050);
+        std::snprintf(perfText,sizeof(perfText),"INPUT %.2f MS  /  PRESENT WAIT %.2f MS",
+            runtimeFrameMetrics.averageInputMs,runtimeFrameMetrics.averagePresentWaitMs);
+        text(perfText,652,530,1,BLUE,1050);
+        std::snprintf(perfText,sizeof(perfText),"LAST SWITCH %.2F MS  /  PEAK %.2F MS",
+            runtimeFrameMetrics.lastWorkspaceSwitchMs,
+            runtimeFrameMetrics.maximumWorkspaceSwitchMs);
+        text(perfText,652,554,1,warnColor,1050);
         text("LIVE SNAPSHOT UPDATES EVERY 5 SECONDS  /  A OR X TO REFRESH",
              176,604,1,MUTED,1060);
         text("NO ACCOUNT IDS OR PERSONAL FILE CONTENT IS INCLUDED",
@@ -8586,6 +8590,8 @@ int main(int,char**) {
     Uint64 metricsWindowStart=SDL_GetPerformanceCounter();
     std::uint64_t metricsFrames=0,metricsSlowFrames=0;
     double metricsFrameSumMs=0.0,metricsRenderSumMs=0.0,metricsMaximumFrameMs=0.0;
+    double metricsInputSumMs=0.0,metricsPresentSumMs=0.0;
+    double metricsMaximumInputMs=0.0,metricsMaximumPresentMs=0.0;
     while(running&&appletMainLoop()) {
         const Uint64 frameStartCounter=SDL_GetPerformanceCounter();
         bool ready=false,complete=false,truncated=false;
@@ -8617,6 +8623,7 @@ int main(int,char**) {
         consumeInitialState(); // IPC-06: queued at backend launch, read once
         pollBackendEvents();   // §4.4: AppExited / AppLaunchFailed / SdRemoved / LowBattery
 #endif
+        const Uint64 inputStarted=SDL_GetPerformanceCounter();
         padUpdate(&pad);
         const u64 buttonDown=padGetButtonsDown(&pad);
         const HidAnalogStickState leftStick=padGetStickPos(&pad,0);
@@ -8673,6 +8680,10 @@ int main(int,char**) {
                 :"FONT REJECTED — PREVIOUS FONT RESTORED",4500);
         }
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        const Uint64 inputFinished=SDL_GetPerformanceCounter();
+        const double inputMs=performanceFrequency>0
+            ?static_cast<double>(inputFinished-inputStarted)*1000.0/
+                static_cast<double>(performanceFrequency):0.0;
         pumpSteamGridDbPicker();
         pumpSteamGridDbCacheCleanup();
         pumpSystemTelemetrySnapshot();
@@ -8684,9 +8695,11 @@ int main(int,char**) {
         const Uint64 renderStartCounter=SDL_GetPerformanceCounter();
         drawScreen();
         const Uint64 renderEndCounter=SDL_GetPerformanceCounter();
-        const double renderMs=performanceFrequency>0
+        const double renderTotalMs=performanceFrequency>0
             ?static_cast<double>(renderEndCounter-renderStartCounter)*1000.0/
                 static_cast<double>(performanceFrequency):0.0;
+        const double presentWaitMs=std::max(0.0,gLastPresentWaitMs);
+        const double renderMs=std::max(0.0,renderTotalMs-presentWaitMs);
         // Present already waits for the display when VSync is active. Sleeping
         // another 16ms here capped the accelerated path at roughly 30 FPS.
         if(!rendererVsync) {
@@ -8700,7 +8713,11 @@ int main(int,char**) {
         ++metricsFrames;
         metricsFrameSumMs+=frameMs;
         metricsRenderSumMs+=renderMs;
+        metricsInputSumMs+=inputMs;
+        metricsPresentSumMs+=presentWaitMs;
         metricsMaximumFrameMs=std::max(metricsMaximumFrameMs,frameMs);
+        metricsMaximumInputMs=std::max(metricsMaximumInputMs,inputMs);
+        metricsMaximumPresentMs=std::max(metricsMaximumPresentMs,presentWaitMs);
         if(frameMs>20.0)++metricsSlowFrames;
         if(performanceFrequency>0&&frameEndCounter-metricsWindowStart>=
             performanceFrequency*5) {
@@ -8713,13 +8730,21 @@ int main(int,char**) {
                 ?metricsFrameSumMs/static_cast<double>(metricsFrames):0.0;
             runtimeFrameMetrics.averageRenderMs=metricsFrames
                 ?metricsRenderSumMs/static_cast<double>(metricsFrames):0.0;
+            runtimeFrameMetrics.averageInputMs=metricsFrames
+                ?metricsInputSumMs/static_cast<double>(metricsFrames):0.0;
+            runtimeFrameMetrics.averagePresentWaitMs=metricsFrames
+                ?metricsPresentSumMs/static_cast<double>(metricsFrames):0.0;
             runtimeFrameMetrics.maximumFrameMs=metricsMaximumFrameMs;
+            runtimeFrameMetrics.maximumInputMs=metricsMaximumInputMs;
+            runtimeFrameMetrics.maximumPresentWaitMs=metricsMaximumPresentMs;
             runtimeFrameMetrics.slowFrames=metricsSlowFrames;
             runtimeFrameMetrics.updatedAt=SDL_GetTicks();
             desknx::diag::Write("runtime","frame_metrics",
-                "fps=%.2f avg_frame_ms=%.3f avg_render_ms=%.3f max_frame_ms=%.3f slow_frames=%llu",
+                "fps=%.2f avg_frame_ms=%.3f avg_render_ms=%.3f avg_input_ms=%.3f avg_present_ms=%.3f max_frame_ms=%.3f max_input_ms=%.3f max_present_ms=%.3f slow_frames=%llu",
                 runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs,
-                runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs,
+                runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.averageInputMs,
+                runtimeFrameMetrics.averagePresentWaitMs,runtimeFrameMetrics.maximumFrameMs,
+                runtimeFrameMetrics.maximumInputMs,runtimeFrameMetrics.maximumPresentWaitMs,
                 static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
             const auto& visualStats=gVisualEngine.lastFrameStats();
             desknx::diag::Write("visual","frame_primitives",
@@ -8731,7 +8756,8 @@ int main(int,char**) {
                 visualStats.shadowLayers,visualStats.failedCalls);
             metricsWindowStart=frameEndCounter;
             metricsFrames=metricsSlowFrames=0;
-            metricsFrameSumMs=metricsRenderSumMs=metricsMaximumFrameMs=0.0;
+            metricsFrameSumMs=metricsRenderSumMs=metricsInputSumMs=metricsPresentSumMs=0.0;
+            metricsMaximumFrameMs=metricsMaximumInputMs=metricsMaximumPresentMs=0.0;
         }
     }
 #ifdef DESKNX_SYSTEM_APPLET
