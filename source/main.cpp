@@ -1446,6 +1446,19 @@ void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20
     roundRect(x,y,w,h,UiCornerRadius,fill);
     roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
 }
+
+void modalCard(int x,int y,int w,int h,Color fill,
+               Color edge=Color{255,255,255,24},bool dialog=false) {
+    fill=themeSurfaceTint(fill);
+    edge=themeEdgeTint(edge);
+    const SDL_Rect bounds{x,y,w,h};
+    const SDL_Color fillColor{fill.r,fill.g,fill.b,fill.a};
+    const SDL_Color edgeColor{edge.r,edge.g,edge.b,edge.a};
+    const bool drawn=dialog
+        ?gUiComponents.dialogSurface(bounds,fillColor,edgeColor,surfaceOpacity)
+        :gUiComponents.modalSurface(bounds,fillColor,edgeColor,surfaceOpacity);
+    if(!drawn)softCard(x,y,w,h,fill,edge);
+}
 void uiButton(int x,int y,int w,int h,int radius,
               desknx::ui::ButtonVariant variant,Color fill,Color edge,
               bool active=false,bool focused=false,Color accent=BLUE) {
@@ -4956,7 +4969,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::Library)) {
 
         const int mx=110,my=70,mw=1060,mh=570;
-        softCard(mx,my,mw,mh,
+        modalCard(mx,my,mw,mh,
             themeIndex==1?Color{10,20,30,252}:Color{17,24,36,255},
             themeIndex==1?Color{89,144,169,110}:Color{255,255,255,25});
         if(themeIndex==1) {
@@ -5294,7 +5307,7 @@ void drawScreen() {
     }
     if(gSurfaceManager.contains(SurfaceId::WorkspaceMenu)) {
 
-        softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
+        modalCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
         text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
@@ -5313,7 +5326,7 @@ void drawScreen() {
     }
     if(gSurfaceManager.contains(SurfaceId::WorkspaceSettings)) {
 
-        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+        modalCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
         text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
         text(desk.name+"  /  PERSONAL APPEARANCE",346,168,1,MUTED,930);
@@ -5341,7 +5354,7 @@ void drawScreen() {
     }
     if(gSurfaceManager.contains(SurfaceId::WorkspacePicker)) {
 
-        softCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
+        modalCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
         text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
              360,100,3,WHITE,920);
         text("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
@@ -5366,7 +5379,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::DeleteConfirmation)) {
 
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
-        softCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
+        modalCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100},true);
         text("DELETE WORKSPACE?",405,270,3,WHITE,890);
         text(desks[static_cast<size_t>(deskIndex)].name,405,314,2,MUTED,890);
         text(std::to_string(tileCount)+" SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
@@ -5382,7 +5395,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::RecentGames)) {
         const auto entries=recentEntriesForModal();
 
-        softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
+        modalCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
         text(recentGamesOnly?"RECENT GAMES":"RECENTLY OPENED",266,104,3,WHITE,850);
         roundRect(838,108,78,30,9,Color{49,52,61,255});
         text("B BACK",850,118,1,WHITE,912);
@@ -5461,7 +5474,7 @@ void drawScreen() {
             values[finishRow]="DONE";
             const int rowCount=widgetEditorRowCount(tile->kind);
     
-            softCard(260,82,760,548,Color{17,24,36,255},Color{255,255,255,28});
+            modalCard(260,82,760,548,Color{17,24,36,255},Color{255,255,255,28});
             text("WIDGET EDITOR",300,110,3,WHITE,970);
             text(typeName(widgetEditorKind)+"  /  CHANGES SAVE AUTOMATICALLY",
                  302,150,1,MUTED,970);
@@ -5496,7 +5509,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::Nextendo)) {
         const auto popular=nextendoPopularSnapshot();
 
-        softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,30});
+        modalCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,30});
         text(languageRussian?"NEXTENDO  /  ПОПУЛЯРНЫЕ ИГРЫ":
             "NEXTENDO  /  POPULAR GAMES",266,104,3,WHITE,850);
         text(popular.available?std::to_string(popular.totalPlayers)+" PLAYERS ONLINE":
@@ -5534,7 +5547,7 @@ void drawScreen() {
     }
     if(gSurfaceManager.contains(SurfaceId::SystemMenu)) {
 
-        softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
+        modalCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
         text("TOOLS",146,130,3,WHITE,1020);
         text("Library, recent apps, widgets and system actions.",
              148,168,1,MUTED,1020);
@@ -5565,7 +5578,7 @@ void drawScreen() {
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(gSurfaceManager.contains(SurfaceId::LauncherSettings)) {
-        softCard(200,38,880,644,Color{17,24,36,255},Color{255,255,255,42});
+        modalCard(200,38,880,644,Color{17,24,36,255},Color{255,255,255,42});
         text("LAUNCHER SETTINGS",244,68,3,WHITE,920);
         text("PERSONALIZE  /  APPEARANCE, WIDGETS AND WORKSPACES",
              246,112,2,MUTED,970);
@@ -5641,7 +5654,7 @@ void drawScreen() {
         const int failures=SDL_AtomicGet(&nextendoConsecutiveFailures);
         const bool networkReady=SDL_AtomicGet(&nextendoNetworkReady)!=0;
 
-        softCard(120,48,1040,624,Color{17,24,36,255},Color{255,255,255,35});
+        modalCard(120,48,1040,624,Color{17,24,36,255},Color{255,255,255,35});
         text("RUNTIME DIAGNOSTICS",158,72,3,WHITE,920);
         text("B BACK",1010,84,1,BLUE,1140);
         text("X / A REFRESH",880,84,1,MUTED,1000);
@@ -5775,7 +5788,7 @@ void drawScreen() {
     }
     if(gSurfaceManager.contains(SurfaceId::MediaPicker)) {
 
-        softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
+        modalCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
         text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
              mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
              mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":
@@ -5818,7 +5831,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::PowerMenu)) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
 
-        softCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
+        modalCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24},true);
         text("POWER",454,238,3,WHITE,820);
         roundRect(780,238,52,30,9,Color{54,57,66,255});
         text("B",798,247,1,WHITE,828);
@@ -5833,7 +5846,7 @@ void drawScreen() {
     }
     if(gSurfaceManager.contains(SurfaceId::UserPicker)) {
 
-        softCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
+        modalCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
         text("SELECT PLAYER",374,142,3,WHITE,900);
         text("The selected profile is used for games that request a player account.",
              376,180,1,MUTED,914);
@@ -5864,7 +5877,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::SteamGridDb)) {
         const auto sgdb=gSteamGridDbService.snapshot();
 
-        softCard(64,34,1152,652,Color{15,23,36,255},Color{255,255,255,38});
+        modalCard(64,34,1152,652,Color{15,23,36,255},Color{255,255,255,38});
         text("STEAMGRIDDB  /  GAME ARTWORK",108,62,3,WHITE,900);
         text(steamGridDbCurrentTitle,110,105,2,MUTED,820);
         char sgdbIdText[48]{};
@@ -5992,7 +6005,7 @@ void drawScreen() {
 
     if(gSurfaceManager.contains(SurfaceId::QuickSettings)) {
         refreshQuickSettingsSnapshot();
-        softCard(292,72,696,576,Color{16,26,40,255},Color{135,174,216,74});
+        modalCard(292,72,696,576,Color{16,26,40,255},Color{135,174,216,74});
         text(languageRussian?"БЫСТРЫЕ НАСТРОЙКИ":"QUICK SETTINGS",332,102,3,WHITE,920);
         text(!quickSettingsSnapshotLoaded
                 ?(languageRussian?"ЧТЕНИЕ СИСТЕМНОГО СОСТОЯНИЯ...":"READING SYSTEM STATUS...")
