@@ -72,7 +72,9 @@ inline int MeasureBitmapTextWidth(const std::string& value,
         const auto decoded=DecodeUtf8Codepoint(value,offset);
         offset+=decoded.length>0?decoded.length:1;
         if(decoded.codepoint=='\r'||decoded.codepoint=='\n')continue;
-        const int advance=decoded.codepoint=='\t'?24*scale:6*scale;
+        const int cellWidth=decoded.codepoint=='\t'?24:6;
+        if(scale>INT_MAX/cellWidth)return INT_MAX;
+        const int advance=cellWidth*scale;
         if(width>INT_MAX-advance)return INT_MAX;
         width+=advance;
     }
