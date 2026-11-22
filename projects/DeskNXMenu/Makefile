@@ -14,6 +14,10 @@ SDL2_LIBS       := $(shell pkg-config --static --libs SDL2 2>/dev/null)
 SDL2_IMAGE_LIBS := $(shell pkg-config --static --libs SDL2_image 2>/dev/null)
 SDL2_TTF_LIBS   := $(shell pkg-config --static --libs SDL2_ttf 2>/dev/null)
 CURL_LIBS      := $(shell pkg-config --static --libs libcurl 2>/dev/null)
+SODIUM_LIBS    := $(shell pkg-config --static --libs libsodium 2>/dev/null)
+ifeq ($(strip $(SODIUM_LIBS)),)
+SODIUM_LIBS := -lsodium
+endif
 ifeq ($(strip $(SDL2_LIBS)),)
 SDL2_LIBS := -lSDL2
 endif
@@ -49,7 +53,7 @@ CFLAGS      += $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--gc-sections
-LIBS        := $(SDL2_IMAGE_LIBS) $(SDL2_TTF_LIBS) $(SDL2_LIBS) $(CURL_LIBS) -lnx
+LIBS        := $(SDL2_IMAGE_LIBS) $(SDL2_TTF_LIBS) $(SDL2_LIBS) $(CURL_LIBS) $(SODIUM_LIBS) -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))

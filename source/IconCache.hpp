@@ -1,11 +1,16 @@
 #pragma once
 
 #include "../include/desknx/Model.hpp"
+#include "../include/desknx/ArtworkRequestPolicy.hpp"
+#include "SteamGridDbCache.hpp"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <fstream>
@@ -21,6 +26,104 @@
 // used by HomeNX's IconStreamer, adapted to DeskNX's SDL2 renderer.
 class IconCache {
 public:
+    struct Stats {
+        std::size_t residentTextures{0};
+        std::size_t textureBytes{0};
+        std::size_t pendingRequests{0};
+        std::size_t completedImages{0};
+        std::size_t failedKeys{0};
+        bool workerRunning{false};
+        std::uint32_t lastFrameDecoded{0};
+        std::uint32_t lastFrameUploads{0};
+        std::uint32_t lastFrameUploadFailures{0};
+        std::size_t lastFrameUploadedBytes{0};
+        double lastFrameDecodeMs{0.0};
+        double lastFrameQueueWaitMs{0.0};
+        double lastFrameUploadMs{0.0};
+    };
+
+    Stats stats() const {
+        Stats result;
+        result.residentTextures = entries_.size();
+        result.textureBytes = textureBytes_;
+        result.failedKeys = failedUntil_.size();
+        result.lastFrameDecoded = lastFrameMetrics_.decodedResults;
+        result.lastFrameUploads = lastFrameMetrics_.uploads;
+        result.lastFrameUploadFailures = lastFrameMetrics_.uploadFailures;
+        result.lastFrameUploadedBytes = lastFrameMetrics_.uploadedBytes;
+        result.lastFrameDecodeMs = lastFrameMetrics_.decodeMs;
+        result.lastFrameQueueWaitMs = lastFrameMetrics_.queueWaitMs;
+        result.lastFrameUploadMs = lastFrameMetrics_.uploadMs;
+        if (mutex_) {
+            SDL_LockMutex(mutex_);
+            result.pendingRequests = requests_.size();
+            result.completedImages = completed_.size();
+            result.workerRunning = worker_ != nullptr && !stopWorker_;
+            SDL_UnlockMutex(mutex_);
+        }
+        return result;
+    }
+
+    void prefetch(const desknx::model::Tile& tile,
+                  int priority = desknx::artwork::WorkspacePrefetchPriorityBase) {
+        (void)get(tile, priority, true);
+    }
+
+    void cancelQueuedPrefetches() {
+        if (!mutex_) { ++prefetchGeneration_; return; }
+        SDL_LockMutex(mutex_);
+        ++prefetchGeneration_;
+        promotedPrefetchKeys_.clear();
+        for (auto it = requests_.begin(); it != requests_.end();) {
+            if (it->prefetched) {
+                pendingKeys_.erase(it->key);
+                requestRetryAt_.erase(it->key);
+                priorityRetryAt_.erase(it->key);
+                it = requests_.erase(it);
+            } else ++it;
+        }
+        for (auto it = completed_.begin(); it != completed_.end();) {
+            if (it->prefetched) {
+                pendingKeys_.erase(it->key);
+                requestRetryAt_.erase(it->key);
+                priorityRetryAt_.erase(it->key);
+                it = completed_.erase(it);
+            } else ++it;
+        }
+        SDL_CondBroadcast(condition_);
+        SDL_UnlockMutex(mutex_);
+    }
+
+    void prefetchWorkspace(const desknx::model::Workspace& workspace,
+                           int focusX, int focusY, std::size_t maxRequests = 48) {
+        struct Candidate { const desknx::model::Tile* tile; int priority; };
+        std::vector<Candidate> candidates;
+        candidates.reserve(workspace.tiles.size());
+        for (const auto& tile : workspace.tiles) {
+            if (tile.kind != desknx::model::Kind::Game &&
+                tile.kind != desknx::model::Kind::Nro) continue;
+            if (desknx::model::iconCachePath(tile.kind, tile.data).empty()) continue;
+            candidates.push_back({&tile,
+                desknx::artwork::workspacePrefetchPriority(tile, focusX, focusY)});
+        }
+        std::stable_sort(candidates.begin(), candidates.end(),
+            [](const Candidate& a, const Candidate& b) {
+                return a.priority > b.priority;
+            });
+        const std::size_t count = std::min(maxRequests, candidates.size());
+        for (std::size_t i = 0; i < count; ++i)
+            prefetch(*candidates[i].tile, candidates[i].priority);
+    }
+
+    // Validate dimensions from image headers before asking SDL_image to decode.
+    // Used by the large preview path as well as by the asynchronous tile cache.
+    static bool validateImagePath(const std::string& path) {
+        struct stat st{};
+        return !path.empty() && stat(path.c_str(),&st)==0 && S_ISREG(st.st_mode) &&
+            st.st_size>0 && static_cast<std::uint64_t>(st.st_size)<=MaxCompressedIconBytes &&
+            imageDimensionsWithinLimit(path);
+    }
+
     void setRenderer(SDL_Renderer* renderer) {
         renderer_ = renderer;
         if (renderer_ && !ensureWorker())
@@ -30,62 +133,198 @@ public:
     // Called once at the beginning of a frame. At most one completed image is
     // uploaded to the GPU per frame, so a large desktop cannot monopolise draw.
     void beginFrame() {
-        loadBudget_ = 1;
+        lastFrameMetrics_ = frameMetrics_;
+        frameMetrics_ = FrameMetrics{};
+        loadBudget_ = MaxTextureUploadsPerFrame;
+        uploadByteBudget_ = MaxTextureUploadBytesPerFrame;
+        uploadsThisFrame_ = 0;
+        const Uint32 now = SDL_GetTicks();
+        if (lastPruneTick_ == 0 || now - lastPruneTick_ >= CachePruneIntervalMs) {
+            pruneUnused(now);
+            lastPruneTick_ = now;
+        }
         uploadCompleted();
     }
 
     void setCustomIconPackDir(const std::string& path) {
         if (path == customIconPackDir_) return;
         customIconPackDir_ = path;
-
-        // Any result already being decoded belongs to the old icon pack. Bump
-        // the generation and discard queued/completed work without joining the
-        // worker or blocking the HOME thread.
+        // Changing a shared pack invalidates all old paths. Keep this rare path
+        // global, but do not make it wait for the decoder worker.
         if (mutex_) {
             SDL_LockMutex(mutex_);
             ++generation_;
+            ++prefetchGeneration_;
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
+            keyGenerations_.clear();
+            inFlightPrefetchKeys_.clear();
+            promotedPrefetchKeys_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
             ++generation_;
             pendingKeys_.clear();
+            keyGenerations_.clear();
         }
-
         failedUntil_.clear();
+        requestRetryAt_.clear();
+        priorityRetryAt_.clear();
         clearTextures();
     }
 
-    SDL_Texture* get(const desknx::model::Tile& tile) {
-        if (!renderer_) return nullptr;
+void setGameIconOverridesDir(const std::string& path) {
+        if (path == gameIconOverridesDir_) return;
+        gameIconOverridesDir_ = path;
+        if (mutex_) {
+            SDL_LockMutex(mutex_);
+            ++generation_;
+            ++prefetchGeneration_;
+            requests_.clear();
+            completed_.clear();
+            pendingKeys_.clear();
+            keyGenerations_.clear();
+            inFlightPrefetchKeys_.clear();
+            promotedPrefetchKeys_.clear();
+            SDL_CondBroadcast(condition_);
+            SDL_UnlockMutex(mutex_);
+        } else {
+            ++generation_;
+            pendingKeys_.clear();
+            keyGenerations_.clear();
+        }
+        failedUntil_.clear();
+        requestRetryAt_.clear();
+        clearTextures();
+    }
 
-        // Hot path: resident textures are found by stable tile identity before
-        // any path lookup, filesystem call or temporary allocation.
+    SDL_Texture* get(const desknx::model::Tile& tile,
+                     int priority = desknx::artwork::VisibleTilePriority,
+                     bool prefetched = false) {
+        if (!renderer_) return nullptr;
+        const Uint32 now = SDL_GetTicks();
         for (auto& entry : entries_) {
             if (entry.kind == tile.kind && entry.data == tile.data) {
                 entry.lastUse = ++clock_;
+                entry.lastUseMs = now;
                 return entry.texture;
             }
         }
 
-        const std::string defaultPath =
-            desknx::model::iconCachePath(tile.kind, tile.data);
-        if (defaultPath.empty()) return nullptr;
-
         const std::string key = makeKey(tile.kind, tile.data);
-        const Uint32 now = SDL_GetTicks();
+        const auto retry = requestRetryAt_.find(key);
+        if (retry != requestRetryAt_.end()) {
+            if (static_cast<Sint32>(now - retry->second) < 0) {
+                if (!prefetched && priority < desknx::artwork::VisibleTilePriority)
+                    return nullptr;
+                if (!prefetched && priority >= desknx::artwork::VisibleTilePriority) {
+                    const auto promotion = priorityRetryAt_.find(key);
+                    if (promotion != priorityRetryAt_.end() &&
+                        static_cast<Sint32>(now - promotion->second) < 0)
+                        return nullptr;
+                    const bool promoted = enqueue(tile, key, priority, false);
+                    priorityRetryAt_[key] = now + PromotionRetryThrottleMs;
+                    requestRetryAt_[key] = now + (promoted
+                        ? RequestRetryThrottleMs : QueueRetryThrottleMs);
+                    return nullptr;
+                }
+                const bool alreadyQueued = enqueue(tile, key, priority, true);
+                if (!alreadyQueued) requestRetryAt_[key] = now + QueueRetryThrottleMs;
+                return nullptr;
+            }
+            requestRetryAt_.erase(retry);
+        }
+
         const auto failed = failedUntil_.find(key);
         if (failed != failedUntil_.end()) {
             if (static_cast<Sint32>(now - failed->second) < 0) return nullptr;
             failedUntil_.erase(failed);
         }
+        const std::string defaultPath =
+            desknx::model::iconCachePath(tile.kind, tile.data);
+        if (defaultPath.empty()) return nullptr;
+        const bool queued = enqueue(tile, key, priority, prefetched);
+        requestRetryAt_[key] = now + (queued
+            ? RequestRetryThrottleMs : QueueRetryThrottleMs);
 
-        // Queueing is non-blocking. Missing artwork is represented by the
-        // caller's placeholder until the worker finishes decoding it.
-        enqueue(tile, key);
+        if (requestRetryAt_.size() > 512) {
+            for (auto it = requestRetryAt_.begin(); it != requestRetryAt_.end();) {
+                if (static_cast<Sint32>(now - it->second) >= 0)
+                    it = requestRetryAt_.erase(it);
+                else ++it;
+            }
+            if (requestRetryAt_.size() > 512)
+                requestRetryAt_.erase(requestRetryAt_.begin());
+        }
+        if (priorityRetryAt_.size() > 512) {
+            for (auto it = priorityRetryAt_.begin(); it != priorityRetryAt_.end();) {
+                if (static_cast<Sint32>(now - it->second) >= 0)
+                    it = priorityRetryAt_.erase(it);
+                else ++it;
+            }
+            if (priorityRetryAt_.size() > 512)
+                priorityRetryAt_.erase(priorityRetryAt_.begin());
+        }
         return nullptr;
+    }
+
+    // Call after a persistent artwork override is applied or removed. Pending
+    // decodes are invalidated so an older system icon cannot replace the new art.
+    void invalidate() {
+        if (mutex_) {
+            SDL_LockMutex(mutex_);
+            ++generation_;
+            ++prefetchGeneration_;
+            requests_.clear();
+            completed_.clear();
+            pendingKeys_.clear();
+            keyGenerations_.clear();
+            inFlightPrefetchKeys_.clear();
+            promotedPrefetchKeys_.clear();
+            SDL_CondBroadcast(condition_);
+            SDL_UnlockMutex(mutex_);
+        } else {
+            ++generation_;
+            pendingKeys_.clear();
+            keyGenerations_.clear();
+        }
+        failedUntil_.clear();
+        requestRetryAt_.clear();
+        clearTextures();
+    }
+
+    void invalidate(desknx::model::Kind kind, const std::string& data) {
+        const std::string key = makeKey(kind, data);
+        // Per-title invalidation must not discard other games' queued/completed art.
+        if (mutex_) {
+            SDL_LockMutex(mutex_);
+            ++keyGenerations_[key];
+            for (auto it = requests_.begin(); it != requests_.end();) {
+                if (it->key == key) it = requests_.erase(it);
+                else ++it;
+            }
+            for (auto it = completed_.begin(); it != completed_.end();) {
+                if (it->key == key) it = completed_.erase(it);
+                else ++it;
+            }
+            pendingKeys_.erase(key);
+            SDL_CondBroadcast(condition_);
+            SDL_UnlockMutex(mutex_);
+        } else {
+            ++keyGenerations_[key];
+            pendingKeys_.erase(key);
+        }
+        failedUntil_.erase(key);
+        requestRetryAt_.erase(key);
+        priorityRetryAt_.erase(key);
+        for (auto it = entries_.begin(); it != entries_.end();) {
+            if (it->kind == kind && it->data == data) {
+                if (it->texture) SDL_DestroyTexture(it->texture);
+                textureBytes_ -= std::min(textureBytes_, it->bytes);
+                it = entries_.erase(it);
+            } else ++it;
+        }
     }
 
     void shutdown() {
@@ -113,6 +352,8 @@ public:
         }
 
         pendingKeys_.clear();
+        inFlightPrefetchKeys_.clear();
+        promotedPrefetchKeys_.clear();
         requests_.clear();
         completed_.clear();
         failedUntil_.clear();
@@ -121,13 +362,29 @@ public:
     }
 
 private:
+    struct FrameMetrics {
+        std::uint32_t decodedResults{0};
+        std::uint32_t uploads{0};
+        std::uint32_t uploadFailures{0};
+        std::size_t uploadedBytes{0};
+        double decodeMs{0.0};
+        double queueWaitMs{0.0};
+        double uploadMs{0.0};
+    };
+
     struct Request {
         desknx::model::Kind kind{desknx::model::Kind::Game};
         std::string title;
         std::string data;
         std::string key;
         std::string customDirectory;
+        std::string gameOverrideDirectory;
         std::uint64_t generation{0};
+        std::uint64_t keyGeneration{0};
+        std::uint64_t prefetchGeneration{0};
+        int priority{0};
+        bool prefetched{false};
+        Uint64 enqueuedAtMs{0};
     };
 
     struct Decoded {
@@ -136,8 +393,14 @@ private:
         std::string key;
         std::string path;
         std::uint64_t generation{0};
+        std::uint64_t keyGeneration{0};
+        std::uint64_t prefetchGeneration{0};
+        int priority{0};
+        bool prefetched{false};
         int width{0};
         int height{0};
+        double decodeMs{0.0};
+        double queueWaitMs{0.0};
         bool isCustom{false};
         bool success{false};
         std::vector<Uint8> rgba;
@@ -149,17 +412,29 @@ private:
         std::string path;
         SDL_Texture* texture;
         std::uint64_t lastUse;
+        Uint32 lastUseMs;
         std::size_t bytes;
     };
 
     static constexpr std::size_t MaxEntries = 64;
     static constexpr std::size_t MaxTextureBytes = 32u * 1024u * 1024u;
-    static constexpr std::size_t MaxCompressedIconBytes = 2u * 1024u * 1024u;
+    static constexpr Uint32 CacheIdleLifetimeMs = 120000;
+    static constexpr Uint32 CachePruneIntervalMs = 5000;
+    static constexpr Uint32 RequestRetryThrottleMs = 1500;
+    static constexpr Uint32 QueueRetryThrottleMs = 180;
+    static constexpr Uint32 PromotionRetryThrottleMs = 220;
+    static constexpr std::size_t MaxPrunePerFrame = 8;
+    static constexpr std::size_t MaxCompressedIconBytes = 16u * 1024u * 1024u;
     static constexpr std::size_t MaxQueuedRequests = 48;
     // Bound decoded CPU-side pixels while the renderer is busy. One 1024x1024
     // RGBA image is at most 4 MiB, so this queue has a predictable upper bound.
     static constexpr std::size_t MaxCompletedImages = 2;
-    static constexpr int MaxIconDimension = 1024;
+    static constexpr std::size_t MaxTextureUploadsPerFrame = 2;
+    static constexpr std::size_t MaxTextureUploadBytesPerFrame = 6u * 1024u * 1024u;
+    static constexpr int MaxIconDimension = 2048;
+    static constexpr int MaxGpuIconDimension = 1024;
+    static constexpr std::uint32_t MaxDecodedPixels = 3u * 1024u * 1024u;
+    static constexpr std::uint32_t MaxGpuDecodedPixels = 1024u * 1024u;
 
     static std::string makeKey(desknx::model::Kind kind, const std::string& data) {
         return desknx::model::typeCode(kind) + "\t" + data;
@@ -203,26 +478,60 @@ private:
         for (;;) {
             Request request;
             SDL_LockMutex(mutex_);
-            while (!stopWorker_ &&
-                   (requests_.empty() || completed_.size() >= MaxCompletedImages)) {
+            while (!stopWorker_ && (requests_.empty() ||
+                   (completed_.size() >= MaxCompletedImages &&
+                    requests_.front().priority <= completed_.back().priority))) {
                 SDL_CondWait(condition_, mutex_);
             }
-            if (stopWorker_) {
-                SDL_UnlockMutex(mutex_);
-                break;
-            }
+            if (stopWorker_) { SDL_UnlockMutex(mutex_); break; }
             request = std::move(requests_.front());
             requests_.pop_front();
+            if (request.prefetched) inFlightPrefetchKeys_.insert(request.key);
             SDL_UnlockMutex(mutex_);
 
-            // The Switch target is built with -fno-exceptions. Input file
-            // size and decoded dimensions are bounded before allocating RGBA
-            // storage, so decoder failures are reported through Decoded::success.
+            const Uint64 decodeStarted = SDL_GetPerformanceCounter();
+            const Uint64 decodeStartedMs = SDL_GetTicks64();
             Decoded decoded = decode(request);
+            const Uint64 decodeFinished = SDL_GetPerformanceCounter();
+            const Uint64 frequency = SDL_GetPerformanceFrequency();
+            decoded.decodeMs = frequency > 0 && decodeFinished >= decodeStarted
+                ? static_cast<double>(decodeFinished - decodeStarted) * 1000.0 /
+                    static_cast<double>(frequency) : 0.0;
+            decoded.queueWaitMs = decodeStartedMs >= request.enqueuedAtMs
+                ? static_cast<double>(decodeStartedMs - request.enqueuedAtMs) : 0.0;
 
             SDL_LockMutex(mutex_);
-            if (!stopWorker_ && request.generation == generation_) {
-                completed_.push_back(std::move(decoded));
+            bool promoted = false;
+            if (request.prefetched) {
+                inFlightPrefetchKeys_.erase(request.key);
+                promoted = promotedPrefetchKeys_.erase(request.key) != 0;
+            }
+            const auto version = keyGenerations_.find(request.key);
+            const bool keyCurrent = version != keyGenerations_.end() &&
+                version->second == request.keyGeneration;
+            const bool requestCurrent =
+                !stopWorker_ && request.generation == generation_ && keyCurrent;
+            const bool prefetchCurrent = !request.prefetched ||
+                request.prefetchGeneration == prefetchGeneration_ || promoted;
+
+            if (requestCurrent && prefetchCurrent) {
+                if (completed_.size() >= MaxCompletedImages) {
+                    if (decoded.priority > completed_.back().priority) {
+                        pendingKeys_.erase(completed_.back().key);
+                        completed_.pop_back();
+                    } else {
+                        pendingKeys_.erase(request.key);
+                        SDL_CondBroadcast(condition_);
+                        SDL_UnlockMutex(mutex_);
+                        continue;
+                    }
+                }
+                const auto position = std::find_if(
+                    completed_.begin(), completed_.end(),
+                    [&](const Decoded& item) { return item.priority < decoded.priority; });
+                completed_.insert(position, std::move(decoded));
+            } else if (requestCurrent) {
+                pendingKeys_.erase(request.key);
             }
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
@@ -230,128 +539,215 @@ private:
         return 0;
     }
 
-    void enqueue(const desknx::model::Tile& tile, const std::string& key) {
-        if (!ensureWorker() || pendingKeys_.find(key) != pendingKeys_.end())
-            return;
-
+    bool enqueue(const desknx::model::Tile& tile, const std::string& key,
+                 int priority, bool prefetched) {
+        if (!ensureWorker()) return false;
         Request request;
         request.kind = tile.kind;
         request.title = tile.title;
         request.data = tile.data;
         request.key = key;
         request.customDirectory = customIconPackDir_;
+        request.gameOverrideDirectory = gameIconOverridesDir_;
+        request.priority = priority;
+        request.prefetched = prefetched;
 
         SDL_LockMutex(mutex_);
-        if (stopWorker_ || requests_.size() >= MaxQueuedRequests) {
+        if (stopWorker_) { SDL_UnlockMutex(mutex_); return false; }
+
+        const auto queued = std::find_if(requests_.begin(), requests_.end(),
+            [&](const Request& item) { return item.key == key; });
+        if (queued != requests_.end()) {
+            if (priority > queued->priority || (!prefetched && queued->prefetched)) {
+                Request promoted = std::move(*queued);
+                requests_.erase(queued);
+                promoted.priority = std::max(promoted.priority, priority);
+                if (!prefetched) promoted.prefetched = false;
+                const auto position = std::find_if(
+                    requests_.begin(), requests_.end(),
+                    [&](const Request& item) { return item.priority < promoted.priority; });
+                requests_.insert(position, std::move(promoted));
+                SDL_CondSignal(condition_);
+            }
             SDL_UnlockMutex(mutex_);
-            return;
+            return true;
         }
+
+        if (pendingKeys_.find(key) != pendingKeys_.end()) {
+            if (!prefetched && inFlightPrefetchKeys_.find(key) != inFlightPrefetchKeys_.end())
+                promotedPrefetchKeys_.insert(key);
+            SDL_UnlockMutex(mutex_);
+            return true;
+        }
+
+        if (requests_.size() >= MaxQueuedRequests) {
+            if (requests_.empty() || priority <= requests_.back().priority) {
+                SDL_UnlockMutex(mutex_);
+                return false;
+            }
+            pendingKeys_.erase(requests_.back().key);
+            requests_.pop_back();
+        }
+
         request.generation = generation_;
-        requests_.push_back(std::move(request));
+        request.keyGeneration = keyGenerations_[key];
+        request.prefetchGeneration = prefetchGeneration_;
+        request.enqueuedAtMs = SDL_GetTicks64();
+        const auto position = std::find_if(
+            requests_.begin(), requests_.end(),
+            [&](const Request& item) { return item.priority < request.priority; });
+        requests_.insert(position, std::move(request));
         pendingKeys_.insert(key);
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
+        return true;
     }
 
     static Decoded decode(const Request& request) {
         Decoded result;
-        result.kind = request.kind;
-        result.data = request.data;
-        result.key = request.key;
-        result.generation = request.generation;
+        result.kind=request.kind;
+        result.data=request.data;
+        result.key=request.key;
+        result.generation=request.generation;
+        result.keyGeneration = request.keyGeneration;
+        result.prefetchGeneration = request.prefetchGeneration;
+        result.priority = request.priority;
+        result.prefetched = request.prefetched;
+        const std::string defaultPath=desknx::model::iconCachePath(request.kind,request.data);
+        if(defaultPath.empty())return result;
+        // SteamGridDB selection is the active artwork for this title. Legacy
+        // per-game overrides remain a fallback, so a stale old icon cannot
+        // shadow a cover that the user just downloaded and selected.
+        const std::string gameOverridePath=customPathFor(request.kind,request.data,
+            std::string{},request.gameOverrideDirectory);
+        const std::string customPath=customPathFor(request.kind,request.data,
+            request.customDirectory,std::string{});
 
-        const std::string defaultPath =
-            desknx::model::iconCachePath(request.kind, request.data);
-        if (defaultPath.empty()) return result;
-
-        const std::string customPath =
-            customPathFor(request.kind, request.data, request.customDirectory);
-        result.isCustom = !customPath.empty();
-        result.path = result.isCustom ? customPath : defaultPath;
-
-        struct stat st{};
-        if (stat(result.path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
-            return result;
-
-        if (st.st_size <= 0 ||
-            static_cast<std::uint64_t>(st.st_size) > MaxCompressedIconBytes ||
-            !imageDimensionsWithinLimit(result.path)) {
-            // A broken generated cache entry can be regenerated by the
-            // catalogue. Never remove a file owned by the user's icon pack.
-            if (!result.isCustom) std::remove(result.path.c_str());
-            return result;
+        std::string steamGridPath;
+        if(request.kind==desknx::model::Kind::Game&&desknx::model::isTitleId(request.data)){
+            char* end=nullptr;
+            const unsigned long long id=std::strtoull(request.data.c_str(),&end,16);
+            if(end==request.data.c_str()+request.data.size()&&id){
+                desknx::steamgriddb::SteamGridDbCache cache;
+                steamGridPath=cache.selectedPath(static_cast<std::uint64_t>(id));
+            }
         }
 
-        SDL_Surface* source = IMG_Load(result.path.c_str());
-        if (!source) {
-            if (!result.isCustom) std::remove(result.path.c_str());
-            return result;
-        }
-
-        const bool dimensionsOk = source->w > 0 && source->h > 0 &&
-            source->w <= MaxIconDimension && source->h <= MaxIconDimension &&
-            static_cast<std::uint64_t>(source->w) *
-                static_cast<std::uint64_t>(source->h) <=
-                static_cast<std::uint64_t>(MaxIconDimension) * MaxIconDimension;
-        if (!dimensionsOk) {
+        auto tryLoad=[&](const std::string& path,bool custom)->bool{
+            if(path.empty())return false;
+            struct stat st{};
+            if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode))return false;
+            if(st.st_size<=0||static_cast<std::uint64_t>(st.st_size)>MaxCompressedIconBytes||
+               !imageDimensionsWithinLimit(path)){
+                if(!custom)std::remove(path.c_str());
+                return false;
+            }
+            SDL_RWops* stream=SDL_RWFromFile(path.c_str(),"rb");
+            SDL_Surface* source=stream?IMG_Load_RW(stream,1):nullptr;
+            if(!source){if(!custom)std::remove(path.c_str());return false;}
+            const bool dimensionsOk=source->w>0&&source->h>0&&
+                source->w<=MaxIconDimension&&source->h<=MaxIconDimension&&
+                static_cast<std::uint64_t>(source->w)*static_cast<std::uint64_t>(source->h)<=MaxDecodedPixels;
+            if(!dimensionsOk){SDL_FreeSurface(source);if(!custom)std::remove(path.c_str());return false;}
+            SDL_Surface* rgba=SDL_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0);
             SDL_FreeSurface(source);
-            if (!result.isCustom) std::remove(result.path.c_str());
-            return result;
-        }
+            if(!rgba){if(!custom)std::remove(path.c_str());return false;}
 
-        SDL_Surface* rgba = SDL_ConvertSurfaceFormat(
-            source, SDL_PIXELFORMAT_RGBA32, 0);
-        SDL_FreeSurface(source);
-        if (!rgba) {
-            if (!result.isCustom) std::remove(result.path.c_str());
-            return result;
-        }
-
-        const std::size_t rowBytes = static_cast<std::size_t>(rgba->w) * 4u;
-        const std::size_t totalBytes = rowBytes * static_cast<std::size_t>(rgba->h);
-        if (rgba->pitch < 0 ||
-            static_cast<std::size_t>(rgba->pitch) < rowBytes ||
-            totalBytes > MaxTextureBytes) {
-            SDL_FreeSurface(rgba);
-            return result;
-        }
-
-        result.width = rgba->w;
-        result.height = rgba->h;
-        result.rgba.resize(totalBytes);
-        const auto* pixels = static_cast<const Uint8*>(rgba->pixels);
-        for (int y = 0; y < rgba->h; ++y) {
-            std::memcpy(result.rgba.data() + static_cast<std::size_t>(y) * rowBytes,
-                        pixels + static_cast<std::size_t>(y) *
-                                     static_cast<std::size_t>(rgba->pitch),
-                        rowBytes);
-        }
-        SDL_FreeSurface(rgba);
-        result.success = true;
+            // Large SteamGridDB posters do not need to become multi-megabyte
+            // GPU textures for 154px grid cells. Downsample on the decoder
+            // worker, preserving aspect ratio and alpha, before renderer upload.
+            const std::uint64_t decodedPixels=
+                static_cast<std::uint64_t>(rgba->w)*static_cast<std::uint64_t>(rgba->h);
+            if(rgba->w>MaxGpuIconDimension||rgba->h>MaxGpuIconDimension||
+               decodedPixels>MaxGpuDecodedPixels) {
+                const double scale=std::min(
+                    static_cast<double>(MaxGpuIconDimension)/rgba->w,
+                    std::min(static_cast<double>(MaxGpuIconDimension)/rgba->h,
+                        std::sqrt(static_cast<double>(MaxGpuDecodedPixels)/decodedPixels)));
+                const int targetW=std::max(1,static_cast<int>(std::lround(rgba->w*scale)));
+                const int targetH=std::max(1,static_cast<int>(std::lround(rgba->h*scale)));
+                SDL_Surface* scaled=SDL_CreateRGBSurfaceWithFormat(
+                    0,targetW,targetH,32,SDL_PIXELFORMAT_RGBA32);
+                if(!scaled||SDL_BlitScaled(rgba,nullptr,scaled,nullptr)!=0) {
+                    if(scaled)SDL_FreeSurface(scaled);
+                    SDL_FreeSurface(rgba);
+                    if(!custom)std::remove(path.c_str());
+                    return false;
+                }
+                SDL_FreeSurface(rgba);
+                rgba=scaled;
+            }
+            const std::size_t rowBytes=static_cast<std::size_t>(rgba->w)*4u;
+            const std::size_t totalBytes=rowBytes*static_cast<std::size_t>(rgba->h);
+            if(rgba->pitch<0||static_cast<std::size_t>(rgba->pitch)<rowBytes||totalBytes>MaxTextureBytes){
+                SDL_FreeSurface(rgba);return false;
+            }
+            result.path=path;result.isCustom=custom;result.width=rgba->w;result.height=rgba->h;
+            result.rgba.resize(totalBytes);
+            const auto* pixels=static_cast<const Uint8*>(rgba->pixels);
+            for(int y=0;y<rgba->h;++y){
+                std::memcpy(result.rgba.data()+static_cast<std::size_t>(y)*rowBytes,
+                    pixels+static_cast<std::size_t>(y)*static_cast<std::size_t>(rgba->pitch),rowBytes);
+            }
+            SDL_FreeSurface(rgba);result.success=true;return true;
+        };
+        // The explicitly selected SteamGridDB artwork is authoritative.
+        // If it is missing/corrupt, fall back to a legacy per-game override,
+        // then the shared icon pack and the original system icon.
+        // SteamGridDB files are cache-owned, so a corrupt download is removed
+        // once rather than being retried on every frame.
+        if(tryLoad(steamGridPath,false))return result;
+        if(tryLoad(gameOverridePath,true))return result;
+        if(tryLoad(customPath,true))return result;
+        (void)tryLoad(defaultPath,false);
         return result;
     }
 
     void uploadCompleted() {
         if (!renderer_ || loadBudget_ == 0 || !mutex_) return;
-
-        // Ignore obsolete/failed results without spending the one-per-frame GPU
-        // upload budget. The worker may finish an old request after a theme or
-        // icon-pack change; generation tags prevent it entering the live cache.
         while (loadBudget_ > 0) {
             Decoded decoded;
             SDL_LockMutex(mutex_);
-            if (completed_.empty()) {
+            if (completed_.empty()) { SDL_UnlockMutex(mutex_); return; }
+
+            const Decoded& next = completed_.front();
+            const auto version = keyGenerations_.find(next.key);
+            const bool keyCurrent = version != keyGenerations_.end() &&
+                version->second == next.keyGeneration;
+            const bool currentGeneration = next.generation == generation_ && keyCurrent;
+            const bool currentPrefetch = !next.prefetched ||
+                next.prefetchGeneration == prefetchGeneration_;
+            if (!currentGeneration || !currentPrefetch) {
+                const std::string staleKey = next.key;
+                completed_.pop_front();
+                if (currentGeneration) pendingKeys_.erase(staleKey);
+                SDL_CondSignal(condition_);
+                SDL_UnlockMutex(mutex_);
+                if (currentGeneration) {
+                    requestRetryAt_.erase(staleKey);
+                    priorityRetryAt_.erase(staleKey);
+                }
+                continue;
+            }
+
+            // A first image may use up to 4 MiB; a second is uploaded only
+            // when the combined amount remains within the 6 MiB frame budget.
+            if (uploadsThisFrame_ > 0 && next.rgba.size() > uploadByteBudget_) {
                 SDL_UnlockMutex(mutex_);
                 return;
             }
+
             decoded = std::move(completed_.front());
             completed_.pop_front();
+            pendingKeys_.erase(decoded.key);
             SDL_CondSignal(condition_);
-            const bool currentGeneration = decoded.generation == generation_;
             SDL_UnlockMutex(mutex_);
 
-            pendingKeys_.erase(decoded.key);
-            if (!currentGeneration) continue;
+            requestRetryAt_.erase(decoded.key);
+            priorityRetryAt_.erase(decoded.key);
+            ++frameMetrics_.decodedResults;
+            frameMetrics_.decodeMs = std::max(frameMetrics_.decodeMs, decoded.decodeMs);
+            frameMetrics_.queueWaitMs = std::max(frameMetrics_.queueWaitMs, decoded.queueWaitMs);
 
             if (!decoded.success || decoded.rgba.empty() ||
                 decoded.width <= 0 || decoded.height <= 0) {
@@ -360,33 +756,56 @@ private:
             }
 
             const std::size_t bytes = decoded.rgba.size();
-            if (bytes == 0 || bytes > MaxTextureBytes ||
-                !makeRoom(bytes)) {
+            if (bytes == 0 || bytes > MaxTextureBytes || !makeRoom(bytes)) {
                 rememberFailure(decoded.key);
                 continue;
             }
 
+            const Uint64 uploadStarted = SDL_GetPerformanceCounter();
             SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
                 decoded.rgba.data(), decoded.width, decoded.height, 32,
                 decoded.width * 4, SDL_PIXELFORMAT_RGBA32);
             if (!surface) {
+                recordUploadTime(uploadStarted);
+                ++frameMetrics_.uploadFailures;
                 rememberFailure(decoded.key);
                 continue;
             }
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
             SDL_FreeSurface(surface);
             if (!texture) {
+                recordUploadTime(uploadStarted);
+                ++frameMetrics_.uploadFailures;
                 rememberFailure(decoded.key);
                 continue;
             }
 
             SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+            recordUploadTime(uploadStarted);
             entries_.push_back({decoded.kind, std::move(decoded.data),
-                                std::move(decoded.path), texture, ++clock_, bytes});
+                                std::move(decoded.path), texture, ++clock_,
+                                SDL_GetTicks(), bytes});
             textureBytes_ += bytes;
-            failedUntil_.erase(decoded.key);
+            frameMetrics_.uploadedBytes += bytes;
+            ++frameMetrics_.uploads;
+            ++uploadsThisFrame_;
+            uploadByteBudget_ = bytes >= uploadByteBudget_
+                ? 0 : uploadByteBudget_ - bytes;
             --loadBudget_;
+            failedUntil_.erase(decoded.key);
         }
+    }
+
+    static double elapsedMs(Uint64 start, Uint64 finish) noexcept {
+        const Uint64 frequency = SDL_GetPerformanceFrequency();
+        if (frequency == 0 || finish < start) return 0.0;
+        return static_cast<double>(finish - start) * 1000.0 /
+               static_cast<double>(frequency);
+    }
+
+    void recordUploadTime(Uint64 started) {
+        frameMetrics_.uploadMs +=
+            elapsedMs(started, SDL_GetPerformanceCounter());
     }
 
     void rememberFailure(const std::string& key) {
@@ -413,6 +832,21 @@ private:
                textureBytes_ <= MaxTextureBytes - requiredBytes;
     }
 
+    void pruneUnused(Uint32 now) {
+        std::size_t removed = 0;
+        for (auto it = entries_.begin();
+             it != entries_.end() && removed < MaxPrunePerFrame;) {
+            if (now - it->lastUseMs <= CacheIdleLifetimeMs) {
+                ++it;
+                continue;
+            }
+            if (it->texture) SDL_DestroyTexture(it->texture);
+            textureBytes_ -= std::min(textureBytes_, it->bytes);
+            it = entries_.erase(it);
+            ++removed;
+        }
+    }
+
     void clearTextures() {
         for (auto& entry : entries_) {
             if (entry.texture) SDL_DestroyTexture(entry.texture);
@@ -424,8 +858,9 @@ private:
 
     static std::string customPathFor(desknx::model::Kind kind,
                                      const std::string& data,
-                                     const std::string& customDirectory) {
-        if (customDirectory.empty()) return {};
+                                     const std::string& customDirectory,
+                                     const std::string& gameOverrideDirectory) {
+        if (customDirectory.empty() && gameOverrideDirectory.empty()) return {};
 
         std::string stem;
         if (kind == desknx::model::Kind::Game) {
@@ -456,11 +891,12 @@ private:
             return {};
         }
 
-        static const char* const extensions[] = {".jpg", ".png", ".jpeg"};
-        auto findFile = [&](const std::string& base) -> std::string {
+        static const char* const extensions[] = {".svg", ".jpg", ".png", ".jpeg"};
+        auto findInDirectory = [&](const std::string& directory,
+                                   const std::string& base) -> std::string {
+            if (directory.empty()) return {};
             for (const char* extension : extensions) {
-                const std::string candidate =
-                    customDirectory + "/" + base + extension;
+                const std::string candidate = directory + "/" + base + extension;
                 struct stat st{};
                 if (stat(candidate.c_str(), &st) == 0 &&
                     S_ISREG(st.st_mode) && st.st_size > 0)
@@ -468,8 +904,14 @@ private:
             }
             return {};
         };
+        auto findFile = [&](const std::string& base) -> std::string {
+            return findInDirectory(customDirectory, base);
+        };
 
         if (kind == desknx::model::Kind::Game) {
+            // One-off per-title artwork overrides a shared pack or SteamGridDB.
+            const std::string perGame = findInDirectory(gameOverrideDirectory, stem);
+            if (!perGame.empty()) return perGame;
             // Prefer real landscape box art over the square NACP system icon.
             const std::string coverBases[] = {
                 "cover-" + stem, stem + "-cover",
@@ -493,7 +935,74 @@ private:
         return {};
     }
 
+    static double svgNumber(const std::string& text, const std::string& key) {
+        std::size_t at = text.find(key);
+        while (at != std::string::npos) {
+            if (at == 0 || !(std::isalnum(static_cast<unsigned char>(text[at-1])) ||
+                             text[at-1] == '-' || text[at-1] == '_'))
+                break;
+            at = text.find(key, at + key.size());
+        }
+        if (at == std::string::npos) return 0.0;
+        at += key.size();
+        while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) ++at;
+        if (at >= text.size() || text[at++] != '=') return 0.0;
+        while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) ++at;
+        if (at >= text.size() || (text[at] != '"' && text[at] != '\'')) return 0.0;
+        const char quote = text[at++];
+        char* end = nullptr;
+        const double value = std::strtod(text.c_str() + at, &end);
+        if (!end || end == text.c_str() + at || value <= 0.0 || !std::isfinite(value)) return 0.0;
+        if (static_cast<std::size_t>(end - text.c_str()) >= text.size() ||
+            text[static_cast<std::size_t>(end - text.c_str())] != quote) return 0.0;
+        return value;
+    }
+
+    static bool svgDimensionsWithinLimit(const std::string& path) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) return false;
+        std::string header(8192, '\0');
+        input.read(&header[0], static_cast<std::streamsize>(header.size()));
+        header.resize(static_cast<std::size_t>(input.gcount()));
+        const std::size_t start = header.find("<svg");
+        if (start == std::string::npos) return false;
+        const std::size_t end = header.find('>', start);
+        if (end == std::string::npos) return false;
+        const std::string tag = header.substr(start, end - start + 1);
+        double width = svgNumber(tag, "width");
+        double height = svgNumber(tag, "height");
+        if (width <= 0.0 || height <= 0.0) {
+            const std::size_t view = tag.find("viewBox");
+            if (view == std::string::npos) return false;
+            const std::size_t eq = tag.find('=', view);
+            if (eq == std::string::npos) return false;
+            const std::size_t quoteAt = tag.find_first_of("\"'", eq + 1);
+            if (quoteAt == std::string::npos) return false;
+            const char quote = tag[quoteAt];
+            const std::size_t close = tag.find(quote, quoteAt + 1);
+            if (close == std::string::npos) return false;
+            const std::string values = tag.substr(quoteAt + 1, close - quoteAt - 1);
+            double x = 0.0, y = 0.0;
+            if (std::sscanf(values.c_str(), "%lf %lf %lf %lf", &x, &y, &width, &height) != 4)
+                return false;
+        }
+        return width >= 1.0 && height >= 1.0 &&
+            width <= 512.0 && height <= 512.0 && width * height <= 1024.0 * 1024.0;
+    }
+
     static bool imageDimensionsWithinLimit(const std::string& path) {
+        const std::size_t dot = path.find_last_of('.');
+        if (dot != std::string::npos) {
+            std::string extension = path.substr(dot);
+            for (char& ch : extension)
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (extension == ".svg") {
+                struct stat st{};
+                return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) &&
+                    st.st_size > 0 && st.st_size <= 128 * 1024 &&
+                    svgDimensionsWithinLimit(path);
+            }
+        }
         std::ifstream input(path, std::ios::binary);
         unsigned char header[24]{};
         if (!input.read(reinterpret_cast<char*>(header), 8)) return false;
@@ -520,9 +1029,25 @@ private:
                 static_cast<std::uint32_t>(header[23]);
             return width > 0 && height > 0 &&
                    width <= MaxIconDimension && height <= MaxIconDimension &&
-                   width * height <= 1024u * 1024u;
+                   width * height <= MaxDecodedPixels;
         }
+        if(header[0]==0&&header[1]==0&&header[2]==1)
+            return icoDimensionsWithinLimit(path);
         return jpegDimensionsWithinLimit(path);
+    }
+
+    static bool icoDimensionsWithinLimit(const std::string& path) {
+        std::ifstream input(path,std::ios::binary);
+        unsigned char header[22]{};
+        if(!input.read(reinterpret_cast<char*>(header),sizeof(header)))return false;
+        if(header[0]!=0||header[1]!=0||header[2]!=1||header[3]!=0)return false;
+        const unsigned count=static_cast<unsigned>(header[4])|
+            (static_cast<unsigned>(header[5])<<8);
+        if(count==0||count>64)return false;
+        const std::uint32_t width=header[6]?header[6]:256u;
+        const std::uint32_t height=header[7]?header[7]:256u;
+        return width>0&&height>0&&width<=MaxIconDimension&&
+            height<=MaxIconDimension&&width*height<=MaxDecodedPixels;
     }
 
     static bool jpegDimensionsWithinLimit(const std::string& path) {
@@ -533,7 +1058,7 @@ private:
             return false;
 
         constexpr int MaxSegments = 256;
-        constexpr std::uint32_t MaxPixels = 1024u * 1024u;
+        constexpr std::uint32_t MaxPixels = MaxDecodedPixels;
         for (int count = 0; count < MaxSegments; ++count) {
             int byte = input.get();
             while (byte != std::char_traits<char>::eof() && byte != 0xFF)
@@ -593,15 +1118,29 @@ private:
     SDL_Thread* worker_{nullptr};
     bool stopWorker_{false};
     std::uint64_t generation_{1};
+    std::uint64_t prefetchGeneration_{1};
 
     std::string customIconPackDir_;
+    std::string gameIconOverridesDir_;
     std::unordered_map<std::string, Uint32> failedUntil_;
+    // The cooldown is read/written only on the render thread.
+    std::unordered_map<std::string, Uint32> requestRetryAt_;
+    std::unordered_map<std::string, Uint32> priorityRetryAt_; // render-thread only
+    // Protected by mutex_: cancel one in-flight title without flushing the queue.
+    std::unordered_map<std::string, std::uint64_t> keyGenerations_;
     std::unordered_set<std::string> pendingKeys_;
+    std::unordered_set<std::string> inFlightPrefetchKeys_;
+    std::unordered_set<std::string> promotedPrefetchKeys_;
     std::deque<Request> requests_;
     std::deque<Decoded> completed_;
 
     std::uint64_t clock_{0};
-    std::size_t loadBudget_{1};
+    Uint32 lastPruneTick_{0};
+    std::size_t loadBudget_{0};
+    std::size_t uploadByteBudget_{0};
+    std::size_t uploadsThisFrame_{0};
     std::size_t textureBytes_{0};
+    FrameMetrics frameMetrics_{};
+    FrameMetrics lastFrameMetrics_{};
     std::vector<Entry> entries_;
 };

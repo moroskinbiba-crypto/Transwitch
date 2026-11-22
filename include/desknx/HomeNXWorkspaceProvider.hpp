@@ -167,9 +167,10 @@ public:
         return true;
     }
 
-    // Drag an existing tile to another cell of the active desktop. The tile
-    // keeps its identity and size; only its origin moves. A refused move leaves
-    // the workspace untouched, so the UI can animate a snapped-back drop.
+    // Drag an existing tile to another cell of the active desktop. Prefer the
+    // requested origin; when it is occupied or off-grid, place the tile in the
+    // next free origin in reading order, wrapping once. A full workspace is
+    // rejected without mutating the source tile or any neighbour.
     bool moveTile(std::size_t tileIndex, int x, int y) {
         model::Workspace* workspace = activeWorkspaceForEditing();
         if (!workspace || tileIndex >= workspace->tiles.size())
@@ -178,11 +179,21 @@ public:
         const model::Tile& tile = workspace->tiles[tileIndex];
         if (tile.x == x && tile.y == y)
             return false;
-        if (!model::placeable(*workspace, tile, x, y, static_cast<int>(tileIndex)))
+        // Keep invalid off-grid drops rejected. Only occupied, otherwise
+        // valid destinations are redirected to the next available origin.
+        if (x < 0 || y < 0 || x >= model::Columns || y >= model::Rows ||
+            tile.w > model::Columns - x || tile.h > model::Rows - y)
+            return false;
+        int targetX = x;
+        int targetY = y;
+        if (!model::placeable(*workspace, tile, x, y,
+                              static_cast<int>(tileIndex)) &&
+            !model::firstFreeFrom(*workspace, tile, x, y, targetX, targetY,
+                                  static_cast<int>(tileIndex), tile.x, tile.y))
             return false;
 
-        workspace->tiles[tileIndex].x = x;
-        workspace->tiles[tileIndex].y = y;
+        workspace->tiles[tileIndex].x = targetX;
+        workspace->tiles[tileIndex].y = targetY;
         return true;
     }
 

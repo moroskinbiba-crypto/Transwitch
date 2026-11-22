@@ -362,3 +362,68 @@ The native standalone build has now completed both CI workflows:
 - Изменения рабочих столов и active-workspace marker теперь записываются через отдельный SDL worker; повторные правки объединяются в последний актуальный snapshot. Синхронный checked save сохранён перед запуском/завершением приложения.
 - SD commits сериализованы отдельным mutex, а завершение фоновой записи отражается в диагностике async_save_finished.
 - CI проверит native NRO и host tests. Физический тест на Switch всё ещё обязателен: особенно проверить старый catalogue cache, фильтр Widgets, появление 90 игр до завершения metadata scan, drag/resize/add/remove, переключение рабочих столов и перезапуск во время активного сохранения.
+
+
+## Unified SVG recovery integration
+
+Preserved the validated SVG IconRegistry/VectorIconCache, VisualEngine, UiComponents,
+TileRenderer, SurfaceManager, SystemTelemetry, async FontRenderer and existing
+workspace page/drag gesture path. Added semantic text roles and UTF-8 wrapping as
+adapters over the existing renderer; TTF misses stay asynchronous and use whole-block
+Cyrillic bitmap fallback until cached. Added shared footer/dock geometry so visible
+buttons and tap targets match exactly. The broad hold-to-drag/page-swipe band and
+five-tab paging behavior are retained. Host coverage is in visual_contracts_test.cpp.
+
+
+## MotionController integration — SVG recovery branch
+
+Added the Full / Reduced / Low Performance motion policy from the runtime-stability
+line to the recovered SVG engine. The mode is persisted in DESKNXSET2 while legacy
+`effects=` settings remain readable; the existing motion-effects toggle maps old
+settings to Full or Reduced when no mode is present. Selection emphasis now animates
+only on focus changes, and screen fades use mode-specific durations. The existing
+UiMotion easing helpers remain in place.
+
+SensorService and ModalStack were deliberately not copied: the recovered build already
+has SystemTelemetry plus a separate off-render-thread SD statistics worker, and its
+SurfaceManager/ModalLayer is the authoritative surface/compositor owner. Adding the
+parallel services would duplicate PSM and modal ownership rather than improve them.
+
+
+## Shared confirmation dialog geometry
+
+The workspace-delete confirmation now reads its surface, button, footer and text
+positions from one tested geometry contract. Rendering and touch hit-testing share
+the same half-open rectangles, replacing duplicated numeric bounds without changing
+the established visual appearance or controller-button behavior.
+
+
+## Complete Repository Audit — 22 November 2026
+
+- Audited baseline: `recovered/unified-best-20261122`, commit `888898f70aec3cd7973e35912bebb0fc3ae0494b`; `main` remains unchanged.
+- Repository inventory: 72 branches, 58 pull requests (11 open), 233 files in the recovered tree, 46 host test files and four GitHub Actions workflows.
+- The recovered baseline is 489 commits ahead of `main`, zero commits behind; the GitHub comparison reports 138 changed files, 18,208 additions and 2,251 deletions.
+- Added `docs/REPOSITORY_AUDIT_2026-11-22.md` with production-path findings, branch/PR disposition, risk register, CI evidence and next-stage sequencing.
+- Added `docs/UNIFIED_FEATURE_MATRIX.md` separating production features from partial integrations, helper/domain modules, unimplemented features and hardware-only acceptance gates.
+- Confirmed: current catalogue contains completeness/truncation/manifest protections equivalent to or stronger than the four unique catalogue commits in `perf-stability-iteration`; do not replay that branch wholesale.
+- Confirmed: PR #56 `SensorService` and `ModalStack` duplicate the broader current `SystemTelemetry`/SD stats worker and `SurfaceManager`; they are not to be copied as parallel owners. Motion policy and delete-confirmation geometry have been integrated selectively.
+- Confirmed P0 gap: production persistence remains directly implemented in `source/main.cpp`; the standalone JSON `PersistenceStore` test does not exercise those live settings/layout/history transaction paths. The separate production-persistence test suite in `feat/theme-socoma` is not in this branch and must be adapted to the current formats/entry points, not copied blindly.
+- Confirmed P1 gaps: duplicate workspace model/store ownership; artwork paths not yet coordinated by one manager; reusable window geometry/control contracts only partially migrated; `source/main.cpp` remains 9,199 lines; devkitPro container remains floating at `latest`.
+- CI on this exact SHA: DeskNX run 45052223734, Native NRO 45052223784, Nextendo overlay 45052223827 and experimental HOME backend 45052223789 all succeeded. These are compile/host-test results, not physical Switch runtime validation.
+- Hardware acceptance remains NOT RUN. Do not claim qlaunch replacement, suspend/resume or game launch/return are physically validated.
+
+### Audit scope note
+
+All branch names and PR metadata were inventoried. Feature-bearing divergent refs were compared by GitHub commit/file metadata and their distinctive source files were inspected. Historical branches whose code is an ancestor, superseded prototype or web-only implementation were classified accordingly. This is not a line-by-line review of every historical commit in every branch; any newly discovered distinct behavior should be added to the feature matrix before implementation.
+
+
+## Stage 1A — Production Persistence Recovery Tests — 22 November 2026
+
+- Production persistence changes were implemented on `recovered/unified-best-20261122`; `main` was not changed.
+- Added `include/desknx/ProductionPersistence.hpp` for bounded reads, validated primary/backup fallback and atomic SD-write transactions with injectable commit and temporary-write callbacks.
+- Refactored `SafeReplace.hpp` to inject stat/remove/rename operations for host testing while preserving the default production filesystem implementation.
+- Wired live settings, launch history, layout and active-workspace marker paths in `source/main.cpp` to the tested transaction/parsing helpers. Existing settings formats `DESKNXSET1/2` and history format `DESKNXH1` are preserved.
+- Added `tests/production_persistence_test.cpp` and its CI step. It covers valid/invalid primary+backup recovery, layout and active-marker validation, temp open/write failures, both SD commit boundaries, rename/publish failures, rollback failure, recovery from retained `.bak`, successful rotation and one-commit active marker writes.
+- Fixed the stale active-marker backup case: once a full layout is durably committed, a failed marker write now invalidates both marker copies so an old `.bak` cannot override the active index stored in the authoritative layout.
+- CI on code commit `6c55adb8ee1fc62d8161decfb1c597169fbb038e`: Build DeskNX run 45055914697, native NRO run 45055914638 and Nextendo Overlay run 45055914649 all succeeded. The experimental HOME backend run 45055914686 had passed host tests and libnx preparation; Atmosphère/libstratosphere compilation was still in progress when this changelog was updated.
+- Physical Switch validation remains NOT RUN: simulate power loss/SD removal and verify suspend/resume, launch/return and marker/layout recovery on a test console.

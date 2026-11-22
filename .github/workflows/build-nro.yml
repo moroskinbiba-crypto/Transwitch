@@ -27,8 +27,16 @@ jobs:
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
 
+      - name: Validate SOCOMA SVG assets
+        run: python3 scripts/check-svg-assets.py assets/icons
+
+      - name: Install Nextendo signature verification library
+        run: dkp-pacman -S --needed --noconfirm switch-libsodium
+
       - name: Build native SDL2 application
-        run: make -j2
+        run: |
+          python3 scripts/check-svg-assets.py assets/icons
+          make -j2
 
       - name: Verify native NRO (NACP present, no RomFS/WebKit wrapper)
         run: python3 scripts/check-nro-assets.py DeskNX.nro

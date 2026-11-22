@@ -6,7 +6,9 @@
 
 #include <desknx/Protocol.hpp>
 #include <desknx/MenuLiveness.hpp>
+#include <desknx/PendingOperationGate.hpp>
 #include <desknx/SafeReplace.hpp>
+#include <desknx/SleepRecoveryPolicy.hpp>
 #include <desknx/system/Application.hpp>
 #include <desknx/system/ExternalContent.hpp>
 #include <desknx/system/LibraryApplet.hpp>
@@ -23,6 +25,7 @@
 namespace {
 
 using desknx::ipc::Command;
+using desknx::runtime::PendingOperation;
 using namespace desknx::system;
 
 constexpr const char* kDataDir = "sdmc:/switch/DeskNX";
@@ -84,6 +87,7 @@ u64 g_PendingLaunchFlags = 0;       // LaunchTitle v2 flag bits (LNC-02)
 bool g_PendingCloseApp = false;
 desknx::ipc::PowerKind g_PendingPowerAction = desknx::ipc::PowerKind::Sleep;
 bool g_HasPendingPowerAction = false;
+desknx::runtime::PendingOperationGate g_PendingOperationGate{};
 // Last title-launch failure, reported to the menu in the initial state block
 // (IPC-06 §4.4). Cleared when a launch succeeds.
 u32 g_LastLaunchRc = 0;
@@ -267,6 +271,40 @@ void TransitionTo(BackendState next, const char* reason) {
     DaemonLog("state: %s -> %s (%s)", BackendStateName(g_BackendState),
               BackendStateName(next), reason ? reason : "unspecified");
     g_BackendState = next;
+}
+
+bool BeginPendingMenuOperation(PendingOperation operation, const char* label) {
+    if (g_PendingOperationGate.TryBegin(operation)) return true;
+    DaemonLog("ipc: rejected %s; operation=%u is still pending",
+              label ? label : "menu command",
+              static_cast<unsigned int>(g_PendingOperationGate.current()));
+    return false;
+}
+
+void ReleasePendingMenuOperation() {
+    if (!g_PendingOperationGate.busy()) return;
+    DaemonLog("ipc: resolved pending operation=%u after menu holder closed",
+              static_cast<unsigned int>(g_PendingOperationGate.current()));
+    g_PendingOperationGate.Reset();
+}
+
+// HOME, sleep, SD removal and watchdog recovery intentionally cancel a
+// command that has not reached the menu-close commit point.
+void CancelPendingMenuOperation(const char* reason) {
+    if (!g_PendingOperationGate.busy()) return;
+    DaemonLog("ipc: cancelling pending operation=%u (%s)",
+              static_cast<unsigned int>(g_PendingOperationGate.current()),
+              reason ? reason : "menu teardown");
+    g_PendingOperationGate.Reset();
+    g_PendingTitle = 0;
+    g_PendingLaunchFlags = 0;
+    g_PendingReturnToGame = false;
+    g_PendingHomebrew = false;
+    g_PendingHomebrewPath[0] = '\0';
+    g_PendingHomebrewArgv[0] = '\0';
+    g_HasPendingUser = false;
+    g_PendingCloseApp = false;
+    g_HasPendingPowerAction = false;
 }
 
 bool IsSafeHomebrewPath(const char* path) {
@@ -634,7 +672,7 @@ bool ParseMenuCommand(AppletStorage& storage) {
             u64 title_id = 0;
             AccountUid uid{};
             bool has_uid = false;
-            g_PendingLaunchFlags = 0;
+            u64 launch_flags = 0;
             if (hdr.payload_size == sizeof(desknx::ipc::LaunchTitleV2Payload)) {
                 desknx::ipc::LaunchTitleV2Payload payload{};
                 if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
@@ -643,7 +681,7 @@ bool ParseMenuCommand(AppletStorage& storage) {
                 uid = payload.uid;
                 has_uid = accountUidIsValid(&uid);
                 // LNC-02: keep the menu's NACP override bits for Launch().
-                g_PendingLaunchFlags = payload.flags &
+                launch_flags = payload.flags &
                     (desknx::ipc::LaunchFlagHasUser | desknx::ipc::LaunchFlagNoPreuser);
             } else if (hdr.payload_size == sizeof(desknx::ipc::LaunchTitlePayload)) {
                 desknx::ipc::LaunchTitlePayload payload{};
@@ -654,6 +692,9 @@ bool ParseMenuCommand(AppletStorage& storage) {
                 return false;
             }
             if (title_id == 0) return false;
+            if (!BeginPendingMenuOperation(PendingOperation::LaunchTitle, "LaunchTitle"))
+                return false;
+            g_PendingLaunchFlags = launch_flags;
             g_PendingTitle = title_id;
             g_PendingReturnToGame = false;
             g_PendingHomebrew = false;
@@ -716,6 +757,8 @@ bool ParseMenuCommand(AppletStorage& storage) {
                 !std::memchr(payload.argv, '\0', sizeof(payload.argv)) ||
                 !IsSafeHomebrewPath(payload.nro_path))
                 return false;
+            if (!BeginPendingMenuOperation(PendingOperation::LaunchHomebrew, "LaunchHomebrew"))
+                return false;
             g_PendingTitle = 0;
             g_PendingReturnToGame = false;
             g_PendingHomebrew = true;
@@ -729,6 +772,8 @@ bool ParseMenuCommand(AppletStorage& storage) {
 
         case Command::ReturnToGame:
             if (hdr.payload_size != 0) return false;
+            if (!BeginPendingMenuOperation(PendingOperation::ReturnToGame, "ReturnToGame"))
+                return false;
             g_PendingTitle = 0;
             g_PendingHomebrew = false;
             g_PendingReturnToGame = true;
@@ -743,6 +788,8 @@ bool ParseMenuCommand(AppletStorage& storage) {
             // the applet is alive.
             if (hdr.payload_size != 0 || hdr.version < desknx::ipc::Version)
                 return false;
+            if (!BeginPendingMenuOperation(PendingOperation::CloseApp, "CloseApp"))
+                return false;
             g_PendingCloseApp = true;
             DaemonLog("ipc: close-app requested");
             return true;
@@ -755,8 +802,11 @@ bool ParseMenuCommand(AppletStorage& storage) {
             desknx::ipc::SelectUserPayload payload{};
             if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
                 return false;
-            // LNC-03: never accept a zero/invalid uid from the menu.
-            if (!accountUidIsValid(&payload.uid)) return false;
+            // LNC-03: never accept a zero/invalid uid from the menu. Do not
+            // change the selected profile after a launch/close/power command
+            // has already captured the current menu transaction.
+            if (!accountUidIsValid(&payload.uid) || g_PendingOperationGate.busy())
+                return false;
             g_PendingUser = payload.uid;
             g_HasPendingUser = true;
             g_SelectedUser = payload.uid;
@@ -772,6 +822,8 @@ bool ParseMenuCommand(AppletStorage& storage) {
             if (R_FAILED(appletStorageRead(&storage, sizeof(hdr), &payload, sizeof(payload))))
                 return false;
             if (!desknx::ipc::rules::IsValidPowerAction(payload.action)) return false;
+            if (!BeginPendingMenuOperation(PendingOperation::PowerAction, "PowerAction"))
+                return false;
             const auto action = static_cast<desknx::ipc::PowerKind>(payload.action);
             // PWR-03: sleep reuses the AM sequence (BK-16 keeps it single
             // shot); reboot/shutdown go through psm with our SD state synced.
@@ -957,6 +1009,9 @@ void OpenMenuForHomePress() {
             // returns to DeskNX by ending that session and restoring the real
             // Album slot immediately.
             if (R_FAILED(StopMenuSafely("HOME closes Homebrew"))) return;
+            CancelPendingMenuOperation("HOME closed Homebrew");
+            g_MenuReady = false;
+            ResetMenuHeartbeatTracking();
             g_HomebrewLoaderRunning = false;
             RestoreAlbumSlotAfterHomebrew("HOME from Homebrew");
             DaemonLog("home: stopped Homebrew loader and returned to DeskNX");
@@ -967,6 +1022,9 @@ void OpenMenuForHomePress() {
         // suspended title, matching the stock HOME toggle where possible.
         if (app::g_AppRunning) {
             if (R_FAILED(StopMenuSafely("HOME dismisses menu"))) return;
+            CancelPendingMenuOperation("HOME dismissed menu");
+            g_MenuReady = false;
+            ResetMenuHeartbeatTracking();
             app::FocusApplication();
             TransitionTo(BackendState::GameRunning, "HOME dismissed menu");
             DaemonLog("home: dismissed DeskNX, returned to title=0x%016llX",
@@ -993,20 +1051,73 @@ void OpenMenuForHomePress() {
 }
 
 void HandleSleepMessage() {
+    if (g_BackendState == BackendState::Sleeping) {
+        DaemonLog("power: duplicate sleep request ignored");
+        return;
+    }
+
+    CancelPendingMenuOperation("sleep request");
     g_AppWasRunningBeforeSleep = app::g_AppRunning;
-    g_ReopenMenuAfterSleep = la::IsMenuAlive();
-    if (g_ReopenMenuAfterSleep) {
+    const bool menuWasOpen = la::IsMenuAlive();
+    g_ReopenMenuAfterSleep = menuWasOpen;
+    if (menuWasOpen) {
         const Result stopRc = StopMenuSafely("sleep transition");
-        if (R_SUCCEEDED(stopRc) && g_HomebrewLoaderRunning) {
-            g_HomebrewLoaderRunning = false;
-            RestoreAlbumSlotAfterHomebrew("sleep transition");
-            DaemonLog("power: ended Homebrew session before sleep");
+        if (R_SUCCEEDED(stopRc)) {
+            g_MenuReady = false;
+            ResetMenuHeartbeatTracking();
+            if (g_HomebrewLoaderRunning) {
+                g_HomebrewLoaderRunning = false;
+                RestoreAlbumSlotAfterHomebrew("sleep transition");
+                DaemonLog("power: ended Homebrew session before sleep");
+            }
+        } else {
+            // Keep the holder and readiness state intact. On wake we either
+            // resume this still-live applet or reap it before starting another.
+            DaemonLog("power: menu stop incomplete before sleep rc=0x%08X",
+                      static_cast<unsigned int>(stopRc));
         }
     }
 
     TransitionTo(BackendState::Sleeping, "sleep sequence requested");
     const Result rc = appletStartSleepSequence(true);
     DaemonLog("power: sleep sequence rc=0x%08X", static_cast<unsigned int>(rc));
+    if (R_SUCCEEDED(rc)) return;
+
+    // If AM refuses the sleep sequence, no FinishedSleepSequence event is
+    // guaranteed. Never leave the backend stuck in Sleeping on that path.
+    g_ReopenMenuAfterSleep = false;
+    g_AppWasRunningBeforeSleep = false;
+    const auto recovery = desknx::runtime::DecideSleepStartFailureRecovery(
+        menuWasOpen, la::IsMenuAlive(), la::g_MenuRunning, g_MenuReady,
+        app::g_AppRunning);
+    switch (recovery) {
+        case desknx::runtime::SleepRecoveryAction::KeepMenuActive:
+            ResetMenuHeartbeatTracking();
+            g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq());
+            TransitionTo(BackendState::MenuActive,
+                         "sleep request failed; kept live menu");
+            break;
+        case desknx::runtime::SleepRecoveryAction::KeepMenuStarting:
+            g_MenuLaunchTick = armGetSystemTick();
+            TransitionTo(BackendState::MenuStarting,
+                         "sleep request failed; menu still starting");
+            break;
+        case desknx::runtime::SleepRecoveryAction::ReapMenuHolder:
+            TransitionTo(BackendState::MenuStarting,
+                         "sleep request failed; reap closed menu holder");
+            break;
+        case desknx::runtime::SleepRecoveryAction::RestoreGame:
+            app::FocusApplication();
+            TransitionTo(BackendState::GameRunning,
+                         "sleep request failed; restore game");
+            break;
+        case desknx::runtime::SleepRecoveryAction::LaunchMenu:
+        default:
+            TransitionTo(BackendState::MenuStarting,
+                         "sleep request failed; recover HOME");
+            LaunchMenu();
+            break;
+    }
 }
 
 // qlaunch-only messages omitted from libnx's public AppletMessage enum.
@@ -1051,24 +1162,56 @@ void PumpAppletMessages() {
                 break;
 
             case Msg_FinishedSleepSequence:
-                DaemonLog("power: wake event");
-                if (g_ReopenMenuAfterSleep) {
-                    g_ReopenMenuAfterSleep = false;
-                    TransitionTo(BackendState::MenuStarting, "wake; reopen menu");
-                    LaunchMenu();
-                } else if (g_AppWasRunningBeforeSleep && app::g_AppRunning) {
-                    g_AppWasRunningBeforeSleep = false;
-                    app::FocusApplication();
-                    TransitionTo(BackendState::GameRunning, "wake; restore game focus");
-                } else {
-                    g_AppWasRunningBeforeSleep = false;
-                    TransitionTo(BackendState::MenuStarting, "wake; no prior foreground");
-                    LaunchMenu();
+                if (g_BackendState != BackendState::Sleeping) {
+                    DaemonLog("power: ignored stale FinishedSleepSequence outside sleep");
+                    break;
                 }
+                DaemonLog("power: wake event");
+                {
+                    const auto recovery = desknx::runtime::DecideSleepWakeRecovery(
+                        g_ReopenMenuAfterSleep, la::IsMenuAlive(), la::g_MenuRunning,
+                        g_MenuReady, g_AppWasRunningBeforeSleep, app::g_AppRunning);
+                    g_ReopenMenuAfterSleep = false;
+                    switch (recovery) {
+                        case desknx::runtime::SleepRecoveryAction::KeepMenuActive:
+                            // Reuse the live holder; never create a second applet.
+                            ResetMenuHeartbeatTracking();
+                            g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq());
+                            TransitionTo(BackendState::MenuActive, "wake; resume live menu");
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::KeepMenuStarting:
+                            g_MenuLaunchTick = armGetSystemTick();
+                            TransitionTo(BackendState::MenuStarting,
+                                         "wake; resume starting menu");
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::ReapMenuHolder:
+                            // The main loop joins/closes this completed holder
+                            // before the MenuStarting retry may create another.
+                            g_MenuReady = false;
+                            g_MenuLaunchTick = 0;
+                            ResetMenuHeartbeatTracking();
+                            TransitionTo(BackendState::MenuStarting,
+                                         "wake; reap finished menu holder");
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::RestoreGame:
+                            app::FocusApplication();
+                            TransitionTo(BackendState::GameRunning,
+                                         "wake; restore game focus");
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::LaunchMenu:
+                        default:
+                            TransitionTo(BackendState::MenuStarting,
+                                         "wake; no prior foreground");
+                            LaunchMenu();
+                            break;
+                    }
+                }
+                g_AppWasRunningBeforeSleep = false;
                 break;
 
             case Msg_SdCardRemoved:
                 DaemonLog("storage: SD card removed; closing SD-backed menu");
+                CancelPendingMenuOperation("SD card removed");
                 g_SdMountedForBackend = false; // REC-04: next menu starts degraded
                 // REC-05: notify before tearing the applet down so a menu
                 // that is mid-frame can flush state; delivery failure is
@@ -1082,6 +1225,8 @@ void PumpAppletMessages() {
                 if (la::IsMenuAlive()) {
                     const Result stopRc = StopMenuSafely("SD card removed");
                     if (R_FAILED(stopRc)) break;
+                    g_MenuReady = false;
+                    ResetMenuHeartbeatTracking();
                 }
                 if (g_HomebrewLoaderRunning && !la::g_MenuRunning) {
                     g_HomebrewLoaderRunning = false;
@@ -1103,6 +1248,7 @@ void HandleMenuClosed() {
     if (R_FAILED(StopMenuSafely("menu closed"))) return;
     g_MenuReady = false;
     ResetMenuHeartbeatTracking();
+    ReleasePendingMenuOperation();
 
     // The shared AppletHolder also runs nx-hbloader. Its exit is not a failed
     // menu startup: unregister its ECS override and restore DeskNX, even if the
@@ -1367,6 +1513,8 @@ void HandleExternalLaunchRequest(u64 titleId) {
     // foreground transition. If there is no suspended application, use the
     // HomeNX background-start path; otherwise defer until HandleMenuClosed().
     if (la::g_MenuRunning) {
+        if (!BeginPendingMenuOperation(PendingOperation::LaunchTitle, "external LaunchTitle"))
+            return;
         if (!g_HomebrewLoaderRunning && la::IsMenuAlive() && !app::g_AppRunning) {
             const Result earlyRc = app::Launch(titleId, launchUser, 0, false);
             DaemonLog("applet: external background launch title=0x%016llX rc=0x%08X",
@@ -1435,7 +1583,9 @@ void TakeLaunchRequests() {
     // Keep the launch request in AM until current HOME/menu operations have
     // finished. This mirrors HomeNX's queued action handling and avoids losing
     // an external request while a normal menu command is being committed.
-    if (g_PendingTitle != 0 || g_PendingHomebrew || g_PendingReturnToGame)
+    if (g_PendingOperationGate.busy() || g_PendingTitle != 0 ||
+        g_PendingHomebrew || g_PendingReturnToGame ||
+        g_PendingCloseApp || g_HasPendingPowerAction)
         return;
 
     AppletApplication requested{};
@@ -1474,6 +1624,15 @@ void RunMainLoop() {
     LaunchMenu();
 
     while (true) {
+        // Lifecycle messages are always pumped first. While the system is
+        // asleep, do not consume menu IPC, retry services, poll title processes,
+        // or run watchdog recovery against an applet paused by the sleep cycle.
+        PumpAppletMessages();
+        if (g_BackendState == BackendState::Sleeping) {
+            svcSleepThread(16'666'666ULL);
+            continue;
+        }
+
         RetryPmshellInitialization();
         RetryPendingHbloaderUnregister();
         const u64 loopNow = armGetSystemTick();
@@ -1483,7 +1642,6 @@ void RunMainLoop() {
             DaemonLog("ipc: Busy pause ended; heartbeat monitoring resumed");
 
         if (la::IsMenuAlive()) DrainMenuCommands();
-        PumpAppletMessages();
         TakeLaunchRequests();
 
         // Poll even while DeskNX is open. If a suspended game exits naturally,
@@ -1515,6 +1673,7 @@ void RunMainLoop() {
             if (elapsed >= armGetSystemTickFreq() * kMenuReadyTimeoutSeconds) {
                 DaemonLog("menu: ready timeout; slot=%s", CurrentMenuSlot().name);
                 if (R_FAILED(StopMenuSafely("menu ready timeout"))) continue;
+                CancelPendingMenuOperation("menu ready timeout");
                 g_MenuReady = false;
                 ResetMenuHeartbeatTracking();
                 if (app::g_AppRunning) {
@@ -1541,6 +1700,7 @@ void RunMainLoop() {
             if (g_MenuLiveness.HeartbeatTimedOut(heartbeatNow, g_MenuReady)) {
                 DaemonLog("menu: heartbeat timeout; slot=%s", CurrentMenuSlot().name);
                 if (R_FAILED(StopMenuSafely("menu heartbeat timeout"))) continue;
+                CancelPendingMenuOperation("menu heartbeat timeout");
                 g_MenuReady = false;
                 ResetMenuHeartbeatTracking();
                 if (app::g_AppRunning) {
@@ -1766,7 +1926,7 @@ void InitializeSystemModule() {
     remove(kPrevLogPath);
     rename(kLogPath, kPrevLogPath);
     DaemonLog("backend: bootstrap reached sd_mount_rc=0x%08X",
-              static_cast<unsigned int>(sdMountRc));
+              sdMountRc.GetValue());
 
     // libnx chooses IPC command/layouts by HOS version. Discover the installed
     // firmware before initializing account/ns/applet services.

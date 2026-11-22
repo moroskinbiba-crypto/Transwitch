@@ -6,6 +6,7 @@
 
 #include <switch.h>
 #include <curl/curl.h>
+#include "NetworkRuntime.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -36,9 +37,21 @@ size_t receive(char* data, size_t size, size_t count, void* opaque) {
     return bytes;
 }
 
-bool request(CURL* curl, const std::string& url, std::string& body) {
-    if (!curl) return false;
+struct CancelInfo {
+    CancelCheck check{nullptr};
+    void* context{nullptr};
+};
+int transferProgress(void* opaque, curl_off_t, curl_off_t,
+                     curl_off_t, curl_off_t) {
+    const auto* cancel=static_cast<const CancelInfo*>(opaque);
+    return cancel && cancel->check && cancel->check(cancel->context) ? 1 : 0;
+}
+
+bool request(CURL* curl, const std::string& url, std::string& body,
+             CancelCheck shouldCancel, void* cancelContext) {
+    if (!curl || (shouldCancel && shouldCancel(cancelContext))) return false;
     Response response;
+    CancelInfo cancellation{shouldCancel,cancelContext};
     curl_easy_reset(curl);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "Transwitch/DeskNX");
@@ -52,6 +65,11 @@ bool request(CURL* curl, const std::string& url, std::string& body) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    if (shouldCancel) {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, transferProgress);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &cancellation);
+    }
     const CURLcode result = curl_easy_perform(curl);
     long status = 0;
     if (result == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
@@ -176,35 +194,36 @@ bool readConnected(const std::string& body, unsigned& connected) {
 } // namespace
 
 bool initializeNetwork() {
-    const Result socketRc = socketInitializeDefault();
-    if (R_FAILED(socketRc)) return false;
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-        socketExit();
-        return false;
-    }
-    return true;
+    return desknx::network::acquire();
 }
 
 void shutdownNetwork() {
-    curl_global_cleanup();
-    socketExit();
+    desknx::network::release();
 }
 
-bool fetchSnapshot(PlayerSnapshot& snapshot) {
+bool fetchSnapshot(PlayerSnapshot& snapshot, CancelCheck shouldCancel,
+                   void* cancelContext) {
     snapshot = PlayerSnapshot{};
+    if (shouldCancel && shouldCancel(cancelContext)) return false;
     CURL* curl = curl_easy_init();
     if (!curl) return false;
     bool any = false;
     std::string body;
 
-    if (request(curl, std::string(kBaseUrl) + "/api/online-counts", body)) {
+    if (request(curl, std::string(kBaseUrl) + "/api/online-counts", body,
+                 shouldCancel,cancelContext)) {
         PlayerSnapshot parsed;
         if (parseCounts(body, parsed, false)) {
             snapshot.perTitle = std::move(parsed.perTitle);
             any = true;
         }
     }
-    if (request(curl, std::string(kBaseUrl) + "/service-catalog/v1/online-counts", body)) {
+    if (shouldCancel && shouldCancel(cancelContext)) {
+        curl_easy_cleanup(curl);
+        return false;
+    }
+    if (request(curl, std::string(kBaseUrl) + "/service-catalog/v1/online-counts", body,
+                shouldCancel,cancelContext)) {
         if (parseCounts(body, snapshot, true)) any = true;
     }
 
@@ -218,7 +237,9 @@ bool fetchSnapshot(PlayerSnapshot& snapshot) {
         {"/game-stats/uno-count", 0x0100B6E012EBE000ull, false},
     };
     for (const auto& game : ownGames) {
-        if (!request(curl, std::string(kBaseUrl) + game.path, body)) continue;
+        if (shouldCancel && shouldCancel(cancelContext)) break;
+        if (!request(curl, std::string(kBaseUrl) + game.path, body,
+                     shouldCancel,cancelContext)) continue;
         if (game.requiresOnline && !readBool(body, "online", false)) continue;
         unsigned connected = 0;
         if (readConnected(body, connected)) {
@@ -227,7 +248,7 @@ bool fetchSnapshot(PlayerSnapshot& snapshot) {
         }
     }
     curl_easy_cleanup(curl);
-    if (!any) return false;
+    if ((shouldCancel && shouldCancel(cancelContext)) || !any) return false;
 
     std::uint64_t total = 0;
     for (const auto& entry : snapshot.perTitle) total += entry.second;

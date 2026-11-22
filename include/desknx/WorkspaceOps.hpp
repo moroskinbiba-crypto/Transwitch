@@ -95,9 +95,25 @@ inline bool moveSelectedTile(model::Workspace& desk, int& selectedX,
     const int index = model::itemAt(desk, selectedX, selectedY);
     if (index < 0 || (dx == 0 && dy == 0)) return false;
     auto& tile = desk.tiles[static_cast<size_t>(index)];
-    const int nextX = tile.x + dx;
-    const int nextY = tile.y + dy;
-    if (!model::placeable(desk, tile, nextX, nextY, index)) return false;
+    const int requestedX = tile.x + dx;
+    const int requestedY = tile.y + dy;
+    // A collision can be resolved automatically, but a destination outside
+    // the grid remains an invalid input rather than silently relocating the
+    // tile somewhere unrelated.
+    if (requestedX < 0 || requestedY < 0 ||
+        requestedX >= model::Columns || requestedY >= model::Rows ||
+        tile.w > model::Columns - requestedX ||
+        tile.h > model::Rows - requestedY)
+        return false;
+    int nextX = requestedX;
+    int nextY = requestedY;
+    // Prefer the requested origin. When occupied, scan forward in reading
+    // order and wrap once. Exclude the current origin so a full workspace
+    // cannot report a no-op relocation as a successful move.
+    if (!model::placeable(desk, tile, requestedX, requestedY, index) &&
+        !model::firstFreeFrom(desk, tile, requestedX, requestedY,
+                              nextX, nextY, index, tile.x, tile.y))
+        return false;
     tile.x = nextX;
     tile.y = nextY;
     selectedX = nextX;
@@ -126,8 +142,12 @@ inline bool resizeSelectedTile(model::Workspace& desk, int& selectedX,
         if (bigger) { nextW = 3; nextH = 2; }
         else { nextW = 2; nextH = 1; }
     } else if (tile.w == 3 && tile.h == 2) {
-        if (!bigger) { nextW = 2; nextH = 2; }
-        else return false;
+        if (bigger) { nextW = 2; nextH = 3; }
+        else { nextW = 2; nextH = 2; }
+    } else if (tile.w == 2 && tile.h == 3) {
+        // 2x3 is the largest supported portrait tile in the six-column grid.
+        if (bigger) return false;
+        nextW = 2; nextH = 2;
     } else if (tile.w == 3 && tile.h == 1) {
         if (bigger) { nextW = 3; nextH = 2; }
         else { nextW = 2; nextH = 1; }
@@ -138,10 +158,23 @@ inline bool resizeSelectedTile(model::Workspace& desk, int& selectedX,
     model::Tile proposed = tile;
     proposed.w = nextW;
     proposed.h = nextH;
-    if (!model::placeable(desk, proposed, tile.x, tile.y, index)) return false;
+
+    // Match the touch/provider resize contract: keep the current origin when
+    // possible, otherwise relocate to the next free origin in reading order.
+    // Exclude the old origin so an expanded tile cannot appear to succeed
+    // without changing position when no valid alternative exists.
+    int targetX = tile.x;
+    int targetY = tile.y;
+    if (!model::placeable(desk, proposed, targetX, targetY, index) &&
+        !model::firstFreeFrom(desk, proposed, tile.x, tile.y,
+                              targetX, targetY, index, tile.x, tile.y))
+        return false;
+
+    tile.x = targetX;
+    tile.y = targetY;
     tile.w = proposed.w;
     tile.h = proposed.h;
-    // Keep focus on the tile itself even when the old cursor cell is removed.
+    // Keep focus on the tile itself even when resizing relocates its origin.
     selectedX = tile.x;
     selectedY = tile.y;
     return true;

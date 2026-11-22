@@ -2,7 +2,7 @@ name: Build DeskNX
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, "preview/**" ]
   workflow_dispatch:
   pull_request:
     branches: [ main, master ]
@@ -28,8 +28,16 @@ jobs:
       - name: Verify production HOME applet entry point
         run: bash scripts/check-home-applet-entrypoint.sh
 
-      - name: Verify Switch curl dependency
-        run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
+      - name: Validate SOCOMA SVG assets
+        run: python3 scripts/check-svg-assets.py assets/icons
+
+      - name: Install Nextendo signature verification library
+        run: dkp-pacman -S --needed --noconfirm switch-libsodium
+
+      - name: Verify Switch network dependencies
+        run: |
+          test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
+          test -s /opt/devkitpro/portlibs/switch/lib/libsodium.a
 
       - name: Validate shell scripts
         run: bash -n scripts/install-system.sh scripts/uninstall-system.sh scripts/package-runtime-assets.sh tests/test-recovery.sh
@@ -39,15 +47,142 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test coalesced layout-save scheduler
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/coalesced_layout_save_scheduler_test.cpp -o /tmp/desknx-coalesced-layout-save-test
+          /tmp/desknx-coalesced-layout-save-test
+
+      - name: Test constant-time active workspace marker serialization
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/active_workspace_marker_test.cpp source/Layout.cpp -o /tmp/desknx-active-workspace-marker-test
+          /tmp/desknx-active-workspace-marker-test
+
+      - name: Test game tile visual layout rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/tile_visual_rules_test.cpp -o /tmp/desknx-tile-visual-rules-test
+          /tmp/desknx-tile-visual-rules-test
+
+      - name: Test visual engine rounded geometry
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_geometry_test.cpp -o /tmp/desknx-visual-geometry-test
+          /tmp/desknx-visual-geometry-test
+
+      - name: Test modal surface stack ownership and backdrop rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/surface_manager_test.cpp -o /tmp/desknx-surface-manager-test
+          /tmp/desknx-surface-manager-test
+
+      - name: Test semantic icon manifest and legacy mapping
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/icon_registry_test.cpp -o /tmp/desknx-icon-registry-test
+          /tmp/desknx-icon-registry-test
+
+      - name: Test UI component visual-state rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_component_rules_test.cpp -o /tmp/desknx-ui-component-rules-test
+          /tmp/desknx-ui-component-rules-test
+
+      - name: Test Visual Engine semantic tokens
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_tokens_test.cpp -o /tmp/desknx-visual-tokens-test
+          /tmp/desknx-visual-tokens-test
+
+      - name: Test unified typography, UTF-8 layout and workspace chrome contracts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_contracts_test.cpp -o /tmp/desknx-visual-contracts-test
+          /tmp/desknx-visual-contracts-test
+
+      - name: Test UI motion easing and transitions
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_motion_test.cpp -o /tmp/desknx-ui-motion-test
+          /tmp/desknx-ui-motion-test
+
+      - name: Validate custom font preflight parser
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/font_file_validation_test.cpp -o /tmp/desknx-font-validation-test
+          /tmp/desknx-font-validation-test
+
       - name: Install host zlib headers for NACP normalization test
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev
+          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev libsodium-dev pkg-config libsdl2-dev
+
+      - name: Test artwork prefetch priority policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/artwork_request_policy_test.cpp -o /tmp/desknx-artwork-priority-test
+          /tmp/desknx-artwork-priority-test
+
+      - name: Test Russian UTF-8 bitmap fallback
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/bitmap_font_test.cpp -o /tmp/desknx-bitmap-font-test
+          /tmp/desknx-bitmap-font-test
+
+      - name: Test renderer state baseline policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_state_policy_test.cpp -o /tmp/desknx-renderer-state-test
+          /tmp/desknx-renderer-state-test
+
+      - name: Test SDL renderer frame recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_frame_recovery_test.cpp -lSDL2 -o /tmp/desknx-renderer-recovery-test
+          /tmp/desknx-renderer-recovery-test
+
+      - name: Test bounded rolling runtime metrics
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/runtime_metrics_test.cpp -o /tmp/desknx-runtime-metrics-test
+          /tmp/desknx-runtime-metrics-test
 
       - name: Test compressed NACP title normalization
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/nacp_title_block_test.cpp -lz -o /tmp/desknx-nacp-test
           /tmp/desknx-nacp-test
+
+      - name: Test application-size decoding
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/application_size_test.cpp -o /tmp/desknx-application-size-test
+          /tmp/desknx-application-size-test
+
+      - name: Test HomeNX library grid placement and collision handling
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/library_grid_test.cpp -o /tmp/desknx-library-grid-test
+          /tmp/desknx-library-grid-test
+
+      - name: Test bounded recursive NRO scanner
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nro_scanner_test.cpp -o /tmp/desknx-nro-scanner-test
+          /tmp/desknx-nro-scanner-test
+
+      - name: Test shutdown-time persistence guard
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/shutdown_persistence_test.cpp -o /tmp/desknx-shutdown-persistence-test
+          /tmp/desknx-shutdown-persistence-test
+
+      - name: Test all six adaptive widget layouts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_layout_test.cpp -o /tmp/desknx-widget-layout-test
+          /tmp/desknx-widget-layout-test
+
+      - name: Test visual policy separation for SOCOMA and 0.1
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/theme_visual_policy_test.cpp -o /tmp/desknx-theme-policy-test
+          /tmp/desknx-theme-policy-test
+
+      - name: Test widget configuration persistence and validation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_config_test.cpp -o /tmp/desknx-widget-config-test
+          /tmp/desknx-widget-config-test
+
+      - name: Test SteamGridDB title matching and cache behavior
+        run: |
+          c++ -std=c++17 -Iinclude tests/steamgriddb_client_test.cpp source/SteamGridDbClient.cpp $(pkg-config --cflags --libs libcurl) -o /tmp/desknx-steamgriddb-client-test
+          /tmp/desknx-steamgriddb-client-test
+          c++ -std=c++17 -Isource tests/steamgriddb_cache_test.cpp source/SteamGridDbCache.cpp -o /tmp/desknx-steamgriddb-cache-test
+          /tmp/desknx-steamgriddb-cache-test
+
+      - name: Test signed Nextendo game catalog verification
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_game_catalog_test.cpp source/NextendoGameCatalog.cpp $(pkg-config --cflags --libs libsodium libcurl) -o /tmp/desknx-nextendo-game-catalog-test
+          /tmp/desknx-nextendo-game-catalog-test
 
       - name: Test IPC protocol validation boundaries
         run: |
@@ -72,6 +207,24 @@ jobs:
             tests/backend_machine_test.cpp projects/common/source/BackendMachine.cpp \
             -o /tmp/desknx-backend-machine-test
           /tmp/desknx-backend-machine-test
+
+      - name: Test pending runtime operation gate
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/pending_operation_gate_test.cpp -o /tmp/desknx-pending-operation-test
+          /tmp/desknx-pending-operation-test
+
+      - name: Test application lifecycle completion policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/application_lifecycle_policy_test.cpp -o /tmp/desknx-application-lifecycle-test
+          /tmp/desknx-application-lifecycle-test
+
+      - name: Test sleep and wake recovery policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/sleep_recovery_policy_test.cpp -o /tmp/desknx-sleep-recovery-test
+          /tmp/desknx-sleep-recovery-test
 
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
@@ -115,6 +268,40 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
+
+      - name: Test SD mount generations commit arbitration and retry backoff
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_control_plane_test.cpp -o /tmp/desknx-storage-control-test
+          /tmp/desknx-storage-control-test
+
+      - name: Test versioned storage migration dry-run and validation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_migration_test.cpp -o /tmp/desknx-storage-migration-test
+          /tmp/desknx-storage-migration-test
+
+      - name: Test production workspace and settings migration adapters
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/storage_migration_adapters_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-storage-migration-adapters-test
+          /tmp/desknx-storage-migration-adapters-test
+
+      - name: Test unified workspace snapshot transactions and recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/workspace_storage_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-workspace-storage-test
+          /tmp/desknx-workspace-storage-test
+
+      - name: Test production persistence recovery and injected failures
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/production_persistence_test.cpp source/Layout.cpp -o /tmp/desknx-production-persistence-test
+          /tmp/desknx-production-persistence-test
+
+      - name: Validate package runtime assets
+        run: python3 scripts/check-svg-assets.py assets/icons
 
       - name: Build native standalone NRO
         run: |

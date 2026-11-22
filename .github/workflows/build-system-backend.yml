@@ -30,6 +30,23 @@ on:
       - "Makefile.switch"
       - ".github/workflows/build-system-backend.yml"
 
+  pull_request:
+    paths:
+      - "projects/sSystem/**"
+      - "projects/DeskNXMenu/**"
+      - "projects/hbloader/**"
+      - "projects/common/**"
+      - "scripts/**"
+      - ".gitignore"
+      - "tests/**"
+      - "docs/**"
+      - "THIRD_PARTY.md"
+      - "README.md"
+      - "source/**"
+      - "Makefile"
+      - "Makefile.switch"
+      - ".github/workflows/build-system-backend.yml"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -52,6 +69,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install host-test development headers
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends zlib1g-dev
+
       - name: Verify Switch curl dependency
         run: test -s /opt/devkitpro/portlibs/switch/lib/libcurl.a
 
@@ -65,6 +87,31 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
+
+      - name: Test bounded recursive NRO scanner
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nro_scanner_test.cpp -o /tmp/desknx-nro-scanner-test
+          /tmp/desknx-nro-scanner-test
+
+      - name: Test visual geometry and batched editor grid
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_geometry_test.cpp -o /tmp/desknx-visual-geometry-test
+          /tmp/desknx-visual-geometry-test
+
+      - name: Test unified typography, UTF-8 layout and workspace chrome contracts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_contracts_test.cpp -o /tmp/desknx-visual-contracts-test
+          /tmp/desknx-visual-contracts-test
+
+      - name: Test all six adaptive widget layouts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/widget_layout_test.cpp -o /tmp/desknx-widget-layout-test
+          /tmp/desknx-widget-layout-test
+
+      - name: Test visual policy separation for SOCOMA and 0.1
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/theme_visual_policy_test.cpp -o /tmp/desknx-theme-policy-test
+          /tmp/desknx-theme-policy-test
 
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
@@ -99,6 +146,50 @@ jobs:
             tests/backend_machine_test.cpp projects/common/source/BackendMachine.cpp \
             -o /tmp/desknx-backend-machine-test
           /tmp/desknx-backend-machine-test
+
+      - name: Test pending runtime operation gate
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/pending_operation_gate_test.cpp -o /tmp/desknx-pending-operation-test
+          /tmp/desknx-pending-operation-test
+
+      - name: Test application lifecycle completion policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/application_lifecycle_policy_test.cpp -o /tmp/desknx-application-lifecycle-test
+          /tmp/desknx-application-lifecycle-test
+
+      - name: Test sleep and wake recovery policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
+            tests/sleep_recovery_policy_test.cpp -o /tmp/desknx-sleep-recovery-test
+          /tmp/desknx-sleep-recovery-test
+
+      - name: Test unified workspace snapshot transactions and recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/workspace_storage_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-workspace-storage-test
+          /tmp/desknx-workspace-storage-test
+
+      - name: Test SD mount generations commit arbitration and retry backoff
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_control_plane_test.cpp -o /tmp/desknx-storage-control-test
+          /tmp/desknx-storage-control-test
+
+      - name: Test versioned storage migration dry-run and validation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_migration_test.cpp -o /tmp/desknx-storage-migration-test
+          /tmp/desknx-storage-migration-test
+
+      - name: Test production workspace and settings migration adapters
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
+            tests/storage_migration_adapters_test.cpp source/Layout.cpp \
+            -o /tmp/desknx-storage-migration-adapters-test
+          /tmp/desknx-storage-migration-adapters-test
 
       - name: Test installer and uninstaller rollback with injected rename failures
         run: bash tests/test-recovery.sh

@@ -19,6 +19,11 @@
 using namespace desknx::model;
 
 int main() {
+    assert(parseKind("X") == Kind::Nextendo);
+    assert(parseKind("P") == Kind::Nextendo); // legacy Nextendo tile code
+    assert(typeCode(Kind::Nextendo) == "X");
+    assert(parseKind("Q") == Kind::QuickSettings);
+    assert(typeCode(Kind::QuickSettings) == "Q");
     int parsedInt = 0;
     assert(desknx::strict::parseInt32("0", parsedInt) && parsedInt == 0);
     assert(desknx::strict::parseInt32("-2147483648", parsedInt) && parsedInt == (-2147483647 - 1));
@@ -194,23 +199,45 @@ int main() {
         assert(!deleteWorkspace(spaces,active,4));
     }
 
-    // Growing a tile is transactional: an occupied neighbour or the grid edge
-    // rejects the resize without changing its footprint.
+    // Resizing preserves the original position when possible, otherwise
+    // it relocates to the next free origin. A genuinely full grid still fails
+    // atomically and keeps the old dimensions and selection.
     {
         using namespace desknx::workspace_ops;
-        Workspace resizeDesk{"resize-blocked",{}};
+        Workspace resizeDesk{"resize-relocation",{}};
         resizeDesk.tiles.push_back(Tile{Kind::Game,"Target","0100000000000008",0,0,1,1,0});
         resizeDesk.tiles.push_back(Tile{Kind::Nro,"Neighbour","sdmc:/switch/neighbour.nro",1,0,1,1,1});
         int sx=0,sy=0;
-        assert(!resizeSelectedTile(resizeDesk,sx,sy,true));
-        assert(resizeDesk.tiles[0].w==1 && resizeDesk.tiles[0].h==1);
-        assert(sx==0 && sy==0);
+        assert(resizeSelectedTile(resizeDesk,sx,sy,true));
+        assert(resizeDesk.tiles[0].x==2 && resizeDesk.tiles[0].y==0);
+        assert(resizeDesk.tiles[0].w==2 && resizeDesk.tiles[0].h==1);
+        assert(sx==2 && sy==0);
+        assert(!overlap(resizeDesk.tiles[0],resizeDesk.tiles[1]));
+
+        // A valid tile at the last column also relocates when its wider shape
+        // cannot fit at the current origin.
         resizeDesk.tiles.erase(resizeDesk.tiles.begin()+1);
         resizeDesk.tiles[0].x=Columns-1;
+        resizeDesk.tiles[0].w=1;
+        resizeDesk.tiles[0].h=1;
         sx=Columns-1;sy=0;
-        assert(!resizeSelectedTile(resizeDesk,sx,sy,true));
-        assert(resizeDesk.tiles[0].x==Columns-1 &&
-               resizeDesk.tiles[0].w==1 && sx==Columns-1);
+        assert(resizeSelectedTile(resizeDesk,sx,sy,true));
+        assert(resizeDesk.tiles[0].x==0 && resizeDesk.tiles[0].y==1);
+        assert(resizeDesk.tiles[0].w==2 && resizeDesk.tiles[0].h==1);
+        assert(sx==0 && sy==1);
+
+        Workspace fullDesk{"resize-full",{}};
+        fullDesk.tiles.push_back(Tile{Kind::Game,"Target","0100000000000009",0,0,1,1,0});
+        for(int yy=0;yy<Rows;++yy)for(int xx=0;xx<Columns;++xx) {
+            if(xx==0&&yy==0)continue;
+            fullDesk.tiles.push_back(Tile{Kind::Nro,"Filler",
+                "sdmc:/switch/filler.nro",xx,yy,1,1,1});
+        }
+        sx=0;sy=0;
+        assert(!resizeSelectedTile(fullDesk,sx,sy,true));
+        assert(fullDesk.tiles[0].x==0 && fullDesk.tiles[0].y==0);
+        assert(fullDesk.tiles[0].w==1 && fullDesk.tiles[0].h==1);
+        assert(sx==0 && sy==0);
     }
 
     // The Recent widget is intentionally 3x1. It must survive a
@@ -369,6 +396,15 @@ int main() {
     assert(recovered.recoveredTiles == 1);
     assert(recovered.workspaces[0].tiles.size() == 2);
     assert(recovered.workspaces[0].tiles[1].x != 1);
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(true,recovered));
+    desknx::layout::LoadResult clean{};
+    assert(!desknx::layout::shouldRewritePrimaryAfterLoad(true,clean));
+    clean.droppedTiles=1;
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(true,clean));
+    clean={};clean.needsMigration=true;
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(true,clean));
+    clean={};
+    assert(desknx::layout::shouldRewritePrimaryAfterLoad(false,clean));
 
     const std::string unknown =
         "DESKNX3\nA\t0\nD\tLegacy\n"

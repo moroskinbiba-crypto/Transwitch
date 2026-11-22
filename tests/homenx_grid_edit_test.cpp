@@ -3,6 +3,7 @@
 // leave the workspace exactly as it was - a half-applied drag corrupts a layout
 // that is then persisted to the SD card.
 #include <desknx/HomeNXWorkspaceProvider.hpp>
+#include <desknx/WorkspaceOps.hpp>
 
 #include <cassert>
 #include <cstdio>
@@ -52,26 +53,69 @@ void testMoveIntoEmptyCell() {
     assert(provider.activeWorkspace()->tiles[0].w == 1);
 }
 
-void testMoveOntoOccupiedCellIsRefusedAndChangesNothing() {
+void testMoveOntoOccupiedCellUsesNextFreeOrigin() {
     WorkspaceProvider provider = makeProvider();
-    const Workspace before = *provider.activeWorkspace();
 
-    // The 2x1 game occupies (1,0)-(2,0); dropping the clock there must fail.
-    assert(!provider.moveTile(0, 1, 0));
-
+    // The 2x1 game occupies (1,0)-(2,0). The clock requests (1,0),
+    // therefore the next available 1x1 origin is (3,0).
+    assert(provider.moveTile(0, 1, 0));
     const Workspace& after = *provider.activeWorkspace();
-    assert(after.tiles.size() == before.tiles.size());
-    assert(after.tiles[0].x == before.tiles[0].x);
-    assert(after.tiles[0].y == before.tiles[0].y);
+    assert(after.tiles[0].x == 3);
+    assert(after.tiles[0].y == 0);
+    assert(!overlap(after.tiles[0], after.tiles[1]));
 }
 
-void testMoveOffGridIsRefused() {
+void testMoveOffGridRemainsRejected() {
     WorkspaceProvider provider = makeProvider();
-    assert(!provider.moveTile(1, 5, 0));  // 2-wide tile would end at column 7
+    assert(!provider.moveTile(1, 5, 0));  // the 2-wide tile would cross the edge
     assert(!provider.moveTile(1, -1, 0));
-    assert(!provider.moveTile(1, 0, 3));  // below the third row
+    assert(!provider.moveTile(1, 0, 3));
     assert(provider.activeWorkspace()->tiles[1].x == 1);
     assert(provider.activeWorkspace()->tiles[1].y == 0);
+}
+
+void testOccupiedLastColumnWrapsToNextRow() {
+    Workspace desk{"Wrap", {}};
+    desk.tiles.push_back(makeTile(Kind::Clock, "Clock", "widget://clock", 0, 0, 1, 1));
+    desk.tiles.push_back(makeTile(Kind::Nro, "Blocker", "sdmc:/switch/blocker.nro", 5, 0, 1, 1));
+    WorkspaceProvider provider;
+    assert(provider.load(std::vector<Workspace>{desk}, 0));
+
+    // A valid (1x1) request at the last column is occupied. The search wraps
+    // to the next row, rather than leaving the tile where it started.
+    assert(provider.moveTile(0, 5, 0));
+    const Tile& moved = provider.activeWorkspace()->tiles[0];
+    assert(moved.x == 0 && moved.y == 1);
+}
+
+void testMoveWhenWorkspaceIsFullIsAtomic() {
+    Workspace full{"Full", {}};
+    for (int y = 0; y < Rows; ++y) {
+        for (int x = 0; x < Columns; ++x) {
+            full.tiles.push_back(makeTile(Kind::Clock, "Clock",
+                "widget://clock/" + std::to_string(y * Columns + x), x, y, 1, 1));
+        }
+    }
+    WorkspaceProvider provider;
+    assert(provider.load(std::vector<Workspace>{full}, 0));
+    const Workspace before = *provider.activeWorkspace();
+    assert(!provider.moveTile(0, 1, 0));
+    const Workspace& after = *provider.activeWorkspace();
+    assert(after.tiles.size() == before.tiles.size());
+    for (std::size_t i = 0; i < before.tiles.size(); ++i) {
+        assert(after.tiles[i].x == before.tiles[i].x);
+        assert(after.tiles[i].y == before.tiles[i].y);
+    }
+}
+
+void testMoveSelectedTileUsesSameCollisionPolicy() {
+    Workspace desk{"Home", {}};
+    desk.tiles.push_back(makeTile(Kind::Clock, "Clock", "widget://clock", 0, 0, 1, 1));
+    desk.tiles.push_back(makeTile(Kind::Game, "Game", "0100000000001000", 1, 0, 2, 1));
+    int selectedX = 0, selectedY = 0;
+    assert(desknx::workspace_ops::moveSelectedTile(desk, selectedX, selectedY, 1, 0));
+    assert(desk.tiles[0].x == 3 && desk.tiles[0].y == 0);
+    assert(selectedX == 3 && selectedY == 0);
 }
 
 void testMoveToSameCellIsNotAnEdit() {
@@ -96,16 +140,46 @@ void testResizeInPlace() {
     assert(!overlap(clock, desk.tiles[1]));
 }
 
-void testResizeToUnsupportedShapeIsRefused() {
-    WorkspaceProvider provider = makeProvider();
-    const Workspace before = *provider.activeWorkspace();
+void testResizeSupportsPortraitShapeButRejectsUnsupportedWidth() {
+    Workspace desk{"Portrait", {}};
+    desk.tiles.push_back(makeTile(Kind::Game, "Portrait", "0100000000002000", 4, 0, 2, 1));
+    WorkspaceProvider provider;
+    assert(provider.load(std::vector<Workspace>{desk}, 0));
 
-    // 4x1 and 2x3 are not part of the native shape set (1x1, 2x1, 3x1, 2x2, 3x2).
-    assert(!provider.resizeTile(0, 0, 0, 4, 1));
-    assert(!provider.resizeTile(0, 0, 0, 2, 3));
+    // 4x1 remains unsupported, while portrait 2x3 is now a supported game tile.
+    assert(!provider.resizeTile(0, 4, 0, 4, 1));
+    assert(provider.resizeTile(0, 4, 0, 2, 3));
+    assert(provider.activeWorkspace()->tiles[0].w == 2);
+    assert(provider.activeWorkspace()->tiles[0].h == 3);
+}
 
-    assert(provider.activeWorkspace()->tiles[0].w == before.tiles[0].w);
-    assert(provider.activeWorkspace()->tiles[0].h == before.tiles[0].h);
+void testResizeSelectedTileRelocatesWhenExpansionCollides() {
+    Workspace desk{"Resize relocation", {}};
+    desk.tiles.push_back(makeTile(Kind::Clock, "Clock", "widget://clock", 0, 0, 1, 1));
+    desk.tiles.push_back(makeTile(Kind::Nro, "Blocker", "sdmc:/switch/blocker.nro", 1, 0, 1, 1));
+    int selectedX = 0;
+    int selectedY = 0;
+
+    // 1x1 -> 2x1 would overlap the blocker at (1,0). The D-pad path now
+    // relocates to (2,0), matching HomeNXWorkspaceProvider::resizeTile().
+    assert(desknx::workspace_ops::resizeSelectedTile(desk, selectedX, selectedY, true));
+    const Tile& resized = desk.tiles[0];
+    assert(resized.x == 2 && resized.y == 0);
+    assert(resized.w == 2 && resized.h == 1);
+    assert(selectedX == 2 && selectedY == 0);
+    assert(!overlap(resized, desk.tiles[1]));
+}
+
+void testResizeStepRestoresPortraitTwoByThree() {
+    Workspace desk{"Portrait",{}};
+    desk.tiles.push_back(makeTile(Kind::Game,"Portrait","0100000000003000",0,0,3,2));
+    int selectedX=0,selectedY=0;
+    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
+    assert(desk.tiles[0].w==2&&desk.tiles[0].h==3);
+    // The 2x3 portrait format is supported, but 3x3 is outside the 6x3 tile-size set.
+    assert(!desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,true));
+    assert(desknx::workspace_ops::resizeSelectedTile(desk,selectedX,selectedY,false));
+    assert(desk.tiles[0].w==2&&desk.tiles[0].h==2);
 }
 
 void testResizeWithoutRoomIsRefused() {
@@ -207,12 +281,17 @@ void testEditsSurviveSerializeAndReload() {
 
 int main() {
     testMoveIntoEmptyCell();
-    testMoveOntoOccupiedCellIsRefusedAndChangesNothing();
-    testMoveOffGridIsRefused();
+    testMoveOntoOccupiedCellUsesNextFreeOrigin();
+    testMoveOffGridRemainsRejected();
+    testOccupiedLastColumnWrapsToNextRow();
+    testMoveWhenWorkspaceIsFullIsAtomic();
+    testMoveSelectedTileUsesSameCollisionPolicy();
     testMoveToSameCellIsNotAnEdit();
     testMoveOfUnknownTileIsRefused();
     testResizeInPlace();
-    testResizeToUnsupportedShapeIsRefused();
+    testResizeSelectedTileRelocatesWhenExpansionCollides();
+    testResizeSupportsPortraitShapeButRejectsUnsupportedWidth();
+    testResizeStepRestoresPortraitTwoByThree();
     testResizeWithoutRoomIsRefused();
     testResizeThenMoveKeepsGeometryValid();
     testRemoveTile();

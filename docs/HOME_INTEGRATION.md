@@ -95,7 +95,7 @@ Before trying any system install:
 - Firmware slot selection and ECS registration are firmware-sensitive.
 - The IPC currently covers readiness, heartbeat, bounded Busy pause/end, title launch, Homebrew launch and return-to-game; it is not a full replacement for all normal HOME operations or sLaunch command breadth. Host tests cover protocol validation boundaries, but they do not emulate the full qlaunch watchdog state machine.
 - Homebrew launches currently use the library-applet/album slot, so available memory and permissions are limited. Full-RAM donor-slot launches are intentionally disabled.
-- Controller setup, selected-user behavior, suspended-title lifecycle, service initialization, failure recovery and qlaunch NPDM need an expert code review before release.
+- The selected-user path passes an explicit DeskNX profile for titles whose NACP `StartupUserAccount` requests a system user; titles marked `None` retain their own player selector to avoid selector loops. Host tests cover this policy, but actual game handoff still requires physical-console validation for each target HOS/Atmosphère combination. Controller setup, suspended-title lifecycle, service initialization, failure recovery and qlaunch NPDM also remain hardware/release gates.
 - The installer is conservative, but it cannot guarantee recovery if the SD contents are corrupted or the console has unrelated boot problems.
 
 ### Process termination safety
