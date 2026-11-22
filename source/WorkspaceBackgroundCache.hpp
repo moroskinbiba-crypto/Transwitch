@@ -89,7 +89,8 @@ public:
         const auto failed = failedUntil_.find(path);
         if (failed != failedUntil_.end()) {
             if (static_cast<Sint32>(now - failed->second) < 0) {
-                if (highPriority && priorityPath_ == path) priorityPath_.clear();
+                if (highPriority && priorityPath_ == path)
+                    advancePriorityAfterFailure(path);
                 return nullptr;
             }
             failedUntil_.erase(failed);
@@ -138,7 +139,7 @@ public:
         if (!decoded.success || decoded.rgba.empty() ||
             decoded.width <= 0 || decoded.height <= 0) {
             pending_.erase(decoded.path);
-            if (priorityPath_ == decoded.path) priorityPath_.clear();
+            advancePriorityAfterFailure(decoded.path);
             rememberFailure(decoded.path, now);
             return;
         }
@@ -146,7 +147,7 @@ public:
         const std::size_t bytes = decoded.rgba.size();
         if (bytes == 0 || bytes > MaxTextureBytes || !makeRoom(bytes)) {
             pending_.erase(decoded.path);
-            if (priorityPath_ == decoded.path) priorityPath_.clear();
+            advancePriorityAfterFailure(decoded.path);
             rememberFailure(decoded.path, now);
             return;
         }
@@ -156,7 +157,7 @@ public:
             decoded.width * 4, SDL_PIXELFORMAT_RGBA32);
         if (!surface) {
             pending_.erase(decoded.path);
-            if (priorityPath_ == decoded.path) priorityPath_.clear();
+            advancePriorityAfterFailure(decoded.path);
             rememberFailure(decoded.path, now);
             return;
         }
@@ -171,7 +172,7 @@ public:
         if (!texture) {
             ++frameMetrics_.uploadFailures;
             pending_.erase(decoded.path);
-            if (priorityPath_ == decoded.path) priorityPath_.clear();
+            advancePriorityAfterFailure(decoded.path);
             rememberFailure(decoded.path, now);
             return;
         }
@@ -375,6 +376,7 @@ private:
             }
             pending_.insert(path);
             requests_.push_back({path, SDL_GetPerformanceCounter()});
+            if (priorityPath_.empty()) priorityPath_ = path;
         }
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
@@ -494,6 +496,15 @@ private:
         SDL_DestroyTexture(texture);
         frameMetrics_.textureDestroyMs +=
             elapsedMs(started, SDL_GetPerformanceCounter());
+    }
+
+    void advancePriorityAfterFailure(const std::string& failedPath) {
+        if (priorityPath_ != failedPath) return;
+        priorityPath_.clear();
+        if (!mutex_) return;
+        SDL_LockMutex(mutex_);
+        if (!requests_.empty()) priorityPath_ = requests_.front().path;
+        SDL_UnlockMutex(mutex_);
     }
 
     void discardQueuedRequestsExcept(const std::string& keepPath) {
