@@ -5860,9 +5860,10 @@ void drawScreen() {
             fontStats.pendingRasterJobs,fontStats.staleJobsDiscarded);
         text(perfText,176,604,1,MUTED,1060);
         std::snprintf(perfText,sizeof(perfText),
-            "PREP %.2F / FONT OPEN %.2F PEAK (%u) / RASTER %.2F MS",
-            fontStats.textPreparationMs,fontStats.maximumFontOpenMs,
-            fontStats.fontOpenOperations,fontStats.rasterizationMs);
+            "PREP %.2F / OPEN %.2F TOTAL / PEAK %.2F (%u) / RASTER %.2F",
+            fontStats.textPreparationMs,fontStats.fontOpenMs,
+            fontStats.maximumFontOpenMs,fontStats.fontOpenOperations,
+            fontStats.rasterizationMs);
         text(perfText,176,628,1,BLUE,1060);
         std::snprintf(perfText,sizeof(perfText),
             "UPLOAD %.2F / DESTROY %.2F / CLEAR %.2F / EVICT %u / OLD %u",
