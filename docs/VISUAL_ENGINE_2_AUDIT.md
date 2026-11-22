@@ -287,3 +287,16 @@ clip only when SDL accepts the new rectangle, and restores the exact prior state
 before applying its known baseline. These diagnostics can identify renderer-state
 leaks in logs. They do not prove the historical white-screen symptom is fixed; repeated
 modal open/close and sleep/wake checks on actual Switch hardware remain mandatory.
+
+## Render-target recovery policy
+
+The frame-boundary renderer checks now include three state invariants: no off-screen
+render target left active, no clip rectangle enabled, and draw blending restored to
+`SDL_BLENDMODE_BLEND`. A pure policy helper in `RendererStatePolicy.hpp` maps SDL
+snapshots to explicit violation flags and is covered by host tests.
+
+When a stray off-screen target is observed, the frame boundary attempts to restore
+the default screen target before applying clip/blend baseline. Any restore failure is
+reported separately. The normal path does not change the target because it is already
+null. This guards one additional class of accidental blank-frame composition; actual
+Switch modal/sleep/resume verification remains open.

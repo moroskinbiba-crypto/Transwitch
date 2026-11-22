@@ -83,7 +83,9 @@ Successful compilation alone does not close a runtime acceptance item.
 - [x] Add scoped clip and texture-modulation guards to wallpaper, workspace-background,
       tile-artwork and rounded-mask paths.
 - [x] Restore pre-existing SDL clip rectangles in scoped guards and diagnose clip/draw-
-      blend invariant violations at frame boundaries.
+      blend and off-screen render-target invariant violations at frame boundaries.
+- [x] Restore the default screen render target before composition/Present when a stray
+      off-screen target is detected; verify the policy with host tests.
 - [ ] Add regression checks for full-frame recovery after every modal/window path.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [x] Add shared Button variants/states and selectable-row visual contracts; migrate

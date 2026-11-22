@@ -25,6 +25,7 @@
 #include "../include/desknx/ConfirmationDialogLayout.hpp"
 #include "../include/desknx/WindowComponents.hpp"
 #include "../include/desknx/ControlComponents.hpp"
+#include "../include/desknx/RendererStatePolicy.hpp"
 #include "../include/desknx/Typography.hpp"
 #include "../include/desknx/MotionController.hpp"
 
@@ -152,19 +153,51 @@ private:
 
 void diagnoseRendererState(const char* phase) {
     if(!renderer)return;
-    if(SDL_RenderIsClipEnabled(renderer)==SDL_TRUE) {
+    SDL_BlendMode blendMode=SDL_BLENDMODE_NONE;
+    const int blendQuery=SDL_GetRenderDrawBlendMode(renderer,&blendMode);
+    const SDL_bool clipEnabled=SDL_RenderIsClipEnabled(renderer);
+    const bool renderTargetActive=SDL_GetRenderTarget(renderer)!=nullptr;
+    const int actualBlend=blendQuery==0?static_cast<int>(blendMode):-1;
+    const auto violations=desknx::ui::RendererStateViolations({
+        renderTargetActive,clipEnabled==SDL_TRUE,actualBlend
+    },static_cast<int>(SDL_BLENDMODE_BLEND));
+
+    if(violations&desknx::ui::RendererStateRenderTargetActive) {
+        desknx::diag::Write("render","render_target_state_leak",
+            "phase=%s target=offscreen",phase?phase:"unknown");
+    }
+    if(violations&desknx::ui::RendererStateClipEnabled) {
         SDL_Rect clip{};
         SDL_RenderGetClipRect(renderer,&clip);
         desknx::diag::Write("render","clip_state_leak",
             "phase=%s x=%d y=%d w=%d h=%d",
             phase?phase:"unknown",clip.x,clip.y,clip.w,clip.h);
     }
-    SDL_BlendMode blendMode=SDL_BLENDMODE_NONE;
-    if(SDL_GetRenderDrawBlendMode(renderer,&blendMode)==0&&
-       blendMode!=SDL_BLENDMODE_BLEND) {
+    if(violations&desknx::ui::RendererStateBlendMismatch) {
         desknx::diag::Write("render","draw_blend_state_leak",
-            "phase=%s mode=%d",phase?phase:"unknown",
-            static_cast<int>(blendMode));
+            "phase=%s mode=%d expected=%d query_rc=%d",
+            phase?phase:"unknown",actualBlend,
+            static_cast<int>(SDL_BLENDMODE_BLEND),blendQuery);
+    }
+}
+
+void restoreFrameRendererBaseline(const char* phase) {
+    if(!renderer)return;
+    SDL_Texture* activeTarget=SDL_GetRenderTarget(renderer);
+    if(activeTarget) {
+        const int rc=SDL_SetRenderTarget(renderer,nullptr);
+        if(rc!=0) {
+            desknx::diag::Write("render","render_target_restore_failed",
+                "phase=%s rc=%d",phase?phase:"unknown",rc);
+        }
+    }
+    if(SDL_RenderSetClipRect(renderer,nullptr)!=0) {
+        desknx::diag::Write("render","clip_restore_failed",
+            "phase=%s",phase?phase:"unknown");
+    }
+    if(SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND)!=0) {
+        desknx::diag::Write("render","draw_blend_restore_failed",
+            "phase=%s",phase?phase:"unknown");
     }
 }
 
@@ -2729,8 +2762,7 @@ void drawScreen() {
     // Report state left behind by the previous frame before establishing
     // the known full-frame baseline.
     diagnoseRendererState("frame_begin");
-    SDL_RenderSetClipRect(renderer,nullptr);
-    SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+    restoreFrameRendererBaseline("frame_begin");
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     bool catalogueNsAvailableNow=false;
@@ -3442,8 +3474,7 @@ void drawScreen() {
     }
     // Diagnose state left by this frame before restoring the baseline for Present.
     diagnoseRendererState("frame_end");
-    SDL_RenderSetClipRect(renderer,nullptr);
-    SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+    restoreFrameRendererBaseline("frame_end");
     if(gFrameRenderStartedCounter!=0) {
         const Uint64 beforePresent=SDL_GetPerformanceCounter();
         gRuntimeMetrics.record(desknx::runtime::Metric::RenderTime,
