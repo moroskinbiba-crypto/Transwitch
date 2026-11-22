@@ -46,17 +46,46 @@ When a workspace becomes active, the selected tile is queued at high decode prio
 The Diagnostics panel reports measurements from the previous completed frame so
 that the panel does not display a partially collected sample:
 
-- Text rendering: cache hits/misses, newly created text textures, work deferred
-  by the per-frame budget, text preparation, TTF rasterization and SDL texture
-  upload time.
+- Text rendering: cache hits/misses, newly created text textures, pending raster
+  jobs, queue insertions, TTF text preparation/rasterization, SDL texture upload,
+  texture eviction and full-cache clear duration.
 - Artwork cache: decoded results, maximum decode duration and queue wait for
   consumed results, successful/failed texture uploads, and upload duration.
+- Workspace backgrounds: decode and queue-wait peaks, texture upload, texture
+  destruction/eviction and full-cache clear duration.
 
-Artwork decoding remains on the worker. SDL surface wrapping and renderer
-texture creation remain on the UI thread. The one-upload-per-frame policy and
-existing queue/memory limits are deliberately unchanged by instrumentation.
+### Text raster queue (VE-2.1b)
+
+A cache miss in FontRenderer::drawImpl() now creates a bounded request instead
+of calling TTF_SizeUTF8, TTF_RenderUTF8_Blended and
+SDL_CreateTextureFromSurface during tile/window traversal. The next
+beginFrame() pumps at most two requests, with a 2.5 ms soft time budget after
+the first request and a hard limit of two texture creations. Font-face opening
+for a missing system size is also performed by this pump, not by drawImpl().
+The existing custom-font file reader stays asynchronous, and font-generation
+changes invalidate queued work from the previous face. A cached system-face
+label can remain visible while the matching custom-face texture is prepared.
+
+TTF rasterization deliberately remains on the renderer/UI thread: moving SDL_ttf
+calls to a second thread without a separately owned and validated font runtime
+would introduce cross-thread font lifetime and FreeType synchronization risks.
+The queue removes expensive TTF work from the UI traversal and spreads cache
+warming over frames; it does not claim that rasterization itself is performed
+off-thread. A single unusually expensive glyph run can still exceed the soft
+budget, which is why the console metrics remain necessary.
+
+### Workspace-background scheduling
+
+Background files continue to be read and decoded on the existing low-priority
+worker, while surface wrapping, SDL texture upload and texture destruction stay
+on the renderer thread. The currently requested workspace background is queued
+ahead of fallback wallpaper work; obsolete queued backgrounds are discarded,
+and a completed result that no longer matches the active priority path is not
+uploaded. The cache still retains its existing five-texture / 32 MiB limits and
+one decoded-result handoff.
+
 These counters explain where a frame spent time; they do not by themselves
-prove that a new limit or worker count would improve Switch performance.
+prove that a new worker count or memory limit would improve Switch performance.
 
 ## Validation
 
