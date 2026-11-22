@@ -3072,13 +3072,44 @@ bool writeActiveWorkspaceSnapshot(const LayoutSaveJob& job) {
 
 int layoutSaveThreadMain(void* context) {
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
-    const auto* job=static_cast<const LayoutSaveJob*>(context);
+    auto* job=static_cast<LayoutSaveJob*>(context);
     LayoutSaveOutcome outcome{};
-    outcome.markerOnly=job->markerOnly;
-    outcome.shapeHash=job->shapeHash;
+    outcome.markerOnly=job?job->markerOnly:false;
 
-    bool primaryOk=true;
-    if(job->rewritePrimary) {
+    if(!job) {
+        std::snprintf(outcome.message,sizeof(outcome.message),"LAYOUT SAVE JOB MISSING");
+        layoutSaveOutcome=outcome;
+        SDL_AtomicSet(&layoutSaveDone,1);
+        return 0;
+    }
+
+    // Serialize an immutable workspace snapshot on this low-priority worker.
+    // No layout traversal, string formatting or hashing runs in the input loop.
+    job->serializedLayout=desknx::layout::serialize(
+        job->workspaceSnapshot,job->activeWorkspace);
+    const std::string shape=desknx::layout::serialize(job->workspaceSnapshot,0);
+    job->activeWorkspaceState=desknx::layout::serializeActiveWorkspaceState(
+        job->workspaceSnapshot,job->activeWorkspace);
+
+    bool primaryOk=!job->serializedLayout.empty()&&!shape.empty()&&
+                   !job->activeWorkspaceState.empty();
+    if(!primaryOk) {
+        std::snprintf(outcome.message,sizeof(outcome.message),
+                      "LAYOUT INVALID; SAVE REFUSED");
+    } else {
+        job->shapeHash=desknx::model::stableHash(shape);
+        outcome.shapeHash=job->shapeHash;
+        struct stat primaryStat{};
+        const bool primaryExists=stat(CFG_FILE,&primaryStat)==0&&
+            S_ISREG(primaryStat.st_mode);
+        job->rewritePrimary=!job->markerOnly&&
+            (job->primaryNeedsRewrite||!primaryExists||
+             !job->persistedShapeKnown||
+             job->persistedShapeHash!=job->shapeHash||
+             job->needsMigration);
+    }
+
+    if(primaryOk&&job->rewritePrimary) {
         mkdir("sdmc:/switch",0777);
         mkdir(CFG_DIR,0777);
         std::ofstream out(CFG_TMP,std::ios::binary|std::ios::trunc);
@@ -3128,18 +3159,18 @@ int layoutSaveThreadMain(void* context) {
 
     if(primaryOk) {
         outcome.markerWritten=writeActiveWorkspaceSnapshot(*job);
-        // A full layout snapshot already contains the active index. If its
-        // separate marker cannot be published, remove the stale marker so it
-        // cannot override the freshly written layout on the next boot.
-        if(job->rewritePrimary && !outcome.markerWritten)
+        // A full layout snapshot already carries the active index. If its
+        // small marker cannot be published, remove the stale marker so it
+        // cannot override the just-published layout during the next boot.
+        if(job->rewritePrimary&&!outcome.markerWritten)
             (void)std::remove(ACTIVE_WORKSPACE_FILE);
         outcome.success=outcome.primaryWritten||outcome.markerWritten;
         if(outcome.success) {
             std::snprintf(outcome.message,sizeof(outcome.message),
                 outcome.markerWritten ? "LAYOUT SAVED" :
                 (outcome.primaryWritten ? "LAYOUT SAVED; WORKSPACE MARKER RETRY" :
-                                          "WORKSPACE SAVE COMPLETE"));
-        } else if(outcome.message[0]=='\0') {
+                                           "WORKSPACE SAVE COMPLETE"));
+        } else if(outcome.message[0]=='\\0') {
             std::snprintf(outcome.message,sizeof(outcome.message),
                           "WORKSPACE SAVE FAILED");
         }
@@ -3151,6 +3182,41 @@ int layoutSaveThreadMain(void* context) {
 }
 } // namespace
 
+bool startLayoutSaveSnapshot(bool markerOnly) {
+    if(!sdMounted||layoutSaveBlocked||desks.empty()||deskIndex<0||
+       deskIndex>=static_cast<int>(desks.size()))return false;
+    if(layoutSaveThread||activeLayoutSaveJob)return false;
+
+    auto job=std::make_unique<LayoutSaveJob>();
+    // This is the only model copy on the main thread. Text conversion, hashing,
+    // file metadata checks, writes and fsdevCommitDevice all run off-thread.
+    job->workspaceSnapshot=desks;
+    job->activeWorkspace=deskIndex;
+    job->previousActiveMarker=persistedActiveWorkspaceMarker;
+    job->previousMarkerKnown=activeWorkspaceMarkerKnown;
+    job->persistedShapeHash=persistedLayoutShapeHash;
+    job->persistedShapeKnown=persistedLayoutShapeKnown;
+    job->primaryNeedsRewrite=layoutPrimaryNeedsRewrite;
+    job->needsMigration=layoutNeedsMigration;
+    job->markerOnly=markerOnly;
+
+    activeLayoutSaveJob=std::move(job);
+    layoutSaveOutcome=LayoutSaveOutcome{};
+    SDL_AtomicSet(&layoutSaveDone,0);
+    layoutSaveThread=SDL_CreateThread(layoutSaveThreadMain,
+        "DeskNX layout persistence",activeLayoutSaveJob.get());
+    if(!layoutSaveThread) {
+        activeLayoutSaveJob.reset();
+        desknx::diag::Write("layout","async_save_thread_failed",
+                            "fallback=retry_after_debounce");
+        return false;
+    }
+    desknx::diag::Write("layout","async_save_started",
+        "marker_only=%d workspaces=%zu",
+        markerOnly?1:0,desks.size());
+    return true;
+}
+
 bool enqueueLayoutSave(bool markerOnly) {
     if(!sdMounted) {
         setStatus("SAVE FAILED: SD CARD NOT MOUNTED",3000);
@@ -3160,138 +3226,103 @@ bool enqueueLayoutSave(bool markerOnly) {
         setStatus("SAVE BLOCKED: PRESERVE LAYOUT BACKUP",3500);
         return false;
     }
-    if(desks.empty() || deskIndex<0 ||
-       deskIndex>=static_cast<int>(desks.size())) return false;
-
-    // First retire a finished request. A worker only receives immutable
-    // serialized strings; it never touches the live workspace vector.
-    pumpAsyncLayoutSaver(false);
-
-    const std::string serialized=desknx::layout::serialize(desks,deskIndex);
-    const std::string shape=desknx::layout::serialize(desks,0);
-    const std::string activeState=
-        desknx::layout::serializeActiveWorkspaceState(desks,deskIndex);
-    if(serialized.empty()||shape.empty()||activeState.empty()) {
-        setStatus("LAYOUT INVALID; SAVE REFUSED",3000);
+    if(desks.empty()||deskIndex<0||deskIndex>=static_cast<int>(desks.size()))
         return false;
-    }
 
-    const uint64_t shapeHash=desknx::model::stableHash(shape);
-    struct stat primaryStat{};
-    const bool primaryExists=
-        stat(CFG_FILE,&primaryStat)==0&&S_ISREG(primaryStat.st_mode);
-    const bool rewritePrimary=!markerOnly &&
-        (layoutPrimaryNeedsRewrite||!primaryExists||
-         !persistedLayoutShapeKnown||persistedLayoutShapeHash!=shapeHash||
-         layoutNeedsMigration);
-
-    auto job=std::make_unique<LayoutSaveJob>();
-    job->serializedLayout=serialized;
-    job->activeWorkspaceState=activeState;
-    job->previousActiveMarker=persistedActiveWorkspaceMarker;
-    job->previousMarkerKnown=activeWorkspaceMarkerKnown;
-    job->shapeHash=shapeHash;
-    job->rewritePrimary=rewritePrimary;
-    job->markerOnly=markerOnly;
-
-    if(layoutSaveThread || activeLayoutSaveJob) {
-        // Coalesce bursts of tile edits to the latest complete layout. The
-        // active snapshot remains immutable until its worker exits.
-        const bool replaced=static_cast<bool>(pendingLayoutSaveJob);
-        pendingLayoutSaveJob=std::move(job);
-        desknx::diag::Write("layout","async_save_queued",
-            "marker_only=%d pending_replaced=%d",
-            markerOnly?1:0,replaced?1:0);
-        return true;
-    }
-
-    activeLayoutSaveJob=std::move(job);
-    layoutSaveOutcome=LayoutSaveOutcome{};
-    SDL_AtomicSet(&layoutSaveDone,0);
-    layoutSaveThread=SDL_CreateThread(layoutSaveThreadMain,
-        "DeskNX layout persistence",activeLayoutSaveJob.get());
-    if(!layoutSaveThread) {
-        activeLayoutSaveJob.reset();
-        setStatus("BACKGROUND SAVE THREAD UNAVAILABLE",3500);
-        desknx::diag::Write("layout","async_save_thread_failed",
-                            "fallback=not_started");
-        return false;
-    }
+    // Every edit updates only a deadline and dirty-kind flag. Bursts of D-pad,
+    // resize, drag and widget changes collapse into one immutable snapshot.
+    layoutSaveScheduler.request(SDL_GetTicks(),markerOnly?550u:450u,markerOnly);
     return true;
 }
 
 void pumpAsyncLayoutSaver(bool waitForCompletion) {
-    if(layoutSaveThread &&
-       (waitForCompletion || SDL_AtomicGet(&layoutSaveDone))) {
-        if(waitForCompletion && !SDL_AtomicGet(&layoutSaveDone))
-            SDL_WaitThread(layoutSaveThread,nullptr);
-        else
-            SDL_WaitThread(layoutSaveThread,nullptr);
-        layoutSaveThread=nullptr;
+    if(waitForCompletion)
+        layoutSaveScheduler.forceDue(SDL_GetTicks());
 
-        const LayoutSaveOutcome outcome=layoutSaveOutcome;
-        const bool hadJob=static_cast<bool>(activeLayoutSaveJob);
-        const bool markerOnly=hadJob&&activeLayoutSaveJob->markerOnly;
-        const std::string completedMarker=
-            hadJob?activeLayoutSaveJob->activeWorkspaceState:std::string{};
-        if(outcome.success) {
-            if(outcome.primaryWritten) {
-                persistedLayoutShapeHash=outcome.shapeHash;
-                persistedLayoutShapeKnown=true;
-                layoutPrimaryNeedsRewrite=false;
-                layoutNeedsMigration=false;
-                layoutLoaded=true;
-            }
-            if(outcome.markerWritten) {
-                persistedActiveWorkspaceMarker=completedMarker;
-                activeWorkspaceMarkerKnown=true;
+    for(;;) {
+        if(layoutSaveThread) {
+            if(!waitForCompletion&&!SDL_AtomicGet(&layoutSaveDone))
+                return;
+            SDL_WaitThread(layoutSaveThread,nullptr);
+            layoutSaveThread=nullptr;
+
+            const LayoutSaveOutcome outcome=layoutSaveOutcome;
+            const bool hadJob=static_cast<bool>(activeLayoutSaveJob);
+            const bool markerOnly=hadJob&&activeLayoutSaveJob->markerOnly;
+            const std::string completedMarker=
+                hadJob?activeLayoutSaveJob->activeWorkspaceState:std::string{};
+            if(outcome.success) {
+                if(outcome.primaryWritten) {
+                    persistedLayoutShapeHash=outcome.shapeHash;
+                    persistedLayoutShapeKnown=true;
+                    layoutPrimaryNeedsRewrite=false;
+                    layoutNeedsMigration=false;
+                    layoutLoaded=true;
+                }
+                if(outcome.markerWritten) {
+                    persistedActiveWorkspaceMarker=completedMarker;
+                    activeWorkspaceMarkerKnown=true;
+                } else {
+                    activeWorkspaceMarkerPending=true;
+                    activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
+                }
+                if(outcome.markerWritten&&activeWorkspaceMarkerPending&&
+                   desknx::layout::serializeActiveWorkspaceState(desks,deskIndex)==
+                       completedMarker) {
+                    activeWorkspaceMarkerPending=false;
+                    activeWorkspaceMarkerDue=0;
+                }
+                if(outcome.message[0])setStatus(outcome.message,1800);
             } else {
-                activeWorkspaceMarkerPending=true;
-                activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
+                if(outcome.blocked)layoutSaveBlocked=true;
+                if(markerOnly||(outcome.primaryWritten&&!outcome.markerWritten)) {
+                    activeWorkspaceMarkerPending=true;
+                    activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
+                }
+                setStatus(outcome.message[0]?outcome.message:
+                          "BACKGROUND SAVE FAILED",4000);
+                desknx::diag::Write("layout","async_save_failed",
+                    "marker_only=%d blocked=%d",
+                    markerOnly?1:0,outcome.blocked?1:0);
             }
-            if(outcome.markerWritten && activeWorkspaceMarkerPending &&
-               desknx::layout::serializeActiveWorkspaceState(desks,deskIndex)==
-                    completedMarker) {
-                activeWorkspaceMarkerPending=false;
-                activeWorkspaceMarkerDue=0;
-            }
-            if(outcome.message[0])setStatus(outcome.message,1800);
-        } else {
-            if(outcome.blocked)layoutSaveBlocked=true;
-            if(markerOnly || (outcome.primaryWritten && !outcome.markerWritten)) {
-                activeWorkspaceMarkerPending=true;
-                activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
-            }
-            setStatus(outcome.message[0]?outcome.message:"BACKGROUND SAVE FAILED",4000);
-        }
-        desknx::diag::Write("layout","async_save_finished",
-            "success=%d primary=%d marker=%d blocked=%d marker_only=%d",
-            outcome.success?1:0,outcome.primaryWritten?1:0,
-            outcome.markerWritten?1:0,outcome.blocked?1:0,
-            markerOnly?1:0);
-        activeLayoutSaveJob.reset();
-    }
-
-    if(!layoutSaveThread && !activeLayoutSaveJob && pendingLayoutSaveJob) {
-        activeLayoutSaveJob=std::move(pendingLayoutSaveJob);
-        pendingLayoutSaveJob.reset();
-        layoutSaveOutcome=LayoutSaveOutcome{};
-        SDL_AtomicSet(&layoutSaveDone,0);
-        layoutSaveThread=SDL_CreateThread(layoutSaveThreadMain,
-            "DeskNX layout persistence",activeLayoutSaveJob.get());
-        if(!layoutSaveThread) {
+            desknx::diag::Write("layout","async_save_finished",
+                "success=%d primary=%d marker=%d blocked=%d marker_only=%d",
+                outcome.success?1:0,outcome.primaryWritten?1:0,
+                outcome.markerWritten?1:0,outcome.blocked?1:0,
+                markerOnly?1:0);
             activeLayoutSaveJob.reset();
-            pendingLayoutSaveJob.reset();
-            setStatus("BACKGROUND SAVE THREAD UNAVAILABLE",3500);
-            desknx::diag::Write("layout","async_save_thread_failed",
-                                "fallback=queued_request_dropped");
         }
+
+        if(!layoutSaveScheduler.pending())
+            return;
+        const Uint32 now=SDL_GetTicks();
+        if(!waitForCompletion&&!layoutSaveScheduler.ready(now))
+            return;
+
+        const auto kind=layoutSaveScheduler.take();
+        const bool markerOnly=kind==
+            desknx::persistence::LayoutSaveKind::MarkerOnly;
+        if(!startLayoutSaveSnapshot(markerOnly)) {
+            layoutSaveScheduler.request(SDL_GetTicks(),2500u,markerOnly);
+            setStatus("BACKGROUND SAVE RETRY QUEUED",1800);
+            return;
+        }
+        if(!waitForCompletion)
+            return;
+        // In drain mode, wait for the worker, reap it, then also flush any
+        // newer coalesced request that arrived before the drain began.
     }
 }
 
 void drainAsyncLayoutSaver() {
-    while(layoutSaveThread || activeLayoutSaveJob || pendingLayoutSaveJob)
+    layoutSaveScheduler.forceDue(SDL_GetTicks());
+    while(layoutSaveThread||activeLayoutSaveJob||layoutSaveScheduler.pending()) {
         pumpAsyncLayoutSaver(true);
+        if(!layoutSaveThread&&!activeLayoutSaveJob&&
+           layoutSaveScheduler.pending()&&
+           !layoutSaveScheduler.ready(SDL_GetTicks()))
+            break; // worker creation failed; caller may use checked sync fallback
+    }
 }
 
 bool loadLayoutFrom(const char* path) {
