@@ -99,5 +99,16 @@ int main() {
         offset += decoded.length;
     }
 
+    // Bitmap fallback width uses Unicode code points, not UTF-8 bytes.
+    assert(desknx::ui::MeasureBitmapTextWidth("ABC",1)==18);
+    assert(desknx::ui::MeasureBitmapTextWidth(u8"Ёж",1)==12);
+    assert(desknx::ui::MeasureBitmapTextWidth(u8"Привет",2)==72);
+    assert(desknx::ui::MeasureBitmapTextWidth("A\\tB",1)==30);
+    assert(desknx::ui::MeasureBitmapTextWidth("A\\r\\nB",1)==12);
+    assert(desknx::ui::MeasureBitmapTextWidth("",1)==0);
+    assert(desknx::ui::MeasureBitmapTextWidth("ABC",0)==0);
+    const std::string invalidBitmapUtf8{"\\xD0",1};
+    assert(desknx::ui::MeasureBitmapTextWidth(invalidBitmapUtf8,1)==6);
+
     return 0;
 }
