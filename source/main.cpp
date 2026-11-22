@@ -234,17 +234,26 @@ SDL_atomic_t layoutSaveDone{};
 LayoutSaveOutcome layoutSaveOutcome{};
 desknx::persistence::CoalescedLayoutSaveScheduler layoutSaveScheduler{2000};
 
-enum class AuxiliarySaveSlot : std::size_t { Favorites, History, CalendarNotes, GameNames, Count };
+enum class AuxiliarySaveSlot : std::size_t {
+    Favorites, History, CalendarNotes, GameNames,
+    SteamGridPreview, SteamGridArtwork, GameIcon, Count
+};
 constexpr std::size_t AuxiliarySaveSlotCount=static_cast<std::size_t>(AuxiliarySaveSlot::Count);
 struct AuxiliaryFileSaveJob {
     std::string contents;
+    std::string sourcePath;
     std::string temporaryPath;
     std::string targetPath;
     std::string backupPath;
     std::string directory;
+    std::vector<std::string> obsoletePaths;
     std::string tempCommitOperation;
     std::string publishCommitOperation;
     std::string failureMessage;
+    std::string invalidateGameData;
+    std::uint64_t maximumSourceBytes{2u*1024u*1024u};
+    bool copySourceToTemporary{false};
+    bool commitOnly{false};
 };
 struct AuxiliarySaveBatch {
     std::array<AuxiliaryFileSaveJob,AuxiliarySaveSlotCount> jobs{};
@@ -620,6 +629,13 @@ bool writeAuxiliaryFileSnapshot(const AuxiliaryFileSaveJob& job,
         return false;
     };
     if(!sdMounted)return fail("SD CARD UNAVAILABLE");
+    if(job.commitOnly) {
+        if(!commitSdCard(job.publishCommitOperation.c_str()))
+            return fail(job.failureMessage.empty()
+                ?"BACKGROUND SD COMMIT FAILED":job.failureMessage.c_str());
+        return true;
+    }
+
     mkdir("sdmc:/switch",0777);
     mkdir(CFG_DIR,0777);
     if(!job.directory.empty())mkdir(job.directory.c_str(),0777);
@@ -627,9 +643,37 @@ bool writeAuxiliaryFileSnapshot(const AuxiliaryFileSaveJob& job,
     std::ofstream out(job.temporaryPath,std::ios::binary|std::ios::trunc);
     if(!out)return fail(job.failureMessage.empty()
         ?"BACKGROUND SAVE OPEN FAILED":job.failureMessage.c_str());
-    out.write(job.contents.data(),static_cast<std::streamsize>(job.contents.size()));
+
+    bool good=false;
+    if(job.copySourceToTemporary) {
+        struct stat sourceStat{};
+        if(lstat(job.sourcePath.c_str(),&sourceStat)!=0||
+           !S_ISREG(sourceStat.st_mode)||sourceStat.st_size<=0||
+           static_cast<std::uint64_t>(sourceStat.st_size)>job.maximumSourceBytes) {
+            out.close();
+            std::remove(job.temporaryPath.c_str());
+            return fail("SOURCE FILE UNAVAILABLE OR TOO LARGE");
+        }
+        std::ifstream source(job.sourcePath,std::ios::binary);
+        if(!source) {
+            out.close();
+            std::remove(job.temporaryPath.c_str());
+            return fail("SOURCE FILE READ FAILED");
+        }
+        char buffer[8192];
+        while(source) {
+            source.read(buffer,sizeof(buffer));
+            const std::streamsize bytes=source.gcount();
+            if(bytes>0)out.write(buffer,bytes);
+            if(!out)break;
+        }
+        good=!source.bad()&&out.good();
+    } else {
+        out.write(job.contents.data(),static_cast<std::streamsize>(job.contents.size()));
+        good=out.good();
+    }
     out.flush();
-    const bool good=out.good();
+    good=good&&out.good();
     out.close();
     if(!good) {
         std::remove(job.temporaryPath.c_str());
@@ -649,12 +693,13 @@ bool writeAuxiliaryFileSnapshot(const AuxiliaryFileSaveJob& job,
         return fail(job.failureMessage.empty()
             ?"BACKGROUND SAVE PUBLISH FAILED":job.failureMessage.c_str());
     }
+    for(const auto& obsolete:job.obsoletePaths)
+        if(obsolete!=job.targetPath)std::remove(obsolete.c_str());
     if(!commitSdCard(job.publishCommitOperation.c_str()))
         return fail(job.failureMessage.empty()
             ?"BACKGROUND PUBLISH COMMIT FAILED; BACKUP KEPT":job.failureMessage.c_str());
     return true;
 }
-
 int auxiliarySaveThreadMain(void* context) {
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     const auto* batch=static_cast<const AuxiliarySaveBatch*>(context);
