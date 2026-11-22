@@ -418,7 +418,7 @@ private:
 
     static constexpr std::size_t MaxEntries = 64;
     static constexpr std::size_t MaxTextureBytes = 32u * 1024u * 1024u;
-    static constexpr Uint32 CacheIdleLifetimeMs = 45000;
+    static constexpr Uint32 CacheIdleLifetimeMs = 120000;
     static constexpr Uint32 CachePruneIntervalMs = 5000;
     static constexpr Uint32 RequestRetryThrottleMs = 1500;
     static constexpr Uint32 QueueRetryThrottleMs = 180;
