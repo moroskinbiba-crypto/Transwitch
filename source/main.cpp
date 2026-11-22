@@ -4431,6 +4431,27 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 if(dataB)text(joycons,left,r.y+91,1,WHITE,right);
                 else text(powerLabel,left,r.y+91,1,powerConnected?GREEN:MUTED,right);
                 if(banner3)label(powerLabel,r.y+112);
+            } else if(dashboard) {
+                const int mid=left+innerWidth*3/5;
+                text(battery>=0?std::to_string(battery)+"%":"N/A",
+                     left,r.y+43,6,WHITE,mid-8);
+                if(dataA)progress(r.y+142,battery);
+                text(battery<0?"UNAVAILABLE":
+                     battery>=80?"HIGH CHARGE":battery>=20?"NORMAL":"LOW BATTERY",
+                     left,r.y+176,1,battery>=20?GREEN:RED,mid-8);
+                const int sideW=std::max(1,right-mid-8);
+                const int sideH=64;
+                roundRect(mid,r.y+38,sideW,sideH,9,Color{28,42,59,230});
+                roundRect(mid,r.y+112,sideW,sideH,9,Color{28,42,59,230});
+                text(joyconLeft.connected?"JOY-CON L":"JOY-CON L",mid+8,r.y+47,1,MUTED,right);
+                text(joyconLeft.connected?
+                    std::to_string(std::max(0,std::min(100,joyconLeft.level*25)))+"%":"N/A",
+                    mid+8,r.y+70,2,WHITE,right);
+                text("JOY-CON R",mid+8,r.y+121,1,MUTED,right);
+                text(joyconRight.connected?
+                    std::to_string(std::max(0,std::min(100,joyconRight.level*25)))+"%":"N/A",
+                    mid+8,r.y+144,2,WHITE,right);
+                label(powerLabel,r.y+205);
             } else if(portrait) {
                 text(battery>=0?std::to_string(battery)+"%":"N/A",
                      left,r.y+38,5,WHITE,right);
@@ -4470,6 +4491,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             else std::snprintf(cpuText,sizeof(cpuText),"N/A");
             if(systemGpuClockAvailable)std::snprintf(gpuText,sizeof(gpuText),"%u MHz",systemGpuClockHz/1000000u);
             else std::snprintf(gpuText,sizeof(gpuText),"N/A");
+            char batteryText[24]{};
+            if(battery>=0)std::snprintf(batteryText,sizeof(batteryText),"%d%%",battery);
+            else std::snprintf(batteryText,sizeof(batteryText),"N/A");
             const std::string systemHeading=config.style==1?"THERMAL MONITOR":
                 (config.style==2?"CLOCK MONITOR":"SYSTEM MONITOR");
             widgetHeader(desknx::ui::IconId::Monitor,systemHeading,r.y+9);
@@ -4498,9 +4522,9 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             } else if(standard||dashboard||portrait) {
                 // Larger shapes become a true monitor dashboard: standard
                 // shows four core readings, dashboard/portrait expose five.
-                const char* names[]={"SOC TEMP","PCB TEMP","CPU CLOCK","GPU CLOCK","HOS VERSION"};
-                const char* values[]={socText,pcbText,cpuText,gpuText,firmwareText};
-                const int count=standard?4:5;
+                const char* names[]={"SOC TEMP","PCB TEMP","CPU CLOCK","GPU CLOCK","HOS VERSION","BATTERY"};
+                const char* values[]={socText,pcbText,cpuText,gpuText,firmwareText,batteryText};
+                const int count=standard?4:6;
                 const int columns=metrics.gridColumns;
                 const int rows=(count+columns-1)/columns;
                 const int gap=7;
