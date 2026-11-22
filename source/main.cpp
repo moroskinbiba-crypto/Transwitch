@@ -4719,7 +4719,9 @@ void drawScreen() {
         telemetryDemand|=SystemTelemetry::QuickSettingsDemand;
     if(diagnosticsOpen)telemetryDemand|=SystemTelemetry::DiagnosticsDemand;
     static std::uint32_t lastTelemetryDemand=UINT32_MAX;
-    if(telemetryDemand!=lastTelemetryDemand) {
+    // The first startup frame is rendered before the telemetry worker exists.
+    // Do not cache its demand mask until the worker can actually receive it.
+    if(gSystemTelemetryReady&&telemetryDemand!=lastTelemetryDemand) {
         gSystemTelemetry.setDemandMask(telemetryDemand);
         lastTelemetryDemand=telemetryDemand;
     }
