@@ -3137,34 +3137,42 @@ void drawScreen() {
     }
     if(modalStack.contains(desknx::ui::ModalLayer::SystemTools)) {
         drawModalBackdrop(190);
-        drawModalSurface(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
+        const auto& systemToolsLayout=desknx::ui::SystemToolsWindowControls;
+        drawModalSurface(systemToolsLayout.surface.x,systemToolsLayout.surface.y,
+            systemToolsLayout.surface.width,systemToolsLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,25});
         text("TOOLS",146,130,3,WHITE,1020);
         text("Library, recent apps, widgets and system actions.",
              148,168,1,MUTED,1020);
-        struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
+        struct SystemTool { int icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
-            {156,218,4,"APP LIBRARY","INSTALLED GAMES AND HOMEBREW"},
-            {496,218,6,"RECENT","RECENTLY LAUNCHED APPS"},
-            {836,218,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
-            {156,382,5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
-            {496,382,0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
-            {836,382,4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
+            {4,"APP LIBRARY","INSTALLED GAMES AND HOMEBREW"},
+            {6,"RECENT","RECENTLY LAUNCHED APPS"},
+            {3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
+            {5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
+            {0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
+            {4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
-            drawCard({item.x,item.y,288,136},
-                systemMenuIndex==static_cast<int>(toolIndex)
-                    ?desknx::ui::CardVisualState::Focused
-                    :desknx::ui::CardVisualState::Normal);
-            roundRect(item.x+14,item.y+14,54,54,16,
+            const auto bounds=systemToolsLayout.cardRect(static_cast<int>(toolIndex));
+            drawCard(bounds,systemMenuIndex==static_cast<int>(toolIndex)
+                ?desknx::ui::CardVisualState::Focused
+                :desknx::ui::CardVisualState::Normal);
+            roundRect(bounds.x+14,bounds.y+14,54,54,16,
                 systemMenuIndex==static_cast<int>(toolIndex)?
                 Color{54,108,171,255}:Color{38,51,71,255});
-            drawSystemIcon(item.icon,item.x+25,item.y+25,32,WHITE);
-            text(item.title,item.x+82,item.y+23,2,WHITE,item.x+278);
-            text(item.subtitle,item.x+16,item.y+91,1,MUTED,item.x+278);
+            drawSystemIcon(item.icon,bounds.x+25,bounds.y+25,32,WHITE);
+            text(item.title,bounds.x+82,bounds.y+23,2,WHITE,bounds.x+bounds.width-10);
+            text(item.subtitle,bounds.x+16,bounds.y+91,1,MUTED,
+                bounds.x+bounds.width-10);
         }
-        roundRect(1058,136,82,34,10,Color{54,57,66,255});
-        text("B BACK",1074,147,1,WHITE,1130);
+        const desknx::ui::ButtonControl backButton{
+            systemToolsLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B BACK",systemToolsLayout.closeButton.x+16,
+            systemToolsLayout.closeButton.y+11,
+            systemToolsLayout.closeButton.x+systemToolsLayout.closeButton.width-10,
+            desknx::ui::TextRole::Metadata);
         text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::LauncherSettings)) {
@@ -4416,18 +4424,13 @@ void touchInput(const SDL_Event&e) {
     }
     if(activeModal==desknx::ui::ModalLayer::SystemTools ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=1058&&x<=1140&&y>=136&&y<=170){systemMenu=false;return;}
-        if(y>=218&&y<354) {
-            if(x>=156&&x<444)systemMenuIndex=0;
-            else if(x>=496&&x<784)systemMenuIndex=1;
-            else if(x>=836&&x<1124)systemMenuIndex=2;
-            else return;
-        } else if(y>=382&&y<518) {
-            if(x>=156&&x<444)systemMenuIndex=3;
-            else if(x>=496&&x<784)systemMenuIndex=4;
-            else if(x>=836&&x<1124)systemMenuIndex=5;
-            else return;
-        } else return;
+        const auto& layout=desknx::ui::SystemToolsWindowControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)){systemMenu=false;return;}
+        const int action=layout.itemAt(x,y);
+        if(action<0)return;
+        systemMenuIndex=action;
         keyInput(HidNpadButton_A,false);
         return;
     }

@@ -201,3 +201,15 @@ gutters remain inert so a tap between chips cannot trigger another action.
 
 The controller shortcuts (Y/X/L/R/Minus/Right Stick/B/A) are unchanged. The host
 window-layout test covers every chip edge, the 30 px vertical bound and the gutters.
+
+## System Tools grid geometry update
+
+System Tools now uses `SystemToolsWindowControls` for the window surface, six card
+rectangles and Back button. The render loop obtains each card rectangle from this layout;
+the touch dispatcher resolves the same rectangles through `itemAt`, and Back uses a
+shared `ButtonControl` for both drawing and hit testing. The keyboard's row/column
+navigation remains row-major and unchanged.
+
+This removes the old independent x/y ranges for card taps, including inclusive right
+and bottom edges that were one pixel outside the painted surface. Tests cover all six
+cards, row gutters, outer edges and the Back button's half-open bounds.

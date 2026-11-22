@@ -75,6 +75,31 @@ int main() {
     assert(toolbar.buttonRect(6).width==72&&toolbar.buttonRect(6).height==30);
     assert(toolbar.buttonRect(-1).width==0);
 
+    // System Tools cards and Back button share one drawing/hit-test layout.
+    const auto& system=SystemToolsWindowControls;
+    assert(system.surface.contains(110,104));
+    assert(system.closeButton.inside(system.surface));
+    assert(system.cardRect(0).inside(system.surface));
+    assert(system.cardRect(5).inside(system.surface));
+    assert(system.itemAt(156,218)==0);
+    assert(system.itemAt(443,353)==0);
+    assert(system.itemAt(444,300)==-1);
+    assert(system.itemAt(496,218)==1);
+    assert(system.itemAt(835,300)==-1);
+    assert(system.itemAt(836,218)==2);
+    assert(system.itemAt(156,382)==3);
+    assert(system.itemAt(496,382)==4);
+    assert(system.itemAt(836,382)==5);
+    assert(system.itemAt(1123,517)==5);
+    assert(system.itemAt(1124,500)==-1);
+    assert(system.itemAt(500,354)==-1);
+    assert(system.itemAt(500,381)==-1);
+    assert(system.itemAt(500,518)==-1);
+    assert(system.closeButton.contains(1058,136));
+    assert(system.closeButton.contains(1139,169));
+    assert(!system.closeButton.contains(1140,169));
+    assert(!system.closeButton.contains(1139,170));
+
     // The side-panel add target exactly matches its rendered button.
     const auto& panel=AppLibraryDetailsPanelLayout;
     assert(panel.header.inside(panel.surface));

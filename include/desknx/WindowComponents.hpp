@@ -86,6 +86,35 @@ inline constexpr ItemListLayout LauncherSettingsOptionsLayout{
     {340,214,600,334},12,26,28
 };
 
+struct SystemToolsWindowLayout {
+    ModalRect surface;
+    ModalRect closeButton;
+    ModalRect cards[6];
+
+    constexpr ModalRect cardRect(int index) const noexcept {
+        return index>=0&&index<6?cards[index]:ModalRect{};
+    }
+
+    constexpr int itemAt(int x,int y) const noexcept {
+        for(int index=0;index<6;++index)
+            if(cards[index].contains(x,y))return index;
+        return -1;
+    }
+};
+
+inline constexpr SystemToolsWindowLayout SystemToolsWindowControls{
+    {110,104,1060,512},
+    {1058,136,82,34},
+    {
+        {156,218,288,136},
+        {496,218,288,136},
+        {836,218,288,136},
+        {156,382,288,136},
+        {496,382,288,136},
+        {836,382,288,136}
+    }
+};
+
 struct AppLibraryToolbarLayout {
     static constexpr int ButtonCount=7;
     std::array<ModalRect,ButtonCount> buttons{};
