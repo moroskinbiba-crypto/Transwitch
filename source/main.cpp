@@ -3778,7 +3778,7 @@ bool loadLayoutFrom(const char* path) {
     const auto layoutMigrationPlan=desknx::migration::run(
         rawLayout,desknx::migration::WorkspaceSchema,
         desknx::migration::WorkspaceSteps,desknx::migration::WorkspaceStepCount,
-        true,layoutMigrationPreview,desknx::migration::validateWorkspaceV4);
+        false,layoutMigrationPreview,desknx::migration::validateWorkspaceV4);
     desknx::diag::Write("migration","schema_inspected",
         "domain=workspace source_version=%u target_version=%u status=%u plan=%u",
         layoutSchema.sourceVersion,layoutSchema.targetVersion,
