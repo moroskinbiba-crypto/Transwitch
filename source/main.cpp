@@ -4706,7 +4706,11 @@ void drawScreen() {
     if(hasWidgetKind(Kind::QuickSettings)||quickSettingsOpen)
         telemetryDemand|=SystemTelemetry::QuickSettingsDemand;
     if(diagnosticsOpen)telemetryDemand|=SystemTelemetry::DiagnosticsDemand;
-    gSystemTelemetry.setDemandMask(telemetryDemand);
+    static std::uint32_t lastTelemetryDemand=UINT32_MAX;
+    if(telemetryDemand!=lastTelemetryDemand) {
+        gSystemTelemetry.setDemandMask(telemetryDemand);
+        lastTelemetryDemand=telemetryDemand;
+    }
     if(quickSettingsOpen)refreshQuickSettingsSnapshot();
     gModalLayer.beginFrame(renderer,modalSurfaceActive,SW,SH);
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -5731,7 +5735,7 @@ void drawScreen() {
             joyconText(joyconLeft,"L")+"  /  "+joyconText(joyconRight,"R");
         text(powerText,176,550,1,MUTED,580);
 
-        softCard(628,430,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        softCard(628,430,452,168,Color{23,34,49,255},Color{255,255,255,18});
         text("FRAME PERFORMANCE",652,450,2,WHITE,1050);
         char perfText[112]{};
         std::snprintf(perfText,sizeof(perfText),"FPS %.1f  /  FRAME %.2f MS AVG",
@@ -5747,6 +5751,10 @@ void drawScreen() {
             runtimeFrameMetrics.lastWorkspaceSwitchMs,
             runtimeFrameMetrics.maximumWorkspaceSwitchMs);
         text(perfText,652,554,1,warnColor,1050);
+        std::snprintf(perfText,sizeof(perfText),"SLOW FRAMES %llu  /  SWITCHES %llu",
+            static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames),
+            static_cast<unsigned long long>(runtimeFrameMetrics.workspaceSwitches));
+        text(perfText,652,578,1,MUTED,1050);
         text("LIVE SNAPSHOT UPDATES EVERY 5 SECONDS  /  A OR X TO REFRESH",
              176,604,1,MUTED,1060);
         text("NO ACCOUNT IDS OR PERSONAL FILE CONTENT IS INCLUDED",
@@ -8771,7 +8779,6 @@ int main(int,char**) {
     stopHeartbeatThread();
 #endif
     gSystemTelemetry.stop();
-    pumpSystemTelemetrySnapshot();
     SDL_AtomicSet(&nextendoStop,1);
     drainLauncherSettingsSave();
     drainAuxiliarySaves();
