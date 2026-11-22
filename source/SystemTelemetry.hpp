@@ -195,8 +195,9 @@ private:
     bool popWork(std::uint32_t& demand, bool& forceQuick,
                  bool& forceDiagnostics, Command& command, bool& hasCommand) {
         SDL_LockMutex(mutex_);
-        if (!stop_ && queueCount_ == 0 && !forceQuick_ &&
-            !forceDiagnostics_ && demandMask_ == 0)
+        // Always yield between polling cycles, even while one or more widgets
+        // are visible. Otherwise a nonzero demand mask would create a busy loop.
+        if (!stop_ && queueCount_ == 0 && !forceQuick_ && !forceDiagnostics_)
             (void)SDL_CondWaitTimeout(condition_, mutex_, 250);
         if (stop_) {
             SDL_UnlockMutex(mutex_);
