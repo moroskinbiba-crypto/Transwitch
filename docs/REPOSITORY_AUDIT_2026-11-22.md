@@ -200,7 +200,7 @@ Host tests and package checks are green on this commit. Hardware tests remain **
 
 ## 8. Recommended next sequence after Stage 0
 
-1. **Stage 1A — production persistence test seam (P0):** make the existing production paths fault-injectable; test backup/commit recovery without changing the on-disk format.
+1. **Stage 1A — production persistence recovery tests: implemented** in code commit `6c55adb8ee1fc62d8161decfb1c597169fbb038e`. Shared production parsers/serializers and transaction helpers are used by the live settings, history, layout and active-marker paths; host tests inject write, SD-commit, rename and rollback failures.
 2. **Stage 1B — release/build manifest (P1):** pin toolchain/container and publish a provenance manifest with SHA-256 for NRO and SD package.
 3. **Stage 2A — workspace single-owner design (P1):** map actual call sites and migrate the production UI to one tested workspace controller/store with format migration.
 4. **Stage 2B — missing VE window contracts (P1):** port selected WindowComponents/ControlComponents contracts; cover dialog/side panel/context menu and repeated-row hitboxes.
@@ -209,3 +209,37 @@ Host tests and package checks are green on this commit. Hardware tests remain **
 7. **Hardware gate:** standalone NRO smoke, then experimental HOME lifecycle and recovery on a test console.
 
 Stage 0 does not authorise a bulk merge of all 72 branches. The next changes should address the confirmed gaps above, not replay history.
+
+
+## 9. Stage 1A — Production Persistence Recovery Tests
+
+**Implementation commit:** `6c55adb8ee1fc62d8161decfb1c597169fbb038e`  
+**Test entry point:** `tests/production_persistence_test.cpp`
+
+### Production wiring
+
+- `include/desknx/ProductionPersistence.hpp` now provides the bounded file reader, validated primary/backup selection and atomic temp → SD commit → safe replace → publish commit transaction used by the live launcher.
+- `projects/common/include/desknx/SafeReplace.hpp` exposes injectable stat/remove/rename operations while keeping the same default filesystem functions for production.
+- Live settings load/save now use `SettingsFile.hpp` and the shared recovery/transaction path, preserving both `DESKNXSET1` and `DESKNXSET2` keys and the existing theme/motion compatibility rules.
+- Launch history load/save now use `LaunchHistory.hpp`, preserving `DESKNXH1` and the production NRO-path validator.
+- Layout and active-workspace marker writes use the shared transaction helper; layout reads use the common bounded reader and the existing production layout parser. Active marker reads use validated primary/backup fallback.
+- Ordinary auxiliary snapshots (including launch history) use the shared writer when they do not require the older source-copy/obsolete-file ordering. That specialized path retains its existing ordering.
+
+### Failure cases covered
+
+- Settings V1/V2 parse, duplicate key handling, malformed headers, NUL and size bounds.
+- Launch-history format round-trip, title ID validation, NRO path rules and malformed records.
+- Production layout serializer/parser and active workspace marker validation.
+- Valid backup selection for settings, layout, launch history and active-workspace marker; invalid primary+backup leaves the prior output untouched.
+- Temp open/write failure; first SD durability commit failure; destination-to-backup rename failure; temp publish failure; rollback failure with the last known-good bytes retained in `.bak`; recovery from that retained backup; final publish commit failure; successful backup rotation; one-commit active-marker policy.
+- A full layout commit followed by active-marker failure now invalidates both stale marker copies, preventing a previously committed marker backup from overriding the authoritative layout's active index on next boot.
+
+### CI evidence
+
+On code commit `6c55adb8ee1fc62d8161decfb1c597169fbb038e`:
+- Build DeskNX — run 45055914697: success. The new production persistence test, all existing host tests, native standalone NRO, HOME library applet and SD package steps passed.
+- Native Nintendo Switch NRO — run 45055914638: success.
+- Nextendo Online Overlay — run 45055914649: success.
+- Experimental HOME backend — run 45055914686: host tests and libnx build-input preparation passed; Atmosphère/libstratosphere compilation was still running at the time this audit update was written.
+
+This is host/CI validation. It is not a physical Switch power-loss, SD-card removal, suspend/resume or qlaunch recovery test. Hardware acceptance remains NOT RUN.

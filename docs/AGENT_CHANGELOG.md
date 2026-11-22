@@ -415,3 +415,15 @@ the established visual appearance or controller-button behavior.
 ### Audit scope note
 
 All branch names and PR metadata were inventoried. Feature-bearing divergent refs were compared by GitHub commit/file metadata and their distinctive source files were inspected. Historical branches whose code is an ancestor, superseded prototype or web-only implementation were classified accordingly. This is not a line-by-line review of every historical commit in every branch; any newly discovered distinct behavior should be added to the feature matrix before implementation.
+
+
+## Stage 1A — Production Persistence Recovery Tests — 22 November 2026
+
+- Production persistence changes were implemented on `recovered/unified-best-20261122`; `main` was not changed.
+- Added `include/desknx/ProductionPersistence.hpp` for bounded reads, validated primary/backup fallback and atomic SD-write transactions with injectable commit and temporary-write callbacks.
+- Refactored `SafeReplace.hpp` to inject stat/remove/rename operations for host testing while preserving the default production filesystem implementation.
+- Wired live settings, launch history, layout and active-workspace marker paths in `source/main.cpp` to the tested transaction/parsing helpers. Existing settings formats `DESKNXSET1/2` and history format `DESKNXH1` are preserved.
+- Added `tests/production_persistence_test.cpp` and its CI step. It covers valid/invalid primary+backup recovery, layout and active-marker validation, temp open/write failures, both SD commit boundaries, rename/publish failures, rollback failure, recovery from retained `.bak`, successful rotation and one-commit active marker writes.
+- Fixed the stale active-marker backup case: once a full layout is durably committed, a failed marker write now invalidates both marker copies so an old `.bak` cannot override the active index stored in the authoritative layout.
+- CI on code commit `6c55adb8ee1fc62d8161decfb1c597169fbb038e`: Build DeskNX run 45055914697, native NRO run 45055914638 and Nextendo Overlay run 45055914649 all succeeded. The experimental HOME backend run 45055914686 had passed host tests and libnx preparation; Atmosphère/libstratosphere compilation was still in progress when this changelog was updated.
+- Physical Switch validation remains NOT RUN: simulate power loss/SD removal and verify suspend/resume, launch/return and marker/layout recovery on a test console.
