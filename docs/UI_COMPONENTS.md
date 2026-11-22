@@ -14,7 +14,7 @@ Components consume theme tokens (accent, focus and edge) and explicit per-contro
 
 ## Migrated controls
 
-The component layer is used by the shared soft-card helper and by the main navigation controls, overflow button, desktop tabs, action footer and library filter chips. Coordinates and sizes are unchanged, so their existing touch hit regions and controller navigation remain compatible.
+The component layer is used by the shared soft-card helper and by the main navigation controls, overflow button, desktop tabs, action footer and library filter chips. Coordinates and sizes are unchanged, so their existing touch hit regions and controller navigation remain compatible. Modal backdrops are composited as a translucent draw on the normal window target; they do not allocate or switch SDL render-target textures, avoiding a fragile renderer capability on Switch.
 
 Game artwork remains on the existing asynchronous IconCache and rounded-image mask path. Widget content remains information-first and uses its measured footprint; this migration changes the card/surface presentation, not widget data or action routing.
 
