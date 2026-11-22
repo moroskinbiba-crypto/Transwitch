@@ -30,26 +30,27 @@ public:
         const int alpha = clampToken(opacity, 0, 255);
         fill.a = scaleAlpha(fill.a, alpha);
         edge.a = scaleAlpha(edge.a, alpha);
-        bool ok = true;
-
         if (shadow) {
             SDL_Color shade = toSdlColor(tokens_.shadow);
             shade.a = scaleAlpha(shade.a, alpha);
             if (engine_ && engine_->ready()) {
-                // Soft silhouette layers avoid unsupported render-target blur.
-                ok = engine_->drawRoundedShadow(bounds, radius, shade, 6) && ok;
+                // Shadows are optional decoration. A failed shadow must not
+                // make the caller redraw an otherwise successful surface.
+                (void)engine_->drawRoundedShadow(bounds, radius, shade, 6);
             } else {
                 shade.a = scaleAlpha(shade.a, 180);
-                ok = fillRounded(bounds.x, bounds.y + 4, bounds.w, bounds.h,
-                                 radius, shade) && ok;
+                (void)fillRounded(bounds.x, bounds.y + 4, bounds.w, bounds.h,
+                                  radius, shade);
             }
         }
 
-        ok = fillRounded(bounds.x, bounds.y, bounds.w, bounds.h, radius, fill) && ok;
+        const bool fillOk = fillRounded(bounds.x, bounds.y, bounds.w, bounds.h,
+                                        radius, fill);
         // The edge is a stroke, not a translucent inset fill. This keeps card
         // content crisp and prevents the border tint from washing the whole card.
-        ok = outlineRounded(bounds.x, bounds.y, bounds.w, bounds.h, radius, edge) && ok;
-        return ok;
+        const bool edgeOk = outlineRounded(
+            bounds.x, bounds.y, bounds.w, bounds.h, radius, edge);
+        return fillOk && edgeOk;
     }
 
     // Shared shell for every workspace widget. Focus glow is drawn before the
