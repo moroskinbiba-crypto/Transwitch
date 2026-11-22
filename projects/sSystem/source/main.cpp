@@ -8,6 +8,7 @@
 #include <desknx/MenuLiveness.hpp>
 #include <desknx/PendingOperationGate.hpp>
 #include <desknx/SafeReplace.hpp>
+#include <desknx/SleepRecoveryPolicy.hpp>
 #include <desknx/system/Application.hpp>
 #include <desknx/system/ExternalContent.hpp>
 #include <desknx/system/LibraryApplet.hpp>
@@ -1086,28 +1087,36 @@ void HandleSleepMessage() {
     // guaranteed. Never leave the backend stuck in Sleeping on that path.
     g_ReopenMenuAfterSleep = false;
     g_AppWasRunningBeforeSleep = false;
-    if (menuWasOpen) {
-        if (la::IsMenuAlive()) {
-            if (g_MenuReady) {
-                ResetMenuHeartbeatTracking();
-                g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq());
-                TransitionTo(BackendState::MenuActive, "sleep request failed; kept live menu");
-            } else {
-                g_MenuLaunchTick = armGetSystemTick();
-                TransitionTo(BackendState::MenuStarting, "sleep request failed; menu still starting");
-            }
-        } else if (la::g_MenuRunning) {
-            TransitionTo(BackendState::MenuStarting, "sleep request failed; reap closed menu holder");
-        } else {
-            TransitionTo(BackendState::MenuStarting, "sleep request failed; reopen menu");
+    const auto recovery = desknx::runtime::DecideSleepStartFailureRecovery(
+        menuWasOpen, la::IsMenuAlive(), la::g_MenuRunning, g_MenuReady,
+        app::g_AppRunning);
+    switch (recovery) {
+        case desknx::runtime::SleepRecoveryAction::KeepMenuActive:
+            ResetMenuHeartbeatTracking();
+            g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq());
+            TransitionTo(BackendState::MenuActive,
+                         "sleep request failed; kept live menu");
+            break;
+        case desknx::runtime::SleepRecoveryAction::KeepMenuStarting:
+            g_MenuLaunchTick = armGetSystemTick();
+            TransitionTo(BackendState::MenuStarting,
+                         "sleep request failed; menu still starting");
+            break;
+        case desknx::runtime::SleepRecoveryAction::ReapMenuHolder:
+            TransitionTo(BackendState::MenuStarting,
+                         "sleep request failed; reap closed menu holder");
+            break;
+        case desknx::runtime::SleepRecoveryAction::RestoreGame:
+            app::FocusApplication();
+            TransitionTo(BackendState::GameRunning,
+                         "sleep request failed; restore game");
+            break;
+        case desknx::runtime::SleepRecoveryAction::LaunchMenu:
+        default:
+            TransitionTo(BackendState::MenuStarting,
+                         "sleep request failed; recover HOME");
             LaunchMenu();
-        }
-    } else if (app::g_AppRunning) {
-        app::FocusApplication();
-        TransitionTo(BackendState::GameRunning, "sleep request failed; restore game");
-    } else {
-        TransitionTo(BackendState::MenuStarting, "sleep request failed; recover HOME");
-        LaunchMenu();
+            break;
     }
 }
 
@@ -1158,39 +1167,44 @@ void PumpAppletMessages() {
                     break;
                 }
                 DaemonLog("power: wake event");
-                if (g_ReopenMenuAfterSleep) {
+                {
+                    const auto recovery = desknx::runtime::DecideSleepWakeRecovery(
+                        g_ReopenMenuAfterSleep, la::IsMenuAlive(), la::g_MenuRunning,
+                        g_MenuReady, g_AppWasRunningBeforeSleep, app::g_AppRunning);
                     g_ReopenMenuAfterSleep = false;
-                    if (la::IsMenuAlive()) {
-                        // A failed pre-sleep StopMenu may leave the original
-                        // applet alive. Re-arm its watchdog instead of starting
-                        // a second holder over it.
-                        if (g_MenuReady) {
+                    switch (recovery) {
+                        case desknx::runtime::SleepRecoveryAction::KeepMenuActive:
+                            // Reuse the live holder; never create a second applet.
                             ResetMenuHeartbeatTracking();
                             g_MenuLiveness.MarkReady(armGetSystemTick(), armGetSystemTickFreq());
                             TransitionTo(BackendState::MenuActive, "wake; resume live menu");
-                        } else {
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::KeepMenuStarting:
                             g_MenuLaunchTick = armGetSystemTick();
-                            TransitionTo(BackendState::MenuStarting, "wake; resume starting menu");
-                        }
-                    } else if (la::g_MenuRunning) {
-                        // The holder has finished but still needs Join/Close.
-                        // The main loop reaps it before the MenuStarting retry.
-                        g_MenuReady = false;
-                        g_MenuLaunchTick = 0;
-                        ResetMenuHeartbeatTracking();
-                        TransitionTo(BackendState::MenuStarting, "wake; reap finished menu holder");
-                    } else {
-                        TransitionTo(BackendState::MenuStarting, "wake; reopen menu");
-                        LaunchMenu();
+                            TransitionTo(BackendState::MenuStarting,
+                                         "wake; resume starting menu");
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::ReapMenuHolder:
+                            // The main loop joins/closes this completed holder
+                            // before the MenuStarting retry may create another.
+                            g_MenuReady = false;
+                            g_MenuLaunchTick = 0;
+                            ResetMenuHeartbeatTracking();
+                            TransitionTo(BackendState::MenuStarting,
+                                         "wake; reap finished menu holder");
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::RestoreGame:
+                            app::FocusApplication();
+                            TransitionTo(BackendState::GameRunning,
+                                         "wake; restore game focus");
+                            break;
+                        case desknx::runtime::SleepRecoveryAction::LaunchMenu:
+                        default:
+                            TransitionTo(BackendState::MenuStarting,
+                                         "wake; no prior foreground");
+                            LaunchMenu();
+                            break;
                     }
-                } else if (g_AppWasRunningBeforeSleep && app::g_AppRunning) {
-                    g_AppWasRunningBeforeSleep = false;
-                    app::FocusApplication();
-                    TransitionTo(BackendState::GameRunning, "wake; restore game focus");
-                } else {
-                    g_AppWasRunningBeforeSleep = false;
-                    TransitionTo(BackendState::MenuStarting, "wake; no prior foreground");
-                    LaunchMenu();
                 }
                 g_AppWasRunningBeforeSleep = false;
                 break;
