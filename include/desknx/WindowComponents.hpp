@@ -103,7 +103,7 @@ struct AppLibraryToolbarLayout {
     }
 };
 
-inline constexpr AppLibraryToolbarLayout AppLibraryToolbarControls{{
+inline constexpr AppLibraryToolbarLayout AppLibraryToolbarControls{{{
     {138,122,96,30},  // Search
     {242,122,82,30},  // Sort
     {332,122,112,30}, // Filter
@@ -111,6 +111,6 @@ inline constexpr AppLibraryToolbarLayout AppLibraryToolbarControls{{
     {542,122,126,30}, // Rescan
     {676,122,72,30},  // Close
     {756,122,72,30}   // Add
-}};
+}}};
 
 } // namespace desknx::ui
