@@ -76,8 +76,8 @@ inline bool openWriterFile() {
     return gFile != nullptr;
 }
 
-inline void writeRecord(FILE* file, const Record& record) {
-    if (!file || record.length == 0) return;
+inline void writeRecord(const Record& record) {
+    if (!gFile || record.length == 0) return;
     if (gCurrentBytes + static_cast<long>(record.length) > MaxLogBytes) {
         rotateLog();
         (void)openWriterFile();
@@ -168,12 +168,12 @@ inline int SDLCALL writerMain(void*) {
                     sizeof(droppedRecord.text)
                     ? static_cast<std::size_t>(count)
                     : sizeof(droppedRecord.text) - 1;
-                writeRecord(gFile, droppedRecord);
+                writeRecord(droppedRecord);
             }
         }
         for (std::size_t i = 0; i < batchCount; ++i) {
             if (!gFile) (void)openWriterFile();
-            writeRecord(gFile, batch[i]);
+            writeRecord(batch[i]);
         }
         if (gFile && (batchCount > 0 || dropped > 0))
             std::fflush(gFile);
