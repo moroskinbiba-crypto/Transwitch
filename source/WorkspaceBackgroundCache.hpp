@@ -67,7 +67,10 @@ public:
         const Uint32 now = SDL_GetTicks();
         const auto failed = failedUntil_.find(path);
         if (failed != failedUntil_.end()) {
-            if (static_cast<Sint32>(now - failed->second) < 0) return nullptr;
+            if (static_cast<Sint32>(now - failed->second) < 0) {
+                if (highPriority && priorityPath_ == path) priorityPath_.clear();
+                return nullptr;
+            }
             failedUntil_.erase(failed);
         }
 
