@@ -2867,7 +2867,8 @@ void drawScreen() {
         }
         text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-22);
         text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
-        constexpr int vis=10;
+        const auto& libraryRows=desknx::ui::AppLibraryListRows;
+        const int vis=libraryRows.itemCount;
         if(available.empty()) {
             listIndex=0;
             listOffset=0;
@@ -2897,16 +2898,18 @@ void drawScreen() {
                      mx+42,my+184,1,MUTED,mx+720);
             }
         } else {
-            for(int row=0;row<vis;++row) {
+            for(int row=0;row<libraryRows.itemCount;++row) {
                 const int i=listOffset+row;
                 if(i>=static_cast<int>(available.size()))break;
-                const int yy=my+110+row*40;
+                const auto rowBounds=libraryRows.itemRect(row);
                 const Candidate& candidate=available[static_cast<size_t>(i)];
-                if(i==listIndex)roundRect(mx+27,yy,730,35,10,Color{35,58,88,255});
+                if(i==listIndex)
+                    drawSelectableRowBackground(rowBounds,
+                        desknx::ui::SelectableRowState::Focused,10);
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                drawTileIcon(iconTile,mx+38,yy+4,27);
-                text(candidate.title,mx+78,yy+8,2,
-                     i==listIndex?WHITE:MUTED,mx+592);
+                drawTileIcon(iconTile,rowBounds.x+11,rowBounds.y+4,27);
+                text(candidate.title,rowBounds.x+51,rowBounds.y+8,2,
+                     i==listIndex?WHITE:MUTED,rowBounds.x+565);
                 std::string appBadge=typeName(candidate.kind);
                 if(candidate.kind==Kind::Game) {
                     if(candidate.viewFlags&NsViewFlagNeedsUpdate)appBadge="UPDATE";
@@ -2917,7 +2920,8 @@ void drawScreen() {
                     :candidate.kind==Kind::Game?desknx::ui::BadgeVariant::Info
                     :candidate.kind==Kind::Nro?desknx::ui::BadgeVariant::Success
                     :desknx::ui::BadgeVariant::Neutral;
-                drawBadge({mx+610,yy+5,136,25},appBadge,badgeVariant);
+                drawBadge({rowBounds.x+583,rowBounds.y+5,136,25},
+                    appBadge,badgeVariant);
             }
         }
         const auto& detailsPanel=desknx::ui::AppLibraryDetailsPanelLayout;
@@ -2990,10 +2994,13 @@ void drawScreen() {
             }
             text(std::to_string(listIndex+1)+" OF "+std::to_string(available.size()),
                  mx+800,my+438,1,MUTED,mx+mw-30);
-            const auto& addAction=detailsPanel.primaryAction;
-            roundRect(addAction.x,addAction.y,addAction.width,addAction.height,
-                12,Color{49,119,199,255});
-            text("A  ADD TO WORKSPACE",addAction.x+31,addAction.y+15,1,WHITE,mx+mw-30);
+            const desknx::ui::ButtonControl addAction{
+                detailsPanel.primaryAction,desknx::ui::ButtonVariant::Primary,{}};
+            drawButton(addAction,"A  ADD TO WORKSPACE",
+                detailsPanel.primaryAction.x+31,
+                detailsPanel.primaryAction.y+15,
+                detailsPanel.primaryAction.x+detailsPanel.primaryAction.width-10,
+                desknx::ui::TextRole::Metadata);
         }
         const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
@@ -4659,12 +4666,15 @@ void touchInput(const SDL_Event&e) {
             // Preserve the toolbar's empty gutters as inert space; they must
             // not fall through into catalogue rows or the details panel.
             if(y>=122&&y<152)return;
-            if(desknx::ui::AppLibraryDetailsPanelLayout.primaryAction.contains(x,y)) {
+            const auto& details=desknx::ui::AppLibraryDetailsPanelLayout;
+            const desknx::ui::ButtonControl addAction{
+                details.primaryAction,desknx::ui::ButtonVariant::Primary,{}};
+            if(addAction.hitTest(x,y)) {
                 addSelected();
                 return;
             }
-            if(y>=180&&y<580&&x>=130&&x<874) {
-                const int row=(y-180)/40;
+            const int row=desknx::ui::AppLibraryListRows.itemAt(x,y);
+            if(row>=0) {
                 const auto& available=visibleCatalogueSnapshot();
                 const int index=listOffset+row;
                 if(index>=0&&static_cast<size_t>(index)<available.size()) {

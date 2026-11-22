@@ -217,6 +217,20 @@ int main() {
     assert(!system.closeButton.contains(1140,169));
     assert(!system.closeButton.contains(1139,170));
 
+    // App Library rows use 35 px visible targets on a 40 px row cadence.
+    assert(AppLibraryListRows.itemCount==10);
+    assert(AppLibraryListRows.bounds.inside({130,180,744,410}));
+    assert(AppLibraryListRows.itemAt(137,180)==0);
+    assert(AppLibraryListRows.itemAt(866,214)==0);
+    assert(AppLibraryListRows.itemAt(137,215)==-1);
+    assert(AppLibraryListRows.itemAt(137,219)==-1);
+    assert(AppLibraryListRows.itemAt(137,220)==1);
+    assert(AppLibraryListRows.itemAt(866,574)==9);
+    assert(AppLibraryListRows.itemAt(866,575)==-1);
+    assert(AppLibraryListRows.itemAt(867,550)==-1);
+    assert(AppLibraryListRows.itemAt(136,550)==-1);
+    assert(AppLibraryListRows.itemAt(137,580)==-1);
+
     // The side-panel add target exactly matches its rendered button.
     const auto& panel=AppLibraryDetailsPanelLayout;
     assert(panel.header.inside(panel.surface));

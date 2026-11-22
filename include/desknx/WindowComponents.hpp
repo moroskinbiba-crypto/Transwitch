@@ -183,6 +183,12 @@ inline constexpr SystemToolsWindowLayout SystemToolsWindowControls{
     }
 };
 
+// App Library rows are 35 px high on a 40 px cadence. The 5 px gutters
+// are deliberately excluded from touch hit-testing.
+inline constexpr ItemListLayout AppLibraryListRows{
+    {137,180,730,400},10,35,40
+};
+
 struct AppLibraryToolbarLayout {
     static constexpr int ButtonCount=7;
     std::array<ModalRect,ButtonCount> buttons{};

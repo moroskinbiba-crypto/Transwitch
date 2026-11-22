@@ -262,3 +262,15 @@ Touch now resolves the same row rectangles that render, instead of a separate fo
 that previously accepted trailing pixels beyond the painted Workspace Settings rows.
 Keyboard navigation remains cyclic and uses the layout row count. Selected row visuals
 use the shared Focused state.
+
+## App Library list hit-target update
+
+App Library now uses `AppLibraryListRows` for both row drawing and touch selection.
+The painted row is 730 x 35 px on a 40 px cadence; the 5 px vertical gutters and the
+side-panel margins are no longer accepted as list taps. Existing icon, title and badge
+coordinates are retained relative to the row rectangle.
+
+The details-panel "Add to Workspace" action is now drawn and hit-tested through one
+Primary `ButtonControl` using the existing `primaryAction` rectangle. The separate
+toolbar Add action is unchanged. The double-tap-to-launch behaviour, 500 ms interval,
+selection update and play-stat refresh path are preserved.
