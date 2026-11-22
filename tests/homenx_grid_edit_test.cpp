@@ -65,19 +65,27 @@ void testMoveOntoOccupiedCellUsesNextFreeOrigin() {
     assert(!overlap(after.tiles[0], after.tiles[1]));
 }
 
-void testMoveOffGridWrapsToNextAvailableOrigin() {
+void testMoveOffGridRemainsRejected() {
     WorkspaceProvider provider = makeProvider();
-    // The 2-wide game cannot begin at column 5, so the search wraps to row 1.
-    assert(provider.moveTile(1, 5, 0));
-    const Tile& moved = provider.activeWorkspace()->tiles[1];
-    assert(moved.x == 0 && moved.y == 1);
-    assert(moved.w == 2 && moved.h == 1);
-
-    // A negative X request is clamped to the first valid column and scans
-    // forward instead of refusing a drag at the board edge.
-    assert(provider.moveTile(1, -1, 0));
+    assert(!provider.moveTile(1, 5, 0));  // the 2-wide tile would cross the edge
+    assert(!provider.moveTile(1, -1, 0));
+    assert(!provider.moveTile(1, 0, 3));
     assert(provider.activeWorkspace()->tiles[1].x == 1);
     assert(provider.activeWorkspace()->tiles[1].y == 0);
+}
+
+void testOccupiedLastColumnWrapsToNextRow() {
+    Workspace desk{"Wrap", {}};
+    desk.tiles.push_back(makeTile(Kind::Clock, "Clock", "widget://clock", 0, 0, 1, 1));
+    desk.tiles.push_back(makeTile(Kind::Nro, "Blocker", "sdmc:/switch/blocker.nro", 5, 0, 1, 1));
+    WorkspaceProvider provider;
+    assert(provider.load(std::vector<Workspace>{desk}, 0));
+
+    // A valid (1x1) request at the last column is occupied. The search wraps
+    // to the next row, rather than leaving the tile where it started.
+    assert(provider.moveTile(0, 5, 0));
+    const Tile& moved = provider.activeWorkspace()->tiles[0];
+    assert(moved.x == 0 && moved.y == 1);
 }
 
 void testMoveWhenWorkspaceIsFullIsAtomic() {
@@ -257,7 +265,8 @@ void testEditsSurviveSerializeAndReload() {
 int main() {
     testMoveIntoEmptyCell();
     testMoveOntoOccupiedCellUsesNextFreeOrigin();
-    testMoveOffGridWrapsToNextAvailableOrigin();
+    testMoveOffGridRemainsRejected();
+    testOccupiedLastColumnWrapsToNextRow();
     testMoveWhenWorkspaceIsFullIsAtomic();
     testMoveSelectedTileUsesSameCollisionPolicy();
     testMoveToSameCellIsNotAnEdit();
