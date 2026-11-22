@@ -191,6 +191,7 @@ public:
         }
         rasterQueue_.clear();
         pendingRasterKeys_.clear();
+        emptyTextKeys_.clear();
         clearCache();
         fittedTextCache_.clear();
         closeFonts();
@@ -246,6 +247,7 @@ private:
     std::unordered_map<std::string, std::string> fittedTextCache_;
     std::deque<RasterJob> rasterQueue_;
     std::unordered_set<std::string> pendingRasterKeys_;
+    std::unordered_set<std::string> emptyTextKeys_;
     unsigned long long clock_{0};
     uint64_t fontGeneration_{1};
     int customWarmupIndex_{8};
@@ -375,6 +377,8 @@ private:
         const Uint64 prepareStarted = SDL_GetPerformanceCounter();
         std::string key = makeKey(value, scale, color, maxWidth, customReady);
         CacheEntry* entry = find(key);
+        if (!entry && emptyTextKeys_.find(key) != emptyTextKeys_.end())
+            return true;
         CacheEntry* fallbackEntry = nullptr;
         if (!entry && customReady) {
             const std::string systemKey =
@@ -453,8 +457,16 @@ private:
                 openedFontThisFrame = font != nullptr;
             }
             if (!font) {
-                rasterQueue_.push_front(std::move(job));
-                break;
+                if (job.customFace) {
+                    rasterQueue_.push_front(std::move(job));
+                    break;
+                }
+                // A missing shared face cannot become valid by retrying the
+                // same system request. Drop it; a newly warmed custom face will
+                // enqueue a distinct generation/key when it becomes available.
+                pendingRasterKeys_.erase(job.key);
+                ++processed;
+                continue;
             }
 
             const Uint64 prepareStarted = SDL_GetPerformanceCounter();
@@ -464,6 +476,8 @@ private:
                 elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
             if (fitted->empty()) {
                 pendingRasterKeys_.erase(job.key);
+                if (emptyTextKeys_.size() >= CacheLimit) emptyTextKeys_.clear();
+                emptyTextKeys_.insert(job.key);
                 ++processed;
                 continue;
             }
