@@ -60,6 +60,7 @@ public:
             entry.lastUseMs = SDL_GetTicks();
             width = entry.width;
             height = entry.height;
+            if (highPriority) discardQueuedRequestsExcept(path);
             return entry.texture;
         }
 
@@ -158,6 +159,8 @@ public:
         failedUntil_.erase(entries_.back().path);
         pending_.erase(entries_.back().path);
         ++frameMetrics_.uploads;
+        if (priorityPath_ == entries_.back().path)
+            discardQueuedRequestsExcept(priorityPath_);
     }
 
     Stats stats() const {
@@ -467,6 +470,21 @@ private:
         SDL_DestroyTexture(texture);
         frameMetrics_.textureDestroyMs +=
             elapsedMs(started, SDL_GetPerformanceCounter());
+    }
+
+    void discardQueuedRequestsExcept(const std::string& keepPath) {
+        if (!mutex_) return;
+        SDL_LockMutex(mutex_);
+        for (auto it = requests_.begin(); it != requests_.end();) {
+            if (it->path == keepPath) {
+                ++it;
+                continue;
+            }
+            pending_.erase(it->path);
+            it = requests_.erase(it);
+        }
+        SDL_CondBroadcast(condition_);
+        SDL_UnlockMutex(mutex_);
     }
 
     void rememberFailure(const std::string& path, Uint32 now) {
