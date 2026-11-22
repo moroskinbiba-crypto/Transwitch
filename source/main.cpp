@@ -447,62 +447,15 @@ void refreshQuickSettingsSnapshot(bool force=false) {
     const Uint32 now=SDL_GetTicks();
     if(!force&&quickSettingsSnapshotLoaded&&now-quickSettingsSnapshotTick<3500)return;
     quickSettingsSnapshotTick=now;
-    quickNetworkStatus=languageRussian?"СТАТУС СЕТИ НЕДОСТУПЕН":"NETWORK STATUS UNAVAILABLE";
-    quickInternetConnected=false;
-    quickWifiStrength=0;
-    quickAirplaneAvailable=quickWifiAvailable=quickBluetoothAvailable=false;
-    quickSoundAvailable=quickBrightnessAvailable=false;
-
-    if(setsysServiceReady) {
-        quickWifiAvailable=R_SUCCEEDED(setsysGetWirelessLanEnableFlag(&quickWifiEnabled));
-        quickBluetoothAvailable=R_SUCCEEDED(setsysGetBluetoothEnableFlag(&quickBluetoothEnabled));
-    }
-
-    NifmInternetConnectionType connectionType=NifmInternetConnectionType_WiFi;
-    if(R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
-        bool wirelessEnabled=true;
-        quickAirplaneAvailable=R_SUCCEEDED(nifmIsWirelessCommunicationEnabled(&wirelessEnabled));
-        if(quickAirplaneAvailable)quickAirplaneMode=!wirelessEnabled;
-        NifmInternetConnectionStatus connectionStatus=NifmInternetConnectionStatus_ConnectingUnknown1;
-        u32 strength=0;
-        if(R_SUCCEEDED(nifmGetInternetConnectionStatus(&connectionType,&strength,&connectionStatus))) {
-            quickInternetConnected=connectionStatus==NifmInternetConnectionStatus_Connected;
-            quickWifiStrength=std::min<u32>(strength,3);
-        }
-        nifmExit();
-    }
-
-    if(R_SUCCEEDED(audctlInitialize())) {
-        AudioTarget target=AudioTarget_Invalid;
-        if(R_FAILED(audctlGetActiveOutputTarget(&target))||target==AudioTarget_Invalid)
-            (void)audctlGetDefaultTarget(&target);
-        if(target==AudioTarget_Invalid)target=AudioTarget_Speaker;
-        quickAudioTarget=target;
-        quickSoundAvailable=R_SUCCEEDED(audctlIsTargetMute(&quickSoundMuted,target));
-        audctlExit();
-    }
-
-    if(R_SUCCEEDED(lblInitialize())) {
-        quickBrightnessAvailable=R_SUCCEEDED(lblGetCurrentBrightnessSetting(&quickBrightness));
-        lblExit();
-    }
-    if(quickAirplaneAvailable&&quickAirplaneMode)
-        quickNetworkStatus=languageRussian?"АВИАРЕЖИМ ВКЛЮЧЁН":"AIRPLANE MODE ON";
-    else if(quickInternetConnected)
-        quickNetworkStatus=connectionType==NifmInternetConnectionType_Ethernet
-            ?(languageRussian?"ПРОВОДНАЯ СЕТЬ ПОДКЛЮЧЕНА":"ETHERNET CONNECTED")
-            :(languageRussian?"WI-FI ПОДКЛЮЧЁН  /  СИГНАЛ ":"WI-FI CONNECTED  /  SIGNAL ")+std::to_string(quickWifiStrength)+"/3";
-    else if(quickWifiAvailable&&quickWifiEnabled)
-        quickNetworkStatus=languageRussian?"WI-FI ВКЛЮЧЁН  /  НЕТ ИНТЕРНЕТА":"WI-FI ENABLED  /  NO INTERNET";
-    else if(quickWifiAvailable)
-        quickNetworkStatus=languageRussian?"WI-FI ВЫКЛЮЧЕН":"WI-FI DISABLED";
-    quickSettingsSnapshotLoaded=true;
+    quickSettingsSnapshotLoading=!quickSettingsSnapshotLoaded;
+    gSystemTelemetry.requestQuickSettings();
 }
 
 void openQuickSettings() {
     quickSettingsIndex=0;
     quickSettingsOpen=true;
     refreshQuickSettingsSnapshot(true);
+    if(!quickSettingsSnapshotLoaded)setStatus("READING SYSTEM STATUS...",1600);
 }
 
 void closeQuickSettings() {
@@ -510,104 +463,18 @@ void closeQuickSettings() {
 }
 
 void adjustQuickBrightness(int direction) {
-    if(!quickBrightnessAvailable) {
-        setStatus("BRIGHTNESS CONTROL UNAVAILABLE",2200);
-        return;
-    }
-    if(R_FAILED(lblInitialize())) {
-        setStatus("BRIGHTNESS SERVICE UNAVAILABLE",2200);
-        return;
-    }
-    const float next=std::max(0.10f,std::min(1.0f,
-        quickBrightness+static_cast<float>(direction)*0.05f));
-    Result rc=lblSetCurrentBrightnessSetting(next);
-    if(R_SUCCEEDED(rc))rc=lblApplyCurrentBrightnessSettingToBacklight();
-    if(R_SUCCEEDED(rc))(void)lblSaveCurrentSetting();
-    lblExit();
-    if(R_FAILED(rc))setStatus("BRIGHTNESS CHANGE FAILED",2500);
-    else {
-        quickBrightness=next;
-        quickBrightnessAvailable=true;
-        quickSettingsSnapshotLoaded=true;
-        quickSettingsSnapshotTick=SDL_GetTicks();
-        setStatus("BRIGHTNESS  "+std::to_string(static_cast<int>(std::lround(next*100.0f)))+"%",1600);
-    }
+    if(!gSystemTelemetry.enqueueQuickAction(4,direction))
+        setStatus("SYSTEM SERVICE BUSY - TRY AGAIN",1800);
+    else
+        setStatus("APPLYING BRIGHTNESS...",1200);
 }
 
 void toggleQuickSetting(int index) {
-    refreshQuickSettingsSnapshot();
-    Result rc=0;
-    if(index==0) {
-        if(!quickSoundAvailable) {
-            setStatus("SYSTEM SOUND CONTROL UNAVAILABLE",2500);
-            return;
-        }
-        if(R_FAILED(audctlInitialize())) {
-            setStatus("AUDIO SERVICE UNAVAILABLE",2500);
-            return;
-        }
-        rc=audctlSetTargetMute(quickAudioTarget,!quickSoundMuted);
-        audctlExit();
-        if(R_SUCCEEDED(rc))setStatus(quickSoundMuted?"SOUND ENABLED":"SOUND MUTED",1800);
-    } else if(index==1) {
-        if(R_FAILED(nifmInitialize(NifmServiceType_System))) {
-            setStatus("NETWORK SERVICE UNAVAILABLE",2500);
-            return;
-        }
-        // NIFM's system wireless flag is the console-wide airplane/radio gate.
-        rc=nifmSetWirelessCommunicationEnabled(quickAirplaneMode);
-        nifmExit();
-        if(R_SUCCEEDED(rc))setStatus(quickAirplaneMode?"AIRPLANE MODE DISABLED":"AIRPLANE MODE ENABLED",2000);
-    } else if(index==2) {
-        if(!setsysServiceReady||!quickWifiAvailable) {
-            setStatus("WI-FI CONTROL UNAVAILABLE",2500);
-            return;
-        }
-        if(!quickWifiEnabled&&quickAirplaneMode) {
-            if(R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
-                rc=nifmSetWirelessCommunicationEnabled(true);
-                nifmExit();
-            } else rc=MAKERESULT(Module_Libnx,LibnxError_NotInitialized);
-        }
-        if(R_SUCCEEDED(rc))rc=setsysSetWirelessLanEnableFlag(!quickWifiEnabled);
-        if(R_SUCCEEDED(rc))setStatus(quickWifiEnabled?"WI-FI DISABLED":"WI-FI ENABLED",1800);
-    } else if(index==3) {
-        if(!setsysServiceReady||!quickBluetoothAvailable) {
-            setStatus("BLUETOOTH CONTROL UNAVAILABLE",2500);
-            return;
-        }
-        if(quickBluetoothEnabled&&appletGetOperationMode()!=AppletOperationMode_Handheld) {
-            setStatus("BLUETOOTH IS KEPT ON WHILE DOCKED",2600);
-            return;
-        }
-        rc=setsysSetBluetoothEnableFlag(!quickBluetoothEnabled);
-        if(R_SUCCEEDED(rc))setStatus(quickBluetoothEnabled?"BLUETOOTH DISABLED":"BLUETOOTH ENABLED",1800);
-    } else if(index==4) {
-        adjustQuickBrightness(1);
-        return;
-    }
-    if(R_FAILED(rc))setStatus("QUICK SETTING CHANGE FAILED  0X"+
-        [] (Result value) { char buffer[9]{};std::snprintf(buffer,sizeof(buffer),"%08X",static_cast<unsigned int>(value));return std::string(buffer); }(rc),2800);
-    else {
-        // Reflect the confirmed toggle immediately. The full service snapshot is
-        // refreshed on the normal 3.5s cadence, not synchronously after every tap.
-        if(index==0)quickSoundMuted=!quickSoundMuted;
-        else if(index==1) {
-            quickAirplaneMode=!quickAirplaneMode;
-            quickInternetConnected=false;
-            quickNetworkStatus=quickAirplaneMode?"AIRPLANE MODE ON":
-                (quickWifiEnabled?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED");
-        } else if(index==2) {
-            const bool enablingWifi=!quickWifiEnabled;
-            quickWifiEnabled=enablingWifi;
-            if(enablingWifi&&quickAirplaneMode)quickAirplaneMode=false;
-            quickInternetConnected=false;
-            quickNetworkStatus=quickWifiEnabled&&!quickAirplaneMode
-                ?"WI-FI ENABLED  /  CONNECTING":"WI-FI DISABLED";
-        } else if(index==3)quickBluetoothEnabled=!quickBluetoothEnabled;
-        quickSettingsSnapshotLoaded=true;
-        quickSettingsSnapshotTick=SDL_GetTicks();
-    }
+    if(index<0||index>3)return;
+    if(!gSystemTelemetry.enqueueQuickAction(index,0))
+        setStatus("SYSTEM SERVICE BUSY - TRY AGAIN",1800);
+    else
+        setStatus("APPLYING SYSTEM SETTING...",1200);
 }
 
 bool commitSdCard(const char* operation) {
