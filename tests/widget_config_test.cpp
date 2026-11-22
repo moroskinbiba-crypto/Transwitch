@@ -11,7 +11,7 @@ int main() {
     assert(calendarDefaults.style == 0);
     const auto quickDefaults = desknx::widgets::defaults(Kind::QuickSettings);
     assert(quickDefaults.style == 0 && quickDefaults.refreshSeconds == 15 &&
-           quickDefaults.flags == 3u && quickDefaults.itemCount == 4);
+           quickDefaults.flags == 3u && quickDefaults.itemCount == 6);
     const auto quickRestored = desknx::widgets::parse(
         Kind::QuickSettings, "W1;S=1;R=30;F=1;N=6");
     assert(quickRestored.style == 1 && quickRestored.refreshSeconds == 30 &&
