@@ -60,12 +60,6 @@ public:
         } else {
             return false;
         }
-
-        if (selected && engine_ && engine_->ready()) {
-            SDL_Color focus{accent.r,accent.g,accent.b,210};
-            ok = engine_->drawRoundedOutline(bounds.x, bounds.y, bounds.w,
-                bounds.h, radius, focus) && ok;
-        }
         return ok;
     }
 
