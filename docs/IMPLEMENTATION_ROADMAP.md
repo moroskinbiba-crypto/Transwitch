@@ -112,8 +112,11 @@ Successful compilation alone does not close a runtime acceptance item.
       preserve the double-tap launch path and make list gutters non-interactive.
 - [x] Move the main header toolbar and workspace dock into shared chrome layouts;
       rendering, pointer hit targets and drag-to-workspace use one geometry source.
-- [ ] Migrate remaining status/footer hint controls and the rest of the workspace chrome
-      to shared control styles.
+- [x] Migrate workspace footer status, key hints and selected-tile actions to shared
+      layout geometry; render hint chips and actions through shared Badge/Button styles
+      with matching touch bounds.
+- [ ] Migrate remaining workspace dock chrome (tabs, add/menu/page/edit controls) to
+      shared control styles while preserving drag-to-workspace behavior.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,
       library and workspace-picker surfaces.
