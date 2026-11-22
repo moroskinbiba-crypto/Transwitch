@@ -321,3 +321,16 @@ The budget bounds burst work but is not a claim that every cache miss is asynchr
 On budget overflow, existing bitmap fallback is used for that frame and TTF rendering
 retries on the next frame. Its Cyrillic fallback appearance must still be checked on
 device.
+
+## Semantic typography migration — remaining modal surfaces
+
+The role-aware adapter is now used throughout the remaining high-traffic modal
+surfaces: Recent, System Tools, Launcher Settings, Workspace Settings, Media Picker,
+Power and User Picker. Existing font-scale mappings, coordinates, hit regions and row
+geometry are preserved during this migration.
+
+Longer descriptions and empty-state instructions use `textBlock()`, which shares the
+UTF-8 line-layout cache and switches the entire block to bitmap fallback when TTF
+textures are unavailable or deferred by the per-frame budget. The change is an API
+consistency migration, not a claim that every role yet has a distinct weight or final
+pixel size. Physical-console readability checks remain open.
