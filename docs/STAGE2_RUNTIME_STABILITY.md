@@ -32,7 +32,7 @@ c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
 /tmp/application-lifecycle-test
 ```
 
-Both commands are now part of `.github/workflows/build.yml` and `.github/workflows/build-system-backend.yml`.
+All three test targets are now part of `.github/workflows/build.yml` and `.github/workflows/build-system-backend.yml`.
 
 c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
   tests/sleep_recovery_policy_test.cpp -o /tmp/sleep-recovery-test
