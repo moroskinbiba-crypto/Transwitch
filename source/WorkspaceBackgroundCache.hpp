@@ -48,9 +48,11 @@ public:
                 "[background-cache] worker unavailable; backgrounds stay on fallback\n");
     }
 
-    SDL_Texture* get(const std::string& path, int& width, int& height) {
+    SDL_Texture* get(const std::string& path, int& width, int& height,
+                     bool highPriority = true) {
         width = height = 0;
         if (!renderer_ || path.empty() || path.size() > MaxPathBytes) return nullptr;
+        if (highPriority) priorityPath_ = path;
 
         for (auto& entry : entries_) {
             if (entry.path != path) continue;
@@ -68,7 +70,7 @@ public:
             failedUntil_.erase(failed);
         }
 
-        enqueue(path);
+        enqueue(path, highPriority);
         return nullptr;
     }
 
@@ -95,6 +97,11 @@ public:
         SDL_CondBroadcast(condition_);
         SDL_UnlockMutex(mutex_);
 
+        if (!priorityPath_.empty() && decoded.path != priorityPath_) {
+            pending_.erase(decoded.path);
+            return;
+        }
+
         frameMetrics_.decodedResults++;
         frameMetrics_.decodeMs += decoded.decodeMs;
         frameMetrics_.maximumDecodeMs =
@@ -106,6 +113,7 @@ public:
         if (!decoded.success || decoded.rgba.empty() ||
             decoded.width <= 0 || decoded.height <= 0) {
             pending_.erase(decoded.path);
+            if (priorityPath_ == decoded.path) priorityPath_.clear();
             rememberFailure(decoded.path, now);
             return;
         }
@@ -113,6 +121,7 @@ public:
         const std::size_t bytes = decoded.rgba.size();
         if (bytes == 0 || bytes > MaxTextureBytes || !makeRoom(bytes)) {
             pending_.erase(decoded.path);
+            if (priorityPath_ == decoded.path) priorityPath_.clear();
             rememberFailure(decoded.path, now);
             return;
         }
@@ -121,6 +130,8 @@ public:
             decoded.rgba.data(), decoded.width, decoded.height, 32,
             decoded.width * 4, SDL_PIXELFORMAT_RGBA32);
         if (!surface) {
+            pending_.erase(decoded.path);
+            if (priorityPath_ == decoded.path) priorityPath_.clear();
             rememberFailure(decoded.path, now);
             return;
         }
@@ -135,6 +146,7 @@ public:
         if (!texture) {
             ++frameMetrics_.uploadFailures;
             pending_.erase(decoded.path);
+            if (priorityPath_ == decoded.path) priorityPath_.clear();
             rememberFailure(decoded.path, now);
             return;
         }
@@ -197,6 +209,7 @@ public:
         requests_.clear();
         completed_.clear();
         failedUntil_.clear();
+        priorityPath_.clear();
         clearTextures();
         renderer_ = nullptr;
     }
@@ -288,7 +301,7 @@ private:
         return static_cast<WorkspaceBackgroundCache*>(context)->workerLoop();
     }
 
-    void enqueue(const std::string& path) {
+    void enqueue(const std::string& path, bool highPriority) {
         if (!ensureWorker()) return;
         SDL_LockMutex(mutex_);
         if (stopWorker_) {
@@ -296,32 +309,46 @@ private:
             return;
         }
 
-        // The requested path belongs to the workspace currently being drawn.
-        // Drop queued work for abandoned desks and promote the active image.
-        for (auto it = requests_.begin(); it != requests_.end();) {
-            if (it->path == path) {
-                if (it != requests_.begin()) {
-                    Request active = std::move(*it);
-                    requests_.erase(it);
-                    requests_.push_front(std::move(active));
+        if (highPriority) {
+            bool foundQueuedRequest = false;
+            Request selected;
+            for (auto it = requests_.begin(); it != requests_.end();) {
+                if (it->path == path) {
+                    selected = std::move(*it);
+                    foundQueuedRequest = true;
+                    it = requests_.erase(it);
+                } else {
+                    pending_.erase(it->path);
+                    it = requests_.erase(it);
                 }
+            }
+            if (foundQueuedRequest) {
+                requests_.push_front(std::move(selected));
                 SDL_CondSignal(condition_);
                 SDL_UnlockMutex(mutex_);
                 return;
             }
-            pending_.erase(it->path);
-            it = requests_.erase(it);
+            if (pending_.find(path) != pending_.end()) {
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            if (requests_.size() >= MaxQueuedRequests) {
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            pending_.insert(path);
+            requests_.push_front({path, SDL_GetPerformanceCounter()});
+        } else {
+            // A fallback wallpaper may be shown while a desktop-specific
+            // background is loading, but it must not cancel or outrank it.
+            if (pending_.find(path) != pending_.end() ||
+                requests_.size() >= MaxQueuedRequests) {
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            pending_.insert(path);
+            requests_.push_back({path, SDL_GetPerformanceCounter()});
         }
-        if (pending_.find(path) != pending_.end()) {
-            SDL_UnlockMutex(mutex_);
-            return;
-        }
-        if (requests_.size() >= MaxQueuedRequests) {
-            SDL_UnlockMutex(mutex_);
-            return;
-        }
-        pending_.insert(path);
-        requests_.push_front({path, SDL_GetPerformanceCounter()});
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
     }
@@ -499,6 +526,7 @@ private:
     }
 
     SDL_Renderer* renderer_{nullptr};
+    std::string priorityPath_;
     Uint64 performanceFrequency_{0};
     double lastClearMs_{0.0};
     std::uint32_t lastClearTextures_{0};
