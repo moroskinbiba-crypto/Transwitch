@@ -705,35 +705,49 @@ private:
 
     void uploadCompleted() {
         if (!renderer_ || loadBudget_ == 0 || !mutex_) return;
-
-        // Ignore obsolete/failed results without spending the one-per-frame GPU
-        // upload budget. The worker may finish an old request after a theme or
-        // icon-pack change; generation tags prevent it entering the live cache.
         while (loadBudget_ > 0) {
             Decoded decoded;
             SDL_LockMutex(mutex_);
-            if (completed_.empty()) {
+            if (completed_.empty()) { SDL_UnlockMutex(mutex_); return; }
+
+            const Decoded& next = completed_.front();
+            const auto version = keyGenerations_.find(next.key);
+            const bool keyCurrent = version != keyGenerations_.end() &&
+                version->second == next.keyGeneration;
+            const bool currentGeneration = next.generation == generation_ && keyCurrent;
+            const bool currentPrefetch = !next.prefetched ||
+                next.prefetchGeneration == prefetchGeneration_;
+            if (!currentGeneration || !currentPrefetch) {
+                const std::string staleKey = next.key;
+                completed_.pop_front();
+                if (currentGeneration) pendingKeys_.erase(staleKey);
+                SDL_CondSignal(condition_);
+                SDL_UnlockMutex(mutex_);
+                if (currentGeneration) {
+                    requestRetryAt_.erase(staleKey);
+                    priorityRetryAt_.erase(staleKey);
+                }
+                continue;
+            }
+
+            // A first image may use up to 4 MiB; a second is uploaded only
+            // when the combined amount remains within the 6 MiB frame budget.
+            if (uploadsThisFrame_ > 0 && next.rgba.size() > uploadByteBudget_) {
                 SDL_UnlockMutex(mutex_);
                 return;
             }
+
             decoded = std::move(completed_.front());
             completed_.pop_front();
+            pendingKeys_.erase(decoded.key);
             SDL_CondSignal(condition_);
-            const auto version = keyGenerations_.find(decoded.key);
-            const bool keyCurrent = version != keyGenerations_.end() &&
-                version->second == decoded.keyGeneration;
-            const bool currentGeneration = decoded.generation == generation_ && keyCurrent;
             SDL_UnlockMutex(mutex_);
 
-            pendingKeys_.erase(decoded.key);
             requestRetryAt_.erase(decoded.key);
             priorityRetryAt_.erase(decoded.key);
-            if (!currentGeneration) continue;
             ++frameMetrics_.decodedResults;
-            frameMetrics_.decodeMs = std::max(
-                frameMetrics_.decodeMs, decoded.decodeMs);
-            frameMetrics_.queueWaitMs = std::max(
-                frameMetrics_.queueWaitMs, decoded.queueWaitMs);
+            frameMetrics_.decodeMs = std::max(frameMetrics_.decodeMs, decoded.decodeMs);
+            frameMetrics_.queueWaitMs = std::max(frameMetrics_.queueWaitMs, decoded.queueWaitMs);
 
             if (!decoded.success || decoded.rgba.empty() ||
                 decoded.width <= 0 || decoded.height <= 0) {
@@ -742,8 +756,7 @@ private:
             }
 
             const std::size_t bytes = decoded.rgba.size();
-            if (bytes == 0 || bytes > MaxTextureBytes ||
-                !makeRoom(bytes)) {
+            if (bytes == 0 || bytes > MaxTextureBytes || !makeRoom(bytes)) {
                 rememberFailure(decoded.key);
                 continue;
             }
@@ -775,8 +788,11 @@ private:
             textureBytes_ += bytes;
             frameMetrics_.uploadedBytes += bytes;
             ++frameMetrics_.uploads;
-            failedUntil_.erase(decoded.key);
+            ++uploadsThisFrame_;
+            uploadByteBudget_ = bytes >= uploadByteBudget_
+                ? 0 : uploadByteBudget_ - bytes;
             --loadBudget_;
+            failedUntil_.erase(decoded.key);
         }
     }
 
