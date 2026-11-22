@@ -111,6 +111,14 @@ public:
         SDL_UnlockMutex(mutex_);
     }
 
+    void requestDemand(std::uint32_t mask) {
+        if (!mutex_) return;
+        SDL_LockMutex(mutex_);
+        demandMask_ |= mask;
+        SDL_CondSignal(condition_);
+        SDL_UnlockMutex(mutex_);
+    }
+
     void requestQuickSettings() {
         if (!mutex_) return;
         SDL_LockMutex(mutex_);
