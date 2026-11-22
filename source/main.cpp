@@ -2842,14 +2842,17 @@ void drawScreen() {
             WHITE,mx+mw-24);
         textRole("Installed games, homebrew and system widgets",
             mx+30,my+43,desknx::ui::TextRole::Caption,MUTED,mx+mw-24);
-        struct DrawerChip { int x; int w; const char* label; };
-        const DrawerChip chips[]={{mx+28,96,"Y  SEARCH"},{mx+132,82,"X  SORT"},
-            {mx+222,112,"L/R  FILTER"},{mx+342,82,"-  CLEAR"},
-            {mx+432,126,"R STICK RESCAN"},{mx+566,72,"B  CLOSE"},
-            {mx+646,72,"A  ADD"}};
-        for(const auto& chip:chips) {
-            roundRect(chip.x,my+52,chip.w,25,9,Color{31,43,61,255});
-            text(chip.label,chip.x+7,my+61,1,WHITE,chip.x+chip.w-5);
+        const char* toolbarLabels[]={"Y  SEARCH","X  SORT","L/R  FILTER",
+            "-  CLEAR","R STICK RESCAN","B  CLOSE","A  ADD"};
+        const auto& toolbar=desknx::ui::AppLibraryToolbarControls;
+        for(int buttonIndex=0;buttonIndex<desknx::ui::AppLibraryToolbarLayout::ButtonCount;
+            ++buttonIndex) {
+            const auto bounds=toolbar.buttonRect(buttonIndex);
+            const desknx::ui::ButtonControl button{
+                bounds,desknx::ui::ButtonVariant::Toolbar,{}};
+            drawButton(button,toolbarLabels[buttonIndex],
+                bounds.x+7,bounds.y+10,bounds.x+bounds.width-5,
+                desknx::ui::TextRole::Metadata);
         }
         std::string viewLabel=std::string("FILTER  ")+
             desknx::catalog_view::FilterName(catalogueFilter)+"     SORT  "+
@@ -4522,16 +4525,30 @@ void touchInput(const SDL_Event&e) {
     if(e.type==SDL_FINGERDOWN) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(activeModal==desknx::ui::ModalLayer::AppLibrary) {
-            if(y>=122&&y<=151) {
-                if(x>=138&&x<234) searchCatalogue();
-                else if(x>=242&&x<324) cycleCatalogueSort();
-                else if(x>=332&&x<444) cycleCatalogueFilter(1);
-                else if(x>=452&&x<534){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
-                else if(x>=542&&x<668) restartCatalogueScan();
-                else if(x>=676&&x<748) closeList();
-                else if(x>=756&&x<828) addSelected();
+            const int toolbarAction=
+                desknx::ui::AppLibraryToolbarControls.itemAt(x,y);
+            if(toolbarAction>=0) {
+                switch(toolbarAction) {
+                    case 0: searchCatalogue(); break;
+                    case 1: cycleCatalogueSort(); break;
+                    case 2: cycleCatalogueFilter(1); break;
+                    case 3:
+                        catalogueQuery.clear();
+                        ++catalogueViewRevision;
+                        listIndex=0;
+                        listOffset=0;
+                        setStatus("SEARCH CLEARED",1800);
+                        break;
+                    case 4: restartCatalogueScan(); break;
+                    case 5: closeList(); break;
+                    case 6: addSelected(); break;
+                    default: break;
+                }
                 return;
             }
+            // Preserve the toolbar's empty gutters as inert space; they must
+            // not fall through into catalogue rows or the details panel.
+            if(y>=122&&y<152)return;
             if(desknx::ui::AppLibraryDetailsPanelLayout.primaryAction.contains(x,y)) {
                 addSelected();
                 return;

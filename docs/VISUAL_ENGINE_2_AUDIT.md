@@ -190,3 +190,14 @@ additional service calls.
 The host control contract test now covers all of these resolvers and interactive
 hit-test boundaries. Remaining migrations include other modals, toolbar/footer elements
 and workspace controls; this change does not claim the full UI has already been migrated.
+
+## App Library toolbar geometry update
+
+The seven App Library header actions now use `AppLibraryToolbarControls` as their
+single geometry source. The drawing loop uses the same rectangles and shared Toolbar
+button variant that touch dispatch resolves through `itemAt`. Visible chip height is
+now 30 px, and the formerly duplicated touch hit boxes have been removed. The empty
+gutters remain inert so a tap between chips cannot trigger another action.
+
+The controller shortcuts (Y/X/L/R/Minus/Right Stick/B/A) are unchanged. The host
+window-layout test covers every chip edge, the 30 px vertical bound and the gutters.

@@ -2,6 +2,9 @@
 
 #include "ConfirmationDialogLayout.hpp"
 
+#include <array>
+#include <cstddef>
+
 namespace desknx::ui {
 
 // One source of truth for repeated rows. Hit testing intentionally excludes
@@ -82,5 +85,32 @@ inline constexpr ContextMenuLayout WorkspaceOptionsContextMenuLayout{
 inline constexpr ItemListLayout LauncherSettingsOptionsLayout{
     {340,214,600,334},12,26,28
 };
+
+struct AppLibraryToolbarLayout {
+    static constexpr int ButtonCount=7;
+    std::array<ModalRect,ButtonCount> buttons{};
+
+    constexpr ModalRect buttonRect(int index) const noexcept {
+        return index>=0&&index<ButtonCount
+            ?buttons[static_cast<std::size_t>(index)]:ModalRect{};
+    }
+
+    constexpr int itemAt(int x,int y) const noexcept {
+        for(int index=0;index<ButtonCount;++index)
+            if(buttons[static_cast<std::size_t>(index)].contains(x,y))
+                return index;
+        return -1;
+    }
+};
+
+inline constexpr AppLibraryToolbarLayout AppLibraryToolbarControls{{
+    {138,122,96,30},  // Search
+    {242,122,82,30},  // Sort
+    {332,122,112,30}, // Filter
+    {452,122,82,30},  // Clear search
+    {542,122,126,30}, // Rescan
+    {676,122,72,30},  // Close
+    {756,122,72,30}   // Add
+}};
 
 } // namespace desknx::ui

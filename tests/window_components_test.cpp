@@ -52,6 +52,29 @@ int main() {
     assert(settings.itemAt(940,214)==-1);
     assert(settings.itemRect(11).inside({340,104,680,520}));
 
+    // App Library toolbar: every visible control has one exact hit rectangle.
+    const auto& toolbar=AppLibraryToolbarControls;
+    assert(AppLibraryToolbarLayout::ButtonCount==7);
+    assert(toolbar.itemAt(138,122)==0);
+    assert(toolbar.itemAt(233,151)==0);
+    assert(toolbar.itemAt(234,140)==-1);
+    assert(toolbar.itemAt(242,122)==1);
+    assert(toolbar.itemAt(323,151)==1);
+    assert(toolbar.itemAt(324,140)==-1);
+    assert(toolbar.itemAt(332,122)==2);
+    assert(toolbar.itemAt(443,151)==2);
+    assert(toolbar.itemAt(444,140)==-1);
+    assert(toolbar.itemAt(542,122)==4);
+    assert(toolbar.itemAt(667,151)==4);
+    assert(toolbar.itemAt(668,140)==-1);
+    assert(toolbar.itemAt(756,122)==6);
+    assert(toolbar.itemAt(827,151)==6);
+    assert(toolbar.itemAt(828,140)==-1);
+    assert(toolbar.itemAt(138,152)==-1);
+    assert(toolbar.itemAt(235,151)==-1); // inert gutter
+    assert(toolbar.buttonRect(6).width==72&&toolbar.buttonRect(6).height==30);
+    assert(toolbar.buttonRect(-1).width==0);
+
     // The side-panel add target exactly matches its rendered button.
     const auto& panel=AppLibraryDetailsPanelLayout;
     assert(panel.header.inside(panel.surface));

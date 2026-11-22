@@ -89,6 +89,8 @@ Successful compilation alone does not close a runtime acceptance item.
 - [x] Add badge, toggle, value-field, card and status-indicator primitives; migrate
       library badges, Settings values/edit-mode toggle, library service status, and
       System Tools/library-details cards.
+- [x] Migrate the App Library toolbar to shared Toolbar buttons and one source-of-truth
+      geometry for rendering and touch hit testing.
 - [ ] Migrate remaining modal, toolbar, footer and workspace controls to shared styles.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,
