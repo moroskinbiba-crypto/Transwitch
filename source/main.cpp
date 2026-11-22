@@ -34,6 +34,7 @@
 #include "SvgIconCache.hpp"
 #include "VisualEngine.hpp"
 #include "UiComponents.hpp"
+#include "TileRenderer.hpp"
 #include "../include/desknx/UiMotion.hpp"
 #include "../include/desknx/ModalLayer.hpp"
 #include "../include/desknx/SurfaceManager.hpp"
@@ -153,6 +154,7 @@ SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 desknx::visual::VisualEngine gVisualEngine;
 desknx::ui::UiComponents gUiComponents;
+desknx::ui::TileRenderer gTileRenderer;
 desknx::ui::SurfaceManager gSurfaceManager;
 desknx::ui::ModalLayer gModalLayer;
 bool rendererVsync=false;
@@ -4180,22 +4182,29 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
              bounds.y+(bounds.h-7*scale)/2,scale,WHITE,bounds.x+bounds.w-8);
     }
 
-    const size_t maxChars=static_cast<size_t>(std::max(8,(bounds.w-20)/12));
-    const auto& titleLines=cachedTileTitleLines(tile.title,maxChars);
-    const int stripHeight=titleLines.size()>1?44:32;
-    const int overlay=std::max(0,std::min(255,workspace.labelOpacity));
-    if(overlay>0)
+    const auto titleMetrics=desknx::ui::TileRenderer::labelLayout(
+        viewport.w,viewport.h,false,UiCornerRadius);
+    const auto& titleLines=cachedTileTitleLines(
+        tile.title,static_cast<std::size_t>(titleMetrics.maxCharacters));
+    const auto labelMetrics=desknx::ui::TileRenderer::labelLayout(
+        viewport.w,viewport.h,titleLines.size()>1,UiCornerRadius);
+    const int stripHeight=labelMetrics.stripHeight;
+    const int overlay=desknx::ui::clampTileLabelOpacity(workspace.labelOpacity);
+    if(!gTileRenderer.labelScrim(viewport,titleLines.size()>1,overlay,UiCornerRadius)&&overlay>0)
         rect(viewport.x,viewport.y+viewport.h-stripHeight,viewport.w,stripHeight,
              Color{5,9,16,static_cast<Uint8>(overlay)});
     const int titleCenter=bounds.x+bounds.w/2;
     if(titleLines.size()==1) {
-        textCentered(titleLines[0],titleCenter,bounds.y+bounds.h-stripHeight+8,
-                      2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
+        textCentered(titleLines[0],titleCenter,
+            bounds.y+bounds.h-stripHeight+labelMetrics.firstLineOffset,
+            2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
     } else {
-        textCentered(titleLines[0],titleCenter,bounds.y+bounds.h-stripHeight+3,
-                     2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
-        textCentered(titleLines[1],titleCenter,bounds.y+bounds.h-stripHeight+22,
-                     2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
+        textCentered(titleLines[0],titleCenter,
+            bounds.y+bounds.h-stripHeight+labelMetrics.firstLineOffset,
+            2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
+        textCentered(titleLines[1],titleCenter,
+            bounds.y+bounds.h-stripHeight+labelMetrics.secondLineOffset,
+            2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
     }
     // Texture rendering uses a rectangular clip; paint only the four corner
     // wedges afterwards so the actual game artwork follows the tile's 10px
@@ -4233,7 +4242,11 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         ?Color{13,29,41,236}:fill;
     const Color widgetEdge=selected?Color{92,164,255,210}:Color{255,255,255,18};
     if(artworkTile) {
-        softCard(r.x,r.y,r.w,r.h,widgetFill,widgetEdge);
+        (void)gTileRenderer.artworkFrame(r,
+            SDL_Color{widgetFill.r,widgetFill.g,widgetFill.b,widgetFill.a},
+            SDL_Color{widgetEdge.r,widgetEdge.g,widgetEdge.b,widgetEdge.a},
+            SDL_Color{accent.r,accent.g,accent.b,accent.a},
+            selected,surfaceOpacity,UiCornerRadius);
     } else if(!gUiComponents.widgetSurface(r,
         SDL_Color{themeSurfaceTint(widgetFill).r,themeSurfaceTint(widgetFill).g,
                   themeSurfaceTint(widgetFill).b,themeSurfaceTint(widgetFill).a},
@@ -8450,6 +8463,7 @@ int main(int,char**) {
     if(!gVisualEngine.initialize(renderer,SW,SH))
         desknx::diag::Write("visual","engine_init_failed","fallback=direct_sdl_primitives");
     gUiComponents.bind(&gVisualEngine,renderer);
+    gTileRenderer.bind(&gVisualEngine,&gUiComponents,renderer);
     gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
         SDL_Color{BLUE.r,BLUE.g,BLUE.b,BLUE.a},
         SDL_Color{WHITE.r,WHITE.g,WHITE.b,220},
@@ -8873,6 +8887,7 @@ int main(int,char**) {
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (storageCommitMutex) SDL_DestroyMutex(storageCommitMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
+    gTileRenderer.bind(nullptr,nullptr,nullptr);
     gUiComponents.bind(nullptr,nullptr);
     gVisualEngine.shutdown();
     if (renderer) SDL_DestroyRenderer(renderer);
