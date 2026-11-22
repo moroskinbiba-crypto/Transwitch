@@ -1,7 +1,7 @@
 # Stage 4A — Workspace placement and resource streaming
 
 ## Changes
-- Dragging or moving a tile prefers the requested origin. If that origin is occupied or cannot fit on the grid, placement scans forward in reading order and wraps once.
+- Dragging or moving a tile prefers the requested origin. If that origin is occupied (while the requested origin is still a valid grid position), placement scans forward in reading order and wraps once. Off-grid requests remain rejected.
 - The tile's previous origin is excluded from fallback placement. A truly full workspace returns failure without mutating any tile.
 - The production D-pad/touch path and the HomeNX workspace provider use the same placement policy.
 - Artwork prefetch context is now tied to workspace/list/catalogue/layout changes, not focus coordinates. Moving selection no longer cancels pending decoder work. Visible tile requests continue to promote matching queued or in-flight work.
