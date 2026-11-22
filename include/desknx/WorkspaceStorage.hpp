@@ -169,6 +169,25 @@ inline bool loadSnapshot(const Paths& paths, Snapshot& output) {
     return true;
 }
 
+inline persist::WriteStatus writeActiveWorkspaceBytes(
+    const Paths& paths, const std::string& markerBytes,
+    persist::CommitCallback commit, void* context,
+    const char* tempCommitPhase, const char* publishCommitPhase,
+    bool commitBeforePublish = false, bool keepBackupOnSuccess = true,
+    const safeio::ReplaceOperations* replaceOperations = nullptr,
+    persist::TemporaryWriteCallback writeTemporary = persist::writeTemporaryFile,
+    void* writeContext = nullptr) {
+    if (markerBytes.empty())
+        return persist::WriteStatus::InvalidArgument;
+    if (!commit)
+        commit = detail::commitNothing;
+    return persist::writeAtomically(
+        paths.activeTemp.c_str(), paths.active.c_str(), paths.activeBackup.c_str(),
+        markerBytes, commit, context, tempCommitPhase, publishCommitPhase,
+        commitBeforePublish, keepBackupOnSuccess, replaceOperations,
+        writeTemporary, writeContext);
+}
+
 inline persist::WriteStatus writeActiveWorkspace(
     const Paths& paths, const std::vector<model::Workspace>& workspaces,
     int activeWorkspace, persist::CommitCallback commit, void* context,
@@ -177,16 +196,10 @@ inline persist::WriteStatus writeActiveWorkspace(
     const safeio::ReplaceOperations* replaceOperations = nullptr,
     persist::TemporaryWriteCallback writeTemporary = persist::writeTemporaryFile,
     void* writeContext = nullptr) {
-    if (!commit)
-        commit = detail::commitNothing;
     const std::string bytes =
         layout::serializeActiveWorkspaceState(workspaces, activeWorkspace);
-    if (bytes.empty())
-        return persist::WriteStatus::InvalidArgument;
-
-    return persist::writeAtomically(
-        paths.activeTemp.c_str(), paths.active.c_str(), paths.activeBackup.c_str(),
-        bytes, commit, context, tempCommitPhase, publishCommitPhase,
+    return writeActiveWorkspaceBytes(
+        paths, bytes, commit, context, tempCommitPhase, publishCommitPhase,
         commitBeforePublish, keepBackupOnSuccess, replaceOperations,
         writeTemporary, writeContext);
 }
