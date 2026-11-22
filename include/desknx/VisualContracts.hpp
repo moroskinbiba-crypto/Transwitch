@@ -141,6 +141,10 @@ struct ChromeRect {
     constexpr bool contains(int px,int py) const noexcept {
         return width>0&&height>0&&px>=x&&px<x+width&&py>=y&&py<y+height;
     }
+    constexpr bool inside(const ChromeRect& outer) const noexcept {
+        return x>=outer.x&&y>=outer.y&&x+width<=outer.x+outer.width&&
+            y+height<=outer.y+outer.height;
+    }
 };
 enum class WorkspaceFooterAction { None,DecreaseTileSize,IncreaseTileSize,RemoveTile };
 struct WorkspaceFooterLayout {
@@ -159,6 +163,31 @@ struct WorkspaceFooterLayout {
     }
 };
 enum class WorkspaceDockAction { None,SelectWorkspace,AddWorkspace,OpenWorkspaceMenu,OpenWorkspacePicker,ToggleEditMode };
+
+struct ConfirmationDialogLayout {
+    ChromeRect surface;
+    ChromeRect primaryButton;
+    ChromeRect secondaryButton;
+    ChromeRect footer;
+    int titleX{0},titleY{0};
+    int subtitleX{0},subtitleY{0};
+    int descriptionX{0},descriptionY{0};
+    int primaryLabelX{0},primaryLabelY{0};
+    int secondaryLabelX{0},secondaryLabelY{0};
+};
+
+inline constexpr ConfirmationDialogLayout WorkspaceDeleteConfirmationLayout{
+    {360,242,560,240},
+    {405,382,210,48},
+    {635,382,240,48},
+    {405,444,485,18},
+    405,270,
+    405,314,
+    405,346,
+    466,399,
+    706,399
+};
+
 struct WorkspaceDockLayout {
     static constexpr int TabX=50,TabWidth=132,TabStep=142,VisibleTabCount=5,MaximumWorkspaceCount=12;
     // Intentionally broad for hold-to-drag and page-swipe continuity.

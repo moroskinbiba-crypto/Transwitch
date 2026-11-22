@@ -388,3 +388,11 @@ SensorService and ModalStack were deliberately not copied: the recovered build a
 has SystemTelemetry plus a separate off-render-thread SD statistics worker, and its
 SurfaceManager/ModalLayer is the authoritative surface/compositor owner. Adding the
 parallel services would duplicate PSM and modal ownership rather than improve them.
+
+
+## Shared confirmation dialog geometry
+
+The workspace-delete confirmation now reads its surface, button, footer and text
+positions from one tested geometry contract. Rendering and touch hit-testing share
+the same half-open rectangles, replacing duplicated numeric bounds without changing
+the established visual appearance or controller-button behavior.

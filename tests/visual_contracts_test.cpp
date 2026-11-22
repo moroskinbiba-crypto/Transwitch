@@ -51,6 +51,21 @@ int main() {
  assert(truncated.size()==2&&truncated[0]==u8"Привет"&&truncated[1]==u8"мир…");
 
  using Dock=WorkspaceDockLayout; using Footer=WorkspaceFooterLayout;
+
+ const auto& confirm=WorkspaceDeleteConfirmationLayout;
+ assert(confirm.surface.x==360&&confirm.surface.y==242);
+ assert(confirm.surface.width==560&&confirm.surface.height==240);
+ assert(confirm.primaryButton.inside(confirm.surface));
+ assert(confirm.secondaryButton.inside(confirm.surface));
+ assert(confirm.footer.inside(confirm.surface));
+ assert(confirm.primaryButton.contains(405,382));
+ assert(confirm.primaryButton.contains(614,429));
+ assert(!confirm.primaryButton.contains(615,429));
+ assert(confirm.secondaryButton.contains(635,382));
+ assert(confirm.secondaryButton.contains(874,429));
+ assert(!confirm.secondaryButton.contains(875,429));
+ assert(!confirm.primaryButton.contains(405,430));
+
  assert(Footer::surface.contains(28,558)&&Footer::surface.contains(1251,613));
  assert(!Footer::surface.contains(1252,613));
  assert(Footer::actionAt(650,571)==WorkspaceFooterAction::DecreaseTileSize);

@@ -5572,19 +5572,28 @@ void drawScreen() {
              360,608,1,MUTED,730);
     }
     if(gSurfaceManager.contains(SurfaceId::DeleteConfirmation)) {
-
+        const auto& dialog=desknx::ui::WorkspaceDeleteConfirmationLayout;
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
-        modalCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100},true);
-        text("DELETE WORKSPACE?",405,270,3,WHITE,890);
-        text(desks[static_cast<size_t>(deskIndex)].name,405,314,2,MUTED,890);
+        modalCard(dialog.surface.x,dialog.surface.y,dialog.surface.width,dialog.surface.height,
+            Color{24,27,38,255},Color{255,99,112,100},true);
+        const int textRight=dialog.surface.x+dialog.surface.width-30;
+        text("DELETE WORKSPACE?",dialog.titleX,dialog.titleY,3,WHITE,textRight);
+        text(desks[static_cast<size_t>(deskIndex)].name,
+            dialog.subtitleX,dialog.subtitleY,2,MUTED,textRight);
         text(std::to_string(tileCount)+" SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
-             405,346,1,MUTED,890);
-        roundRect(405,382,210,48,12,Color{112,38,42,255});
-        outline(405,382,210,48,Color{255,69,58,130});
-        text("DELETE",466,399,2,WHITE,600);
-        roundRect(635,382,240,48,12,Color{54,57,66,255});
-        text("CANCEL",706,399,2,WHITE,865);
-        text("A CONFIRM     B CANCEL",405,444,1,MUTED,890);
+            dialog.descriptionX,dialog.descriptionY,1,MUTED,textRight);
+        roundRect(dialog.primaryButton.x,dialog.primaryButton.y,
+            dialog.primaryButton.width,dialog.primaryButton.height,12,Color{112,38,42,255});
+        outline(dialog.primaryButton.x,dialog.primaryButton.y,
+            dialog.primaryButton.width,dialog.primaryButton.height,Color{255,69,58,130});
+        text("DELETE",dialog.primaryLabelX,dialog.primaryLabelY,2,WHITE,
+            dialog.primaryButton.x+dialog.primaryButton.width-15);
+        roundRect(dialog.secondaryButton.x,dialog.secondaryButton.y,
+            dialog.secondaryButton.width,dialog.secondaryButton.height,12,Color{54,57,66,255});
+        text("CANCEL",dialog.secondaryLabelX,dialog.secondaryLabelY,2,WHITE,
+            dialog.secondaryButton.x+dialog.secondaryButton.width-10);
+        text("A CONFIRM     B CANCEL",dialog.footer.x,dialog.footer.y,1,MUTED,
+            dialog.footer.x+dialog.footer.width);
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
     if(gSurfaceManager.contains(SurfaceId::RecentGames)) {
@@ -8231,8 +8240,9 @@ void touchInput(const SDL_Event&e) {
     }
     if(e.type==SDL_FINGERDOWN && gSurfaceManager.isTop(SurfaceId::DeleteConfirmation)) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
-        else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
+        const auto& dialog=desknx::ui::WorkspaceDeleteConfirmationLayout;
+        if(dialog.primaryButton.contains(x,y))keyInput(HidNpadButton_A,false);
+        else if(dialog.secondaryButton.contains(x,y))keyInput(HidNpadButton_B,false);
         return;
     }
     if(e.type==SDL_FINGERDOWN&&!gSurfaceManager.hasBlockingSurface()) {
