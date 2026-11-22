@@ -248,17 +248,15 @@ private:
             if (!left && !right) return;
             if (left && right) {
                 HidPowerInfo leftInfo{}, rightInfo{};
-                if (R_SUCCEEDED(hidGetNpadPowerInfoSplit(id, &leftInfo, &rightInfo))) {
-                    if (!out.left.connected) assignJoycon(out.left, leftInfo);
-                    if (!out.right.connected) assignJoycon(out.right, rightInfo);
-                }
+                hidGetNpadPowerInfoSplit(id, &leftInfo, &rightInfo);
+                if (!out.left.connected) assignJoycon(out.left, leftInfo);
+                if (!out.right.connected) assignJoycon(out.right, rightInfo);
                 return;
             }
             HidPowerInfo info{};
-            if (R_SUCCEEDED(hidGetNpadPowerInfoSingle(id, &info))) {
-                if (left && !out.left.connected) assignJoycon(out.left, info);
-                if (right && !out.right.connected) assignJoycon(out.right, info);
-            }
+            hidGetNpadPowerInfoSingle(id, &info);
+            if (left && !out.left.connected) assignJoycon(out.left, info);
+            if (right && !out.right.connected) assignJoycon(out.right, info);
         };
         inspect(HidNpadIdType_Handheld);
         for (int i = 0; i < 8; ++i)
