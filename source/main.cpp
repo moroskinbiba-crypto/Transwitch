@@ -928,16 +928,16 @@ void text(const std::string& value,int x,int y,int scale,Color c,int right=1260)
         const auto decoded=desknx::ui::DecodeUtf8Codepoint(localized,offset);
         offset+=decoded.length>0?decoded.length:1;
         const std::uint32_t codepoint=decoded.codepoint;
-        if(codepoint=='\\r'||codepoint=='\\n') {
-            if(codepoint=='\\r'&&offset<localized.size()) {
+        if(codepoint=='\r'||codepoint=='\n') {
+            if(codepoint=='\r'&&offset<localized.size()) {
                 const auto next=desknx::ui::DecodeUtf8Codepoint(localized,offset);
-                if(next.valid&&next.codepoint=='\\n')offset+=next.length;
+                if(next.valid&&next.codepoint=='\n')offset+=next.length;
             }
             px=x;
             py+=8*scale;
             continue;
         }
-        if(codepoint=='\\t') {
+        if(codepoint=='\t') {
             px+=24*scale;
             continue;
         }
