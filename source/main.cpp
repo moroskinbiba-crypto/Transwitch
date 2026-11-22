@@ -1351,37 +1351,33 @@ void applyMediaPickerSelection(int index) {
             setStatus("ICON MUST BE A VALID IMAGE UNDER 2 MB",3000);return;
         }
         std::string extension=selected.path.substr(selected.path.find_last_of('.'));
-        for(char& ch:extension)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        mkdir(GAME_ICON_OVERRIDES_DIR,0777);
+        for(char& ch:extension)
+            ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        const std::string titleId=pendingGameIconTitleId;
         const std::string target=std::string(GAME_ICON_OVERRIDES_DIR)+"/"+
-            pendingGameIconTitleId+extension;
-        const std::string temporary=target+".tmp";
-        std::ifstream source(selected.path,std::ios::binary);
-        std::ofstream destination(temporary,std::ios::binary|std::ios::trunc);
-        if(!source||!destination){setStatus("CANNOT READ OR WRITE GAME ICON",3000);return;}
-        char buffer[8192];
-        while(source) {
-            source.read(buffer,sizeof(buffer));
-            const std::streamsize bytes=source.gcount();
-            if(bytes>0)destination.write(buffer,bytes);
-        }
-        destination.flush();const bool copied=!source.bad()&&destination.good();destination.close();
-        if(!copied){std::remove(temporary.c_str());setStatus("GAME ICON COPY FAILED",3000);return;}
-        if(!commitSdCard("game-icon-temp")){std::remove(temporary.c_str());return;}
-        const auto replaceRc=desknx::safeio::replaceFilePreservingOnFailure(
-            temporary.c_str(),target.c_str(),(target+".bak").c_str(),true);
-        if(replaceRc!=desknx::safeio::ReplaceStatus::Success) {
-            std::remove(temporary.c_str());setStatus("GAME ICON SAVE FAILED",3000);return;
-        }
+            titleId+extension;
+
+        AuxiliaryFileSaveJob job;
+        job.sourcePath=selected.path;
+        job.copySourceToTemporary=true;
+        job.maximumSourceBytes=2u*1024u*1024u;
+        job.temporaryPath=target+".tmp";
+        job.targetPath=target;
+        job.backupPath=target+".bak";
+        job.directory=GAME_ICON_OVERRIDES_DIR;
+        job.tempCommitOperation="game-icon-temp";
+        job.publishCommitOperation="game-icon-publish";
+        job.failureMessage="GAME ICON SAVE FAILED";
+        job.invalidateGameData=titleId;
         for(const char* ext:{".svg",".jpg",".jpeg",".png"}) {
             const std::string obsolete=std::string(GAME_ICON_OVERRIDES_DIR)+"/"+
-                pendingGameIconTitleId+ext;
-            if(obsolete!=target)std::remove(obsolete.c_str());
+                titleId+ext;
+            if(obsolete!=target)job.obsoletePaths.push_back(obsolete);
         }
-        gIconCache.invalidate(Kind::Game,pendingGameIconTitleId);
+        scheduleAuxiliaryFileSave(AuxiliarySaveSlot::GameIcon,std::move(job),0);
         pendingGameIconTitleId.clear();
         mediaPickerOpen=false;
-        setStatus("CUSTOM GAME ICON ASSIGNED",2500);
+        setStatus("CUSTOM GAME ICON SAVE QUEUED",2500);
         return;
     }
     if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
@@ -2042,12 +2038,10 @@ void pumpSteamGridDbPicker() {
         // Flush the cache-owned thumbnail to SD before asking IconCache's
         // worker to reopen it. This keeps the visible tile in sync with the
         // image that the picker just confirmed.
-        const bool previewCommitted=commitSdCard("steamgriddb-preview");
-        desknx::diag::Write("steamgriddb","preview_commit",
-            "success=%d title=%016llX",previewCommitted?1:0,
-            static_cast<unsigned long long>(steamGridDbCurrentTitleId));
-        if(!steamGridDbCurrentGameData.empty())
-            gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
+        scheduleAuxiliaryCommit(AuxiliarySaveSlot::SteamGridPreview,
+            "steamgriddb-preview",steamGridDbCurrentGameData);
+        desknx::diag::Write("steamgriddb","preview_commit_queued",
+            "title=%016llX",static_cast<unsigned long long>(steamGridDbCurrentTitleId));
         setStatus(languageRussian?"МИНИАТЮРА ПРИМЕНЕНА — ЗАГРУЖАЕТСЯ ОРИГИНАЛ":
             "PREVIEW APPLIED — FULL ARTWORK IS DOWNLOADING",4200);
         if(steamGridDbPickerOpen)steamGridDbClosePicker();
@@ -2063,15 +2057,13 @@ void pumpSteamGridDbPicker() {
     if(state.status==desknx::steamgriddb::ServiceStatus::Applied&&steamGridDbApplyPending) {
         // SteamGridDbCache writes with stdio on its worker. Explicitly commit
         // the mounted FAT volume before the icon worker reopens the active file.
-        const bool artworkCommitted=commitSdCard("steamgriddb-artwork");
+        scheduleAuxiliaryCommit(AuxiliarySaveSlot::SteamGridArtwork,
+            "steamgriddb-artwork",steamGridDbCurrentGameData);
         const std::string activePath=gSteamGridDbService.cache().selectedPath(
             steamGridDbCurrentTitleId);
-        desknx::diag::Write("steamgriddb","artwork_committed",
-            "success=%d active_path=%s title=%016llX",
-            artworkCommitted?1:0,activePath.c_str(),
+        desknx::diag::Write("steamgriddb","artwork_commit_queued",
+            "active_path=%s title=%016llX",activePath.c_str(),
             static_cast<unsigned long long>(steamGridDbCurrentTitleId));
-        if(!steamGridDbCurrentGameData.empty())
-            gIconCache.invalidate(Kind::Game,steamGridDbCurrentGameData);
 
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
