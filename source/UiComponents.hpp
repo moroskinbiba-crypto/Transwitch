@@ -89,6 +89,27 @@ public:
         return width > 0 && fillRect(x, y, width, 1, color);
     }
 
+    // Common outer shells for modal panels and confirmation dialogs. Content
+    // layout remains with each surface; these methods standardize elevation,
+    // radius and border behavior without touching focus or input ownership.
+    bool modalSurface(const SDL_Rect& bounds, SDL_Color fill, SDL_Color edge,
+                      int opacity = 255) {
+        if (!valid(bounds)) return false;
+        return surface(bounds, fill, edge, tokens_.radiusXl, true, opacity);
+    }
+
+    bool dialogSurface(const SDL_Rect& bounds, SDL_Color fill, SDL_Color edge,
+                       int opacity = 255) {
+        if (!valid(bounds)) return false;
+        return surface(bounds, fill, edge, tokens_.radiusLg, true, opacity);
+    }
+
+    bool sidePanelSurface(const SDL_Rect& bounds, SDL_Color fill, SDL_Color edge,
+                          int opacity = 255) {
+        if (!valid(bounds)) return false;
+        return surface(bounds, fill, edge, tokens_.radiusLg, true, opacity);
+    }
+
     bool button(const SDL_Rect& bounds, ButtonVariant variant,
                 ButtonState state, SDL_Color fill, SDL_Color edge,
                 int radius = 10, SDL_Color accent = SDL_Color{0,0,0,0}) {
