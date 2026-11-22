@@ -91,14 +91,17 @@ TTF/shared/custom-font rendering.
 Metadata) mapped to actual font sizes/weights/line metrics. Keep a predictable Cyrillic
 fallback and test it when shared-font initialization fails.
 
-### 5. No shared motion controller was found in the inspected path
+### 5. Motion is now centralized for the first interaction
 
-The current renderer contains no central duration/easing/transition owner. Modal
-visibility is boolean-driven and rendered immediately.
+`MotionController.hpp` provides deterministic Linear, EaseOutCubic and EaseInOutCubic
+tracks, with Full, Reduced and LowPerformance duration policies. A 160 ms eased track
+now drives selected-tile focus emphasis; state navigation remains immediate and only
+the visual emphasis is animated. Host tests cover easing, reduced/low-performance
+modes and 32-bit tick wraparound.
 
-**Required correction:** add one small deterministic motion controller after modal
-ownership is centralized. It must support reduced-motion and low-performance modes,
-and must never delay input or workspace state changes.
+**Still required:** expose the mode in launcher settings and migrate modal, panel and
+workspace transitions in small slices. Keep input/state changes immediate; animation
+must remain presentation-only.
 
 ## Implementation order
 

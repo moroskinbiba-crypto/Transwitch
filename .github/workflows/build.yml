@@ -86,6 +86,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/window_components_test.cpp -o /tmp/desknx-window-components-test
           /tmp/desknx-window-components-test
 
+      - name: Test deterministic motion controller and reduced modes
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/motion_controller_test.cpp -o /tmp/desknx-motion-test
+          /tmp/desknx-motion-test
+
       - name: Test semantic typography role tokens
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/typography_test.cpp -o /tmp/desknx-typography-test

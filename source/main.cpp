@@ -25,6 +25,7 @@
 #include "../include/desknx/ConfirmationDialogLayout.hpp"
 #include "../include/desknx/WindowComponents.hpp"
 #include "../include/desknx/Typography.hpp"
+#include "../include/desknx/MotionController.hpp"
 
 #include <algorithm>
 #include <array>
@@ -236,6 +237,10 @@ FontRenderer gFontRenderer;
 IconCache gIconCache;
 desknx::runtime::SensorService gSensorService;
 desknx::runtime::RollingMetrics gRuntimeMetrics;
+desknx::ui::MotionController gMotionController;
+desknx::ui::MotionTrack gTileFocusTransition{};
+int gMotionWorkspace=-1,gMotionSelectedX=-1,gMotionSelectedY=-1;
+float gTileFocusProgress=1.0f;
 Uint64 gInputStartedCounter=0;
 Uint64 gWorkspaceSwitchStartedCounter=0;
 Uint64 gFrameRenderStartedCounter=0;
@@ -2304,18 +2309,24 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     const Color accent=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
+    const float emphasis=selected?std::max(0.0f,std::min(1.0f,gTileFocusProgress)):1.0f;
+    const Uint8 focusAlpha=static_cast<Uint8>(155.0f+100.0f*emphasis);
+    const Uint8 innerFocusAlpha=static_cast<Uint8>(35.0f+55.0f*emphasis);
+    const Color selectedEdge{92,164,255,focusAlpha};
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
-             selected?Color{92,164,255,210}:Color{255,255,255,18});
+             selected?selectedEdge:Color{255,255,255,18});
 
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
         drawTileCover(t,workspace,r,fill,selected);
         if(selected) {
-            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
-            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
+            outline(r.x,r.y,r.w,r.h,Color{139,190,255,focusAlpha});
+            outline(r.x+1,r.y+1,r.w-2,r.h-2,
+                Color{255,255,255,innerFocusAlpha});
         }
     } else {
-        roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
+        const Color focusAccent{BLUE.r,BLUE.g,BLUE.b,focusAlpha};
+        roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?focusAccent:accent);
         const bool compact=t.w==1&&t.h==1;
         const bool wide=t.h==1&&t.w>=2;
         const int left=r.x+18, right=r.x+r.w-14;
@@ -2562,6 +2573,16 @@ desknx::ui::ModalStack collectModalStack() {
 
 void drawScreen() {
     const desknx::ui::ModalStack modalStack=collectModalStack();
+    const Uint32 motionNow=SDL_GetTicks();
+    if(deskIndex!=gMotionWorkspace||selectedX!=gMotionSelectedX||
+       selectedY!=gMotionSelectedY) {
+        gMotionWorkspace=deskIndex;
+        gMotionSelectedX=selectedX;
+        gMotionSelectedY=selectedY;
+        gTileFocusTransition=gMotionController.begin(
+            0.0f,1.0f,motionNow,160,desknx::ui::MotionCurve::EaseOutCubic);
+    }
+    gTileFocusProgress=gMotionController.sample(gTileFocusTransition,motionNow);
     gIconCache.beginFrame();
     // Every frame starts from a known SDL clip/blend state. A previous image or
     // modal path must never constrain the next full-screen clear or composition.
