@@ -483,17 +483,12 @@ private:
                     requests_.front().priority <= completed_.back().priority))) {
                 SDL_CondWait(condition_, mutex_);
             }
-            if (stopWorker_) {
-                SDL_UnlockMutex(mutex_);
-                break;
-            }
+            if (stopWorker_) { SDL_UnlockMutex(mutex_); break; }
             request = std::move(requests_.front());
             requests_.pop_front();
+            if (request.prefetched) inFlightPrefetchKeys_.insert(request.key);
             SDL_UnlockMutex(mutex_);
 
-            // The Switch target is built with -fno-exceptions. Input file
-            // size and decoded dimensions are bounded before allocating RGBA
-            // storage, so decoder failures are reported through Decoded::success.
             const Uint64 decodeStarted = SDL_GetPerformanceCounter();
             const Uint64 decodeStartedMs = SDL_GetTicks64();
             Decoded decoded = decode(request);
@@ -501,24 +496,30 @@ private:
             const Uint64 frequency = SDL_GetPerformanceFrequency();
             decoded.decodeMs = frequency > 0 && decodeFinished >= decodeStarted
                 ? static_cast<double>(decodeFinished - decodeStarted) * 1000.0 /
-                    static_cast<double>(frequency)
-                : 0.0;
+                    static_cast<double>(frequency) : 0.0;
             decoded.queueWaitMs = decodeStartedMs >= request.enqueuedAtMs
-                ? static_cast<double>(decodeStartedMs - request.enqueuedAtMs)
-                : 0.0;
+                ? static_cast<double>(decodeStartedMs - request.enqueuedAtMs) : 0.0;
 
             SDL_LockMutex(mutex_);
+            bool promoted = false;
+            if (request.prefetched) {
+                inFlightPrefetchKeys_.erase(request.key);
+                promoted = promotedPrefetchKeys_.erase(request.key) != 0;
+            }
             const auto version = keyGenerations_.find(request.key);
             const bool keyCurrent = version != keyGenerations_.end() &&
                 version->second == request.keyGeneration;
-            if (!stopWorker_ && request.generation == generation_ && keyCurrent) {
-                // Keep completed images ordered by priority too: decoding can
-                // finish out of order, so FIFO would make a new selected cover
-                // wait behind earlier off-screen prefetches.
+            const bool requestCurrent =
+                !stopWorker_ && request.generation == generation_ && keyCurrent;
+            const bool prefetchCurrent = !request.prefetched ||
+                request.prefetchGeneration == prefetchGeneration_ || promoted;
+
+            if (requestCurrent && prefetchCurrent) {
                 if (completed_.size() >= MaxCompletedImages) {
-                    if (decoded.priority > completed_.back().priority)
+                    if (decoded.priority > completed_.back().priority) {
+                        pendingKeys_.erase(completed_.back().key);
                         completed_.pop_back();
-                    else {
+                    } else {
                         pendingKeys_.erase(request.key);
                         SDL_CondBroadcast(condition_);
                         SDL_UnlockMutex(mutex_);
@@ -529,6 +530,8 @@ private:
                     completed_.begin(), completed_.end(),
                     [&](const Decoded& item) { return item.priority < decoded.priority; });
                 completed_.insert(position, std::move(decoded));
+            } else if (requestCurrent) {
+                pendingKeys_.erase(request.key);
             }
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
@@ -537,29 +540,42 @@ private:
     }
 
     bool enqueue(const desknx::model::Tile& tile, const std::string& key,
-                 int priority) {
+                 int priority, bool prefetched) {
         if (!ensureWorker()) return false;
+        Request request;
+        request.kind = tile.kind;
+        request.title = tile.title;
+        request.data = tile.data;
+        request.key = key;
+        request.customDirectory = customIconPackDir_;
+        request.gameOverrideDirectory = gameIconOverridesDir_;
+        request.priority = priority;
+        request.prefetched = prefetched;
 
         SDL_LockMutex(mutex_);
-        if (stopWorker_) {
-            SDL_UnlockMutex(mutex_);
-            return false;
-        }
+        if (stopWorker_) { SDL_UnlockMutex(mutex_); return false; }
 
-        if (pendingKeys_.find(key) != pendingKeys_.end()) {
-            const auto queued = std::find_if(requests_.begin(), requests_.end(),
-                [&](const Request& item) { return item.key == key; });
-            if (queued != requests_.end() && priority > queued->priority) {
+        const auto queued = std::find_if(requests_.begin(), requests_.end(),
+            [&](const Request& item) { return item.key == key; });
+        if (queued != requests_.end()) {
+            if (priority > queued->priority || (!prefetched && queued->prefetched)) {
                 Request promoted = std::move(*queued);
                 requests_.erase(queued);
-                promoted.priority = priority;
+                promoted.priority = std::max(promoted.priority, priority);
+                if (!prefetched) promoted.prefetched = false;
                 const auto position = std::find_if(
                     requests_.begin(), requests_.end(),
-                    [&](const Request& item) { return item.priority < priority; });
+                    [&](const Request& item) { return item.priority < promoted.priority; });
                 requests_.insert(position, std::move(promoted));
                 SDL_CondSignal(condition_);
             }
-            // The same key is either queued or currently being decoded.
+            SDL_UnlockMutex(mutex_);
+            return true;
+        }
+
+        if (pendingKeys_.find(key) != pendingKeys_.end()) {
+            if (!prefetched && inFlightPrefetchKeys_.find(key) != inFlightPrefetchKeys_.end())
+                promotedPrefetchKeys_.insert(key);
             SDL_UnlockMutex(mutex_);
             return true;
         }
@@ -573,20 +589,13 @@ private:
             requests_.pop_back();
         }
 
-        Request request;
-        request.kind = tile.kind;
-        request.title = tile.title;
-        request.data = tile.data;
-        request.key = key;
-        request.customDirectory = customIconPackDir_;
-        request.gameOverrideDirectory = gameIconOverridesDir_;
-        request.priority = priority;
         request.generation = generation_;
         request.keyGeneration = keyGenerations_[key];
+        request.prefetchGeneration = prefetchGeneration_;
         request.enqueuedAtMs = SDL_GetTicks64();
         const auto position = std::find_if(
             requests_.begin(), requests_.end(),
-            [&](const Request& queued) { return queued.priority < priority; });
+            [&](const Request& item) { return item.priority < request.priority; });
         requests_.insert(position, std::move(request));
         pendingKeys_.insert(key);
         SDL_CondSignal(condition_);
@@ -600,8 +609,10 @@ private:
         result.data=request.data;
         result.key=request.key;
         result.generation=request.generation;
-        result.keyGeneration=request.keyGeneration;
-        result.priority=request.priority;
+        result.keyGeneration = request.keyGeneration;
+        result.prefetchGeneration = request.prefetchGeneration;
+        result.priority = request.priority;
+        result.prefetched = request.prefetched;
         const std::string defaultPath=desknx::model::iconCachePath(request.kind,request.data);
         if(defaultPath.empty())return result;
         // SteamGridDB selection is the active artwork for this title. Legacy
@@ -1091,6 +1102,7 @@ private:
     SDL_Thread* worker_{nullptr};
     bool stopWorker_{false};
     std::uint64_t generation_{1};
+    std::uint64_t prefetchGeneration_{1};
 
     std::string customIconPackDir_;
     std::string gameIconOverridesDir_;
@@ -1101,12 +1113,16 @@ private:
     // Protected by mutex_: cancel one in-flight title without flushing the queue.
     std::unordered_map<std::string, std::uint64_t> keyGenerations_;
     std::unordered_set<std::string> pendingKeys_;
+    std::unordered_set<std::string> inFlightPrefetchKeys_;
+    std::unordered_set<std::string> promotedPrefetchKeys_;
     std::deque<Request> requests_;
     std::deque<Decoded> completed_;
 
     std::uint64_t clock_{0};
     Uint32 lastPruneTick_{0};
-    std::size_t loadBudget_{1};
+    std::size_t loadBudget_{0};
+    std::size_t uploadByteBudget_{0};
+    std::size_t uploadsThisFrame_{0};
     std::size_t textureBytes_{0};
     FrameMetrics frameMetrics_{};
     FrameMetrics lastFrameMetrics_{};
