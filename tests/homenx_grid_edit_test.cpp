@@ -153,6 +153,23 @@ void testResizeSupportsPortraitShapeButRejectsUnsupportedWidth() {
     assert(provider.activeWorkspace()->tiles[0].h == 3);
 }
 
+void testResizeSelectedTileRelocatesWhenExpansionCollides() {
+    Workspace desk{"Resize relocation", {}};
+    desk.tiles.push_back(makeTile(Kind::Clock, "Clock", "widget://clock", 0, 0, 1, 1));
+    desk.tiles.push_back(makeTile(Kind::Nro, "Blocker", "sdmc:/switch/blocker.nro", 1, 0, 1, 1));
+    int selectedX = 0;
+    int selectedY = 0;
+
+    // 1x1 -> 2x1 would overlap the blocker at (1,0). The D-pad path now
+    // relocates to (2,0), matching HomeNXWorkspaceProvider::resizeTile().
+    assert(desknx::workspace_ops::resizeSelectedTile(desk, selectedX, selectedY, true));
+    const Tile& resized = desk.tiles[0];
+    assert(resized.x == 2 && resized.y == 0);
+    assert(resized.w == 2 && resized.h == 1);
+    assert(selectedX == 2 && selectedY == 0);
+    assert(!overlap(resized, desk.tiles[1]));
+}
+
 void testResizeStepRestoresPortraitTwoByThree() {
     Workspace desk{"Portrait",{}};
     desk.tiles.push_back(makeTile(Kind::Game,"Portrait","0100000000003000",0,0,3,2));
@@ -272,6 +289,7 @@ int main() {
     testMoveToSameCellIsNotAnEdit();
     testMoveOfUnknownTileIsRefused();
     testResizeInPlace();
+    testResizeSelectedTileRelocatesWhenExpansionCollides();
     testResizeSupportsPortraitShapeButRejectsUnsupportedWidth();
     testResizeStepRestoresPortraitTwoByThree();
     testResizeWithoutRoomIsRefused();
