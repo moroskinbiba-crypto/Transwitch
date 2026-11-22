@@ -4,7 +4,9 @@
 #include "ProductionPersistence.hpp"
 
 #include <cstdio>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -81,6 +83,14 @@ inline bool validateActive(const std::string& bytes, void* opaque) {
 
 inline bool commitNothing(void*, const char*) {
     return true;
+}
+
+inline bool ensureDirectory(const Paths& paths) {
+    if (paths.directory.empty())
+        return false;
+    std::error_code error;
+    std::filesystem::create_directories(paths.directory, error);
+    return !error;
 }
 
 inline void removeTemps(const Paths& paths) {
@@ -179,6 +189,8 @@ inline persist::WriteStatus writeActiveWorkspaceBytes(
     void* writeContext = nullptr) {
     if (markerBytes.empty())
         return persist::WriteStatus::InvalidArgument;
+    if (!detail::ensureDirectory(paths))
+        return persist::WriteStatus::OpenFailed;
     if (!commit)
         commit = detail::commitNothing;
     return persist::writeAtomically(
@@ -225,6 +237,10 @@ inline SnapshotWriteResult writeSnapshotBytes(
         !tempCommitPhase || !publishCommitPhase || !writeTemporary ||
         layoutBytes.empty() || activeBytes.empty()) {
         result.status = persist::WriteStatus::InvalidArgument;
+        return result;
+    }
+    if (!detail::ensureDirectory(paths)) {
+        result.status = persist::WriteStatus::OpenFailed;
         return result;
     }
     if (!commit)
