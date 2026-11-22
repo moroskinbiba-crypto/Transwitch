@@ -26,7 +26,10 @@ int main() {
     scheduler.request(1300, 450, false);
     scheduler.request(1600, 450, false);
     scheduler.request(1900, 450, false);
-    assert(!scheduler.ready(2449));
+    scheduler.request(2200, 450, false);
+    scheduler.request(2500, 450, false);
+    scheduler.request(2800, 450, false);
+    assert(!scheduler.ready(2999));
     assert(scheduler.ready(3000)); // max deferral from first request
     assert(scheduler.take() == LayoutSaveKind::Full);
 
