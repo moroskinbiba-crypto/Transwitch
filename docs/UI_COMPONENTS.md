@@ -1,33 +1,35 @@
-# Transwitch UI component layer
+# Transwitch UI component layer — Visual Engine 1.0
 
 ## Purpose
 
-The UI component layer centralizes presentation without moving input handling or application logic into widgets. Hit rectangles, key mappings, workspace edits and launch dispatch remain owned by main.cpp.
+The component layer centralizes presentation without moving input handling or application logic into widgets. Hit rectangles, key mappings, workspace edits and launch dispatch remain owned by the launcher controller.
 
 ## Components
 
-- Surface: layered fill, inset edge and optional low-cost shadow. The existing opacity setting scales both the surface and its edge consistently.
-- Button: Glass, Rail, Minimal, Chip and Solid variants. Active, focused and disabled states are resolved by pure presentation rules.
-- Divider: one-pixel themed separator.
+- **Surface:** theme-token fill, true rounded outline and optional three-layer low-alpha shadow.
+- **Widget surface:** shared surface, top accent rail and optional cached radial glow when focused.
+- **Button:** Glass, Rail, Minimal, Chip and Solid variants. Active, focused, hovered, pressed and disabled states are resolved by pure presentation rules.
+- **Progress bar:** normalized progress with clamping for NaN, infinities and values outside 0..1.
+- **Divider:** semantic one-pixel separator.
 
-Components consume theme tokens (accent, focus and edge) and explicit per-control colors. No component owns SDL_Renderer or textures. All SDL drawing stays on the main render thread, and a direct SDL fallback remains available if a Visual Engine call fails.
+## Rules
 
-## Migrated controls
+- Components accept bounds and visual state; they never own input or decide actions.
+- No component reads SD, calls a system service, waits on a worker or performs a network request.
+- All SDL drawing and texture use remains on the render thread.
+- A failed optional engine primitive falls back to a direct SDL implementation where a safe fallback exists.
+- Existing aggregate initialization of the first four theme token fields remains source-compatible.
+- Focus is visible through an outline/ring and accent treatment, not only a color change.
+- Pressed/disabled feedback changes opacity only; it does not mutate hitbox geometry.
 
-The component layer is used by the shared soft-card helper and by the main navigation controls, overflow button, desktop tabs, action footer and library filter chips. Coordinates and sizes are unchanged, so their existing touch hit regions and controller navigation remain compatible. Modal backdrops are composited as a translucent draw on the normal window target; they do not allocate or switch SDL render-target textures, avoiding a fragile renderer capability on Switch.
+## Modal safety
 
-Game artwork remains on the existing asynchronous IconCache and rounded-image mask path. Widget content remains information-first and uses its measured footprint; this migration changes the card/surface presentation, not widget data or action routing.
+Modal backdrops are composited on the normal window target. This layer must not allocate or switch SDL render-target textures for ordinary windows. Z-order and keyboard/touch ownership remain with SurfaceManager and the existing controller.
 
-## Themes
+## Theme compatibility
 
-The existing v0.1 and SOCOMA theme palettes remain source data. Components receive the active accent/focus/edge tokens each frame, so changing theme or appearance settings does not recreate the component system or invalidate artwork caches.
-
-## Motion
-
-`include/desknx/UiMotion.hpp` provides bounded cubic easing, wrap-safe transition progress, fade alpha and a low-cost ping-pong pulse. These are time-based helpers; they allocate no memory and create no threads.
-
-The existing screen transition keeps its 150 ms duration but now uses eased alpha. Selected game/NRO tiles now use the existing selection-style setting: outline, accent rail, pulse ring or corner brackets. When motion effects are enabled, the selection pulse is smoothed and remains bounded; when disabled, the selected-state alpha is static.
+0.1 and SOCOMA remain unchanged. Components consume semantic tokens supplied by the active palette; a later showcase theme will exercise the full token set without altering saved workspace layouts or application data.
 
 ## Tests
 
-Host tests cover pure button-state resolution: active, focused, disabled and each visual variant. SDL drawing itself remains covered by the native Switch build and requires a hardware visual pass for final confirmation.
+Host tests cover token normalization and pure button-state resolution. Geometry tests cover rounded spans. SDL renderer integration is covered by the native NRO/HOME applet builds and still requires physical-console visual validation.
