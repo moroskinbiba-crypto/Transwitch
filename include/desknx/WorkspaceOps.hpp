@@ -158,10 +158,23 @@ inline bool resizeSelectedTile(model::Workspace& desk, int& selectedX,
     model::Tile proposed = tile;
     proposed.w = nextW;
     proposed.h = nextH;
-    if (!model::placeable(desk, proposed, tile.x, tile.y, index)) return false;
+
+    // Match the touch/provider resize contract: keep the current origin when
+    // possible, otherwise relocate to the next free origin in reading order.
+    // Exclude the old origin so an expanded tile cannot appear to succeed
+    // without changing position when no valid alternative exists.
+    int targetX = tile.x;
+    int targetY = tile.y;
+    if (!model::placeable(desk, proposed, targetX, targetY, index) &&
+        !model::firstFreeFrom(desk, proposed, tile.x, tile.y,
+                              targetX, targetY, index, tile.x, tile.y))
+        return false;
+
+    tile.x = targetX;
+    tile.y = targetY;
     tile.w = proposed.w;
     tile.h = proposed.h;
-    // Keep focus on the tile itself even when the old cursor cell is removed.
+    // Keep focus on the tile itself even when resizing relocates its origin.
     selectedX = tile.x;
     selectedY = tile.y;
     return true;
