@@ -205,8 +205,8 @@ Uint32 activeWorkspaceMarkerDue=0;
 bool activeWorkspaceMarkerKnown=false;
 std::string persistedActiveWorkspaceMarker;
 struct LayoutSaveJob {
-    // The UI thread copies the small value model only after the debounce
-    // deadline. Expensive serialization, hashing and SD I/O happen in worker.
+    // Full saves own an immutable model copy. Marker-only saves carry just the
+    // active index/name and the already-persisted shape hash; they never copy tiles.
     std::vector<Workspace> workspaceSnapshot;
     int activeWorkspace{0};
     std::string serializedLayout;
@@ -3311,30 +3311,50 @@ int layoutSaveThreadMain(void* context) {
         return 0;
     }
 
-    // Serialize an immutable workspace snapshot on this low-priority worker.
-    // No layout traversal, string formatting or hashing runs in the input loop.
-    job->serializedLayout=desknx::layout::serialize(
-        job->workspaceSnapshot,job->activeWorkspace);
-    const std::string shape=desknx::layout::serialize(job->workspaceSnapshot,0);
-    job->activeWorkspaceState=desknx::layout::serializeActiveWorkspaceState(
-        job->workspaceSnapshot,job->activeWorkspace);
-
-    bool primaryOk=!job->serializedLayout.empty()&&!shape.empty()&&
-                   !job->activeWorkspaceState.empty();
+    bool primaryOk=false;
+    if(job->markerOnly) {
+        // A desk switch cannot change the layout's shape. The prevalidated marker
+        // is already complete, so this path does no model walk or serialization.
+        primaryOk=!job->activeWorkspaceState.empty();
+        job->shapeHash=job->persistedShapeHash;
+        outcome.shapeHash=job->shapeHash;
+    } else {
+        // Full saves serialize the immutable copy exactly twice: one canonical
+        // shape for hashing and one layout containing the active index. Reuse
+        // that hash to build the marker instead of serializing the model again.
+        job->serializedLayout=desknx::layout::serialize(
+            job->workspaceSnapshot,job->activeWorkspace);
+        const std::string shape=desknx::layout::serialize(
+            job->workspaceSnapshot,0);
+        if(!shape.empty())
+            job->shapeHash=desknx::model::stableHash(shape);
+        if(!job->workspaceSnapshot.empty() &&
+           job->activeWorkspace>=0 &&
+           job->activeWorkspace<static_cast<int>(job->workspaceSnapshot.size())) {
+            job->activeWorkspaceState=
+                desknx::layout::serializeActiveWorkspaceState(
+                    job->activeWorkspace,job->workspaceSnapshot.size(),
+                    job->shapeHash,
+                    job->workspaceSnapshot[static_cast<std::size_t>(
+                        job->activeWorkspace)].name);
+        }
+        primaryOk=!job->serializedLayout.empty()&&!shape.empty()&&
+                  !job->activeWorkspaceState.empty();
+        if(primaryOk) {
+            outcome.shapeHash=job->shapeHash;
+            struct stat primaryStat{};
+            const bool primaryExists=stat(CFG_FILE,&primaryStat)==0&&
+                S_ISREG(primaryStat.st_mode);
+            job->rewritePrimary=
+                job->primaryNeedsRewrite||!primaryExists||
+                !job->persistedShapeKnown||
+                job->persistedShapeHash!=job->shapeHash||
+                job->needsMigration;
+        }
+    }
     if(!primaryOk) {
         std::snprintf(outcome.message,sizeof(outcome.message),
                       "LAYOUT INVALID; SAVE REFUSED");
-    } else {
-        job->shapeHash=desknx::model::stableHash(shape);
-        outcome.shapeHash=job->shapeHash;
-        struct stat primaryStat{};
-        const bool primaryExists=stat(CFG_FILE,&primaryStat)==0&&
-            S_ISREG(primaryStat.st_mode);
-        job->rewritePrimary=!job->markerOnly&&
-            (job->primaryNeedsRewrite||!primaryExists||
-             !job->persistedShapeKnown||
-             job->persistedShapeHash!=job->shapeHash||
-             job->needsMigration);
     }
 
     if(primaryOk&&job->rewritePrimary) {
@@ -3416,9 +3436,6 @@ bool startLayoutSaveSnapshot(bool markerOnly) {
     if(layoutSaveThread||activeLayoutSaveJob)return false;
 
     auto job=std::make_unique<LayoutSaveJob>();
-    // This is the only model copy on the main thread. Text conversion, hashing,
-    // file metadata checks, writes and fsdevCommitDevice all run off-thread.
-    job->workspaceSnapshot=desks;
     job->activeWorkspace=deskIndex;
     job->previousActiveMarker=persistedActiveWorkspaceMarker;
     job->previousMarkerKnown=activeWorkspaceMarkerKnown;
@@ -3427,6 +3444,20 @@ bool startLayoutSaveSnapshot(bool markerOnly) {
     job->primaryNeedsRewrite=layoutPrimaryNeedsRewrite;
     job->needsMigration=layoutNeedsMigration;
     job->markerOnly=markerOnly;
+    if(markerOnly&&persistedLayoutShapeKnown) {
+        const Workspace& active=desks[static_cast<std::size_t>(deskIndex)];
+        // Only small metadata is copied for an ordinary workspace switch.
+        job->shapeHash=persistedLayoutShapeHash;
+        job->activeWorkspaceState=
+            desknx::layout::serializeActiveWorkspaceState(
+                deskIndex,desks.size(),persistedLayoutShapeHash,active.name);
+        if(job->activeWorkspaceState.empty())return false;
+    } else {
+        // A marker cannot safely refer to an unknown persisted shape. Promote
+        // this rare startup/recovery case to a normal checked full save.
+        job->workspaceSnapshot=desks;
+        job->markerOnly=false;
+    }
 
     activeLayoutSaveJob=std::move(job);
     layoutSaveOutcome=LayoutSaveOutcome{};
@@ -3495,8 +3526,12 @@ void pumpAsyncLayoutSaver(bool waitForCompletion) {
                     activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
                 }
                 if(outcome.markerWritten&&activeWorkspaceMarkerPending&&
-                   desknx::layout::serializeActiveWorkspaceState(desks,deskIndex)==
-                       completedMarker) {
+                   !desks.empty()&&deskIndex>=0&&
+                   deskIndex<static_cast<int>(desks.size())&&
+                   desknx::layout::serializeActiveWorkspaceState(
+                       deskIndex,desks.size(),persistedLayoutShapeHash,
+                       desks[static_cast<std::size_t>(deskIndex)].name)==
+                           completedMarker) {
                     activeWorkspaceMarkerPending=false;
                     activeWorkspaceMarkerDue=0;
                 }
@@ -8460,6 +8495,9 @@ int main(int,char**) {
         rendererInfo.name ? rendererInfo.name : "unknown", rendererInfoRc,
         static_cast<unsigned int>(rendererInfo.flags),rendererVsync?1:0);
     SDL_RenderSetLogicalSize(renderer,SW,SH);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+    // Diagnostic file writes are performed by a low-priority worker from this
+    // point onward; status updates and input handlers only enqueue fixed records.
+    (void)desknx::diag::StartAsyncWriter();
     if(!gVisualEngine.initialize(renderer,SW,SH))
         desknx::diag::Write("visual","engine_init_failed","fallback=direct_sdl_primitives");
     gUiComponents.bind(&gVisualEngine,renderer);
@@ -8892,8 +8930,10 @@ int main(int,char**) {
     gVisualEngine.shutdown();
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
-    SDL_Quit();
     desknx::diag::Write("session", "end", "normal_exit=1");
+    // Drain the bounded diagnostic queue before SDL and the SD filesystem go away.
+    desknx::diag::ShutdownAsyncWriter();
+    SDL_Quit();
     
     return 0;
 }
