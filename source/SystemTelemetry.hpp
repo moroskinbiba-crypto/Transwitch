@@ -91,6 +91,7 @@ public:
         forceQuick_ = false;
         forceDiagnostics_ = false;
         demandMask_ = 0;
+        oneShotDemandMask_ = 0;
         queueHead_ = queueCount_ = 0;
         snapshot_ = Snapshot{};
         thread_ = SDL_CreateThread(threadEntry, "DeskNX system telemetry", this);
@@ -114,7 +115,7 @@ public:
     void requestDemand(std::uint32_t mask) {
         if (!mutex_) return;
         SDL_LockMutex(mutex_);
-        demandMask_ |= mask;
+        oneShotDemandMask_ |= mask;
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
     }
@@ -211,7 +212,8 @@ private:
             SDL_UnlockMutex(mutex_);
             return false;
         }
-        demand = demandMask_;
+        demand = demandMask_ | oneShotDemandMask_;
+        oneShotDemandMask_ = 0;
         forceQuick = forceQuick_;
         forceDiagnostics = forceDiagnostics_;
         forceQuick_ = false;
@@ -579,6 +581,7 @@ private:
     bool forceQuick_{false};
     bool forceDiagnostics_{false};
     std::uint32_t demandMask_{0};
+    std::uint32_t oneShotDemandMask_{0};
     std::array<Command, CommandCapacity> commands_{};
     std::size_t queueHead_{0};
     std::size_t queueCount_{0};
