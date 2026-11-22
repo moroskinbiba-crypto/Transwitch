@@ -33,7 +33,7 @@ public:
         bool ok = true;
 
         if (shadow) {
-            SDL_Color shade = tokens_.shadow;
+            SDL_Color shade = toSdlColor(tokens_.shadow);
             shade.a = scaleAlpha(shade.a, alpha);
             if (engine_ && engine_->ready()) {
                 // Soft silhouette layers avoid unsupported render-target blur.
@@ -96,7 +96,7 @@ public:
         const ButtonPaintRules paint = resolveButtonPaint(variant, state);
         fill = withScaledAlpha(fill, paint.alphaScale);
         edge = withScaledAlpha(edge, paint.alphaScale);
-        accent = accent.a == 0 ? tokens_.accent : accent;
+        accent = accent.a == 0 ? toSdlColor(tokens_.accent) : accent;
         accent = withScaledAlpha(accent, paint.alphaScale);
         bool ok = true;
 
@@ -112,7 +112,7 @@ public:
                           std::max(1, bounds.w - inset * 2), railHeight, accent) && ok;
         }
         if (paint.drawFocusRing) {
-            SDL_Color focus = withScaledAlpha(tokens_.focus, paint.alphaScale);
+            SDL_Color focus = withScaledAlpha(toSdlColor(tokens_.focus), paint.alphaScale);
             const int ring = tokens_.focusRingWidth;
             for (int layer = 0; layer < ring; ++layer) {
                 ok = outlineRounded(bounds.x - 2 - layer, bounds.y - 2 - layer,
@@ -144,6 +144,10 @@ public:
     }
 
 private:
+    static SDL_Color toSdlColor(ColorToken color) noexcept {
+        return SDL_Color{color.r, color.g, color.b, color.a};
+    }
+
     static bool valid(const SDL_Rect& bounds) noexcept {
         return bounds.w > 0 && bounds.h > 0;
     }
