@@ -39,10 +39,10 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
-      - name: Install host zlib headers for NACP normalization test
+      - name: Install host dependencies for native integration tests
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev
+          apt-get install -y --no-install-recommends zlib1g-dev libsdl2-dev
 
       - name: Test compressed NACP title normalization
         run: |
@@ -75,6 +75,71 @@ jobs:
 
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
+
+      - name: Test confirmation dialog layout and hit-target geometry
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/confirmation_dialog_layout_test.cpp -o /tmp/desknx-confirmation-layout-test
+          /tmp/desknx-confirmation-layout-test
+
+      - name: Test shared Dialog, SidePanel and ContextMenu geometry
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/window_components_test.cpp -o /tmp/desknx-window-components-test
+          /tmp/desknx-window-components-test
+
+      - name: Test shared button, badge, toggle, field, card and indicator contracts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/control_components_test.cpp -o /tmp/desknx-control-components-test
+          /tmp/desknx-control-components-test
+
+      - name: Test deterministic motion controller and reduced modes
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/motion_controller_test.cpp -o /tmp/desknx-motion-test
+          /tmp/desknx-motion-test
+
+      - name: Test semantic typography role tokens
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/typography_test.cpp -o /tmp/desknx-typography-test
+          /tmp/desknx-typography-test
+
+      - name: Test Russian bitmap font and UTF-8 fallback decoding
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/bitmap_font_test.cpp -o /tmp/desknx-bitmap-font-test
+          /tmp/desknx-bitmap-font-test
+
+      - name: Test UTF-8 multiline text layout and truncation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/text_layout_test.cpp -o /tmp/desknx-text-layout-test
+          /tmp/desknx-text-layout-test
+
+      - name: Test renderer frame-state invariants
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_state_policy_test.cpp -o /tmp/desknx-renderer-state-test
+          /tmp/desknx-renderer-state-test
+
+      - name: Test SDL renderer frame-baseline recovery
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/renderer_frame_recovery_test.cpp -lSDL2 -o /tmp/desknx-renderer-recovery-test
+          /tmp/desknx-renderer-recovery-test
+
+      - name: Test per-frame text texture creation budget
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/text_texture_budget_test.cpp -o /tmp/desknx-text-budget-test
+          /tmp/desknx-text-budget-test
+
+      - name: Test modal stack precedence and layer invariants
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/modal_stack_test.cpp -o /tmp/desknx-modal-stack-test
+          /tmp/desknx-modal-stack-test
+
+      - name: Test bounded runtime performance metrics
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/runtime_metrics_test.cpp -o /tmp/desknx-runtime-metrics-test
+          /tmp/desknx-runtime-metrics-test
+
+      - name: Test artwork request priority policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/artwork_request_policy_test.cpp -o /tmp/desknx-artwork-priority-test
+          /tmp/desknx-artwork-priority-test
 
       - name: Test Nextendo presence snapshot and expiry rules
         run: |

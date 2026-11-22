@@ -18,6 +18,18 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "../include/desknx/ArtworkRequestPolicy.hpp"
+#include "../include/desknx/SensorService.hpp"
+#include "../include/desknx/RuntimeMetrics.hpp"
+#include "../include/desknx/ModalStack.hpp"
+#include "../include/desknx/ConfirmationDialogLayout.hpp"
+#include "../include/desknx/WindowComponents.hpp"
+#include "../include/desknx/ControlComponents.hpp"
+#include "../include/desknx/RendererStatePolicy.hpp"
+#include "../include/desknx/RendererStateRecovery.hpp"
+#include "../include/desknx/BitmapFont.hpp"
+#include "../include/desknx/Typography.hpp"
+#include "../include/desknx/MotionController.hpp"
 
 #include <algorithm>
 #include <array>
@@ -44,9 +56,7 @@ namespace {
 using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
-constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
-constexpr int ToolbarStartX=64, ToolbarButtonWidth=82, ToolbarButtonStep=90, ToolbarButtonCount=4;
-constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarButtonStep; }
+
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
 constexpr u32 NsViewFlagIsGameCard = BIT(6);
@@ -109,6 +119,107 @@ int mediaPickerIndex=0, mediaPickerOffset=0;
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 bool rendererVsync=false;
+
+// SDL renderer state is global to the renderer. Scope clip and texture
+// modulation changes so newly extracted components cannot leak them into later
+// drawing paths, even when control flow gains an early return.
+class ScopedRenderClip {
+public:
+    ScopedRenderClip(SDL_Renderer* target,const SDL_Rect& clip) noexcept
+        : renderer_(target) {
+        if(!renderer_)return;
+        previousClipEnabled_=SDL_RenderIsClipEnabled(renderer_)==SDL_TRUE;
+        if(previousClipEnabled_)
+            SDL_RenderGetClipRect(renderer_,&previousClip_);
+        // If SDL rejects the new clip, leave the renderer untouched and do
+        // not attempt to restore a state that was never changed.
+        changed_=SDL_RenderSetClipRect(renderer_,&clip)==0;
+    }
+    ScopedRenderClip(const ScopedRenderClip&)=delete;
+    ScopedRenderClip& operator=(const ScopedRenderClip&)=delete;
+    ~ScopedRenderClip() {
+        if(!renderer_||!changed_)return;
+        if(previousClipEnabled_)
+            (void)SDL_RenderSetClipRect(renderer_,&previousClip_);
+        else
+            (void)SDL_RenderSetClipRect(renderer_,nullptr);
+    }
+private:
+    SDL_Renderer* renderer_{nullptr};
+    SDL_Rect previousClip_{};
+    bool previousClipEnabled_{false};
+    bool changed_{false};
+};
+
+void diagnoseRendererState(const char* phase) {
+    if(!renderer)return;
+    SDL_BlendMode blendMode=SDL_BLENDMODE_NONE;
+    const int blendQuery=SDL_GetRenderDrawBlendMode(renderer,&blendMode);
+    const SDL_bool clipEnabled=SDL_RenderIsClipEnabled(renderer);
+    const bool renderTargetActive=SDL_GetRenderTarget(renderer)!=nullptr;
+    const int actualBlend=blendQuery==0?static_cast<int>(blendMode):-1;
+    const auto violations=desknx::ui::RendererStateViolations({
+        renderTargetActive,clipEnabled==SDL_TRUE,actualBlend
+    },static_cast<int>(SDL_BLENDMODE_BLEND));
+
+    if(violations&desknx::ui::RendererStateRenderTargetActive) {
+        desknx::diag::Write("render","render_target_state_leak",
+            "phase=%s target=offscreen",phase?phase:"unknown");
+    }
+    if(violations&desknx::ui::RendererStateClipEnabled) {
+        SDL_Rect clip{};
+        SDL_RenderGetClipRect(renderer,&clip);
+        desknx::diag::Write("render","clip_state_leak",
+            "phase=%s x=%d y=%d w=%d h=%d",
+            phase?phase:"unknown",clip.x,clip.y,clip.w,clip.h);
+    }
+    if(violations&desknx::ui::RendererStateBlendMismatch) {
+        desknx::diag::Write("render","draw_blend_state_leak",
+            "phase=%s mode=%d expected=%d query_rc=%d",
+            phase?phase:"unknown",actualBlend,
+            static_cast<int>(SDL_BLENDMODE_BLEND),blendQuery);
+    }
+}
+
+void restoreFrameRendererBaseline(const char* phase) {
+    if(!renderer)return;
+    const auto recovery=desknx::ui::RestoreRendererFrameBaseline(renderer);
+    if(recovery.hadActiveTarget&&recovery.renderTargetResult!=0) {
+        desknx::diag::Write("render","render_target_restore_failed",
+            "phase=%s rc=%d",phase?phase:"unknown",recovery.renderTargetResult);
+    }
+    if(recovery.clipResult!=0) {
+        desknx::diag::Write("render","clip_restore_failed",
+            "phase=%s rc=%d",phase?phase:"unknown",recovery.clipResult);
+    }
+    if(recovery.blendResult!=0) {
+        desknx::diag::Write("render","draw_blend_restore_failed",
+            "phase=%s rc=%d",phase?phase:"unknown",recovery.blendResult);
+    }
+}
+
+class ScopedTextureModulation {
+public:
+    ScopedTextureModulation(SDL_Texture* texture,Uint8 red,Uint8 green,
+                            Uint8 blue,Uint8 alpha) noexcept
+        : texture_(texture) {
+        if(!texture_)return;
+        (void)SDL_GetTextureColorMod(texture_,&previousRed_,&previousGreen_,&previousBlue_);
+        (void)SDL_GetTextureAlphaMod(texture_,&previousAlpha_);
+        (void)SDL_SetTextureColorMod(texture_,red,green,blue);
+        (void)SDL_SetTextureAlphaMod(texture_,alpha);
+    }
+    ScopedTextureModulation(const ScopedTextureModulation&)=delete;
+    ScopedTextureModulation& operator=(const ScopedTextureModulation&)=delete;
+    ~ScopedTextureModulation() {
+        if(!texture_)return;
+        (void)SDL_SetTextureColorMod(texture_,previousRed_,previousGreen_,previousBlue_);
+        (void)SDL_SetTextureAlphaMod(texture_,previousAlpha_);
+    }
+private:
+    SDL_Texture* texture_{nullptr};
+    Uint8 previousRed_{255},previousGreen_{255},previousBlue_{255},previousAlpha_{255};
+};
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
 SDL_mutex* catalogueMutex = nullptr;
@@ -182,6 +293,17 @@ std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+desknx::runtime::SensorService gSensorService;
+desknx::runtime::RollingMetrics gRuntimeMetrics;
+desknx::ui::MotionController gMotionController;
+desknx::ui::MotionTrack gTileFocusTransition{};
+int gMotionWorkspace=-1,gMotionSelectedX=-1,gMotionSelectedY=-1;
+float gTileFocusProgress=1.0f;
+Uint64 gInputStartedCounter=0;
+Uint64 gWorkspaceSwitchStartedCounter=0;
+Uint64 gFrameRenderStartedCounter=0;
+Uint64 gPerformanceFrequency=0;
+Uint32 gLastPerformanceReportTick=0;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
 struct PdmQuerySnapshot {
@@ -202,7 +324,6 @@ desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMod
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
-Uint32 lastStorageUpdate=0;
 bool storageStatsAvailable=false;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
@@ -227,9 +348,9 @@ Uint32 lastWorkspaceTabTapTick=0;
 // locally through the applet power APIs, which are available to NROs too.
 bool powerMenu=false;
 s32 powerIndex=0;
-bool sdMounted=false, psmReady=false, touchDragging=false;
+bool sdMounted=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   L3 TOOLS", lastLaunched="Nothing launched yet";
-Uint32 statusUntil=0, lastBatteryTick=0;
+Uint32 statusUntil=0;
 #ifdef DESKNX_SYSTEM_APPLET
 // Backend -> menu state (IPC-06/§4.4). The menu keeps no app state of its own:
 // everything here comes from the initial block or live events.
@@ -438,6 +559,10 @@ void loadLauncherSettings() {
             char* end=nullptr;
             const long parsed=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
+        } else if(key=="motion") {
+            desknx::ui::MotionMode parsedMode{};
+            if(desknx::ui::ParseMotionModeSetting(value.c_str(),parsedMode))
+                gMotionController.setMode(parsedMode);
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -460,7 +585,8 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n"
+       <<"motion="<<desknx::ui::MotionModeSettingName(gMotionController.mode())<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -536,9 +662,10 @@ void drawWallpaper() {
     if(!wallpaperTexture||wallpaperWidth<=0||wallpaperHeight<=0)return;
     const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,wallpaperWidth,wallpaperHeight);
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
-    SDL_RenderSetClipRect(renderer,&viewport);
-    SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
-    SDL_RenderSetClipRect(renderer,nullptr);
+    {
+        ScopedRenderClip clipScope(renderer,viewport);
+        SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
+    }
     SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
 }
@@ -584,9 +711,10 @@ void drawWorkspaceBackground(const Workspace& desk) {
     const auto fit=desknx::artwork::destination(0,0,SW,SH,width,height,
         static_cast<desknx::artwork::FitMode>(desk.backgroundFit));
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
-    SDL_RenderSetClipRect(renderer,&viewport);
-    SDL_RenderCopy(renderer,texture,nullptr,&dst);
-    SDL_RenderSetClipRect(renderer,nullptr);
+    {
+        ScopedRenderClip clipScope(renderer,viewport);
+        SDL_RenderCopy(renderer,texture,nullptr,&dst);
+    }
     SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
 }
@@ -744,6 +872,15 @@ void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20
     roundRect(x,y,w,h,UiCornerRadius,fill);
     roundRect(x+1,y+1,w-2,h-2,UiCornerRadius-1,edge);
 }
+
+// Shared outer-window primitives. Keep all modal dimming and shell surfaces
+// here so later Dialog/SidePanel components share one visual and compositing base.
+void drawModalBackdrop(Uint8 alpha) {
+    rect(0,0,SW,SH,Color{3,7,14,alpha});
+}
+void drawModalSurface(int x,int y,int w,int h,Color fill,Color edge) {
+    softCard(x,y,w,h,fill,edge);
+}
 std::array<Uint8,7> glyph(char input) {
     const char c=static_cast<char>(std::toupper(static_cast<unsigned char>(input)));
     switch(c) {
@@ -777,37 +914,218 @@ std::array<Uint8,7> glyph(char input) {
         default:return {{31,17,1,2,4,0,4}};
     }
 }
-// Bitmap fallback pre-processing: keep printable ASCII as-is, map every other
-// UTF-8 sequence to a single '?' replacement cell (glyph() draws it as a box).
-std::string fallbackAscii(const std::string& input) {
-    std::string out;
-    for(size_t i=0;i<input.size();) {
-        const unsigned char b=static_cast<unsigned char>(input[i]);
-        if(b<128) { out.push_back(static_cast<char>(b)); ++i; continue; }
-        size_t n=1;
-        if((b&0xE0)==0xC0) n=2; else if((b&0xF0)==0xE0) n=3; else if((b&0xF8)==0xF0) n=4;
-        if(i+n>input.size()) n=input.size()-i;
-        i+=n; out.push_back('?');
-    }
-    return out;
-}
-// UI-20: the transliteration helper is removed. When the shared-font path is
-// unavailable (pl/TTF init failed) we fall back to the bitmap glyphs, which
-// pass ASCII through and draw U+FFFD-style replacement boxes for anything
-// else (default glyph in glyph()) instead of silently dropping characters.
-void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
-    const std::string localized=desknx::i18n::translate(value,languageRussian);
-    if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
-    const std::string s=fallbackAscii(localized); color(c); int px=x;
-    for(char ch:s) {
-        if(px+5*scale>right) break;
-        const auto rows=glyph(ch);
+// Deterministic renderer-thread bitmap drawing. Kept separate from the TTF
+// cache so a multiline fallback never mixes fonts when the texture budget runs out.
+void drawBitmapText(const std::string& localized,int x,int y,int scale,
+                    Color c,int right) {
+    if(scale<=0||right<=x)return;
+    color(c);
+    int px=x;
+    int py=y;
+    for(size_t offset=0;offset<localized.size();) {
+        const auto decoded=desknx::ui::DecodeUtf8Codepoint(localized,offset);
+        offset+=decoded.length>0?decoded.length:1;
+        const std::uint32_t codepoint=decoded.codepoint;
+        if(codepoint=='\r'||codepoint=='\n') {
+            if(codepoint=='\r'&&offset<localized.size()) {
+                const auto next=desknx::ui::DecodeUtf8Codepoint(localized,offset);
+                if(next.valid&&next.codepoint=='\n')offset+=next.length;
+            }
+            px=x;
+            py+=8*scale;
+            continue;
+        }
+        if(codepoint=='\t') {
+            px+=24*scale;
+            continue;
+        }
+        if(px+5*scale>right)break;
+        const auto rows=codepoint<0x80
+            ?glyph(static_cast<char>(codepoint))
+            :desknx::ui::RussianBitmapGlyph(codepoint);
         for(int ry=0;ry<7;++ry) for(int rx=0;rx<5;++rx) if(rows[ry]&(1u<<(4-rx))) {
-            SDL_Rect p{px+rx*scale,y+ry*scale,scale,scale}; SDL_RenderFillRect(renderer,&p);
+            SDL_Rect pixel{px+rx*scale,py+ry*scale,scale,scale};
+            SDL_RenderFillRect(renderer,&pixel);
         }
         px+=6*scale;
     }
 }
+
+// Bitmap fallback remains fully readable for Russian labels when both the
+// custom font and Horizon shared-font service are unavailable.
+void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
+    drawBitmapText(localized,x,y,scale,c,right);
+}
+void textRole(const std::string& value,int x,int y,desknx::ui::TextRole role,
+              Color c,int right=1260) {
+    const auto style=desknx::ui::TypographyFor(role);
+    text(value,x,y,style.fontScale,c,right);
+}
+
+void textBlock(const std::string& value,int x,int y,desknx::ui::TextRole role,
+               Color c,int right=1260) {
+    const auto style=desknx::ui::TypographyFor(role);
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    if(gFontRenderer.drawWrapped(localized,x,y,style.fontScale,
+        SDL_Color{c.r,c.g,c.b,c.a},right,style.maxLines,style.lineHeight))return;
+
+    // Keep fallback output consistent for the entire block. Do not route each
+    // line back through FontRenderer: a nearly exhausted texture budget could
+    // otherwise render early lines with TTF and later lines with bitmap glyphs.
+    const int maxWidth=std::max(0,right-x);
+    if(maxWidth==0||style.maxLines<=0)return;
+    const int scale=style.fontScale;
+    const auto measure=[scale](const std::string& candidate) {
+        return desknx::ui::MeasureBitmapTextWidth(candidate,scale);
+    };
+    const auto lines=desknx::ui::WrapUtf8Text(
+        localized,maxWidth,style.maxLines,measure);
+    const int lineHeight=style.lineHeight>0?style.lineHeight:8*scale;
+    for(std::size_t index=0;index<lines.size();++index)
+        drawBitmapText(lines[index],x,y+static_cast<int>(index)*lineHeight,
+            scale,c,right);
+}
+
+Color controlColor(desknx::ui::ControlColor c) {
+    return Color{c.r,c.g,c.b,c.a};
+}
+
+void drawButton(const desknx::ui::ButtonControl& control,
+                const std::string& label,int labelX,int labelY,
+                int textRight,
+                desknx::ui::TextRole role=desknx::ui::TextRole::Body,
+                int cornerRadius=desknx::ui::ButtonCornerRadius) {
+    const auto& bounds=control.bounds;
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveButtonStyle(control.variant,control.state);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        cornerRadius,controlColor(style.background));
+    if(style.drawBorder)
+        outline(bounds.x,bounds.y,bounds.width,bounds.height,controlColor(style.border));
+    if(style.drawFocusRing)
+        outline(bounds.x-2,bounds.y-2,bounds.width+4,bounds.height+4,
+            controlColor(style.focusRing));
+    textRole(label,labelX,labelY,role,controlColor(style.foreground),
+        std::min(textRight,bounds.x+bounds.width-10));
+}
+
+void drawSelectableRowBackground(const desknx::ui::ModalRect& bounds,
+                                 desknx::ui::SelectableRowState state,
+                                 int radius=10) {
+    const auto style=desknx::ui::ResolveSelectableRowStyle(state);
+    if(style.background.a==0)return;
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,radius,
+        controlColor(style.background));
+}
+
+
+void drawBadge(const desknx::ui::ModalRect& bounds,const std::string& label,
+               desknx::ui::BadgeVariant variant) {
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveBadgeStyle(variant);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        std::min(10,bounds.height/2),controlColor(style.background));
+    outline(bounds.x,bounds.y,bounds.width,bounds.height,
+        controlColor(style.border));
+    textRole(label,bounds.x+8,bounds.y+std::max(1,(bounds.height-10)/2),
+        desknx::ui::TextRole::Metadata,controlColor(style.foreground),
+        bounds.x+bounds.width-6);
+}
+
+void drawToggle(const desknx::ui::ToggleControl& toggle) {
+    const auto& bounds=toggle.bounds;
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveToggleStyle(toggle.value,toggle.state);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        bounds.height/2,controlColor(style.track));
+    outline(bounds.x,bounds.y,bounds.width,bounds.height,
+        controlColor(style.border));
+    const int knobSize=std::max(4,bounds.height-6);
+    const int knobX=toggle.value?bounds.x+bounds.width-knobSize-3:bounds.x+3;
+    roundRect(knobX,bounds.y+3,knobSize,knobSize,knobSize/2,
+        controlColor(style.knob));
+    if(style.drawFocusRing)
+        outline(bounds.x-2,bounds.y-2,bounds.width+4,bounds.height+4,
+            controlColor(style.focusRing));
+}
+
+void drawValueField(const desknx::ui::ValueFieldControl& field,
+                    const std::string& value) {
+    const auto& bounds=field.bounds;
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveValueFieldStyle(field.visualState);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        std::min(8,bounds.height/2),controlColor(style.background));
+    outline(bounds.x,bounds.y,bounds.width,bounds.height,
+        controlColor(style.border));
+    if(style.drawFocusRing)
+        outline(bounds.x-2,bounds.y-2,bounds.width+4,bounds.height+4,
+            controlColor(style.focusRing));
+    textRole(value,bounds.x+8,bounds.y+std::max(1,(bounds.height-10)/2),
+        desknx::ui::TextRole::Metadata,controlColor(style.foreground),
+        bounds.x+bounds.width-6);
+}
+
+void drawCard(const desknx::ui::ModalRect& bounds,
+              desknx::ui::CardVisualState state) {
+    const auto style=desknx::ui::ResolveCardStyle(state);
+    const Color fill=controlColor(style.background);
+    const Color border=controlColor(style.border);
+    if(style.shadow)softCard(bounds.x,bounds.y,bounds.width,bounds.height,fill,border);
+    else {
+        roundRect(bounds.x,bounds.y,bounds.width,bounds.height,UiCornerRadius,fill);
+        if(style.border.a>0)
+            outline(bounds.x,bounds.y,bounds.width,bounds.height,border);
+    }
+}
+
+void drawStatusIndicator(const desknx::ui::ModalRect& bounds,
+                         desknx::ui::IndicatorTone tone) {
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveIndicatorStyle(tone);
+    const int diameter=std::min(bounds.width,bounds.height);
+    if(style.drawHalo) {
+        roundRect(bounds.x-2,bounds.y-2,diameter+4,diameter+4,
+            (diameter+4)/2,controlColor(style.halo));
+    }
+    roundRect(bounds.x,bounds.y,diameter,diameter,diameter/2,
+        controlColor(style.dot));
+}
+
+
+void drawConfirmationDialog(
+    const desknx::ui::ConfirmationDialogLayout& layout,
+    const std::string& title,const std::string& subtitle,
+    const std::string& description,const std::string& primaryLabel,
+    const std::string& secondaryLabel,bool destructive) {
+    drawModalBackdrop(194);
+    drawModalSurface(layout.surface.x,layout.surface.y,
+        layout.surface.width,layout.surface.height,
+        Color{24,27,38,255},
+        destructive?Color{255,99,112,100}:Color{255,255,255,24});
+    textRole(title,layout.titleX,layout.titleY,desknx::ui::TextRole::Heading,
+        WHITE,layout.surface.x+layout.surface.width-30);
+    textRole(subtitle,layout.subtitleX,layout.subtitleY,desknx::ui::TextRole::Subheading,
+        MUTED,layout.surface.x+layout.surface.width-30);
+    textBlock(description,layout.descriptionX,layout.descriptionY,
+        desknx::ui::TextRole::Caption,MUTED,
+        layout.surface.x+layout.surface.width-30);
+    const desknx::ui::ButtonVariant primaryVariant=destructive
+        ?desknx::ui::ButtonVariant::Destructive
+        :desknx::ui::ButtonVariant::Primary;
+    drawButton({layout.primaryButton,primaryVariant,{}},primaryLabel,
+        layout.primaryLabelX,layout.primaryLabelY,
+        layout.primaryButton.x+layout.primaryButton.width);
+    drawButton({layout.secondaryButton,desknx::ui::ButtonVariant::Secondary,{}},
+        secondaryLabel,layout.secondaryLabelX,layout.secondaryLabelY,
+        layout.secondaryButton.x+layout.secondaryButton.width);
+    textRole("A CONFIRM     B CANCEL",layout.footer.x,layout.footer.y,
+        desknx::ui::TextRole::Metadata,MUTED,
+        layout.footer.x+layout.footer.width);
+}
+
 std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
     char b[64]{}; std::strftime(b,sizeof(b),date?"%H:%M  %d-%m-%Y":"%H:%M",tmv); return b;
@@ -1829,33 +2147,88 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
     desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
 }
-void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
-    if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
+double elapsedPerformanceMs(Uint64 start, Uint64 end) {
+    if(gPerformanceFrequency==0 || end<start)return 0.0;
+    return static_cast<double>(end-start)*1000.0/static_cast<double>(gPerformanceFrequency);
 }
-void refreshStorageStats() {
-    const Uint32 now=SDL_GetTicks();
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
-    lastStorageUpdate=now;
-    struct statvfs fs{};
-    if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
-        const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
-        sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
-        sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0;
+void markInputActivity() {
+    if(gInputStartedCounter==0)gInputStartedCounter=SDL_GetPerformanceCounter();
+}
+void pumpSensorSnapshot() {
+    static uint64_t lastGeneration=0;
+    desknx::runtime::SystemSnapshot snapshot{};
+    if(!gSensorService.read(snapshot)||snapshot.generation==lastGeneration)return;
+    lastGeneration=snapshot.generation;
+    battery=snapshot.batteryAvailable?static_cast<int>(snapshot.batteryPercent):-1;
+    storageStatsAvailable=snapshot.storageAvailable;
+    if(storageStatsAvailable) {
+        sdFreeBytes=snapshot.sdFreeBytes;
+        sdTotalBytes=snapshot.sdTotalBytes;
     } else {
-        sdTotalBytes=0;
         sdFreeBytes=0;
-        storageStatsAvailable=false;
+        sdTotalBytes=0;
     }
+    desknx::diag::Write("sensors","snapshot",
+        "generation=%llu age_ms=%llu battery_available=%d battery_fresh=%d battery_pct=%d psm_init_rc=0x%08X battery_rc=0x%08X storage_available=%d storage_fresh=%d storage_errno=%d sd_free=%llu sd_total=%llu",
+        static_cast<unsigned long long>(snapshot.generation),
+        static_cast<unsigned long long>(SDL_GetTicks64()-snapshot.capturedAtMs),
+        snapshot.batteryAvailable?1:0,snapshot.batteryFresh?1:0,battery,
+        static_cast<unsigned int>(snapshot.psmInitResult),
+        static_cast<unsigned int>(snapshot.batteryResult),
+        snapshot.storageAvailable?1:0,snapshot.storageFresh?1:0,snapshot.storageError,
+        static_cast<unsigned long long>(snapshot.sdFreeBytes),
+        static_cast<unsigned long long>(snapshot.sdTotalBytes));
+}
+void reportRuntimeMetrics() {
+    const Uint32 now=SDL_GetTicks();
+    if(gLastPerformanceReportTick!=0&&now-gLastPerformanceReportTick<10000)return;
+    gLastPerformanceReportTick=now;
+    const auto frame=gRuntimeMetrics.summarize(desknx::runtime::Metric::FrameTime);
+    const auto render=gRuntimeMetrics.summarize(desknx::runtime::Metric::RenderTime);
+    const auto present=gRuntimeMetrics.summarize(desknx::runtime::Metric::PresentWait);
+    const auto input=gRuntimeMetrics.summarize(desknx::runtime::Metric::InputLatency);
+    const auto workspace=gRuntimeMetrics.summarize(desknx::runtime::Metric::WorkspaceSwitch);
+    desknx::diag::Write("performance","rolling_window",
+        "frame_avg_ms=%.3f frame_p95_ms=%.3f frame_max_ms=%.3f frame_n=%u render_avg_ms=%.3f render_p95_ms=%.3f render_max_ms=%.3f render_n=%u present_avg_ms=%.3f present_p95_ms=%.3f present_max_ms=%.3f present_n=%u input_avg_ms=%.3f input_p95_ms=%.3f input_max_ms=%.3f input_n=%u workspace_avg_ms=%.3f workspace_p95_ms=%.3f workspace_max_ms=%.3f workspace_n=%u",
+        frame.averageMs,frame.p95Ms,frame.maximumMs,static_cast<unsigned int>(frame.samples),
+        render.averageMs,render.p95Ms,render.maximumMs,static_cast<unsigned int>(render.samples),
+        present.averageMs,present.p95Ms,present.maximumMs,static_cast<unsigned int>(present.samples),
+        input.averageMs,input.p95Ms,input.maximumMs,static_cast<unsigned int>(input.samples),
+        workspace.averageMs,workspace.p95Ms,workspace.maximumMs,static_cast<unsigned int>(workspace.samples));
+    const auto fontStats=gFontRenderer.stats();
+    const double textBuildMs=gPerformanceFrequency
+        ?1000.0*static_cast<double>(fontStats.textureBuildTicks)/
+            static_cast<double>(gPerformanceFrequency):0.0;
+    desknx::diag::Write("performance","font_cache",
+        "misses_total=%llu deferred_total=%llu build_attempts=%llu build_ms_total=%.3f max_builds_frame=%u resident=%u budget=%u",
+        static_cast<unsigned long long>(fontStats.cacheMisses),
+        static_cast<unsigned long long>(fontStats.deferredMisses),
+        static_cast<unsigned long long>(fontStats.textureBuildAttempts),
+        textBuildMs,fontStats.maxBuildAttemptsPerFrame,
+        fontStats.residentTextures,
+        static_cast<unsigned int>(desknx::ui::MaxTextTextureBuildsPerFrame));
 }
 std::string initials(const std::string& name) {
-    // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
-    // through, multibyte sequences contribute their lead byte which yields
-    // '?' via fallbackAscii and is skipped as a word separator below.
-    std::string s=fallbackAscii(name),out;bool begin=true;
-    for(char c:s){if(c==' '||c=='-'||c=='_'||c=='.'){begin=true;continue;}if(begin){out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));begin=false;if(out.size()==2)break;}}
+    std::string out;
+    bool begin=true;
+    std::size_t offset=0;
+    int count=0;
+    while(offset<name.size()) {
+        const auto decoded=desknx::ui::DecodeUtf8Codepoint(name,offset);
+        offset+=decoded.length>0?decoded.length:1;
+        const std::uint32_t codepoint=decoded.codepoint;
+        if(codepoint==' '||codepoint=='-'||codepoint=='_'||codepoint=='.'||
+           codepoint==0x09||codepoint==0x0D||codepoint==0x0A) {
+            begin=true;
+            continue;
+        }
+        if(begin) {
+            desknx::ui::AppendUtf8Codepoint(out,
+                desknx::ui::UppercaseUnicodeInitial(codepoint));
+            begin=false;
+            if(++count==2)break;
+        }
+    }
     return out.empty()?"APP":out;
 }
 SDL_Rect tileRect(const Tile&t) {
@@ -1944,7 +2317,7 @@ void drawSystemIcon(int kind,int x,int y,int size,Color c) {
 void drawTileIcon(const Tile&t,int x,int y,int size) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     roundRect(x,y,size,size,std::max(8,size/5),Color{255,255,255,12});
-    if(SDL_Texture* texture=gIconCache.get(t)) {
+    if(SDL_Texture* texture=gIconCache.get(t,desknx::artwork::LibraryIconPriority)) {
         int width=0,height=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)==0) {
             const int inset=std::max(3,size/24),inner=std::max(1,size-inset*2);
@@ -2072,8 +2445,7 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
     const int r=std::max(0,std::min(radius,std::min(bounds.w,bounds.h)/2));
     SDL_Texture* mask=getRoundedCornerMask(r);
     if(!mask)return;
-    SDL_SetTextureColorMod(mask,fill.r,fill.g,fill.b);
-    SDL_SetTextureAlphaMod(mask,fill.a);
+    ScopedTextureModulation modulation(mask,fill.r,fill.g,fill.b,fill.a);
     const SDL_Rect corners[]={
         {bounds.x,bounds.y,r,r},
         {bounds.x+bounds.w-r,bounds.y,r,r},
@@ -2086,12 +2458,10 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
     };
     for(int i=0;i<4;++i)
         SDL_RenderCopyEx(renderer,mask,nullptr,&corners[i],0.0,nullptr,flips[i]);
-    SDL_SetTextureColorMod(mask,255,255,255);
-    SDL_SetTextureAlphaMod(mask,255);
 }
 
 void drawTileCover(const Tile& tile,const Workspace& workspace,
-                   const SDL_Rect& bounds,Color cornerFill) {
+                   const SDL_Rect& bounds,Color cornerFill,bool focused) {
     const Color fallback=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
@@ -2099,7 +2469,8 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
         std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
     roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
 
-    SDL_Texture* texture=gIconCache.get(tile);
+    SDL_Texture* texture=gIconCache.get(tile,
+        desknx::artwork::tileRenderPriority(focused));
     if(texture) {
         int sourceWidth=0,sourceHeight=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&sourceWidth,&sourceHeight)==0 &&
@@ -2113,9 +2484,10 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
             SDL_Rect clip=viewport,target{fit.x,fit.y,fit.w,fit.h};
             // Cover scales the entire image beyond the tile and clips it to
             // the tile viewport. This avoids source-rect rounding gaps.
-            SDL_RenderSetClipRect(renderer,&clip);
-            SDL_RenderCopy(renderer,texture,nullptr,&target);
-            SDL_RenderSetClipRect(renderer,nullptr);
+            {
+                ScopedRenderClip clipScope(renderer,clip);
+                SDL_RenderCopy(renderer,texture,nullptr,&target);
+            }
         } else {
             roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
         }
@@ -2165,18 +2537,24 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     const Color accent=workspace.accentColor>=0
         ?COLORS[static_cast<size_t>(workspace.accentColor)%COLORS.size()]
         :COLORS[static_cast<size_t>(t.color)%COLORS.size()];
+    const float emphasis=selected?std::max(0.0f,std::min(1.0f,gTileFocusProgress)):1.0f;
+    const Uint8 focusAlpha=static_cast<Uint8>(155.0f+100.0f*emphasis);
+    const Uint8 innerFocusAlpha=static_cast<Uint8>(35.0f+55.0f*emphasis);
+    const Color selectedEdge{92,164,255,focusAlpha};
     const Color fill=selected?Color{29,48,73,255}:Color{22,29,42,255};
     softCard(r.x,r.y,r.w,r.h,fill,
-             selected?Color{92,164,255,210}:Color{255,255,255,18});
+             selected?selectedEdge:Color{255,255,255,18});
 
     if(t.kind==Kind::Game||t.kind==Kind::Nro) {
-        drawTileCover(t,workspace,r,fill);
+        drawTileCover(t,workspace,r,fill,selected);
         if(selected) {
-            outline(r.x,r.y,r.w,r.h,Color{139,190,255,255});
-            outline(r.x+1,r.y+1,r.w-2,r.h-2,Color{255,255,255,90});
+            outline(r.x,r.y,r.w,r.h,Color{139,190,255,focusAlpha});
+            outline(r.x+1,r.y+1,r.w-2,r.h-2,
+                Color{255,255,255,innerFocusAlpha});
         }
     } else {
-        roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?BLUE:accent);
+        const Color focusAccent{BLUE.r,BLUE.g,BLUE.b,focusAlpha};
+        roundRect(r.x+14,r.y+10,std::min(42,r.w-28),3,2,selected?focusAccent:accent);
         const bool compact=t.w==1&&t.h==1;
         const bool wide=t.h==1&&t.w>=2;
         const int left=r.x+18, right=r.x+r.w-14;
@@ -2403,10 +2781,42 @@ void drawDotted(int x,int y,int w,int h) {
 }
 int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
-    return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
+    return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-desknx::ui::WorkspaceDockLayout::VisibleTabCount));
 }
+desknx::ui::ModalStack collectModalStack() {
+    desknx::ui::ModalFlags flags{};
+    flags.appLibrary=listOpen;
+    flags.workspaceMenu=workspaceMenu;
+    flags.workspaceSettings=workspaceSettingsMenu;
+    flags.workspacePicker=workspacePicker;
+    flags.deleteConfirmation=deletePrompt;
+    flags.recent=recentOpen;
+    flags.systemTools=systemMenu;
+    flags.launcherSettings=appSettingsMenu;
+    flags.mediaPicker=mediaPickerOpen;
+    flags.power=powerMenu;
+    flags.userPicker=userPickerOpen;
+    return desknx::ui::ModalStack::build(flags);
+}
+
 void drawScreen() {
+    const desknx::ui::ModalStack modalStack=collectModalStack();
+    const Uint32 motionNow=SDL_GetTicks();
+    if(deskIndex!=gMotionWorkspace||selectedX!=gMotionSelectedX||
+       selectedY!=gMotionSelectedY) {
+        gMotionWorkspace=deskIndex;
+        gMotionSelectedX=selectedX;
+        gMotionSelectedY=selectedY;
+        gTileFocusTransition=gMotionController.begin(
+            0.0f,1.0f,motionNow,160,desknx::ui::MotionCurve::EaseOutCubic);
+    }
+    gTileFocusProgress=gMotionController.sample(gTileFocusTransition,motionNow);
+    gFontRenderer.beginFrame();
     gIconCache.beginFrame();
+    // Report state left behind by the previous frame before establishing
+    // the known full-frame baseline.
+    diagnoseRendererState("frame_begin");
+    restoreFrameRendererBaseline("frame_begin");
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
     bool catalogReadyNow=false,catalogCompleteNow=false,catalogTruncatedNow=false;
     bool catalogueNsAvailableNow=false;
@@ -2415,8 +2825,6 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
-    refreshBattery();
-    refreshStorageStats();
     rect(0,0,SW,SH,BG);
     for(int band=0;band<24;++band) {
         const double t=static_cast<double>(band)/23.0;
@@ -2433,36 +2841,45 @@ void drawScreen() {
     else
         drawWallpaper();
 
-    // Compact, labelled system toolbar. Each control has a generous touch
-    // target and a visible name; the same tools are available from the gamepad.
-    softCard(56,16,1168,64,Color{24,32,45,224},Color{255,255,255,28});
+    // Main toolbar and profile/status panels use one shared chrome layout.
+    const auto& toolbarLayout=desknx::ui::LauncherToolbarControls;
+    softCard(toolbarLayout.surface.x,toolbarLayout.surface.y,
+        toolbarLayout.surface.width,toolbarLayout.surface.height,
+        Color{24,32,45,224},Color{255,255,255,28});
     struct HeaderTool { int icon; bool active; const char* label; };
     const HeaderTool headerTools[]={
         {2,false,"GALLERY"},{0,appSettingsMenu,"SETTINGS"},
         {1,false,"PADS"},{8,systemMenu,"TOOLS"}
     };
-    for(int i=0;i<ToolbarButtonCount;++i) {
+    for(int i=0;i<desknx::ui::LauncherToolbarLayout::ButtonCount;++i) {
         const auto& item=headerTools[i];
-        const int x=toolbarButtonX(i);
-        roundRect(x,24,ToolbarButtonWidth,48,13,
-            item.active?Color{48,82,124,255}:Color{37,47,62,230});
-        if(item.active)outline(x,24,ToolbarButtonWidth,48,Color{120,174,235,150});
-        drawSystemIcon(item.icon,x+12,31,24,item.active?WHITE:Color{204,214,228,255});
+        const auto bounds=toolbarLayout.buttonRect(i);
+        const auto variant=item.active?desknx::ui::ButtonVariant::HeaderToolbarSelected:
+            desknx::ui::ButtonVariant::HeaderToolbar;
+        const desknx::ui::ButtonControl button{bounds,variant,{}};
         const int labelWidth=static_cast<int>(std::string(item.label).size())*6;
-        text(item.label,x+std::max(5,(ToolbarButtonWidth-labelWidth)/2),56,1,
-             item.active?WHITE:Color{179,191,207,255},x+ToolbarButtonWidth-4);
+        drawButton(button,item.label,
+            bounds.x+std::max(5,(bounds.width-labelWidth)/2),56,
+            bounds.x+bounds.width-4,desknx::ui::TextRole::Metadata,13);
+        drawSystemIcon(item.icon,bounds.x+12,bounds.y+7,24,
+            item.active?WHITE:Color{204,214,228,255});
     }
-    softCard(470,24,392,48,Color{32,43,59,235},Color{255,255,255,24});
-    drawSystemIcon(7,486,34,27,Color{215,228,246,255});
-    text(selectedUserLabel,526,41,2,WHITE,760);
-    text("CHANGE",780,43,1,BLUE,850);
-    roundRect(870,24,142,48,18,Color{32,43,59,235});
-    text(nextendoTotalLabel(),882,43,1,GREEN,1003);
-    roundRect(1022,24,180,48,18,Color{32,43,59,235});
-    text(clockText(),1040,37,3,WHITE,1136);
-    rect(1148,34,1,26,Color{255,255,255,30});
-    text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
-         battery>=20?GREEN:RED,1198);
+    const auto profile=toolbarLayout.profileSurface;
+    softCard(profile.x,profile.y,profile.width,profile.height,
+        Color{32,43,59,235},Color{255,255,255,24});
+    drawSystemIcon(7,profile.x+16,profile.y+10,27,Color{215,228,246,255});
+    text(selectedUserLabel,profile.x+56,profile.y+17,2,WHITE,profile.x+290);
+    text("CHANGE",profile.x+310,profile.y+19,1,BLUE,profile.x+380);
+    const auto nextendo=toolbarLayout.nextendoSurface;
+    roundRect(nextendo.x,nextendo.y,nextendo.width,nextendo.height,18,Color{32,43,59,235});
+    text(nextendoTotalLabel(),nextendo.x+12,nextendo.y+19,1,GREEN,nextendo.x+nextendo.width-9);
+    const auto clockBattery=toolbarLayout.clockBatterySurface;
+    roundRect(clockBattery.x,clockBattery.y,clockBattery.width,clockBattery.height,
+        18,Color{32,43,59,235});
+    text(clockText(),clockBattery.x+18,clockBattery.y+13,3,WHITE,clockBattery.x+114);
+    rect(clockBattery.x+126,clockBattery.y+10,1,26,Color{255,255,255,30});
+    text(battery>=0?std::to_string(battery)+"%":"BAT --",clockBattery.x+136,
+        clockBattery.y+19,1,battery>=20?GREEN:RED,clockBattery.x+176);
 
     // Single desktop surface under the tiles and widgets.
     softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
@@ -2487,74 +2904,123 @@ void drawScreen() {
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h,d);
     if(editing&&dragging)text("MOVING",1040,118,1,BLUE,1260);
-    softCard(28,558,1224,56,Color{18,26,39,238},Color{255,255,255,16});
+    const auto& footer=desknx::ui::WorkspaceFooterControls;
+    softCard(footer.surface.x,footer.surface.y,footer.surface.width,
+        footer.surface.height,Color{18,26,39,238},Color{255,255,255,16});
     const bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
-    roundRect(48,576,7,7,4,show?BLUE:GREEN);
-    text(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
-         68,575,1,show?WHITE:MUTED,620);
+    roundRect(footer.statusIndicator.x,footer.statusIndicator.y,
+        footer.statusIndicator.width,footer.statusIndicator.height,4,
+        show?BLUE:GREEN);
+    textRole(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
+        footer.statusLabel.x,footer.statusLabel.y,
+        desknx::ui::TextRole::Metadata,show?WHITE:MUTED,
+        footer.statusLabel.x+footer.statusLabel.width);
     struct Hint { const char* key; const char* action; };
     const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L/R","SPACES"}};
     const Hint editHints[]={{"A","MOVE / ADD"},{"D-PAD","POSITION"},{"ZL/ZR","SIZE"},{"-","REMOVE"}};
     const Hint dragHints[]={{"D-PAD","MOVE"},{"L/R","CHANGE DESK"},{"A / B","DROP"},{"-","REMOVE"}};
     const int selectedTileIndex=itemAt(d,selectedX,selectedY);
     if(editing&&!dragging&&selectedTileIndex>=0) {
-        // Touchscreen users need the same tile-management actions as controller
-        // users. Keep these real, generous hit targets in the persistent footer.
-        roundRect(650,571,165,28,8,Color{35,57,83,255});
-        text("SIZE -  /  ZL",665,581,1,WHITE,808);
-        roundRect(826,571,165,28,8,Color{35,57,83,255});
-        text("SIZE +  /  ZR",841,581,1,WHITE,984);
-        roundRect(1002,571,228,28,8,Color{91,39,48,255});
-        text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
+        const desknx::ui::ButtonControl sizeDecrease{
+            footer.tileSizeDecreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+        const desknx::ui::ButtonControl sizeIncrease{
+            footer.tileSizeIncreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+        const desknx::ui::ButtonControl removeTileButton{
+            footer.removeTileButton,desknx::ui::ButtonVariant::Destructive,{}};
+        drawButton(sizeDecrease,"SIZE -  /  ZL",
+            sizeDecrease.bounds.x+15,sizeDecrease.bounds.y+10,
+            sizeDecrease.bounds.x+sizeDecrease.bounds.width-8,
+            desknx::ui::TextRole::Metadata);
+        drawButton(sizeIncrease,"SIZE +  /  ZR",
+            sizeIncrease.bounds.x+15,sizeIncrease.bounds.y+10,
+            sizeIncrease.bounds.x+sizeIncrease.bounds.width-8,
+            desknx::ui::TextRole::Metadata);
+        drawButton(removeTileButton,"REMOVE TILE  /  MINUS",
+            removeTileButton.bounds.x+16,removeTileButton.bounds.y+10,
+            removeTileButton.bounds.x+removeTileButton.bounds.width-8,
+            desknx::ui::TextRole::Metadata);
     } else {
         const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
-        for(int i=0;i<4;++i) {
-            const int hx=642+i*148;
-            roundRect(hx,571,48,28,8,Color{34,45,63,255});
-            text(hints[i].key,hx+5,581,1,BLUE,hx+43);
-            text(hints[i].action,hx+56,581,1,MUTED,hx+144);
+        for(int i=0;i<desknx::ui::WorkspaceFooterLayout::HintCount;++i) {
+            const auto hint=footer.hint(i);
+            drawBadge(hint.keyBadge,hints[i].key,desknx::ui::BadgeVariant::Info);
+            textRole(hints[i].action,hint.actionLabel.x,hint.actionLabel.y,
+                desknx::ui::TextRole::Metadata,MUTED,
+                hint.actionLabel.x+hint.actionLabel.width);
         }
     }
     // Workspace switcher anchors the lower edge, matching a familiar
     // console desktop rather than duplicating navigation in a second dock.
-    softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
+    const auto& dock=desknx::ui::WorkspaceDockControls;
+    softCard(dock.surface.x,dock.surface.y,dock.surface.width,dock.surface.height,
+        Color{18,26,39,242},Color{255,255,255,24});
     const int deskStart=visibleStart();
-    for(int i=0;i<VisibleDeskTabs&&deskStart+i<static_cast<int>(desks.size());++i) {
-        const int index=deskStart+i;
-        const int x=DeskTabX+i*DeskTabStep;
+    for(int slot=0;slot<desknx::ui::WorkspaceDockLayout::VisibleTabCount&&
+        deskStart+slot<static_cast<int>(desks.size());++slot) {
+        const int index=deskStart+slot;
+        const auto bounds=dock.tabRect(slot);
         const bool active=index==deskIndex;
-        roundRect(x,641,DeskTabWidth,48,14,
-            active?Color{53,91,139,255}:Color{34,43,58,235});
-        if(active)outline(x,641,DeskTabWidth,48,Color{144,189,244,110});
-        text(desks[static_cast<size_t>(index)].name,x+12,658,1,
-             active?WHITE:MUTED,x+DeskTabWidth-8);
+        const desknx::ui::ButtonControl tab{
+            bounds,
+            active?desknx::ui::ButtonVariant::HeaderToolbarSelected
+                  :desknx::ui::ButtonVariant::HeaderToolbar,
+            {}};
+        drawButton(tab,desks[static_cast<size_t>(index)].name,
+            bounds.x+12,bounds.y+17,bounds.x+bounds.width-8,
+            desknx::ui::TextRole::Metadata,14);
     }
-    roundRect(770,641,52,48,14,desks.size()<static_cast<size_t>(MAX_DESKS)?
-        Color{35,70,105,255}:Color{34,43,58,235});
-    text("+",787,652,3,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,812);
-    roundRect(832,641,52,48,14,Color{34,43,58,235});
-    text("...",842,660,2,WHITE,876);
-    text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
-         916,658,1,MUTED,1040);
-    roundRect(1096,638,128,54,16,
-        editing?Color{53,100,156,255}:Color{34,46,64,255});
-    drawSystemIcon(5,1108,650,30,WHITE);
-    text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
-    if(listOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+
+    const auto addBounds=dock.addButton;
+    const bool canAddWorkspace=desks.size()<static_cast<size_t>(MAX_DESKS);
+    const desknx::ui::ButtonControl addWorkspace{
+        addBounds,desknx::ui::ButtonVariant::Primary,
+        {false,false,!canAddWorkspace}};
+    drawButton(addWorkspace,"+",addBounds.x+17,addBounds.y+10,
+        addBounds.x+addBounds.width-10,desknx::ui::TextRole::Heading,14);
+
+    const auto menuBounds=dock.menuButton;
+    const desknx::ui::ButtonControl openWorkspaceMenu{
+        menuBounds,desknx::ui::ButtonVariant::Secondary,{}};
+    drawButton(openWorkspaceMenu,"...",menuBounds.x+10,menuBounds.y+19,
+        menuBounds.x+menuBounds.width-8,desknx::ui::TextRole::Subheading,14);
+
+    const auto pageBounds=dock.pageIndicator;
+    const desknx::ui::ButtonControl openWorkspacePicker{
+        pageBounds,desknx::ui::ButtonVariant::Quiet,{}};
+    drawButton(openWorkspacePicker,
+        std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
+        pageBounds.x+16,pageBounds.y+17,pageBounds.x+pageBounds.width-10,
+        desknx::ui::TextRole::Metadata,10);
+
+    const auto editBounds=dock.editButton;
+    const desknx::ui::ButtonControl toggleEditMode{
+        editBounds,
+        editing?desknx::ui::ButtonVariant::HeaderToolbarSelected
+               :desknx::ui::ButtonVariant::HeaderToolbar,
+        {}};
+    drawButton(toggleEditMode,editing?"DONE":"EDIT",
+        editBounds.x+52,editBounds.y+19,editBounds.x+editBounds.width-8,
+        desknx::ui::TextRole::Subheading,16);
+    drawSystemIcon(5,editBounds.x+12,editBounds.y+12,30,WHITE);
+    if(modalStack.contains(desknx::ui::ModalLayer::AppLibrary)) {
+        drawModalBackdrop(194);
         const int mx=110,my=70,mw=1060,mh=570;
-        softCard(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
-        text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
-        text("Installed games, homebrew and system widgets",
-             mx+30,my+43,1,MUTED,mx+mw-24);
-        struct DrawerChip { int x; int w; const char* label; };
-        const DrawerChip chips[]={{mx+28,96,"Y  SEARCH"},{mx+132,82,"X  SORT"},
-            {mx+222,112,"L/R  FILTER"},{mx+342,82,"-  CLEAR"},
-            {mx+432,126,"R STICK RESCAN"},{mx+566,72,"B  CLOSE"},
-            {mx+646,72,"A  ADD"}};
-        for(const auto& chip:chips) {
-            roundRect(chip.x,my+52,chip.w,25,9,Color{31,43,61,255});
-            text(chip.label,chip.x+7,my+61,1,WHITE,chip.x+chip.w-5);
+        drawModalSurface(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
+        textRole("APP LIBRARY",mx+28,my+17,desknx::ui::TextRole::Heading,
+            WHITE,mx+mw-24);
+        textRole("Installed games, homebrew and system widgets",
+            mx+30,my+43,desknx::ui::TextRole::Caption,MUTED,mx+mw-24);
+        const char* toolbarLabels[]={"Y  SEARCH","X  SORT","L/R  FILTER",
+            "-  CLEAR","R STICK RESCAN","B  CLOSE","A  ADD"};
+        const auto& toolbar=desknx::ui::AppLibraryToolbarControls;
+        for(int buttonIndex=0;buttonIndex<desknx::ui::AppLibraryToolbarLayout::ButtonCount;
+            ++buttonIndex) {
+            const auto bounds=toolbar.buttonRect(buttonIndex);
+            const desknx::ui::ButtonControl button{
+                bounds,desknx::ui::ButtonVariant::Toolbar,{}};
+            drawButton(button,toolbarLabels[buttonIndex],
+                bounds.x+7,bounds.y+10,bounds.x+bounds.width-5,
+                desknx::ui::TextRole::Metadata);
         }
         std::string viewLabel=std::string("FILTER  ")+
             desknx::catalog_view::FilterName(catalogueFilter)+"     SORT  "+
@@ -2569,7 +3035,8 @@ void drawScreen() {
         }
         text(viewLabel,mx+28,my+82,1,BLUE,mx+mw-22);
         text("SELECT AN APP TO SEE DETAILS",mx+28,my+96,1,MUTED,mx+760);
-        constexpr int vis=10;
+        const auto& libraryRows=desknx::ui::AppLibraryListRows;
+        const int vis=libraryRows.itemCount;
         if(available.empty()) {
             listIndex=0;
             listOffset=0;
@@ -2599,27 +3066,34 @@ void drawScreen() {
                      mx+42,my+184,1,MUTED,mx+720);
             }
         } else {
-            for(int row=0;row<vis;++row) {
+            for(int row=0;row<libraryRows.itemCount;++row) {
                 const int i=listOffset+row;
                 if(i>=static_cast<int>(available.size()))break;
-                const int yy=my+110+row*40;
+                const auto rowBounds=libraryRows.itemRect(row);
                 const Candidate& candidate=available[static_cast<size_t>(i)];
-                if(i==listIndex)roundRect(mx+27,yy,730,35,10,Color{35,58,88,255});
+                if(i==listIndex)
+                    drawSelectableRowBackground(rowBounds,
+                        desknx::ui::SelectableRowState::Focused,10);
                 Tile iconTile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                drawTileIcon(iconTile,mx+38,yy+4,27);
-                text(candidate.title,mx+78,yy+8,2,
-                     i==listIndex?WHITE:MUTED,mx+592);
+                drawTileIcon(iconTile,rowBounds.x+11,rowBounds.y+4,27);
+                text(candidate.title,rowBounds.x+51,rowBounds.y+8,2,
+                     i==listIndex?WHITE:MUTED,rowBounds.x+565);
                 std::string appBadge=typeName(candidate.kind);
                 if(candidate.kind==Kind::Game) {
                     if(candidate.viewFlags&NsViewFlagNeedsUpdate)appBadge="UPDATE";
                     else if(candidate.viewFlags&NsViewFlagIsGameCard)appBadge="GAME CARD";
                 }
-                text(appBadge,mx+615,yy+11,1,
-                    (candidate.viewFlags&NsViewFlagNeedsUpdate)?Color{255,177,74,255}:
-                    (i==listIndex?BLUE:MUTED),mx+750);
+                const auto badgeVariant=(candidate.viewFlags&NsViewFlagNeedsUpdate)
+                    ?desknx::ui::BadgeVariant::Warning
+                    :candidate.kind==Kind::Game?desknx::ui::BadgeVariant::Info
+                    :candidate.kind==Kind::Nro?desknx::ui::BadgeVariant::Success
+                    :desknx::ui::BadgeVariant::Neutral;
+                drawBadge({rowBounds.x+583,rowBounds.y+5,136,25},
+                    appBadge,badgeVariant);
             }
         }
-        roundRect(mx+780,my+110,252,410,16,Color{22,31,45,255});
+        const auto& detailsPanel=desknx::ui::AppLibraryDetailsPanelLayout;
+        drawCard(detailsPanel.surface,desknx::ui::CardVisualState::Panel);
         if(!available.empty()) {
             const Candidate& selected=available[static_cast<size_t>(
                 std::max(0,std::min(listIndex,static_cast<int>(available.size())-1)))];
@@ -2688,39 +3162,63 @@ void drawScreen() {
             }
             text(std::to_string(listIndex+1)+" OF "+std::to_string(available.size()),
                  mx+800,my+438,1,MUTED,mx+mw-30);
-            roundRect(mx+792,my+462,228,42,12,Color{49,119,199,255});
-            text("A  ADD TO WORKSPACE",mx+823,my+477,1,WHITE,mx+mw-30);
+            const desknx::ui::ButtonControl addAction{
+                detailsPanel.primaryAction,desknx::ui::ButtonVariant::Primary,{}};
+            drawButton(addAction,"A  ADD TO WORKSPACE",
+                detailsPanel.primaryAction.x+31,
+                detailsPanel.primaryAction.y+15,
+                detailsPanel.primaryAction.x+detailsPanel.primaryAction.width-10,
+                desknx::ui::TextRole::Metadata);
         }
         const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
             std::to_string(available.size())+" SHOWN";
         text(counts,mx+28,my+mh-26,1,MUTED,mx+mw-30);
     }
-    if(workspaceMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
-        text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
+    if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceMenu)) {
+        const auto& layout=desknx::ui::WorkspaceOptionsContextMenuLayout;
+        drawModalBackdrop(190);
+        drawModalSurface(layout.surface.x,layout.surface.y,
+            layout.surface.width,layout.surface.height,
+            Color{18,25,37,255},Color{255,255,255,26});
+        textRole("WORKSPACE OPTIONS",layout.title.x,layout.title.y,
+            desknx::ui::TextRole::Heading,WHITE,
+            layout.title.x+layout.title.width);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
         const char* actions[]={"OPEN WORKSPACE","MOVE SELECTED TILE","CUSTOMIZE DESKTOP",
                                "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
-        for(int i=0;i<6;++i) {
-            const int yy=238+i*44;
-            if(i==workspaceMenuIndex)roundRect(390,yy,500,38,10,Color{45,61,82,255});
-            const Color labelColor=(i==1&&!canMoveTile)?Color{91,101,118,255}:
-                                   (i==workspaceMenuIndex?WHITE:MUTED);
-            text(actions[i],412,yy+12,1,labelColor,875);
+        for(int i=0;i<layout.items.itemCount;++i) {
+            const auto row=layout.items.itemRect(i);
+            const bool disabled=(i==1&&!canMoveTile);
+            const auto rowState=disabled
+                ?desknx::ui::SelectableRowState::Disabled
+                :(i==workspaceMenuIndex
+                    ?desknx::ui::SelectableRowState::Focused
+                    :desknx::ui::SelectableRowState::Normal);
+            drawSelectableRowBackground(row,rowState,10);
+            const Color labelColor=controlColor(
+                desknx::ui::ResolveSelectableRowStyle(rowState).foreground);
+            textRole(actions[i],row.x+22,row.y+12,desknx::ui::TextRole::Body,labelColor,row.x+row.width-15);
         }
-        text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",390,518,1,MUTED,900);
+        textRole("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",
+            layout.footer.x,layout.footer.y,desknx::ui::TextRole::Metadata,MUTED,
+            layout.footer.x+layout.footer.width);
     }
-    if(workspaceSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
-        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
+    if(modalStack.contains(desknx::ui::ModalLayer::WorkspaceSettings)) {
+        drawModalBackdrop(198);
+        const auto& workspaceSettings=desknx::ui::WorkspaceSettingsDialogControls;
+        drawModalSurface(workspaceSettings.surface.x,workspaceSettings.surface.y,
+            workspaceSettings.surface.width,workspaceSettings.surface.height,
+            Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
-        text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
-        text(desk.name+"  /  PERSONAL APPEARANCE",346,168,1,MUTED,930);
-        roundRect(842,132,92,32,10,Color{54,57,66,255});
-        text("B  BACK",856,143,1,WHITE,926);
+        textRole("CUSTOMIZE DESKTOP",344,130,desknx::ui::TextRole::Heading,WHITE,930);
+        textRole(desk.name+"  /  PERSONAL APPEARANCE",346,168,
+            desknx::ui::TextRole::Caption,MUTED,930);
+        const desknx::ui::ButtonControl workspaceBack{
+            workspaceSettings.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(workspaceBack,"B  BACK",856,143,926,
+            desknx::ui::TextRole::Metadata);
         const char* fitNames[]={"COVER","CONTAIN","STRETCH"};
         const char* labels[]={"CHOOSE DESKTOP BACKGROUND","BACKGROUND FIT","GAME ART FIT",
                               "TITLE OVERLAY","ACCENT COLOR","RESET DESKTOP STYLE","DONE"};
@@ -2732,140 +3230,215 @@ void drawScreen() {
             desk.accentColor<0?"AUTO / TILE COLORS":"PALETTE "+std::to_string(desk.accentColor+1),
             "RESTORE DEFAULTS","CLOSE THIS MENU"
         };
-        for(int i=0;i<7;++i) {
-            const int yy=216+i*48;
-            if(i==workspaceSettingsIndex)roundRect(340,yy,600,40,10,Color{35,61,93,255});
-            text(labels[i],360,yy+8,1,i==workspaceSettingsIndex?WHITE:MUTED,700);
-            text(values[i],710,yy+8,1,i==workspaceSettingsIndex?BLUE:MUTED,920);
+        for(int i=0;i<workspaceSettings.rows.itemCount;++i) {
+            const auto row=workspaceSettings.rows.itemRect(i);
+            if(i==workspaceSettingsIndex)
+                drawSelectableRowBackground(row,
+                    desknx::ui::SelectableRowState::Focused,10);
+            textRole(labels[i],row.x+20,row.y+8,desknx::ui::TextRole::Body,
+                i==workspaceSettingsIndex?WHITE:MUTED,row.x+360);
+            textRole(values[i],row.x+370,row.y+8,desknx::ui::TextRole::Metadata,
+                i==workspaceSettingsIndex?BLUE:MUTED,row.x+row.width-20);
         }
-        text("COVER FILLS THE TILE; CONTAIN SHOWS THE WHOLE IMAGE",346,568,1,MUTED,930);
-        text("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,1,BLUE,930);
+        textRole("COVER FILLS THE TILE; CONTAIN SHOWS THE WHOLE IMAGE",346,568,
+            desknx::ui::TextRole::Caption,MUTED,930);
+        textRole("UP / DOWN SELECT     A CHANGE     B CLOSE",346,606,
+            desknx::ui::TextRole::Metadata,BLUE,930);
     }
-    if(workspacePicker) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
-        softCard(320,72,640,580,Color{18,25,37,255},Color{255,255,255,26});
-        text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
-             360,100,3,WHITE,920);
-        text("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
-             360,136,1,MUTED,920);
-        for(size_t i=0;i<desks.size();++i) {
-            const int yy=168+static_cast<int>(i)*32;
+    if(modalStack.contains(desknx::ui::ModalLayer::WorkspacePicker)) {
+        const auto& layout=desknx::ui::WorkspacePickerDialogLayout;
+        drawModalBackdrop(194);
+        drawModalSurface(layout.surface.x,layout.surface.y,
+            layout.surface.width,layout.surface.height,
+            Color{18,25,37,255},Color{255,255,255,26});
+        textRole(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
+             layout.title.x,layout.title.y,desknx::ui::TextRole::Heading,WHITE,
+             layout.title.x+layout.title.width);
+        textRole("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
+             layout.description.x,layout.description.y,desknx::ui::TextRole::Caption,MUTED,
+             layout.description.x+layout.description.width);
+        for(size_t i=0;i<desks.size()&&i<static_cast<size_t>(layout.items.itemCount);++i) {
+            const auto row=layout.items.itemRect(static_cast<int>(i));
             const bool selected=static_cast<int>(i)==workspacePickerIndex;
             const bool current=static_cast<int>(i)==deskIndex;
-            if(selected)roundRect(360,yy,560,29,8,Color{45,61,82,255});
-            else if(current)roundRect(360,yy,560,29,8,Color{30,43,60,255});
-            text(desks[i].name,382,yy+9,1,
-                 selected?WHITE:(current?BLUE:MUTED),760);
+            const auto rowState=selected
+                ?desknx::ui::SelectableRowState::Focused
+                :(current?desknx::ui::SelectableRowState::Current:
+                    desknx::ui::SelectableRowState::Normal);
+            drawSelectableRowBackground(row,rowState,8);
+            const Color rowText=controlColor(
+                desknx::ui::ResolveSelectableRowStyle(rowState).foreground);
+            textRole(desks[i].name,row.x+22,row.y+9,desknx::ui::TextRole::Body,rowText,row.x+row.width-160);
             const std::string detail=current?"CURRENT":
                 std::to_string(desks[i].tiles.size())+" ITEMS";
-            text(detail,804,yy+9,1,current?BLUE:MUTED,902);
+            textRole(detail,row.x+444,row.y+9,desknx::ui::TextRole::Metadata,
+                 current?BLUE:(selected?WHITE:MUTED),row.x+row.width-18);
         }
-        roundRect(744,590,176,38,10,Color{54,57,66,255});
-        text("CANCEL",795,603,1,WHITE,875);
-        text("UP / DOWN SELECT     A OPEN     B BACK",360,608,1,MUTED,730);
+        const desknx::ui::ButtonControl cancelButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(cancelButton,"CANCEL",layout.closeButton.x+51,
+            layout.closeButton.y+13,
+            layout.closeButton.x+layout.closeButton.width-45);
+        text("UP / DOWN SELECT     A OPEN     B BACK",
+             layout.footer.x,layout.footer.y+18,1,MUTED,
+             layout.footer.x+layout.footer.width);
     }
-    if(deletePrompt) {
-        rect(0,0,SW,SH,Color{3,7,14,194});
+    if(modalStack.contains(desknx::ui::ModalLayer::DeleteConfirmation)) {
         const size_t tileCount=desks[static_cast<size_t>(deskIndex)].tiles.size();
-        softCard(360,242,560,240,Color{24,27,38,255},Color{255,99,112,100});
-        text("DELETE WORKSPACE?",405,270,3,WHITE,890);
-        text(desks[static_cast<size_t>(deskIndex)].name,405,314,2,MUTED,890);
-        text(std::to_string(tileCount)+" SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
-             405,346,1,MUTED,890);
-        roundRect(405,382,210,48,12,Color{112,38,42,255});
-        outline(405,382,210,48,Color{255,69,58,130});
-        text("DELETE",466,399,2,WHITE,600);
-        roundRect(635,382,240,48,12,Color{54,57,66,255});
-        text("CANCEL",706,399,2,WHITE,865);
-        text("A CONFIRM     B CANCEL",405,444,1,MUTED,890);
+        drawConfirmationDialog(
+            desknx::ui::WorkspaceDeleteConfirmationLayout,
+            "DELETE WORKSPACE?",
+            desks[static_cast<size_t>(deskIndex)].name,
+            std::to_string(tileCount)+
+                " SHORTCUTS WILL BE REMOVED; INSTALLED APPS STAY INSTALLED",
+            "DELETE","CANCEL",true);
     }
     // PowerMenu modal (ТЗ 6.1/6.2: "-" opens the power menu; PWR-03).
-    if(recentOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
-        text("RECENTLY OPENED",266,104,3,WHITE,850);
-        roundRect(838,108,78,30,9,Color{49,52,61,255});
-        text("B BACK",850,118,1,WHITE,912);
-        roundRect(924,108,88,30,9,Color{10,132,255,255});
-        text("LAUNCH",936,118,1,WHITE,1006);
-        text("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,1,MUTED,850);
+    if(modalStack.contains(desknx::ui::ModalLayer::Recent)) {
+        const auto& recentLayout=desknx::ui::RecentWindowControls;
+        drawModalBackdrop(190);
+        drawModalSurface(recentLayout.surface.x,recentLayout.surface.y,
+            recentLayout.surface.width,recentLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,25});
+        textRole("RECENTLY OPENED",266,104,desknx::ui::TextRole::Heading,WHITE,850);
+        const desknx::ui::ButtonControl backButton{
+            recentLayout.backButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B BACK",recentLayout.backButton.x+12,
+            recentLayout.backButton.y+10,
+            recentLayout.backButton.x+recentLayout.backButton.width-4,
+            desknx::ui::TextRole::Metadata);
+        const desknx::ui::ButtonControl launchButton{
+            recentLayout.launchButton,desknx::ui::ButtonVariant::Primary,{}};
+        drawButton(launchButton,"LAUNCH",recentLayout.launchButton.x+12,
+            recentLayout.launchButton.y+10,
+            recentLayout.launchButton.x+recentLayout.launchButton.width-6,
+            desknx::ui::TextRole::Metadata);
+        textRole("TAP TO SELECT     A / LAUNCH BUTTON TO START",282,153,desknx::ui::TextRole::Metadata,MUTED,850);
         if(recentLaunches.empty()) {
-            text("NO RECENT LAUNCHES YET",310,245,2,WHITE,970);
-            text("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,1,MUTED,970);
+            textRole("NO RECENT LAUNCHES YET",310,245,desknx::ui::TextRole::Subheading,WHITE,970);
+            textBlock("LAUNCH A GAME OR HOMEBREW APP TO SEE IT HERE",310,280,desknx::ui::TextRole::Caption,MUTED,970);
         } else {
             recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
-            const int visible=std::min(10,static_cast<int>(recentLaunches.size()));
+            const int visible=std::min(recentLayout.entries.itemCount,
+                static_cast<int>(recentLaunches.size()));
             for(int row=0;row<visible;++row) {
                 const auto& entry=recentLaunches[static_cast<size_t>(row)];
-                const int yy=190+row*39;
-                if(row==recentIndex)roundRect(278,yy,724,35,9,Color{45,61,82,255});
+                const auto rowBounds=recentLayout.entries.itemRect(row);
+                if(row==recentIndex)
+                    drawSelectableRowBackground(rowBounds,
+                        desknx::ui::SelectableRowState::Focused,9);
                 Tile iconTile{entry.kind,entry.title,entry.data,0,0,1,1,row%12};
-                drawTileIcon(iconTile,290,yy+4,27);
-                text(entry.title,330,yy+8,2,row==recentIndex?WHITE:MUTED,850);
-                text(entry.kind==Kind::Game?"GAME":"HOMEBREW",870,yy+11,1,
-                     row==recentIndex?BLUE:MUTED,990);
+                drawTileIcon(iconTile,rowBounds.x+12,rowBounds.y+4,27);
+                textRole(entry.title,rowBounds.x+52,rowBounds.y+8,desknx::ui::TextRole::Subheading,
+                    row==recentIndex?WHITE:MUTED,rowBounds.x+572);
+                textRole(entry.kind==Kind::Game?"GAME":"HOMEBREW",
+                    rowBounds.x+592,rowBounds.y+11,desknx::ui::TextRole::Metadata,
+                    row==recentIndex?BLUE:MUTED,rowBounds.x+rowBounds.width-12);
             }
         }
-        text("A  LAUNCH SELECTED     B  CLOSE",282,594,1,BLUE,850);
+        textRole("A  LAUNCH SELECTED     B  CLOSE",282,594,desknx::ui::TextRole::Metadata,BLUE,850);
     }
-    if(systemMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,190});
-        softCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
-        text("TOOLS",146,130,3,WHITE,1020);
-        text("Library, recent apps, widgets and system actions.",
-             148,168,1,MUTED,1020);
-        struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
+    if(modalStack.contains(desknx::ui::ModalLayer::SystemTools)) {
+        drawModalBackdrop(190);
+        const auto& systemToolsLayout=desknx::ui::SystemToolsWindowControls;
+        drawModalSurface(systemToolsLayout.surface.x,systemToolsLayout.surface.y,
+            systemToolsLayout.surface.width,systemToolsLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,25});
+        textRole("TOOLS",146,130,desknx::ui::TextRole::Heading,WHITE,1020);
+        textBlock("Library, recent apps, widgets and system actions.",
+             148,168,desknx::ui::TextRole::Caption,MUTED,1020);
+        struct SystemTool { int icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
-            {156,218,4,"APP LIBRARY","INSTALLED GAMES AND HOMEBREW"},
-            {496,218,6,"RECENT","RECENTLY LAUNCHED APPS"},
-            {836,218,3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
-            {156,382,5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
-            {496,382,0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
-            {836,382,4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
+            {4,"APP LIBRARY","INSTALLED GAMES AND HOMEBREW"},
+            {6,"RECENT","RECENTLY LAUNCHED APPS"},
+            {3,"POWER","SLEEP, REBOOT OR SHUT DOWN"},
+            {5,"EDIT MODE","MOVE AND RESIZE DESKTOP TILES"},
+            {0,"WIDGETS","ADD CLOCK, STORAGE AND SYSTEM INFO"},
+            {4,"RESCAN LIBRARY","REFRESH INSTALLED APPLICATIONS"}
         };
         for(size_t toolIndex=0;toolIndex<sizeof(tools)/sizeof(tools[0]);++toolIndex) {
             const auto& item=tools[toolIndex];
-            softCard(item.x,item.y,288,136,systemMenuIndex==static_cast<int>(toolIndex)?
-                Color{34,63,98,255}:Color{23,32,46,255},
-                systemMenuIndex==static_cast<int>(toolIndex)?
-                Color{91,157,238,115}:Color{255,255,255,18});
-            roundRect(item.x+14,item.y+14,54,54,16,
+            const auto bounds=systemToolsLayout.cardRect(static_cast<int>(toolIndex));
+            drawCard(bounds,systemMenuIndex==static_cast<int>(toolIndex)
+                ?desknx::ui::CardVisualState::Focused
+                :desknx::ui::CardVisualState::Normal);
+            roundRect(bounds.x+14,bounds.y+14,54,54,16,
                 systemMenuIndex==static_cast<int>(toolIndex)?
                 Color{54,108,171,255}:Color{38,51,71,255});
-            drawSystemIcon(item.icon,item.x+25,item.y+25,32,WHITE);
-            text(item.title,item.x+82,item.y+23,2,WHITE,item.x+278);
-            text(item.subtitle,item.x+16,item.y+91,1,MUTED,item.x+278);
+            drawSystemIcon(item.icon,bounds.x+25,bounds.y+25,32,WHITE);
+            textRole(item.title,bounds.x+82,bounds.y+23,desknx::ui::TextRole::Subheading,WHITE,bounds.x+bounds.width-10);
+            textBlock(item.subtitle,bounds.x+16,bounds.y+91,desknx::ui::TextRole::Caption,MUTED,
+                bounds.x+bounds.width-10);
         }
-        roundRect(1058,136,82,34,10,Color{54,57,66,255});
-        text("B BACK",1074,147,1,WHITE,1130);
-        text("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,1,BLUE,1120);
+        const desknx::ui::ButtonControl backButton{
+            systemToolsLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B BACK",systemToolsLayout.closeButton.x+16,
+            systemToolsLayout.closeButton.y+11,
+            systemToolsLayout.closeButton.x+systemToolsLayout.closeButton.width-10,
+            desknx::ui::TextRole::Metadata);
+        textRole("L3 OPEN TOOLS     A SELECT     TOUCH ANY CARD",148,568,desknx::ui::TextRole::Metadata,BLUE,1120);
     }
-    if(appSettingsMenu) {
-        rect(0,0,SW,SH,Color{3,7,14,198});
-        softCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
-        text("LAUNCHER SETTINGS",344,130,3,WHITE,930);
-        text("Appearance, widgets and workspace behaviour",346,168,1,MUTED,930);
-        roundRect(842,132,92,32,10,Color{54,57,66,255});
-        text("B  BACK",856,143,1,WHITE,926);
-        text("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,190,1,wallpaperPath.empty()?MUTED:BLUE,630);
+    if(modalStack.contains(desknx::ui::ModalLayer::LauncherSettings)) {
+        drawModalBackdrop(198);
+        const auto& launcherSettings=desknx::ui::LauncherSettingsDialogControls;
+        drawModalSurface(launcherSettings.surface.x,launcherSettings.surface.y,
+            launcherSettings.surface.width,launcherSettings.surface.height,
+            Color{17,24,36,255},Color{255,255,255,28});
+        textRole("LAUNCHER SETTINGS",344,130,desknx::ui::TextRole::Heading,WHITE,930);
+        textBlock("Appearance, widgets and workspace behaviour",346,168,desknx::ui::TextRole::Caption,MUTED,930);
+        const desknx::ui::ButtonControl launcherBack{
+            launcherSettings.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(launcherBack,"B  BACK",856,143,926,
+            desknx::ui::TextRole::Metadata);
+        textRole("WALLPAPER  "+(wallpaperPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
+             346,190,desknx::ui::TextRole::Metadata,wallpaperPath.empty()?MUTED:BLUE,630);
         const size_t fontSlash=fontPath.find_last_of('/');
         const std::string fontLabel=fontPath.empty()?std::string("SYSTEM"):
             (fontSlash==std::string::npos?fontPath:fontPath.substr(fontSlash+1));
-        text("FONT  "+fontLabel,646,190,1,fontPath.empty()?MUTED:BLUE,930);
-        text("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
-             346,202,1,iconPackPath.empty()?MUTED:BLUE,930);
+        textRole("FONT  "+fontLabel,646,190,desknx::ui::TextRole::Metadata,fontPath.empty()?MUTED:BLUE,930);
+        textRole("ICONS  "+(iconPackPath.empty()?std::string("DEFAULT"):std::string("CUSTOM")),
+             346,202,desknx::ui::TextRole::Metadata,iconPackPath.empty()?MUTED:BLUE,930);
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE",
+            languageRussian?"РЕЖИМ АНИМАЦИИ":"ANIMATION MODE"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
-            const int yy=214+i*31;
-            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
-            text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
-            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
-            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
+        const char* motionModes[]={"FULL","REDUCED","LOW POWER"};
+        const auto& settingsRows=launcherSettings.rows;
+        for(int i=0;i<settingsRows.itemCount;++i) {
+            const auto row=settingsRows.itemRect(i);
+            if(i==appSettingsIndex)
+                roundRect(row.x,row.y,row.width,row.height,8,Color{35,61,93,255});
+            textRole(actions[i],row.x+22,row.y+7,desknx::ui::TextRole::Body,
+                i==appSettingsIndex?WHITE:MUTED,row.x+390);
+            if(i==3||i==10||i==11) {
+                std::string value;
+                int fieldOffset=410;
+                int fieldWidth=172;
+                if(i==3) {
+                    value="THEME "+std::to_string(themeIndex+1)+"/8";
+                    fieldOffset=424;
+                    fieldWidth=158;
+                } else if(i==10) {
+                    value=iconStyles[static_cast<size_t>(iconStyle)];
+                    fieldOffset=405;
+                } else {
+                    const int mode=static_cast<int>(gMotionController.mode());
+                    const int boundedMode=std::max(0,std::min(2,mode));
+                    value=motionModes[boundedMode];
+                    fieldOffset=430;
+                    fieldWidth=144;
+                }
+                const auto fieldState=i==appSettingsIndex
+                    ?desknx::ui::FieldVisualState::Focused
+                    :desknx::ui::FieldVisualState::Normal;
+                drawValueField({{row.x+fieldOffset,row.y+2,fieldWidth,22},fieldState},value);
+            }
+            if(i==7) {
+                drawToggle({{row.x+536,row.y+2,44,22},editing,
+                    desknx::ui::ControlState{i==appSettingsIndex,false,false}});
+            }
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -2874,98 +3447,159 @@ void drawScreen() {
             std::snprintf(nsInfo,sizeof(nsInfo),"GAME SERVICE OFFLINE  0X%08X",
                           static_cast<unsigned int>(catalogueNsErrorNow));
         else std::snprintf(nsInfo,sizeof(nsInfo),"LIBRARY READY");
-        text(nsInfo,346,574,1,catalogueNsAvailableNow?GREEN:RED,650);
-        text("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
-             346,592,1,MUTED,930);
-        text("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,1,BLUE,930);
+        const auto libraryTone=(!catalogReadyNow&&!catalogCompleteNow)
+            ?desknx::ui::IndicatorTone::Loading
+            :catalogueNsAvailableNow?desknx::ui::IndicatorTone::Ready
+            :desknx::ui::IndicatorTone::Offline;
+        drawStatusIndicator({330,576,8,8},libraryTone);
+        textRole(nsInfo,346,574,desknx::ui::TextRole::Metadata,catalogueNsAvailableNow?GREEN:RED,650);
+        textRole("MEDIA LIBRARY  •  WALLPAPERS / FONTS / ICON PACKS",
+             346,592,desknx::ui::TextRole::Caption,MUTED,930);
+        textRole("UP / DOWN SELECT     A APPLY     B CLOSE",346,610,desknx::ui::TextRole::Metadata,BLUE,930);
     }
-    if(mediaPickerOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,205});
-        softCard(220,58,840,604,Color{17,24,36,255},Color{255,255,255,25});
-        text(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
+    if(modalStack.contains(desknx::ui::ModalLayer::MediaPicker)) {
+        drawModalBackdrop(205);
+        const auto& mediaLayout=desknx::ui::MediaPickerWindowControls;
+        drawModalSurface(mediaLayout.surface.x,mediaLayout.surface.y,
+            mediaLayout.surface.width,mediaLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,25});
+        textRole(mediaPickerType==MediaPickerType::Wallpaper?"CHOOSE WALLPAPER":
              mediaPickerType==MediaPickerType::WorkspaceBackground?"CHOOSE DESKTOP BACKGROUND":
              mediaPickerType==MediaPickerType::Font?"CHOOSE FONT":"CHOOSE ICON PACK",
-             264,88,3,WHITE,1000);
+             264,88,desknx::ui::TextRole::Heading,WHITE,1000);
         const bool browsingAlbum=mediaPickerDirectory.compare(
             0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0;
-        text(browsingAlbum?"NINTENDO ALBUM":"MEDIA LIBRARY",266,128,1,MUTED,1000);
+        textRole(browsingAlbum?"NINTENDO ALBUM":"MEDIA LIBRARY",266,128,desknx::ui::TextRole::Caption,MUTED,1000);
         if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
-            roundRect(782,86,132,34,10,Color{38,76,119,255});
-            text(browsingAlbum?"MEDIA":"ALBUM",808,98,1,WHITE,908);
+            const desknx::ui::ButtonControl directoryButton{
+                mediaLayout.directoryButton,desknx::ui::ButtonVariant::ToolbarSelected,{}};
+            drawButton(directoryButton,browsingAlbum?"MEDIA":"ALBUM",
+                mediaLayout.directoryButton.x+26,mediaLayout.directoryButton.y+12,
+                mediaLayout.directoryButton.x+mediaLayout.directoryButton.width-6,
+                desknx::ui::TextRole::Metadata);
         }
-        roundRect(930,86,92,34,10,Color{54,57,66,255});
-        text("B  BACK",944,98,1,WHITE,1012);
+        const desknx::ui::ButtonControl backButton{
+            mediaLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B  BACK",mediaLayout.closeButton.x+14,
+            mediaLayout.closeButton.y+12,
+            mediaLayout.closeButton.x+mediaLayout.closeButton.width-10,
+            desknx::ui::TextRole::Metadata);
         if(mediaPickerEntries.empty()) {
-            text("NO SUPPORTED FILES FOUND",286,220,2,WHITE,980);
-            text(mediaPickerType==MediaPickerType::IconPack
+            textRole("NO SUPPORTED FILES FOUND",286,220,desknx::ui::TextRole::Subheading,WHITE,980);
+            textBlock(mediaPickerType==MediaPickerType::IconPack
                  ?"CREATE A FOLDER HERE FOR YOUR ICON PACK"
                  :"COPY JPG / PNG OR TTF / OTF FILES INTO THIS FOLDER",
-                 286,256,1,MUTED,1000);
+                 286,256,desknx::ui::TextRole::Caption,MUTED,1000);
         }
-        for(int row=0;row<12;++row) {
+        const auto& mediaRows=mediaLayout.entries;
+        for(int row=0;row<mediaRows.itemCount;++row) {
             const int index=mediaPickerOffset+row;
             if(index>=static_cast<int>(mediaPickerEntries.size()))break;
             const auto& entry=mediaPickerEntries[static_cast<size_t>(index)];
-            const int yy=166+row*34;
-            if(index==mediaPickerIndex)roundRect(260,yy,760,30,8,Color{35,61,93,255});
+            const auto rowBounds=mediaRows.itemRect(row);
+            if(index==mediaPickerIndex)
+                drawSelectableRowBackground(rowBounds,
+                    desknx::ui::SelectableRowState::Focused,8);
             const char* entryType=entry.directory?"FOLDER":
                 (mediaPickerType==MediaPickerType::Font?"FONT":"IMAGE");
-            text(entryType,278,yy+10,1,entry.directory?BLUE:MUTED,370);
-            text(entry.name,388,yy+10,1,index==mediaPickerIndex?WHITE:MUTED,1004);
+            textRole(entryType,rowBounds.x+18,rowBounds.y+10,desknx::ui::TextRole::Metadata,
+                entry.directory?BLUE:MUTED,rowBounds.x+110);
+            textRole(entry.name,rowBounds.x+128,rowBounds.y+10,desknx::ui::TextRole::Body,
+                index==mediaPickerIndex?WHITE:MUTED,rowBounds.x+rowBounds.width-16);
         }
-        text(std::to_string(mediaPickerIndex+1)+" / "+std::to_string(mediaPickerEntries.size())+
-             "    A OPEN / APPLY",266,590,1,MUTED,650);
-        text(mediaPickerType==MediaPickerType::WorkspaceBackground
+        textRole(std::to_string(mediaPickerIndex+1)+" / "+std::to_string(mediaPickerEntries.size())+
+             "    A OPEN / APPLY",266,590,desknx::ui::TextRole::Metadata,MUTED,650);
+        textRole(mediaPickerType==MediaPickerType::WorkspaceBackground
              ?"UP/DOWN SELECT   A OPEN/APPLY   X ALBUM   B BACK"
              :"UP / DOWN SELECT     B BACK",
-             682,590,1,BLUE,1018);
+             682,590,desknx::ui::TextRole::Metadata,BLUE,1018);
     }
-    if(powerMenu) {
+    if(modalStack.contains(desknx::ui::ModalLayer::Power)) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
-        rect(0,0,SW,SH,Color{3,7,14,194});
-        softCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
-        text("POWER",454,238,3,WHITE,820);
-        roundRect(780,238,52,30,9,Color{54,57,66,255});
-        text("B",798,247,1,WHITE,828);
-        for(int i=0;i<3;++i){
-            int yy=294+i*44;
-            if(i==powerIndex)roundRect(442,yy-5,396,38,9,Color{45,61,82,255});
-            text(kPowerItems[i],460,yy+2,2,i==powerIndex?WHITE:MUTED,810);
+        drawModalBackdrop(194);
+        const auto& powerLayout=desknx::ui::PowerDialogControls;
+        drawModalSurface(powerLayout.surface.x,powerLayout.surface.y,
+            powerLayout.surface.width,powerLayout.surface.height,
+            Color{18,25,37,255},Color{255,255,255,24});
+        textRole("POWER",454,238,desknx::ui::TextRole::Heading,WHITE,820);
+        const desknx::ui::ButtonControl backButton{
+            powerLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B",powerLayout.closeButton.x+18,
+            powerLayout.closeButton.y+9,
+            powerLayout.closeButton.x+powerLayout.closeButton.width-8,
+            desknx::ui::TextRole::Metadata);
+        for(int i=0;i<powerLayout.actions.itemCount;++i) {
+            const auto row=powerLayout.actions.itemRect(i);
+            if(i==powerIndex)
+                drawSelectableRowBackground(row,
+                    desknx::ui::SelectableRowState::Focused,9);
+            textRole(kPowerItems[i],row.x+18,row.y+7,desknx::ui::TextRole::Subheading,
+                i==powerIndex?WHITE:MUTED,row.x+row.width-20);
         }
-        roundRect(590,432,248,42,11,Color{10,132,255,255});
-        text("EXECUTE",674,445,2,WHITE,820);
-        text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
+        const desknx::ui::ButtonControl executeButton{
+            powerLayout.executeButton,desknx::ui::ButtonVariant::Primary,{}};
+        drawButton(executeButton,"EXECUTE",
+            powerLayout.executeButton.x+84,powerLayout.executeButton.y+13,
+            powerLayout.executeButton.x+powerLayout.executeButton.width-14);
+        textRole("SELECT AN ACTION FIRST",440,478,desknx::ui::TextRole::Caption,MUTED,820);
     }
-    if(userPickerOpen) {
-        rect(0,0,SW,SH,Color{3,7,14,210});
-        softCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
-        text("SELECT PLAYER",374,142,3,WHITE,900);
-        text("The selected profile is used for games that request a player account.",
-             376,180,1,MUTED,914);
-        roundRect(844,136,76,34,10,Color{54,57,66,255});
-        text("B BACK",856,147,1,WHITE,912);
+    if(modalStack.contains(desknx::ui::ModalLayer::UserPicker)) {
+        drawModalBackdrop(210);
+        const auto& userLayout=desknx::ui::UserPickerDialogControls;
+        drawModalSurface(userLayout.surface.x,userLayout.surface.y,
+            userLayout.surface.width,userLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,32});
+        textRole("SELECT PLAYER",374,142,desknx::ui::TextRole::Heading,WHITE,900);
+        textBlock("The selected profile is used for games that request a player account.",
+             376,180,desknx::ui::TextRole::Caption,MUTED,914);
+        const desknx::ui::ButtonControl backButton{
+            userLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B BACK",userLayout.closeButton.x+12,
+            userLayout.closeButton.y+11,
+            userLayout.closeButton.x+userLayout.closeButton.width-8,
+            desknx::ui::TextRole::Metadata);
         if(consoleUsers.empty()) {
-            text("NO NINTENDO ACCOUNT PROFILES FOUND",382,268,2,WHITE,906);
-            text("Create a user in System Settings, then reopen this menu.",
-                 382,306,1,MUTED,906);
+            textRole("NO NINTENDO ACCOUNT PROFILES FOUND",382,268,desknx::ui::TextRole::Subheading,WHITE,906);
+            textBlock("Create a user in System Settings, then reopen this menu.",
+                 382,306,desknx::ui::TextRole::Body,MUTED,906);
         } else {
-            for(size_t i=0;i<consoleUsers.size();++i) {
-                const int yy=214+static_cast<int>(i)*46;
+            for(int i=0;i<userLayout.users.itemCount&&
+                i<static_cast<int>(consoleUsers.size());++i) {
+                const auto row=userLayout.users.itemRect(i);
                 const bool active=uiHasSelectedUser&&
-                    sameAccountUid(consoleUsers[i].uid,uiSelectedUser);
-                if(static_cast<int>(i)==userPickerIndex)
-                    roundRect(370,yy,540,40,10,Color{42,74,111,255});
-                else if(active)
-                    roundRect(370,yy,540,40,10,Color{28,47,66,255});
-                drawSystemIcon(7,386,yy+8,24,active?BLUE:MUTED);
-                text(consoleUsers[i].nickname,424,yy+13,2,
-                     static_cast<int>(i)==userPickerIndex?WHITE:MUTED,790);
-                if(active)text("ACTIVE",816,yy+14,1,GREEN,898);
+                    sameAccountUid(consoleUsers[static_cast<size_t>(i)].uid,uiSelectedUser);
+                const auto state=i==userPickerIndex
+                    ?desknx::ui::SelectableRowState::Focused
+                    :active?desknx::ui::SelectableRowState::Current
+                    :desknx::ui::SelectableRowState::Normal;
+                drawSelectableRowBackground(row,state,10);
+                drawSystemIcon(7,row.x+16,row.y+8,24,active?BLUE:MUTED);
+                textRole(consoleUsers[static_cast<size_t>(i)].nickname,
+                    row.x+54,row.y+13,desknx::ui::TextRole::Subheading,
+                    i==userPickerIndex?WHITE:MUTED,row.x+420);
+                if(active)textRole("ACTIVE",row.x+446,row.y+14,
+                    desknx::ui::TextRole::Metadata,GREEN,row.x+row.width-12);
             }
         }
-        text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
+        textRole("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,
+            desknx::ui::TextRole::Metadata,BLUE,914);
     }
-    SDL_RenderPresent(renderer);
+    // Diagnose state left by this frame before restoring the baseline for Present.
+    diagnoseRendererState("frame_end");
+    restoreFrameRendererBaseline("frame_end");
+    if(gFrameRenderStartedCounter!=0) {
+        const Uint64 beforePresent=SDL_GetPerformanceCounter();
+        gRuntimeMetrics.record(desknx::runtime::Metric::RenderTime,
+            elapsedPerformanceMs(gFrameRenderStartedCounter,beforePresent));
+        const Uint64 presentStarted=SDL_GetPerformanceCounter();
+        SDL_RenderPresent(renderer);
+        const Uint64 presentFinished=SDL_GetPerformanceCounter();
+        gRuntimeMetrics.record(desknx::runtime::Metric::PresentWait,
+            elapsedPerformanceMs(presentStarted,presentFinished));
+        gFrameRenderStartedCounter=0;
+    } else {
+        SDL_RenderPresent(renderer);
+    }
 }
 bool saveNow(){return enqueueLayoutSave(false);}
 bool finishTileDrag(const char* message="POSITION SAVED") {
@@ -3476,6 +4110,7 @@ void activateAppSettings(int action) {
             break;
         case 8:
             wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;iconStyle=0;
+            gMotionController.setMode(desknx::ui::MotionMode::Full);
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
             gIconCache.setCustomIconPackDir("");
@@ -3490,6 +4125,19 @@ void activateAppSettings(int action) {
             iconStyle=(iconStyle+1)%3;
             if(saveLauncherSettings())setStatus("ICON STYLE");
             break;
+        case 11: {
+            using desknx::ui::MotionMode;
+            const MotionMode current=gMotionController.mode();
+            const MotionMode next=current==MotionMode::Full?MotionMode::Reduced:
+                current==MotionMode::Reduced?MotionMode::LowPerformance:MotionMode::Full;
+            gMotionController.setMode(next);
+            if(saveLauncherSettings())
+                setStatus("MOTION MODE: "+
+                    std::string(desknx::ui::MotionModeSettingName(next)));
+            else
+                setStatus("MOTION MODE CHANGED; SETTINGS NOT SAVED",3000);
+            break;
+        }
         default: break;
     }
 }
@@ -3626,11 +4274,12 @@ void launch(const Tile& t) {
     } else setStatus(lastLaunched);
 }
 void keyInput(u64 keys, bool fromRepeat) {
+    const desknx::ui::ModalLayer activeModal=collectModalStack().top();
     // A live touch gesture owns focus until its initiating finger is released.
     // This prevents controller buttons from closing the menu or mutating the
     // workspace midway through a touch selection/drag.
     if(touchPressActive||catalogueTouchActive)return;
-    if(userPickerOpen) {
+    if(activeModal==desknx::ui::ModalLayer::UserPicker) {
         if(keys&HidNpadButton_B){userPickerOpen=false;return;}
         if(!consoleUsers.empty()) {
             if(keys&HidNpadButton_Up)
@@ -3642,7 +4291,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(mediaPickerOpen) {
+    if(activeModal==desknx::ui::ModalLayer::MediaPicker) {
         if(keys&HidNpadButton_B){mediaPickerBack();return;}
         if((keys&HidNpadButton_X)&&
            mediaPickerType==MediaPickerType::WorkspaceBackground) {
@@ -3667,21 +4316,22 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(appSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::LauncherSettings) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        const int itemCount=desknx::ui::LauncherSettingsDialogControls.rows.itemCount;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+itemCount-1)%itemCount;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%itemCount;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
-    if(workspaceSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceSettings) {
         if(keys&HidNpadButton_B){workspaceSettingsMenu=false;return;}
         if(keys&HidNpadButton_Up)workspaceSettingsIndex=(workspaceSettingsIndex+6)%7;
         if(keys&HidNpadButton_Down)workspaceSettingsIndex=(workspaceSettingsIndex+1)%7;
         if(keys&HidNpadButton_A)activateWorkspaceAppearance(workspaceSettingsIndex);
         return;
     }
-    if(systemMenu) {
+    if(activeModal==desknx::ui::ModalLayer::SystemTools) {
         if(keys&HidNpadButton_B){systemMenu=false;return;}
         if(systemMenuIndex<0||systemMenuIndex>5)systemMenuIndex=0;
         int row=systemMenuIndex/3;
@@ -3705,7 +4355,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(workspacePicker) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspacePicker) {
         const int count=static_cast<int>(desks.size());
         if(keys&HidNpadButton_B){workspacePicker=false;return;}
         if(count>0&&keys&HidNpadButton_Up)
@@ -3715,14 +4365,26 @@ void keyInput(u64 keys, bool fromRepeat) {
         if(keys&HidNpadButton_A)selectWorkspace(workspacePickerIndex);
         return;
     }
-    if(workspaceMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceMenu) {
         if(keys&HidNpadButton_B){workspaceMenu=false;return;}
+        const int itemCount=desknx::ui::WorkspaceOptionsContextMenuLayout.items.itemCount;
+        if(itemCount<=0)return;
         if(keys&HidNpadButton_Up)
-            workspaceMenuIndex=(workspaceMenuIndex+5)%6;
+            workspaceMenuIndex=(workspaceMenuIndex+itemCount-1)%itemCount;
         if(keys&HidNpadButton_Down)
-            workspaceMenuIndex=(workspaceMenuIndex+1)%6;
+            workspaceMenuIndex=(workspaceMenuIndex+1)%itemCount;
         if(keys&HidNpadButton_A) {
             const int action=workspaceMenuIndex;
+            const bool canMoveTile=editing&&deskIndex>=0&&
+                deskIndex<static_cast<int>(desks.size())&&
+                itemAt(desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0;
+            const auto rowState=(action==1&&!canMoveTile)
+                ?desknx::ui::SelectableRowState::Disabled
+                :desknx::ui::SelectableRowState::Normal;
+            if(!desknx::ui::IsSelectableRowInteractive(rowState)) {
+                setStatus("SELECT A TILE TO MOVE FIRST",1800);
+                return;
+            }
             workspaceMenu=false;
             if(action==0)openWorkspacePicker(false);
             else if(action==1)openWorkspacePicker(true);
@@ -3732,7 +4394,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(recentOpen) {
+    if(activeModal==desknx::ui::ModalLayer::Recent) {
         if(keys&HidNpadButton_B){recentOpen=false;return;}
         if(recentLaunches.empty())return;
         recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
@@ -3747,7 +4409,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(powerMenu) {
+    if(activeModal==desknx::ui::ModalLayer::Power) {
         if(keys&HidNpadButton_B){powerMenu=false;return;}
         if(keys&HidNpadButton_Up)powerIndex=(powerIndex+2)%3;
         if(keys&HidNpadButton_Down)powerIndex=(powerIndex+1)%3;
@@ -3776,7 +4438,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(deletePrompt) {
+    if(activeModal==desknx::ui::ModalLayer::DeleteConfirmation) {
         if(keys&HidNpadButton_B){deletePrompt=false;return;}
         if(keys&HidNpadButton_A) {
             deletePrompt=false;
@@ -3795,7 +4457,7 @@ void keyInput(u64 keys, bool fromRepeat) {
         }
         return;
     }
-    if(listOpen) {
+    if(activeModal==desknx::ui::ModalLayer::AppLibrary) {
         const auto& available=visibleCatalogueSnapshot();
         if(keys&HidNpadButton_B){closeList();return;}
         if(keys&HidNpadButton_Y){searchCatalogue();return;}
@@ -3938,23 +4600,31 @@ bool touchSelect(int x,int y) {
 int tabStart(){
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,
-        static_cast<int>(desks.size())-VisibleDeskTabs));
+        static_cast<int>(desks.size())-desknx::ui::WorkspaceDockLayout::VisibleTabCount));
 }
 void touchInput(const SDL_Event&e) {
-    if(userPickerOpen) {
+    const desknx::ui::ModalLayer activeModal=collectModalStack().top();
+    if(activeModal==desknx::ui::ModalLayer::UserPicker) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-            if(x>=844&&x<=920&&y>=136&&y<=170) {
+            const auto& layout=desknx::ui::UserPickerDialogControls;
+            const desknx::ui::ButtonControl backButton{
+                layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+            if(backButton.hitTest(x,y)) {
                 userPickerOpen=false;
-            } else if(!consoleUsers.empty()&&x>=370&&x<=910&&y>=214&&
-                      y<214+static_cast<int>(consoleUsers.size())*46) {
-                userPickerIndex=std::max(0,std::min(
-                    static_cast<int>(consoleUsers.size())-1,(y-214)/46));
-                selectConsoleUser(userPickerIndex);
+            } else {
+                const int row=layout.users.itemAt(x,y);
+                if(row>=0&&row<static_cast<int>(consoleUsers.size())) {
+                    userPickerIndex=row;
+                    selectConsoleUser(row);
+                }
             }
         }
         return;
     }
+    // A modal owns the complete pointer stream. Non-tap events must not leak
+    // through to an underlying workspace drag or tile interaction.
+    if(activeModal!=desknx::ui::ModalLayer::None&&e.type!=SDL_FINGERDOWN)return;
     // A second pointer must not steal the workspace interaction from an
     // in-progress drag, whether the drag was started by touch or controller.
     if(touchPressActive &&
@@ -3968,150 +4638,226 @@ void touchInput(const SDL_Event&e) {
         setStatus("FINISH MOVING THE TILE FIRST");
         return;
     }
-    if(e.type==SDL_FINGERDOWN && mediaPickerOpen) {
+    if(activeModal==desknx::ui::ModalLayer::MediaPicker ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=930&&x<=1022&&y>=86&&y<=120) {
+        const auto& layout=desknx::ui::MediaPickerWindowControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)) {
             mediaPickerBack();
-        } else if(mediaPickerType==MediaPickerType::WorkspaceBackground &&
-                  x>=782&&x<=914&&y>=86&&y<=120) {
-            mediaPickerDirectory=mediaPickerDirectory.compare(
-                0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0
-                ?std::string(MEDIA_ROOT):std::string(ALBUM_ROOT);
-            mediaPickerIndex=mediaPickerOffset=0;
-            refreshMediaPicker();
-        } else if(x>=260&&x<=1020&&y>=166&&y<574) {
-            const int row=(y-166)/34;
-            applyMediaPickerSelection(mediaPickerOffset+row);
+        } else if(mediaPickerType==MediaPickerType::WorkspaceBackground) {
+            const desknx::ui::ButtonControl directoryButton{
+                layout.directoryButton,desknx::ui::ButtonVariant::ToolbarSelected,{}};
+            if(directoryButton.hitTest(x,y)) {
+                mediaPickerDirectory=mediaPickerDirectory.compare(
+                    0,std::string(ALBUM_ROOT).size(),ALBUM_ROOT)==0
+                    ?std::string(MEDIA_ROOT):std::string(ALBUM_ROOT);
+                mediaPickerIndex=mediaPickerOffset=0;
+                refreshMediaPicker();
+                return;
+            }
+            const int row=layout.entries.itemAt(x,y);
+            if(row>=0)
+                applyMediaPickerSelection(mediaPickerOffset+row);
+        } else {
+            const int row=layout.entries.itemAt(x,y);
+            if(row>=0)
+                applyMediaPickerSelection(mediaPickerOffset+row);
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && appSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::LauncherSettings ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=842&&x<=934&&y>=132&&y<=164) {
+        const auto& layout=desknx::ui::LauncherSettingsDialogControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
-            const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+        } else {
+            const int row=layout.rows.itemAt(x,y);
+            if(row>=0)activateAppSettings(row);
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && workspaceSettingsMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceSettings ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=842&&x<=934&&y>=132&&y<=164)workspaceSettingsMenu=false;
-        else if(x>=340&&x<=940&&y>=216&&y<552) {
-            const int row=(y-216)/48;
-            if(row>=0&&row<7){workspaceSettingsIndex=row;activateWorkspaceAppearance(row);}
-        }
-        return;
-    }
-    if(e.type==SDL_FINGERDOWN && systemMenu) {
-        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=1058&&x<=1140&&y>=136&&y<=170){systemMenu=false;return;}
-        if(y>=218&&y<354) {
-            if(x>=156&&x<444)systemMenuIndex=0;
-            else if(x>=496&&x<784)systemMenuIndex=1;
-            else if(x>=836&&x<1124)systemMenuIndex=2;
-            else return;
-        } else if(y>=382&&y<518) {
-            if(x>=156&&x<444)systemMenuIndex=3;
-            else if(x>=496&&x<784)systemMenuIndex=4;
-            else if(x>=836&&x<1124)systemMenuIndex=5;
-            else return;
-        } else return;
-        keyInput(HidNpadButton_A,false);
-        return;
-    }
-    if(e.type==SDL_FINGERDOWN && workspacePicker) {
-        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=744&&x<=920&&y>=590&&y<=628) {
-            workspacePicker=false;
-        } else if(x>=360&&x<=920&&y>=168&&y<168+static_cast<int>(desks.size())*32) {
-            const int target=(y-168)/32;
-            selectWorkspace(target);
-        }
-        return;
-    }
-    if(e.type==SDL_FINGERDOWN && workspaceMenu) {
-        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=390&&x<=890&&y>=238&&y<502) {
-            const int row=(y-238)/44;
-            if(row>=0&&row<6) {
-                workspaceMenu=false;
-                if(row==0)openWorkspacePicker(false);
-                else if(row==1)openWorkspacePicker(true);
-                else if(row==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
-                else if(row==3)renameDesk();
-                else if(row==4)deleteDesk();
+        const auto& layout=desknx::ui::WorkspaceSettingsDialogControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)) {
+            workspaceSettingsMenu=false;
+        } else {
+            const int row=layout.rows.itemAt(x,y);
+            if(row>=0) {
+                workspaceSettingsIndex=row;
+                activateWorkspaceAppearance(row);
             }
         }
         return;
     }
-    if(e.type==SDL_FINGERDOWN && deletePrompt) {
+    if(activeModal==desknx::ui::ModalLayer::SystemTools ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=382&&y<=430&&x>=405&&x<615) keyInput(HidNpadButton_A,false);
-        else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
+        const auto& layout=desknx::ui::SystemToolsWindowControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(backButton.hitTest(x,y)){systemMenu=false;return;}
+        const int action=layout.itemAt(x,y);
+        if(action<0)return;
+        systemMenuIndex=action;
+        keyInput(HidNpadButton_A,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !powerMenu) {
+    if(activeModal==desknx::ui::ModalLayer::WorkspacePicker ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=566&&y<=614&&itemAt(
-               desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
-            if(x>=650&&x<815) resizeTile(false);
-            else if(x>=826&&x<991) resizeTile(true);
-            else if(x>=1002&&x<1230) removeTile();
+        const auto& layout=desknx::ui::WorkspacePickerDialogLayout;
+        const desknx::ui::ButtonControl cancelButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(cancelButton.hitTest(x,y)) {
+            workspacePicker=false;
+        } else {
+            const int target=layout.items.itemAt(x,y);
+            if(target>=0&&target<static_cast<int>(desks.size()))
+                selectWorkspace(target);
+        }
+        return;
+    }
+    if(activeModal==desknx::ui::ModalLayer::WorkspaceMenu ) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        const auto& layout=desknx::ui::WorkspaceOptionsContextMenuLayout;
+        const int row=layout.items.itemAt(x,y);
+        if(row>=0) {
+            const bool canMoveTile=editing&&deskIndex>=0&&
+                deskIndex<static_cast<int>(desks.size())&&
+                itemAt(desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0;
+            const auto rowState=(row==1&&!canMoveTile)
+                ?desknx::ui::SelectableRowState::Disabled
+                :desknx::ui::SelectableRowState::Normal;
+            if(!desknx::ui::IsSelectableRowInteractive(rowState)) {
+                setStatus("SELECT A TILE TO MOVE FIRST",1800);
+                return;
+            }
+            workspaceMenu=false;
+            if(row==0)openWorkspacePicker(false);
+            else if(row==1)openWorkspacePicker(true);
+            else if(row==2){workspaceSettingsMenu=true;workspaceSettingsIndex=0;}
+            else if(row==3)renameDesk();
+            else if(row==4)deleteDesk();
+        }
+        return;
+    }
+    if(activeModal==desknx::ui::ModalLayer::DeleteConfirmation) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        const auto& layout=desknx::ui::WorkspaceDeleteConfirmationLayout;
+        const desknx::ui::ButtonControl primaryButton{
+            layout.primaryButton,desknx::ui::ButtonVariant::Destructive,{}};
+        const desknx::ui::ButtonControl secondaryButton{
+            layout.secondaryButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(primaryButton.hitTest(x,y))keyInput(HidNpadButton_A,false);
+        else if(secondaryButton.hitTest(x,y))keyInput(HidNpadButton_B,false);
+        return;
+    }
+    if(e.type==SDL_FINGERDOWN &&
+       activeModal==desknx::ui::ModalLayer::None) {
+        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
+        const auto& footer=desknx::ui::WorkspaceFooterControls;
+        if(footer.surface.contains(x,y)) {
+            if(editing&&!dragging&&deskIndex>=0&&
+               deskIndex<static_cast<int>(desks.size())&&
+               itemAt(desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
+                const desknx::ui::ButtonControl sizeDecrease{
+                    footer.tileSizeDecreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+                const desknx::ui::ButtonControl sizeIncrease{
+                    footer.tileSizeIncreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+                const desknx::ui::ButtonControl removeTileButton{
+                    footer.removeTileButton,desknx::ui::ButtonVariant::Destructive,{}};
+                if(sizeDecrease.hitTest(x,y))resizeTile(false);
+                else if(sizeIncrease.hitTest(x,y))resizeTile(true);
+                else if(removeTileButton.hitTest(x,y))removeTile();
+            }
+            // Status text and keyboard hints are intentionally inert. A tap
+            // in their area must not fall through to the workspace grid.
             return;
         }
     }
-    if(e.type==SDL_FINGERDOWN && powerMenu) {
+    if(activeModal==desknx::ui::ModalLayer::Power ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=780&&x<=832&&y>=238&&y<=270) {
+        const auto& layout=desknx::ui::PowerDialogControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        const desknx::ui::ButtonControl executeButton{
+            layout.executeButton,desknx::ui::ButtonVariant::Primary,{}};
+        if(backButton.hitTest(x,y)) {
             keyInput(HidNpadButton_B,false);
-        } else if(y>=289&&y<421&&x>=442&&x<=838) {
-            powerIndex=std::max(0,std::min(2,(y-289)/44));
-        } else if(x>=590&&x<=838&&y>=432&&y<=474) {
+        } else if(executeButton.hitTest(x,y)) {
             keyInput(HidNpadButton_A,false);
+        } else {
+            const int row=layout.actions.itemAt(x,y);
+            if(row>=0)powerIndex=row;
         }
         return;
     }
-    if(recentOpen) {
+    if(activeModal==desknx::ui::ModalLayer::Recent) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-            if(x>=838&&x<=916&&y>=104&&y<=150) {
+            const auto& layout=desknx::ui::RecentWindowControls;
+            const desknx::ui::ButtonControl backButton{
+                layout.backButton,desknx::ui::ButtonVariant::Secondary,{}};
+            const desknx::ui::ButtonControl launchButton{
+                layout.launchButton,desknx::ui::ButtonVariant::Primary,{}};
+            if(backButton.hitTest(x,y)) {
                 recentOpen=false;
-            } else if(x>=924&&x<=1012&&y>=104&&y<=150) {
+            } else if(launchButton.hitTest(x,y)) {
                 if(!recentLaunches.empty()) {
-                    recentIndex=std::max(0,std::min(recentIndex,static_cast<int>(recentLaunches.size())-1));
+                    recentIndex=std::max(0,std::min(recentIndex,
+                        static_cast<int>(recentLaunches.size())-1));
                     const HistoryEntry entry=recentLaunches[static_cast<size_t>(recentIndex)];
                     recentOpen=false;
                     launch(Tile{entry.kind,entry.title,entry.data,0,0,1,1,0});
                 }
-            } else if(y>=190&&y<580&&!recentLaunches.empty()) {
-                const int index=(y-190)/39;
-                if(index>=0&&static_cast<size_t>(index)<recentLaunches.size())
-                    recentIndex=index;
+            } else {
+                const int row=layout.entries.itemAt(x,y);
+                if(row>=0&&row<static_cast<int>(recentLaunches.size()))
+                    recentIndex=row;
             }
         }
         return;
     }
     if(e.type==SDL_FINGERDOWN) {
         int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(listOpen) {
-            if(y>=122&&y<=151) {
-                if(x>=138&&x<234) searchCatalogue();
-                else if(x>=242&&x<324) cycleCatalogueSort();
-                else if(x>=332&&x<444) cycleCatalogueFilter(1);
-                else if(x>=452&&x<534){catalogueQuery.clear();++catalogueViewRevision;listIndex=0;listOffset=0;setStatus("SEARCH CLEARED",1800);}
-                else if(x>=542&&x<668) restartCatalogueScan();
-                else if(x>=676&&x<748) closeList();
-                else if(x>=756&&x<828) addSelected();
+        if(activeModal==desknx::ui::ModalLayer::AppLibrary) {
+            const int toolbarAction=
+                desknx::ui::AppLibraryToolbarControls.itemAt(x,y);
+            if(toolbarAction>=0) {
+                switch(toolbarAction) {
+                    case 0: searchCatalogue(); break;
+                    case 1: cycleCatalogueSort(); break;
+                    case 2: cycleCatalogueFilter(1); break;
+                    case 3:
+                        catalogueQuery.clear();
+                        ++catalogueViewRevision;
+                        listIndex=0;
+                        listOffset=0;
+                        setStatus("SEARCH CLEARED",1800);
+                        break;
+                    case 4: restartCatalogueScan(); break;
+                    case 5: closeList(); break;
+                    case 6: addSelected(); break;
+                    default: break;
+                }
                 return;
             }
-            if(y>=532&&y<=576&&x>=900&&x<=1150) {
+            // Preserve the toolbar's empty gutters as inert space; they must
+            // not fall through into catalogue rows or the details panel.
+            if(y>=122&&y<152)return;
+            const auto& details=desknx::ui::AppLibraryDetailsPanelLayout;
+            const desknx::ui::ButtonControl addAction{
+                details.primaryAction,desknx::ui::ButtonVariant::Primary,{}};
+            if(addAction.hitTest(x,y)) {
                 addSelected();
                 return;
             }
-            if(y>=180&&y<580&&x>=130&&x<874) {
-                const int row=(y-180)/40;
+            const int row=desknx::ui::AppLibraryListRows.itemAt(x,y);
+            if(row>=0) {
                 const auto& available=visibleCatalogueSnapshot();
                 const int index=listOffset+row;
                 if(index>=0&&static_cast<size_t>(index)<available.size()) {
@@ -4140,15 +4886,14 @@ void touchInput(const SDL_Event&e) {
             return;
         }
         if(deletePrompt)return;
-        // Four permanent shortcuts: Gallery, Settings, Pads and Tools.
-        if(y>=16&&y<=82) {
-            if(x>=470&&x<=862) {
+        const auto& toolbarLayout=desknx::ui::LauncherToolbarControls;
+        if(toolbarLayout.touchBand.contains(x,y)) {
+            if(toolbarLayout.profileHitBounds.contains(x,y)) {
                 openUserProfile();
                 return;
             }
-            const int index=(x-ToolbarStartX)/ToolbarButtonStep;
-            if(x>=ToolbarStartX&&index>=0&&index<ToolbarButtonCount&&
-               x<toolbarButtonX(index)+ToolbarButtonWidth) {
+            const int index=toolbarLayout.buttonAt(x,y);
+            if(index>=0) {
                 switch(index) {
                     case 0: {
                         const Uint64 galleryStarted=SDL_GetTicks64();
@@ -4174,15 +4919,11 @@ void touchInput(const SDL_Event&e) {
             }
             return;
         }
-        // Workspace tabs and their controls live at the bottom of the screen.
-        if(y>=638&&y<=694) {
-            if(x>=DeskTabX&&x<DeskTabX+VisibleDeskTabs*DeskTabStep) {
-                const int offset=x-DeskTabX;
-                const int slot=offset/DeskTabStep;
-                const int tabX=DeskTabX+slot*DeskTabStep;
-                const int target=tabStart()+slot;
-                if(x>=tabX&&x<tabX+DeskTabWidth&&target>=0&&
-                   target<static_cast<int>(desks.size())&&target<tabStart()+VisibleDeskTabs) {
+        const auto& dock=desknx::ui::WorkspaceDockControls;
+        if(dock.interactionBounds.contains(x,y)) {
+            if(dock.tabStripBounds.contains(x,y)) {
+                const int target=dock.workspaceAt(x,y,tabStart(),static_cast<int>(desks.size()));
+                if(target>=0) {
                     const Uint32 now=SDL_GetTicks();
                     if(target==deskIndex&&lastWorkspaceTabTap==target&&
                        now-lastWorkspaceTabTapTick<=500) {
@@ -4200,21 +4941,19 @@ void touchInput(const SDL_Event&e) {
                 } else lastWorkspaceTabTap=-1;
                 return;
             }
-            if(x>=770&&x<822) {newDesk();return;}
-            if(x>=832&&x<884) {
-                workspaceMenu=true;
-                workspaceMenuIndex=0;
-                return;
-            }
-            if(x>=900&&x<1050) {
-                openWorkspacePicker(false);
-                return;
-            }
-            if(x>=1096&&x<1224) {
-                editing=!editing;
-                if(!editing&&dragging){dragging=false;saveNow();}
-                setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-                return;
+            switch(dock.actionAt(x,y)) {
+                case desknx::ui::WorkspaceDockAction::AddWorkspace:
+                    if(desks.size()<static_cast<size_t>(MAX_DESKS))newDesk();
+                    return;
+                case desknx::ui::WorkspaceDockAction::OpenMenu:
+                    workspaceMenu=true;workspaceMenuIndex=0;return;
+                case desknx::ui::WorkspaceDockAction::OpenPicker:openWorkspacePicker(false);return;
+                case desknx::ui::WorkspaceDockAction::ToggleEdit:
+                    editing=!editing;
+                    if(!editing&&dragging){dragging=false;saveNow();}
+                    setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
+                    return;
+                case desknx::ui::WorkspaceDockAction::None:default:break;
             }
         }
         if(desks[static_cast<size_t>(deskIndex)].tiles.empty()&&
@@ -4289,28 +5028,20 @@ void touchInput(const SDL_Event&e) {
             dragging=true;
             touchDragging=true;
             touchDragTabStart=tabStart();
-            if(y>=638&&y<=694&&x>=DeskTabX) {
-                const int start=tabStart();
-                const int slot=(x-DeskTabX)/DeskTabStep;
-                const int target=start+slot;
-                const int tabX=DeskTabX+slot*DeskTabStep;
-                if(slot>=0&&slot<VisibleDeskTabs&&x<tabX+DeskTabWidth&&
-                   target>=0&&target<static_cast<int>(desks.size()))
-                    moveToDesk(target);
+            const auto& dock=desknx::ui::WorkspaceDockControls;
+            if(dock.dragActivationBounds.contains(x,y)) {
+                const int target=dock.workspaceAt(x,y,tabStart(),static_cast<int>(desks.size()));
+                if(target>=0)moveToDesk(target);
             } else {
                 (void)touchSelect(x,y);
             }
         }
     } else if(e.type==SDL_FINGERMOTION&&touchDragging) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=638&&y<=694&&x>=DeskTabX) {
-            const int start=tabStart();
-            const int slot=(x-DeskTabX)/DeskTabStep;
-            const int target=start+slot;
-            const int tabX=DeskTabX+slot*DeskTabStep;
-            if(slot>=0&&slot<VisibleDeskTabs&&x<tabX+DeskTabWidth&&
-               target>=0&&target<static_cast<int>(desks.size()))
-                moveToDesk(target);
+        const auto& dock=desknx::ui::WorkspaceDockControls;
+        if(dock.dragActivationBounds.contains(x,y)) {
+            const int target=dock.workspaceAt(x,y,tabStart(),static_cast<int>(desks.size()));
+            if(target>=0)moveToDesk(target);
         } else {
             touchSelect(x,y);
         }
@@ -4480,6 +5211,8 @@ int main(int,char**) {
     applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
     setStatus("STARTING TRANSWITCH...",5000);
+    gPerformanceFrequency=SDL_GetPerformanceFrequency();
+    gFrameRenderStartedCounter=SDL_GetPerformanceCounter();
     drawScreen(); // first frame precedes application enumeration, SD recursion and font service init
 #ifdef DESKNX_SYSTEM_APPLET
     const Result readyRc=sendIpc([]{return desknx::ipc::SendMenuReady();});
@@ -4489,6 +5222,8 @@ int main(int,char**) {
 #else
     setStatus("CATALOGUE LOADING - Y ADD  X EDIT",5000);
 #endif
+    if(!gSensorService.start(sdMounted))
+        desknx::diag::Write("sensors","worker_start_failed","battery and SD widgets remain unavailable");
     IMG_Init(IMG_INIT_JPG|IMG_INIT_PNG);
     gIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
@@ -4545,7 +5280,10 @@ int main(int,char**) {
     if(!consoleUsersLoaded) loadConsoleUsers();
     Uint32 previousFrameTick = SDL_GetTicks();
     Uint32 lastSlowFrameLog = 0;
+    int lastPrefetchedWorkspace=-1;
     while(running&&appletMainLoop()) {
+        const Uint64 frameStartedCounter=SDL_GetPerformanceCounter();
+        const int workspaceAtFrameStart=deskIndex;
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
         const Uint32 frameNow = SDL_GetTicks();
@@ -4588,7 +5326,7 @@ int main(int,char**) {
         const u64 newlyPressedStickDirections=stickDirections&~previousStickDirections;
         previousStickDirections=stickDirections;
         const u64 keys=buttonDown|newlyPressedStickDirections;
-        if(keys)keyInput(keys,false);
+        if(keys){markInputActivity();keyInput(keys,false);}
         // Holding a direction repeats navigation after a short, responsive delay.
         // Modal ownership remains centralized in keyInput().
         {
@@ -4618,23 +5356,49 @@ int main(int,char**) {
         }
         pumpAsyncLayoutSaver();
         pumpPlayStatsQuery();
-        SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else {markInputActivity();touchInput(event);}}
+        if(deskIndex!=workspaceAtFrameStart)gWorkspaceSwitchStartedCounter=SDL_GetPerformanceCounter();
+        if(layoutLoaded&&!defaultLayoutPending&&
+           deskIndex>=0&&deskIndex<static_cast<int>(desks.size())&&
+           lastPrefetchedWorkspace!=deskIndex) {
+            gIconCache.cancelQueuedPrefetches();
+            gIconCache.prefetchWorkspace(
+                desks[static_cast<size_t>(deskIndex)],selectedX,selectedY);
+            lastPrefetchedWorkspace=deskIndex;
+        }
+        pumpSensorSnapshot();
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
             (void)flushActiveWorkspaceSave();
         const Uint32 renderStarted=SDL_GetTicks();
+        gFrameRenderStartedCounter=SDL_GetPerformanceCounter();
         drawScreen();
+        const Uint64 presentedCounter=SDL_GetPerformanceCounter();
+        if(gInputStartedCounter!=0) {
+            gRuntimeMetrics.record(desknx::runtime::Metric::InputLatency,
+                elapsedPerformanceMs(gInputStartedCounter,presentedCounter));
+            gInputStartedCounter=0;
+        }
+        if(gWorkspaceSwitchStartedCounter!=0) {
+            gRuntimeMetrics.record(desknx::runtime::Metric::WorkspaceSwitch,
+                elapsedPerformanceMs(gWorkspaceSwitchStartedCounter,presentedCounter));
+            gWorkspaceSwitchStartedCounter=0;
+        }
         // Present already waits for the display when VSync is active. Sleeping
         // another 16ms here capped the accelerated path at roughly 30 FPS.
         if(!rendererVsync) {
             const Uint32 elapsed=SDL_GetTicks()-renderStarted;
             if(elapsed<16)svcSleepThread(static_cast<s64>(16-elapsed)*1'000'000LL);
         }
+        gRuntimeMetrics.record(desknx::runtime::Metric::FrameTime,
+            elapsedPerformanceMs(frameStartedCounter,SDL_GetPerformanceCounter()));
+        reportRuntimeMetrics();
     }
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    gSensorService.stop();
     SDL_AtomicSet(&nextendoStop,1);
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
@@ -4660,7 +5424,6 @@ int main(int,char**) {
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();
-    if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (nextendoMutex) SDL_DestroyMutex(nextendoMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);

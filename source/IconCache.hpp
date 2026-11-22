@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../include/desknx/Model.hpp"
+#include "../include/desknx/ArtworkRequestPolicy.hpp"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <algorithm>
@@ -27,11 +28,62 @@ public:
             std::fprintf(stderr, "[icon-cache] worker unavailable; icons will use placeholders\n");
     }
 
-    // Called once at the beginning of a frame. At most one completed image is
-    // uploaded to the GPU per frame, so a large desktop cannot monopolise draw.
+    // Two uploads with a byte budget smooth bursts without allowing a large
+    // desktop to monopolise one frame. Every accepted icon is <= 4 MiB.
     void beginFrame() {
-        loadBudget_ = 1;
+        loadBudget_ = MaxTextureUploadsPerFrame;
+        uploadByteBudget_ = MaxTextureUploadBytesPerFrame;
+        uploadsThisFrame_ = 0;
         uploadCompleted();
+    }
+
+    // Drop queued speculative work from the previous desktop. Resident textures
+    // remain cached; in-flight work survives only if the next visible frame
+    // promotes the same asset before decoding completes.
+    void cancelQueuedPrefetches() {
+        if (!mutex_) return;
+        SDL_LockMutex(mutex_);
+        ++prefetchGeneration_;
+        // Promotion belongs only to the workspace that requested the asset.
+        promotedPrefetchKeys_.clear();
+        for (auto it=requests_.begin();it!=requests_.end();) {
+            if (it->prefetched) {
+                pendingKeys_.erase(it->key);
+                it=requests_.erase(it);
+            } else ++it;
+        }
+        for (auto it=completed_.begin();it!=completed_.end();) {
+            if (it->prefetched) {
+                pendingKeys_.erase(it->key);
+                it=completed_.erase(it);
+            } else ++it;
+        }
+        SDL_CondBroadcast(condition_);
+        SDL_UnlockMutex(mutex_);
+    }
+
+    void prefetchWorkspace(const desknx::model::Workspace& workspace,
+                           int focusX,int focusY,
+                           std::size_t maxRequests=48) {
+        struct Candidate { const desknx::model::Tile* tile; int priority; };
+        std::vector<Candidate> candidates;
+        candidates.reserve(workspace.tiles.size());
+        for (const auto& tile:workspace.tiles) {
+            if (tile.kind!=desknx::model::Kind::Game &&
+                tile.kind!=desknx::model::Kind::Nro) continue;
+            if (desknx::model::iconCachePath(tile.kind,tile.data).empty()) continue;
+            candidates.push_back({&tile,
+                desknx::artwork::workspacePrefetchPriority(tile,focusX,focusY)});
+        }
+        std::stable_sort(candidates.begin(),candidates.end(),
+            [](const Candidate& a,const Candidate& b) {
+                return a.priority>b.priority;
+            });
+        const std::size_t count=std::min(maxRequests,candidates.size());
+        for (std::size_t i=0;i<count;++i) {
+            const auto& tile=*candidates[i].tile;
+            enqueue(tile,makeKey(tile.kind,tile.data),candidates[i].priority,true);
+        }
     }
 
     void setCustomIconPackDir(const std::string& path) {
@@ -47,6 +99,8 @@ public:
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
+            inFlightPrefetchKeys_.clear();
+            promotedPrefetchKeys_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
@@ -58,7 +112,8 @@ public:
         clearTextures();
     }
 
-    SDL_Texture* get(const desknx::model::Tile& tile) {
+    SDL_Texture* get(const desknx::model::Tile& tile,
+                     int priority=desknx::artwork::VisibleTilePriority) {
         if (!renderer_) return nullptr;
 
         // Hot path: resident textures are found by stable tile identity before
@@ -84,7 +139,7 @@ public:
 
         // Queueing is non-blocking. Missing artwork is represented by the
         // caller's placeholder until the worker finishes decoding it.
-        enqueue(tile, key);
+        enqueue(tile,key,priority,false);
         return nullptr;
     }
 
@@ -115,6 +170,8 @@ public:
         pendingKeys_.clear();
         requests_.clear();
         completed_.clear();
+        inFlightPrefetchKeys_.clear();
+        promotedPrefetchKeys_.clear();
         failedUntil_.clear();
         clearTextures();
         renderer_ = nullptr;
@@ -128,6 +185,9 @@ private:
         std::string key;
         std::string customDirectory;
         std::uint64_t generation{0};
+        std::uint64_t prefetchGeneration{0};
+        int priority{0};
+        bool prefetched{false};
     };
 
     struct Decoded {
@@ -136,6 +196,9 @@ private:
         std::string key;
         std::string path;
         std::uint64_t generation{0};
+        std::uint64_t prefetchGeneration{0};
+        int priority{0};
+        bool prefetched{false};
         int width{0};
         int height{0};
         bool isCustom{false};
@@ -159,6 +222,8 @@ private:
     // Bound decoded CPU-side pixels while the renderer is busy. One 1024x1024
     // RGBA image is at most 4 MiB, so this queue has a predictable upper bound.
     static constexpr std::size_t MaxCompletedImages = 2;
+    static constexpr std::size_t MaxTextureUploadsPerFrame = 2;
+    static constexpr std::size_t MaxTextureUploadBytesPerFrame = 6u*1024u*1024u;
     static constexpr int MaxIconDimension = 1024;
 
     static std::string makeKey(desknx::model::Kind kind, const std::string& data) {
@@ -211,8 +276,9 @@ private:
                 SDL_UnlockMutex(mutex_);
                 break;
             }
-            request = std::move(requests_.front());
+            request=std::move(requests_.front());
             requests_.pop_front();
+            if(request.prefetched)inFlightPrefetchKeys_.insert(request.key);
             SDL_UnlockMutex(mutex_);
 
             // The Switch target is built with -fno-exceptions. Input file
@@ -221,8 +287,16 @@ private:
             Decoded decoded = decode(request);
 
             SDL_LockMutex(mutex_);
-            if (!stopWorker_ && request.generation == generation_) {
-                completed_.push_back(std::move(decoded));
+            bool promoted=false;
+            if(request.prefetched) {
+                inFlightPrefetchKeys_.erase(request.key);
+                promoted=promotedPrefetchKeys_.erase(request.key)!=0;
+            }
+            if(!stopWorker_&&request.generation==generation_) {
+                const bool stillUseful=!request.prefetched||
+                    request.prefetchGeneration==prefetchGeneration_||promoted;
+                if(stillUseful)completed_.push_back(std::move(decoded));
+                else pendingKeys_.erase(request.key);
             }
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
@@ -230,24 +304,61 @@ private:
         return 0;
     }
 
-    void enqueue(const desknx::model::Tile& tile, const std::string& key) {
-        if (!ensureWorker() || pendingKeys_.find(key) != pendingKeys_.end())
-            return;
+    void insertRequestByPriorityLocked(Request&& request) {
+        auto position=std::find_if(requests_.begin(),requests_.end(),
+            [&](const Request& queued){return request.priority>queued.priority;});
+        requests_.insert(position,std::move(request));
+    }
 
+    void enqueue(const desknx::model::Tile& tile,const std::string& key,
+                 int priority,bool prefetched) {
+        if(!ensureWorker())return;
         Request request;
-        request.kind = tile.kind;
-        request.title = tile.title;
-        request.data = tile.data;
-        request.key = key;
-        request.customDirectory = customIconPackDir_;
+        request.kind=tile.kind;
+        request.title=tile.title;
+        request.data=tile.data;
+        request.key=key;
+        request.customDirectory=customIconPackDir_;
+        request.priority=priority;
+        request.prefetched=prefetched;
 
         SDL_LockMutex(mutex_);
-        if (stopWorker_ || requests_.size() >= MaxQueuedRequests) {
+        if(stopWorker_){SDL_UnlockMutex(mutex_);return;}
+
+        auto queued=std::find_if(requests_.begin(),requests_.end(),
+            [&](const Request& item){return item.key==key;});
+        if(queued!=requests_.end()) {
+            if(priority>queued->priority||(!prefetched&&queued->prefetched)) {
+                Request upgraded=std::move(*queued);
+                requests_.erase(queued);
+                upgraded.priority=std::max(upgraded.priority,priority);
+                if(!prefetched)upgraded.prefetched=false;
+                insertRequestByPriorityLocked(std::move(upgraded));
+                SDL_CondSignal(condition_);
+            }
             SDL_UnlockMutex(mutex_);
             return;
         }
-        request.generation = generation_;
-        requests_.push_back(std::move(request));
+
+        if(pendingKeys_.find(key)!=pendingKeys_.end()) {
+            if(!prefetched&&inFlightPrefetchKeys_.find(key)!=inFlightPrefetchKeys_.end())
+                promotedPrefetchKeys_.insert(key);
+            SDL_UnlockMutex(mutex_);
+            return;
+        }
+
+        if(requests_.size()>=MaxQueuedRequests) {
+            if(requests_.empty()||priority<=requests_.back().priority) {
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            pendingKeys_.erase(requests_.back().key);
+            requests_.pop_back();
+        }
+
+        request.generation=generation_;
+        request.prefetchGeneration=prefetchGeneration_;
+        insertRequestByPriorityLocked(std::move(request));
         pendingKeys_.insert(key);
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
@@ -258,7 +369,10 @@ private:
         result.kind = request.kind;
         result.data = request.data;
         result.key = request.key;
-        result.generation = request.generation;
+        result.generation=request.generation;
+        result.prefetchGeneration=request.prefetchGeneration;
+        result.priority=request.priority;
+        result.prefetched=request.prefetched;
 
         const std::string defaultPath =
             desknx::model::iconCachePath(request.kind, request.data);
@@ -340,18 +454,24 @@ private:
         while (loadBudget_ > 0) {
             Decoded decoded;
             SDL_LockMutex(mutex_);
-            if (completed_.empty()) {
+            if(completed_.empty()) {
                 SDL_UnlockMutex(mutex_);
                 return;
             }
-            decoded = std::move(completed_.front());
+            const std::size_t nextBytes=completed_.front().rgba.size();
+            if(uploadsThisFrame_>0&&nextBytes>uploadByteBudget_) {
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            decoded=std::move(completed_.front());
             completed_.pop_front();
             SDL_CondSignal(condition_);
-            const bool currentGeneration = decoded.generation == generation_;
+            const bool currentGeneration=decoded.generation==generation_;
+            if(currentGeneration)pendingKeys_.erase(decoded.key);
             SDL_UnlockMutex(mutex_);
 
-            pendingKeys_.erase(decoded.key);
-            if (!currentGeneration) continue;
+            if(!currentGeneration)continue;
+            if(decoded.prefetched&&decoded.prefetchGeneration!=prefetchGeneration_)continue;
 
             if (!decoded.success || decoded.rgba.empty() ||
                 decoded.width <= 0 || decoded.height <= 0) {
@@ -383,9 +503,11 @@ private:
             SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
             entries_.push_back({decoded.kind, std::move(decoded.data),
                                 std::move(decoded.path), texture, ++clock_, bytes});
-            textureBytes_ += bytes;
+            textureBytes_+=bytes;
             failedUntil_.erase(decoded.key);
             --loadBudget_;
+            ++uploadsThisFrame_;
+            uploadByteBudget_=bytes>=uploadByteBudget_?0:uploadByteBudget_-bytes;
         }
     }
 
@@ -593,15 +715,20 @@ private:
     SDL_Thread* worker_{nullptr};
     bool stopWorker_{false};
     std::uint64_t generation_{1};
+    std::uint64_t prefetchGeneration_{1};
 
     std::string customIconPackDir_;
     std::unordered_map<std::string, Uint32> failedUntil_;
     std::unordered_set<std::string> pendingKeys_;
+    std::unordered_set<std::string> inFlightPrefetchKeys_;
+    std::unordered_set<std::string> promotedPrefetchKeys_;
     std::deque<Request> requests_;
     std::deque<Decoded> completed_;
 
     std::uint64_t clock_{0};
-    std::size_t loadBudget_{1};
+    std::size_t loadBudget_{0};
+    std::size_t uploadByteBudget_{0};
+    std::size_t uploadsThisFrame_{0};
     std::size_t textureBytes_{0};
     std::vector<Entry> entries_;
 };
