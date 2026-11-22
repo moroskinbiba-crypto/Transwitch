@@ -5716,7 +5716,7 @@ void drawScreen() {
         text(iconStats.workerRunning?"DECODER THREAD RUNNING":"DECODER THREAD STOPPED",
              652,382,1,iconStats.workerRunning?okColor:warnColor,1050);
 
-        softCard(152,430,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        softCard(152,430,452,168,Color{23,34,49,255},Color{255,255,255,18});
         text("BACKGROUND TASKS",176,450,2,WHITE,580);
         char workerText[112]{};
         std::snprintf(workerText,sizeof(workerText),
@@ -5738,6 +5738,10 @@ void drawScreen() {
             layoutSaveThread?"RUNNING":"IDLE");
         text(workerText,176,530,1,MUTED,580);
 #endif
+        std::snprintf(workerText,sizeof(workerText),"SYSTEM TELEMETRY %s",
+            gSystemTelemetryReady&&gSystemTelemetry.running()?"RUNNING":"UNAVAILABLE");
+        text(workerText,176,554,1,
+            gSystemTelemetryReady?okColor:warnColor,580);
         const auto joyconText=[](const JoyconBatteryState& state,const char* side) {
             if(!state.connected)return std::string(side)+" --";
             return std::string(side)+" "+
@@ -5747,7 +5751,7 @@ void drawScreen() {
         const std::string powerText="BATTERY "+(battery>=0?
             std::to_string(battery)+"%":std::string("N/A"))+"  /  "+
             joyconText(joyconLeft,"L")+"  /  "+joyconText(joyconRight,"R");
-        text(powerText,176,550,1,MUTED,580);
+        text(powerText,176,578,1,MUTED,580);
 
         softCard(628,430,452,168,Color{23,34,49,255},Color{255,255,255,18});
         text("FRAME PERFORMANCE",652,450,2,WHITE,1050);
