@@ -245,6 +245,49 @@ struct WorkspaceDockLayout {
 };
 inline constexpr WorkspaceDockLayout WorkspaceDockControls{};
 
+enum class WorkspaceFooterAction : std::uint8_t {
+    None,
+    DecreaseTileSize,
+    IncreaseTileSize,
+    RemoveTile
+};
+
+struct WorkspaceFooterHintLayout {
+    ModalRect keyBadge;
+    ModalRect actionLabel;
+};
+
+// The footer is deliberately a non-interactive status/hint strip except for
+// the three explicit tile actions shown while editing a selected tile.
+// Button rectangles are both the painted bounds and the touch hit targets.
+struct WorkspaceFooterLayout {
+    static constexpr int HintCount=4;
+    ModalRect surface{28,558,1224,56};
+    ModalRect statusIndicator{48,576,7,7};
+    ModalRect statusLabel{68,575,552,18};
+    ModalRect tileSizeDecreaseButton{650,571,165,28};
+    ModalRect tileSizeIncreaseButton{826,571,165,28};
+    ModalRect removeTileButton{1002,571,228,28};
+
+    constexpr WorkspaceFooterHintLayout hint(int index) const noexcept {
+        if(index<0||index>=HintCount)return {};
+        const int x=642+index*148;
+        return {{x,571,48,28},{x+56,581,88,16}};
+    }
+
+    constexpr WorkspaceFooterAction actionAt(int x,int y) const noexcept {
+        if(tileSizeDecreaseButton.contains(x,y))
+            return WorkspaceFooterAction::DecreaseTileSize;
+        if(tileSizeIncreaseButton.contains(x,y))
+            return WorkspaceFooterAction::IncreaseTileSize;
+        if(removeTileButton.contains(x,y))
+            return WorkspaceFooterAction::RemoveTile;
+        return WorkspaceFooterAction::None;
+    }
+};
+inline constexpr WorkspaceFooterLayout WorkspaceFooterControls{};
+
+
 struct AppLibraryToolbarLayout {
     static constexpr int ButtonCount=7;
     std::array<ModalRect,ButtonCount> buttons{};
