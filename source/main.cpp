@@ -4501,24 +4501,24 @@ void refreshSurfaceManager() {
     if(currentWorkspaceIsEmpty())
         (void)gSurfaceManager.push(SurfaceId::EmptyDesktop,false,false,0);
 
-    // Register from back to front. This matches keyInput's dispatch priority:
-    // only the last modal surface is allowed to consume the current input.
+    // Keep this order identical to drawScreen(): surfaces are registered
+    // back-to-front, so the last drawn modal also owns controller/touch input.
     if(listOpen)(void)gSurfaceManager.push(SurfaceId::Library,true,true,174);
-    if(deletePrompt)(void)gSurfaceManager.push(SurfaceId::DeleteConfirmation,true,true,174);
-    if(powerMenu)(void)gSurfaceManager.push(SurfaceId::PowerMenu,true,true,174);
-    if(recentOpen)(void)gSurfaceManager.push(SurfaceId::RecentGames,true,true,174);
     if(workspaceMenu)(void)gSurfaceManager.push(SurfaceId::WorkspaceMenu,true,true,174);
-    if(workspacePicker)(void)gSurfaceManager.push(SurfaceId::WorkspacePicker,true,true,174);
-    if(systemMenu)(void)gSurfaceManager.push(SurfaceId::SystemMenu,true,true,174);
     if(workspaceSettingsMenu)(void)gSurfaceManager.push(SurfaceId::WorkspaceSettings,true,true,174);
-    if(diagnosticsOpen)(void)gSurfaceManager.push(SurfaceId::Diagnostics,true,true,174);
-    if(appSettingsMenu)(void)gSurfaceManager.push(SurfaceId::LauncherSettings,true,true,174);
-    if(mediaPickerOpen)(void)gSurfaceManager.push(SurfaceId::MediaPicker,true,true,174);
-    if(userPickerOpen)(void)gSurfaceManager.push(SurfaceId::UserPicker,true,true,174);
-    if(nextendoOpen)(void)gSurfaceManager.push(SurfaceId::Nextendo,true,true,174);
-    if(steamGridDbPickerOpen)(void)gSurfaceManager.push(SurfaceId::SteamGridDb,true,true,174);
+    if(workspacePicker)(void)gSurfaceManager.push(SurfaceId::WorkspacePicker,true,true,174);
+    if(deletePrompt)(void)gSurfaceManager.push(SurfaceId::DeleteConfirmation,true,true,174);
+    if(recentOpen)(void)gSurfaceManager.push(SurfaceId::RecentGames,true,true,174);
     if(favoritesOpen)(void)gSurfaceManager.push(SurfaceId::Favorites,true,true,174);
     if(widgetEditorOpen)(void)gSurfaceManager.push(SurfaceId::WidgetEditor,true,true,174);
+    if(nextendoOpen)(void)gSurfaceManager.push(SurfaceId::Nextendo,true,true,174);
+    if(systemMenu)(void)gSurfaceManager.push(SurfaceId::SystemMenu,true,true,174);
+    if(appSettingsMenu)(void)gSurfaceManager.push(SurfaceId::LauncherSettings,true,true,174);
+    if(diagnosticsOpen)(void)gSurfaceManager.push(SurfaceId::Diagnostics,true,true,174);
+    if(mediaPickerOpen)(void)gSurfaceManager.push(SurfaceId::MediaPicker,true,true,174);
+    if(powerMenu)(void)gSurfaceManager.push(SurfaceId::PowerMenu,true,true,174);
+    if(userPickerOpen)(void)gSurfaceManager.push(SurfaceId::UserPicker,true,true,174);
+    if(steamGridDbPickerOpen)(void)gSurfaceManager.push(SurfaceId::SteamGridDb,true,true,174);
     if(quickSettingsOpen)(void)gSurfaceManager.push(SurfaceId::QuickSettings,true,true,174);
 }
 
