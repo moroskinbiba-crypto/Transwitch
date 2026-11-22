@@ -124,7 +124,8 @@ inline persist::WriteStatus mapReplaceStatus(safeio::ReplaceStatus status) {
 
 // Read a single explicitly selected layout file. Used by startup recovery so
 // the caller can preserve a corrupt primary before promoting a valid backup.
-inline bool readLayoutFile(const char* path, layout::LoadResult& output) {
+inline bool readLayoutFile(const char* path, layout::LoadResult& output,
+                           std::string* rawBytes = nullptr) {
     std::string bytes;
     if (!persist::readBoundedFile(path, 1024u * 1024u, bytes))
         return false;
@@ -132,6 +133,8 @@ inline bool readLayoutFile(const char* path, layout::LoadResult& output) {
     if (!layout::parse(bytes, parsed))
         return false;
     output = std::move(parsed);
+    if (rawBytes)
+        rawBytes->swap(bytes);
     return true;
 }
 
