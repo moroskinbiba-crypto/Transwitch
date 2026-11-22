@@ -34,9 +34,11 @@ c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
 
 All three test targets are now part of `.github/workflows/build.yml` and `.github/workflows/build-system-backend.yml`.
 
+```sh
 c++ -std=c++17 -Wall -Wextra -Werror -Iprojects/common/include \
   tests/sleep_recovery_policy_test.cpp -o /tmp/sleep-recovery-test
 /tmp/sleep-recovery-test
+```
 
 ### Remaining Stage 2 work
 
