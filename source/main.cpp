@@ -5674,6 +5674,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::Diagnostics)) {
         refreshDiagnosticsSnapshot();
         const auto iconStats=gIconCache.stats();
+        const auto fontStats=gFontRenderer.lastFrameStats();
         const Uint32 lastNetworkSuccess=static_cast<Uint32>(
             SDL_AtomicGet(&nextendoLastSuccessTick));
         const Uint32 networkAge=lastNetworkSuccess==0
@@ -5751,8 +5752,17 @@ void drawScreen() {
             "QUEUE %zu  /  DECODED %zu  /  FAILED %zu",
             iconStats.pendingRequests,iconStats.completedImages,iconStats.failedKeys);
         text(queueText,652,356,1,MUTED,1050);
-        text(iconStats.workerRunning?"DECODER THREAD RUNNING":"DECODER THREAD STOPPED",
-             652,382,1,iconStats.workerRunning?okColor:warnColor,1050);
+        std::snprintf(queueText,sizeof(queueText),
+            "WORKER %s  /  DECODED %u  /  QUEUE WAIT %.2F MS",
+            iconStats.workerRunning?"ON":"OFF",iconStats.lastFrameDecoded,
+            iconStats.lastFrameQueueWaitMs);
+        text(queueText,652,382,1,
+             iconStats.workerRunning?okColor:warnColor,1050);
+        std::snprintf(queueText,sizeof(queueText),
+            "UPLOAD %.2F MS  /  %u OK  /  %u FAILED",
+            iconStats.lastFrameUploadMs,iconStats.lastFrameUploads,
+            iconStats.lastFrameUploadFailures);
+        text(queueText,652,396,1,MUTED,1050);
 
         softCard(152,430,452,168,Color{23,34,49,255},Color{255,255,255,18});
         text("BACKGROUND TASKS",176,450,2,WHITE,580);
@@ -5812,10 +5822,18 @@ void drawScreen() {
             runtimeFrameMetrics.p95FrameMs,
             static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
         text(perfText,652,578,1,MUTED,1050);
-        text("LIVE SNAPSHOT UPDATES EVERY 5 SECONDS  /  A OR X TO REFRESH",
-             176,604,1,MUTED,1060);
-        text("NO ACCOUNT IDS OR PERSONAL FILE CONTENT IS INCLUDED",
-             176,628,1,MUTED,1060);
+        std::snprintf(perfText,sizeof(perfText),
+            "TEXT CACHE %u HIT  /  %u MISS  /  %u NEW  /  %u DEFERRED",
+            fontStats.cacheHits,fontStats.cacheMisses,fontStats.texturesCreated,
+            fontStats.deferredByBudget);
+        text(perfText,176,604,1,MUTED,1060);
+        std::snprintf(perfText,sizeof(perfText),
+            "TEXT PREP %.2F MS  /  RASTER %.2F MS  /  UPLOAD %.2F MS",
+            fontStats.textPreparationMs,fontStats.rasterizationMs,
+            fontStats.textureUploadMs);
+        text(perfText,176,628,1,BLUE,1060);
+        text("CACHE TIMINGS DESCRIBE THE PREVIOUS COMPLETED FRAME",
+             176,652,1,MUTED,1060);
     }
     if(gSurfaceManager.contains(SurfaceId::MediaPicker)) {
 
