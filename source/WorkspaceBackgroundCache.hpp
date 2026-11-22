@@ -397,6 +397,7 @@ private:
             }
             request = std::move(requests_.front());
             requests_.pop_front();
+            inFlightPath_ = request.path;
             SDL_UnlockMutex(mutex_);
 
             const Uint64 decodeStarted = SDL_GetPerformanceCounter();
@@ -407,6 +408,7 @@ private:
 
             SDL_LockMutex(mutex_);
             if (!stopWorker_) completed_.push_back(std::move(decoded));
+            inFlightPath_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         }
@@ -503,7 +505,13 @@ private:
         priorityPath_.clear();
         if (!mutex_) return;
         SDL_LockMutex(mutex_);
-        if (!requests_.empty()) priorityPath_ = requests_.front().path;
+        if (!inFlightPath_.empty()) {
+            priorityPath_ = inFlightPath_;
+        } else if (!completed_.empty()) {
+            priorityPath_ = completed_.front().path;
+        } else if (!requests_.empty()) {
+            priorityPath_ = requests_.front().path;
+        }
         SDL_UnlockMutex(mutex_);
     }
 
@@ -590,6 +598,7 @@ private:
     SDL_Thread* worker_{nullptr};
     bool stopWorker_{false};
     std::unordered_set<std::string> pending_;
+    std::string inFlightPath_; // mutex-protected; worker decode currently in progress
     std::deque<Request> requests_;
     std::deque<Decoded> completed_;
     std::unordered_map<std::string, Uint32> failedUntil_;
