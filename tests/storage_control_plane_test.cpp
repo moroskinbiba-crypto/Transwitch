@@ -43,10 +43,9 @@ int main() {
 
     // A successful commit clears the retry state.
     const auto recovered = control.beginCommit(450);
-    assert(recovered.status == CommitBeginStatus::Busy);
-    // The first due call above acquired the lease; finish that exact lease.
-    // Querying again while it is active is intentionally rejected.
-    // (Keep the lease by acquiring in a fresh controller below.)
+    assert(recovered.status == CommitBeginStatus::Acquired);
+    assert(control.finishCommit(recovered.lease, true, 451) ==
+           CommitFinishStatus::Accepted);
 
     ControlPlane successAfterRetry;
     successAfterRetry.setMounted(true);
@@ -62,16 +61,13 @@ int main() {
     assert(!successAfterRetry.retryPending());
 
     // An SD removal/remount invalidates any in-flight lease from the old card.
-    const auto stale = control.beginCommit(451);
-    assert(stale.status == CommitBeginStatus::Backoff ||
-           stale.status == CommitBeginStatus::Acquired);
+    const auto stale = control.beginCommit(500);
+    assert(stale.status == CommitBeginStatus::Acquired);
     control.setMounted(false);
     assert(!control.mounted());
     assert(control.mountGeneration() == 2);
-    if (stale.lease.valid) {
-        assert(control.finishCommit(stale.lease, true, 452) ==
-               CommitFinishStatus::StaleLease);
-    }
+    assert(control.finishCommit(stale.lease, true, 501) ==
+           CommitFinishStatus::StaleLease);
     control.setMounted(true);
     assert(control.mountGeneration() == 3);
     const auto fresh = control.beginCommit(500);
