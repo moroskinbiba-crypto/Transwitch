@@ -8788,11 +8788,12 @@ int main(int,char**) {
             runtimeFrameMetrics.slowFrames=metricsSlowFrames;
             runtimeFrameMetrics.updatedAt=SDL_GetTicks();
             desknx::diag::Write("runtime","frame_metrics",
-                "fps=%.2f avg_frame_ms=%.3f avg_render_ms=%.3f avg_input_ms=%.3f avg_present_ms=%.3f max_frame_ms=%.3f max_input_ms=%.3f max_present_ms=%.3f slow_frames=%llu",
+                "fps=%.2f avg_frame_ms=%.3f p95_frame_ms=%.3f avg_render_ms=%.3f avg_input_ms=%.3f avg_present_ms=%.3f max_frame_ms=%.3f max_input_ms=%.3f max_present_ms=%.3f slow_frames=%llu",
                 runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs,
-                runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.averageInputMs,
-                runtimeFrameMetrics.averagePresentWaitMs,runtimeFrameMetrics.maximumFrameMs,
-                runtimeFrameMetrics.maximumInputMs,runtimeFrameMetrics.maximumPresentWaitMs,
+                runtimeFrameMetrics.p95FrameMs,runtimeFrameMetrics.averageRenderMs,
+                runtimeFrameMetrics.averageInputMs,runtimeFrameMetrics.averagePresentWaitMs,
+                runtimeFrameMetrics.maximumFrameMs,runtimeFrameMetrics.maximumInputMs,
+                runtimeFrameMetrics.maximumPresentWaitMs,
                 static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
             const auto& visualStats=gVisualEngine.lastFrameStats();
             desknx::diag::Write("visual","frame_primitives",
