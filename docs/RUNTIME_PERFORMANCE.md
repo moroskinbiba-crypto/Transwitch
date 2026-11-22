@@ -41,6 +41,23 @@ complete cache. The last-known-good catalogue is retained when possible.
 
 When a workspace becomes active, the selected tile is queued at high decode priority before nearby visible artwork. Library navigation similarly promotes the currently selected entry. Image decoding stays on the worker; SDL texture upload and destruction remain on the render thread and retain the existing per-frame upload budget.
 
+## Frame-level cache diagnostics
+
+The Diagnostics panel reports measurements from the previous completed frame so
+that the panel does not display a partially collected sample:
+
+- Text rendering: cache hits/misses, newly created text textures, work deferred
+  by the per-frame budget, text preparation, TTF rasterization and SDL texture
+  upload time.
+- Artwork cache: decoded results, maximum decode duration and queue wait for
+  consumed results, successful/failed texture uploads, and upload duration.
+
+Artwork decoding remains on the worker. SDL surface wrapping and renderer
+texture creation remain on the UI thread. The one-upload-per-frame policy and
+existing queue/memory limits are deliberately unchanged by instrumentation.
+These counters explain where a frame spent time; they do not by themselves
+prove that a new limit or worker count would improve Switch performance.
+
 ## Validation
 
 The production DeskNX and native NRO CI builds compile the Switch-only telemetry integration. Host tests continue to cover workspace persistence, selection/navigation, cache rules and UI components.
