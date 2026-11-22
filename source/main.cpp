@@ -14,6 +14,7 @@
 #include "../include/desknx/WorkspaceOps.hpp"
 #include "../include/desknx/HomeNXGridAdapter.hpp"
 #include "../include/desknx/ShutdownPersistence.hpp"
+#include "../include/desknx/CoalescedLayoutSaveScheduler.hpp"
 #include "../include/desknx/Layout.hpp"
 #include "catalog.hpp"
 #include "slaunch_applications.hpp"
@@ -202,10 +203,18 @@ Uint32 activeWorkspaceMarkerDue=0;
 bool activeWorkspaceMarkerKnown=false;
 std::string persistedActiveWorkspaceMarker;
 struct LayoutSaveJob {
+    // The UI thread copies the small value model only after the debounce
+    // deadline. Expensive serialization, hashing and SD I/O happen in worker.
+    std::vector<Workspace> workspaceSnapshot;
+    int activeWorkspace{0};
     std::string serializedLayout;
     std::string activeWorkspaceState;
     std::string previousActiveMarker;
+    uint64_t persistedShapeHash{0};
     uint64_t shapeHash{0};
+    bool persistedShapeKnown{false};
+    bool primaryNeedsRewrite{true};
+    bool needsMigration{false};
     bool rewritePrimary{false};
     bool markerOnly{false};
     bool previousMarkerKnown{false};
@@ -220,10 +229,10 @@ struct LayoutSaveOutcome {
     char message[128]{};
 };
 std::unique_ptr<LayoutSaveJob> activeLayoutSaveJob;
-std::unique_ptr<LayoutSaveJob> pendingLayoutSaveJob;
 SDL_Thread* layoutSaveThread=nullptr;
 SDL_atomic_t layoutSaveDone{};
 LayoutSaveOutcome layoutSaveOutcome{};
+desknx::persistence::CoalescedLayoutSaveScheduler layoutSaveScheduler{2000};
 bool enqueueLayoutSave(bool markerOnly=false);
 void pumpAsyncLayoutSaver(bool waitForCompletion=false);
 void drainAsyncLayoutSaver();
