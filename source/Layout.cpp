@@ -61,10 +61,24 @@ std::string serializeActiveWorkspaceState(
         activeWorkspace >= static_cast<int>(workspaces.size())) return {};
     const std::string shape = serialize(workspaces, 0);
     if (shape.empty()) return {};
+    return serializeActiveWorkspaceState(
+        activeWorkspace, workspaces.size(), model::stableHash(shape),
+        workspaces[static_cast<size_t>(activeWorkspace)].name);
+}
+
+std::string serializeActiveWorkspaceState(
+    int activeWorkspace, std::size_t workspaceCount, std::uint64_t shapeHash,
+    const std::string& activeWorkspaceName) {
+    if (workspaceCount == 0 ||
+        workspaceCount > static_cast<std::size_t>(model::MaxDesks) ||
+        activeWorkspace < 0 ||
+        activeWorkspace >= static_cast<int>(workspaceCount) ||
+        !desknx::workspace_ops::isValidWorkspaceName(activeWorkspaceName))
+        return {};
     return "DESKNX-ACTIVE1\n" + std::to_string(activeWorkspace) + "\n" +
-           std::to_string(workspaces.size()) + "\n" +
-           std::to_string(model::stableHash(shape)) + "\n" +
-           model::safeField(workspaces[static_cast<size_t>(activeWorkspace)].name) + "\n";
+           std::to_string(workspaceCount) + "\n" +
+           std::to_string(shapeHash) + "\n" +
+           model::safeField(activeWorkspaceName) + "\n";
 }
 
 bool parseActiveWorkspaceState(const std::string& input,
