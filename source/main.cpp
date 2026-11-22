@@ -552,6 +552,7 @@ void adjustQuickBrightness(int direction) {
 }
 
 void toggleQuickSetting(int index) {
+    if(index==4) {adjustQuickBrightness(1);return;}
     if(index<0||index>3)return;
     if(!gSystemTelemetry.enqueueQuickAction(index,0))
         setStatus("SYSTEM SERVICE BUSY - TRY AGAIN",1800);
@@ -4696,6 +4697,13 @@ void drawScreen() {
     gWorkspaceBackgroundCache.beginFrame();
     gIconCache.beginFrame();
     gFontRenderer.beginFrame();
+    std::uint32_t telemetryDemand=0;
+    if(hasWidgetKind(Kind::Battery))telemetryDemand|=SystemTelemetry::BatteryDemand;
+    if(hasWidgetKind(Kind::System))telemetryDemand|=SystemTelemetry::SystemDemand;
+    if(hasWidgetKind(Kind::QuickSettings)||quickSettingsOpen)
+        telemetryDemand|=SystemTelemetry::QuickSettingsDemand;
+    if(diagnosticsOpen)telemetryDemand|=SystemTelemetry::DiagnosticsDemand;
+    gSystemTelemetry.setDemandMask(telemetryDemand);
     if(quickSettingsOpen)refreshQuickSettingsSnapshot();
     gModalLayer.beginFrame(renderer,modalSurfaceActive,SW,SH);
     const std::vector<Candidate>& available = listOpen ? visibleCatalogueSnapshot() : visibleCatalogueCache;
@@ -4719,14 +4727,25 @@ void drawScreen() {
             for(int index=first;index<=last;++index) {
                 const Candidate& candidate=available[static_cast<std::size_t>(index)];
                 Tile tile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                gIconCache.prefetch(tile);
+                gIconCache.prefetch(tile,index==listIndex);
             }
         } else if(!desks.empty()) {
-            const Workspace& activeDesk=desks[static_cast<std::size_t>(std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
+            const Workspace& activeDesk=desks[static_cast<size_t>(std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
             int queued=0;
-            for(const Tile& tile:activeDesk.tiles) {
-                const int distance=std::abs(tile.x+tile.w/2-selectedX)+std::abs(tile.y+tile.h/2-selectedY);
-                if(distance<=3&&queued<8){gIconCache.prefetch(tile);++queued;}
+            const int selectedItem=itemAt(activeDesk,selectedX,selectedY);
+            if(selectedItem>=0) {
+                gIconCache.prefetch(activeDesk.tiles[static_cast<size_t>(selectedItem)],true);
+                ++queued;
+            }
+            for(size_t index=0;index<activeDesk.tiles.size();++index) {
+                if(static_cast<int>(index)==selectedItem)continue;
+                const Tile& tile=activeDesk.tiles[index];
+                const int distance=std::abs(tile.x+tile.w/2-selectedX)+
+                    std::abs(tile.y+tile.h/2-selectedY);
+                if(distance<=3&&queued<8) {
+                    gIconCache.prefetch(tile,false);
+                    ++queued;
+                }
             }
         }
         prefetchValid=true;previousListOpen=listOpen;previousDesk=deskIndex;
@@ -5999,7 +6018,27 @@ void drawScreen() {
         }
     }
     gVisualEngine.endFrame();
+    const Uint64 presentStarted=SDL_GetPerformanceCounter();
     SDL_RenderPresent(renderer);
+    const Uint64 presentFinished=SDL_GetPerformanceCounter();
+    const Uint64 presentFrequency=SDL_GetPerformanceFrequency();
+    gLastPresentWaitMs=presentFrequency>0
+        ?static_cast<double>(presentFinished-presentStarted)*1000.0/
+            static_cast<double>(presentFrequency):0.0;
+    if(workspaceSwitchPending&&presentFrequency>0) {
+        const double switchMs=static_cast<double>(
+            presentFinished-workspaceSwitchStartedAt)*1000.0/
+            static_cast<double>(presentFrequency);
+        workspaceSwitchPending=false;
+        runtimeFrameMetrics.lastWorkspaceSwitchMs=switchMs;
+        runtimeFrameMetrics.maximumWorkspaceSwitchMs=std::max(
+            runtimeFrameMetrics.maximumWorkspaceSwitchMs,switchMs);
+        ++runtimeFrameMetrics.workspaceSwitches;
+        const std::size_t tileCount=desks.empty()?0:desks[static_cast<std::size_t>(
+            std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))].tiles.size();
+        desknx::diag::Write("performance","workspace_switch",
+            "latency_ms=%.3f desk=%d tiles=%zu",switchMs,deskIndex,tileCount);
+    }
 }
 bool saveNow(){++layoutMutationRevision;return enqueueLayoutSave(false);}
 bool finishTileDrag(const char* message="POSITION SAVED") {
@@ -6457,7 +6496,9 @@ void newDesk() {
         exists=false;
         for(const auto& desk:desks) if(desk.name==name){exists=true;break;}
     }
-    desks.push_back(Workspace{name,{}});deskIndex=static_cast<int>(desks.size())-1;
+    desks.push_back(Workspace{name,{}});
+    markWorkspaceSwitchBegin();
+    deskIndex=static_cast<int>(desks.size())-1;
     layoutUserModified=true;
     selectedX=selectedY=0;editing=true;
     if(saveNow())setStatus("NEW WORKSPACE CREATED - PRESS Y TO ADD ITEMS");
@@ -6543,6 +6584,7 @@ void selectWorkspace(int target) {
         setStatus("ALREADY ON "+targetName);
         return;
     }
+    markWorkspaceSwitchBegin();
     deskIndex=target;
     scheduleActiveWorkspaceSave();
     setStatus(targetName);
@@ -7468,6 +7510,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     if(keys&HidNpadButton_L) {
         if(dragging) moveAcrossDesk(-1);
         else {
+            markWorkspaceSwitchBegin();
             deskIndex=(deskIndex-1+static_cast<int>(desks.size()))%static_cast<int>(desks.size());
             scheduleActiveWorkspaceSave();
             setStatus(desks[static_cast<size_t>(deskIndex)].name);
@@ -7475,6 +7518,7 @@ void keyInput(u64 keys, bool fromRepeat) {
     } else if(keys&HidNpadButton_R) {
         if(dragging) moveAcrossDesk(1);
         else {
+            markWorkspaceSwitchBegin();
             deskIndex=(deskIndex+1)%static_cast<int>(desks.size());
             scheduleActiveWorkspaceSave();
             setStatus(desks[static_cast<size_t>(deskIndex)].name);
@@ -8101,6 +8145,7 @@ void touchInput(const SDL_Event&e) {
                         renameDesk();
                     } else {
                         if(target!=deskIndex) {
+                            markWorkspaceSwitchBegin();
                             deskIndex=target;
                             scheduleActiveWorkspaceSave();
                             setStatus(desks[static_cast<size_t>(deskIndex)].name);
