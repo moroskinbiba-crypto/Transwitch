@@ -725,8 +725,7 @@ void pumpAuxiliarySaves(bool waitForCompletion) {
         bool any=false;
         for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i) {
             if(!pendingAuxiliarySaveValid[i])continue;
-            const bool due=waitForCompletion||
-                static_cast<Sint32>(now-pendingAuxiliarySaveDue[i])>=0;
+            const bool due=static_cast<Sint32>(now-pendingAuxiliarySaveDue[i])>=0;
             if(!due)continue;
             batch->jobs[i]=std::move(pendingAuxiliarySaveJobs[i]);
             batch->present[i]=true;
@@ -763,13 +762,17 @@ void pumpAuxiliarySaves(bool waitForCompletion) {
 void drainAuxiliarySaves() {
     for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i)
         if(pendingAuxiliarySaveValid[i])pendingAuxiliarySaveDue[i]=0;
-    while(auxiliarySaveThread||activeAuxiliarySaveBatch) {
+    for(;;) {
         pumpAuxiliarySaves(true);
-        if(!auxiliarySaveThread&&!activeAuxiliarySaveBatch)break;
+        if(auxiliarySaveThread||activeAuxiliarySaveBatch)continue;
+        bool anyPending=false;
+        for(std::size_t i=0;i<AuxiliarySaveSlotCount;++i)
+            anyPending=anyPending||pendingAuxiliarySaveValid[i];
+        // A failed write is retained for retry, but never spin or block shutdown
+        // for seconds repeatedly retrying a missing/removed SD card.
+        if(anyPending)break;
+        return;
     }
-    // One final pass takes any snapshots queued while the previous batch ran.
-    pumpAuxiliarySaves(true);
-    if(auxiliarySaveThread)pumpAuxiliarySaves(true);
 }
 
 void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
@@ -2786,7 +2789,7 @@ void editCalendarNote() {
     }
     if(note.empty())calendarNotes.erase(key);
     else calendarNotes[key]=std::move(note);
-    if(saveCalendarNotes())setStatus(languageRussian?"ЗАМЕТКА СОХРАНЕНА":"DAY NOTE SAVED",2500);
+    if(saveCalendarNotes())setStatus(languageRussian?"ЗАМЕТКА ДОБАВЛЕНА В ОЧЕРЕДЬ СОХРАНЕНИЯ":"DAY NOTE SAVE QUEUED",2500);
 }
 
 bool readFavoritesFile(const char* path,std::vector<std::string>& output) {
@@ -7031,6 +7034,7 @@ void launch(const Tile& t) {
             return;
         }
         recordRecentLaunch(t);
+        drainAuxiliarySaves();
         appletRequestExitToSelf();
         running=false;
 #else
@@ -7060,6 +7064,7 @@ void launch(const Tile& t) {
             setStatus(b,4000);
         } else {
             recordRecentLaunch(t);
+            drainAuxiliarySaves();
             setStatus("LAUNCH REQUEST ACCEPTED");
         }
 #endif
@@ -7081,6 +7086,7 @@ void launch(const Tile& t) {
             return;
         }
         recordRecentLaunch(t);
+        drainAuxiliarySaves();
         appletRequestExitToSelf();
         running=false;
 #else
@@ -7095,6 +7101,7 @@ void launch(const Tile& t) {
                             static_cast<unsigned int>(nextLoadRc));
         if(R_FAILED(nextLoadRc)){setStatus("CANNOT PREPARE NEXT NRO");return;}
         recordRecentLaunch(t);
+        drainAuxiliarySaves();
         appletRequestExitToSelf();
 #endif
         return;
@@ -8670,6 +8677,7 @@ int main(int,char**) {
             }
         }
         pumpAsyncLayoutSaver();
+        pumpAuxiliarySaves(false);
         pumpLauncherSettingsSave();
         pumpPlayStatsQuery();
         (void)gFontRenderer.pumpWarmup();
@@ -8748,6 +8756,7 @@ int main(int,char**) {
 #endif
     SDL_AtomicSet(&nextendoStop,1);
     drainLauncherSettingsSave();
+    drainAuxiliarySaves();
     gSteamGridDbService.shutdown();
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     // The storage worker only publishes a small snapshot, but it still owns
