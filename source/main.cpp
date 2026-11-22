@@ -18,6 +18,8 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "../include/desknx/SensorService.hpp"
+#include "../include/desknx/RuntimeMetrics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -182,6 +184,13 @@ std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+desknx::runtime::SensorService gSensorService;
+desknx::runtime::RollingMetrics gRuntimeMetrics;
+Uint64 gInputStartedCounter=0;
+Uint64 gWorkspaceSwitchStartedCounter=0;
+Uint64 gFrameRenderStartedCounter=0;
+Uint64 gPerformanceFrequency=0;
+Uint32 gLastPerformanceReportTick=0;
 struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
 std::vector<HistoryEntry> recentLaunches;
 struct PdmQuerySnapshot {
@@ -202,7 +211,6 @@ desknx::catalog_view::FilterMode catalogueFilter=desknx::catalog_view::FilterMod
 desknx::catalog_view::SortMode catalogueSort=desknx::catalog_view::SortMode::Name;
 int deskIndex=0, selectedX=0, selectedY=0, listIndex=0, listOffset=0, battery=-1;
 uint64_t sdFreeBytes=0, sdTotalBytes=0;
-Uint32 lastStorageUpdate=0;
 bool storageStatsAvailable=false;
 std::unordered_map<std::string,uint64_t> nroSizeCache;
 std::unordered_map<std::string,std::vector<std::string>> tileTitleWrapCache;
@@ -227,9 +235,9 @@ Uint32 lastWorkspaceTabTapTick=0;
 // locally through the applet power APIs, which are available to NROs too.
 bool powerMenu=false;
 s32 powerIndex=0;
-bool sdMounted=false, psmReady=false, touchDragging=false;
+bool sdMounted=false, touchDragging=false;
 std::string statusText="Y ADD   X EDIT   L3 TOOLS", lastLaunched="Nothing launched yet";
-Uint32 statusUntil=0, lastBatteryTick=0;
+Uint32 statusUntil=0;
 #ifdef DESKNX_SYSTEM_APPLET
 // Backend -> menu state (IPC-06/§4.4). The menu keeps no app state of its own:
 // everything here comes from the initial block or live events.
@@ -1829,26 +1837,54 @@ void defaultLayout() {
     desks[2].tiles.push_back(Tile{Kind::Storage,"SD storage","",0,2,3,1,3});
     desks[2].tiles.push_back(Tile{Kind::Calendar,"Calendar","",3,2,3,1,4});
 }
-void refreshBattery() {
-    Uint32 now=SDL_GetTicks();if(now-lastBatteryTick<10000)return;lastBatteryTick=now;
-    if(!psmReady&&R_SUCCEEDED(psmInitialize()))psmReady=true;
-    if(psmReady){u32 pct=0;if(R_SUCCEEDED(psmGetBatteryChargePercentage(&pct)))battery=static_cast<int>(pct);}
+double elapsedPerformanceMs(Uint64 start, Uint64 end) {
+    if(gPerformanceFrequency==0 || end<start)return 0.0;
+    return static_cast<double>(end-start)*1000.0/static_cast<double>(gPerformanceFrequency);
 }
-void refreshStorageStats() {
-    const Uint32 now=SDL_GetTicks();
-    if(lastStorageUpdate!=0&&now-lastStorageUpdate<10000)return;
-    lastStorageUpdate=now;
-    struct statvfs fs{};
-    if(statvfs("sdmc:/",&fs)==0&&fs.f_frsize>0) {
-        const uint64_t blockSize=static_cast<uint64_t>(fs.f_frsize);
-        sdTotalBytes=static_cast<uint64_t>(fs.f_blocks)*blockSize;
-        sdFreeBytes=static_cast<uint64_t>(fs.f_bavail)*blockSize;
-        storageStatsAvailable=sdTotalBytes>0;
+void markInputActivity() {
+    if(gInputStartedCounter==0)gInputStartedCounter=SDL_GetPerformanceCounter();
+}
+void pumpSensorSnapshot() {
+    static uint64_t lastGeneration=0;
+    desknx::runtime::SystemSnapshot snapshot{};
+    if(!gSensorService.read(snapshot)||snapshot.generation==lastGeneration)return;
+    lastGeneration=snapshot.generation;
+    battery=snapshot.batteryAvailable?static_cast<int>(snapshot.batteryPercent):-1;
+    storageStatsAvailable=snapshot.storageAvailable;
+    if(storageStatsAvailable) {
+        sdFreeBytes=snapshot.sdFreeBytes;
+        sdTotalBytes=snapshot.sdTotalBytes;
     } else {
-        sdTotalBytes=0;
         sdFreeBytes=0;
-        storageStatsAvailable=false;
+        sdTotalBytes=0;
     }
+    desknx::diag::Write("sensors","snapshot",
+        "generation=%llu age_ms=%llu battery_available=%d battery_fresh=%d battery_pct=%d psm_init_rc=0x%08X battery_rc=0x%08X storage_available=%d storage_fresh=%d storage_errno=%d sd_free=%llu sd_total=%llu",
+        static_cast<unsigned long long>(snapshot.generation),
+        static_cast<unsigned long long>(SDL_GetTicks64()-snapshot.capturedAtMs),
+        snapshot.batteryAvailable?1:0,snapshot.batteryFresh?1:0,battery,
+        static_cast<unsigned int>(snapshot.psmInitResult),
+        static_cast<unsigned int>(snapshot.batteryResult),
+        snapshot.storageAvailable?1:0,snapshot.storageFresh?1:0,snapshot.storageError,
+        static_cast<unsigned long long>(snapshot.sdFreeBytes),
+        static_cast<unsigned long long>(snapshot.sdTotalBytes));
+}
+void reportRuntimeMetrics() {
+    const Uint32 now=SDL_GetTicks();
+    if(gLastPerformanceReportTick!=0&&now-gLastPerformanceReportTick<10000)return;
+    gLastPerformanceReportTick=now;
+    const auto frame=gRuntimeMetrics.summarize(desknx::runtime::Metric::FrameTime);
+    const auto render=gRuntimeMetrics.summarize(desknx::runtime::Metric::RenderTime);
+    const auto present=gRuntimeMetrics.summarize(desknx::runtime::Metric::PresentWait);
+    const auto input=gRuntimeMetrics.summarize(desknx::runtime::Metric::InputLatency);
+    const auto workspace=gRuntimeMetrics.summarize(desknx::runtime::Metric::WorkspaceSwitch);
+    desknx::diag::Write("performance","rolling_window",
+        "frame_avg_ms=%.3f frame_p95_ms=%.3f frame_max_ms=%.3f frame_n=%u render_avg_ms=%.3f render_p95_ms=%.3f render_max_ms=%.3f render_n=%u present_avg_ms=%.3f present_p95_ms=%.3f present_max_ms=%.3f present_n=%u input_avg_ms=%.3f input_p95_ms=%.3f input_max_ms=%.3f input_n=%u workspace_avg_ms=%.3f workspace_p95_ms=%.3f workspace_max_ms=%.3f workspace_n=%u",
+        frame.averageMs,frame.p95Ms,frame.maximumMs,static_cast<unsigned int>(frame.samples),
+        render.averageMs,render.p95Ms,render.maximumMs,static_cast<unsigned int>(render.samples),
+        present.averageMs,present.p95Ms,present.maximumMs,static_cast<unsigned int>(present.samples),
+        input.averageMs,input.p95Ms,input.maximumMs,static_cast<unsigned int>(input.samples),
+        workspace.averageMs,workspace.p95Ms,workspace.maximumMs,static_cast<unsigned int>(workspace.samples));
 }
 std::string initials(const std::string& name) {
     // UI-20: take initials from the raw UTF-8 string; ASCII letters pass
@@ -2415,8 +2451,6 @@ void drawScreen() {
     readCatalogueState(catalogReadyNow,catalogCompleteNow,catalogTruncatedNow,
         &catalogueNsAvailableNow,&catalogueNsErrorNow,
         &catalogueGameCountNow,&catalogueNroCountNow);
-    refreshBattery();
-    refreshStorageStats();
     rect(0,0,SW,SH,BG);
     for(int band=0;band<24;++band) {
         const double t=static_cast<double>(band)/23.0;
@@ -2965,7 +2999,19 @@ void drawScreen() {
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
     }
-    SDL_RenderPresent(renderer);
+    if(gFrameRenderStartedCounter!=0) {
+        const Uint64 beforePresent=SDL_GetPerformanceCounter();
+        gRuntimeMetrics.record(desknx::runtime::Metric::RenderTime,
+            elapsedPerformanceMs(gFrameRenderStartedCounter,beforePresent));
+        const Uint64 presentStarted=SDL_GetPerformanceCounter();
+        SDL_RenderPresent(renderer);
+        const Uint64 presentFinished=SDL_GetPerformanceCounter();
+        gRuntimeMetrics.record(desknx::runtime::Metric::PresentWait,
+            elapsedPerformanceMs(presentStarted,presentFinished));
+        gFrameRenderStartedCounter=0;
+    } else {
+        SDL_RenderPresent(renderer);
+    }
 }
 bool saveNow(){return enqueueLayoutSave(false);}
 bool finishTileDrag(const char* message="POSITION SAVED") {
@@ -4480,6 +4526,8 @@ int main(int,char**) {
     applyThemePalette();
     PadState pad{};padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad);
     setStatus("STARTING TRANSWITCH...",5000);
+    gPerformanceFrequency=SDL_GetPerformanceFrequency();
+    gFrameRenderStartedCounter=SDL_GetPerformanceCounter();
     drawScreen(); // first frame precedes application enumeration, SD recursion and font service init
 #ifdef DESKNX_SYSTEM_APPLET
     const Result readyRc=sendIpc([]{return desknx::ipc::SendMenuReady();});
@@ -4489,6 +4537,8 @@ int main(int,char**) {
 #else
     setStatus("CATALOGUE LOADING - Y ADD  X EDIT",5000);
 #endif
+    if(!gSensorService.start(sdMounted))
+        desknx::diag::Write("sensors","worker_start_failed","battery and SD widgets remain unavailable");
     IMG_Init(IMG_INIT_JPG|IMG_INIT_PNG);
     gIconCache.setRenderer(renderer);
     gFontRenderer.setRenderer(renderer);
@@ -4546,6 +4596,8 @@ int main(int,char**) {
     Uint32 previousFrameTick = SDL_GetTicks();
     Uint32 lastSlowFrameLog = 0;
     while(running&&appletMainLoop()) {
+        const Uint64 frameStartedCounter=SDL_GetPerformanceCounter();
+        const int workspaceAtFrameStart=deskIndex;
         bool ready=false,complete=false,truncated=false;
         readCatalogueState(ready,complete,truncated);
         const Uint32 frameNow = SDL_GetTicks();
@@ -4588,7 +4640,7 @@ int main(int,char**) {
         const u64 newlyPressedStickDirections=stickDirections&~previousStickDirections;
         previousStickDirections=stickDirections;
         const u64 keys=buttonDown|newlyPressedStickDirections;
-        if(keys)keyInput(keys,false);
+        if(keys){markInputActivity();keyInput(keys,false);}
         // Holding a direction repeats navigation after a short, responsive delay.
         // Modal ownership remains centralized in keyInput().
         {
@@ -4618,23 +4670,41 @@ int main(int,char**) {
         }
         pumpAsyncLayoutSaver();
         pumpPlayStatsQuery();
-        SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
+        SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else {markInputActivity();touchInput(event);}}
+        if(deskIndex!=workspaceAtFrameStart)gWorkspaceSwitchStartedCounter=SDL_GetPerformanceCounter();
+        pumpSensorSnapshot();
         const Uint32 persistenceNow=SDL_GetTicks();
         if(activeWorkspaceMarkerPending &&
            static_cast<Sint32>(persistenceNow-activeWorkspaceMarkerDue)>=0)
             (void)flushActiveWorkspaceSave();
         const Uint32 renderStarted=SDL_GetTicks();
+        gFrameRenderStartedCounter=SDL_GetPerformanceCounter();
         drawScreen();
+        const Uint64 presentedCounter=SDL_GetPerformanceCounter();
+        if(gInputStartedCounter!=0) {
+            gRuntimeMetrics.record(desknx::runtime::Metric::InputLatency,
+                elapsedPerformanceMs(gInputStartedCounter,presentedCounter));
+            gInputStartedCounter=0;
+        }
+        if(gWorkspaceSwitchStartedCounter!=0) {
+            gRuntimeMetrics.record(desknx::runtime::Metric::WorkspaceSwitch,
+                elapsedPerformanceMs(gWorkspaceSwitchStartedCounter,presentedCounter));
+            gWorkspaceSwitchStartedCounter=0;
+        }
         // Present already waits for the display when VSync is active. Sleeping
         // another 16ms here capped the accelerated path at roughly 30 FPS.
         if(!rendererVsync) {
             const Uint32 elapsed=SDL_GetTicks()-renderStarted;
             if(elapsed<16)svcSleepThread(static_cast<s64>(16-elapsed)*1'000'000LL);
         }
+        gRuntimeMetrics.record(desknx::runtime::Metric::FrameTime,
+            elapsedPerformanceMs(frameStartedCounter,SDL_GetPerformanceCounter()));
+        reportRuntimeMetrics();
     }
 #ifdef DESKNX_SYSTEM_APPLET
     stopHeartbeatThread();
 #endif
+    gSensorService.stop();
     SDL_AtomicSet(&nextendoStop,1);
     if(nextendoThread){SDL_WaitThread(nextendoThread,nullptr);nextendoThread=nullptr;}
     if(layoutLoaded && !defaultLayoutPending && !layoutSaveBlocked && sdMounted)
@@ -4660,7 +4730,6 @@ int main(int,char**) {
     gIconCache.shutdown();gFontRenderer.shutdown();
     if(wallpaperTexture){SDL_DestroyTexture(wallpaperTexture);wallpaperTexture=nullptr;}
     IMG_Quit();
-    if(psmReady)psmExit();
     if (playStatsMutex) SDL_DestroyMutex(playStatsMutex);
     if (nextendoMutex) SDL_DestroyMutex(nextendoMutex);
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);

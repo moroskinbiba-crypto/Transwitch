@@ -76,6 +76,11 @@ jobs:
       - name: Test install and recovery logic on a temporary fake SD card
         run: bash tests/test-recovery.sh
 
+      - name: Test bounded runtime performance metrics
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/runtime_metrics_test.cpp -o /tmp/desknx-runtime-metrics-test
+          /tmp/desknx-runtime-metrics-test
+
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test
