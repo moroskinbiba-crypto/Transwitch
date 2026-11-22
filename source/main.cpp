@@ -24,6 +24,7 @@
 #include "../include/desknx/ModalStack.hpp"
 #include "../include/desknx/ConfirmationDialogLayout.hpp"
 #include "../include/desknx/WindowComponents.hpp"
+#include "../include/desknx/Typography.hpp"
 
 #include <algorithm>
 #include <array>
@@ -876,6 +877,12 @@ void text(const std::string& value,int x,int y,int scale,Color c,int right=1260)
         px+=6*scale;
     }
 }
+void textRole(const std::string& value,int x,int y,desknx::ui::TextRole role,
+              Color c,int right=1260) {
+    const auto style=desknx::ui::TypographyFor(role);
+    text(value,x,y,style.fontScale,c,right);
+}
+
 void drawConfirmationDialog(
     const desknx::ui::ConfirmationDialogLayout& layout,
     const std::string& title,const std::string& subtitle,
@@ -886,9 +893,12 @@ void drawConfirmationDialog(
         layout.surface.width,layout.surface.height,
         Color{24,27,38,255},
         destructive?Color{255,99,112,100}:Color{255,255,255,24});
-    text(title,layout.titleX,layout.titleY,3,WHITE,layout.surface.x+layout.surface.width-30);
-    text(subtitle,layout.subtitleX,layout.subtitleY,2,MUTED,layout.surface.x+layout.surface.width-30);
-    text(description,layout.descriptionX,layout.descriptionY,1,MUTED,layout.surface.x+layout.surface.width-30);
+    textRole(title,layout.titleX,layout.titleY,desknx::ui::TextRole::Heading,
+        WHITE,layout.surface.x+layout.surface.width-30);
+    textRole(subtitle,layout.subtitleX,layout.subtitleY,desknx::ui::TextRole::Subheading,
+        MUTED,layout.surface.x+layout.surface.width-30);
+    textRole(description,layout.descriptionX,layout.descriptionY,desknx::ui::TextRole::Caption,
+        MUTED,layout.surface.x+layout.surface.width-30);
     roundRect(layout.primaryButton.x,layout.primaryButton.y,
         layout.primaryButton.width,layout.primaryButton.height,12,
         destructive?Color{112,38,42,255}:Color{10,132,255,255});
@@ -896,14 +906,17 @@ void drawConfirmationDialog(
         outline(layout.primaryButton.x,layout.primaryButton.y,
             layout.primaryButton.width,layout.primaryButton.height,
             Color{255,69,58,130});
-    text(primaryLabel,layout.primaryLabelX,layout.primaryLabelY,2,WHITE,
+    textRole(primaryLabel,layout.primaryLabelX,layout.primaryLabelY,
+        desknx::ui::TextRole::Body,WHITE,
         layout.primaryButton.x+layout.primaryButton.width-10);
     roundRect(layout.secondaryButton.x,layout.secondaryButton.y,
         layout.secondaryButton.width,layout.secondaryButton.height,12,
         Color{54,57,66,255});
-    text(secondaryLabel,layout.secondaryLabelX,layout.secondaryLabelY,2,WHITE,
+    textRole(secondaryLabel,layout.secondaryLabelX,layout.secondaryLabelY,
+        desknx::ui::TextRole::Body,WHITE,
         layout.secondaryButton.x+layout.secondaryButton.width-10);
-    text("A CONFIRM     B CANCEL",layout.footer.x,layout.footer.y,1,MUTED,
+    textRole("A CONFIRM     B CANCEL",layout.footer.x,layout.footer.y,
+        desknx::ui::TextRole::Metadata,MUTED,
         layout.footer.x+layout.footer.width);
 }
 
@@ -2689,9 +2702,10 @@ void drawScreen() {
         drawModalBackdrop(194);
         const int mx=110,my=70,mw=1060,mh=570;
         drawModalSurface(mx,my,mw,mh,Color{17,24,36,255},Color{255,255,255,25});
-        text("APP LIBRARY",mx+28,my+17,3,WHITE,mx+mw-24);
-        text("Installed games, homebrew and system widgets",
-             mx+30,my+43,1,MUTED,mx+mw-24);
+        textRole("APP LIBRARY",mx+28,my+17,desknx::ui::TextRole::Heading,
+            WHITE,mx+mw-24);
+        textRole("Installed games, homebrew and system widgets",
+            mx+30,my+43,desknx::ui::TextRole::Caption,MUTED,mx+mw-24);
         struct DrawerChip { int x; int w; const char* label; };
         const DrawerChip chips[]={{mx+28,96,"Y  SEARCH"},{mx+132,82,"X  SORT"},
             {mx+222,112,"L/R  FILTER"},{mx+342,82,"-  CLEAR"},
@@ -2851,7 +2865,8 @@ void drawScreen() {
         drawModalSurface(layout.surface.x,layout.surface.y,
             layout.surface.width,layout.surface.height,
             Color{18,25,37,255},Color{255,255,255,26});
-        text("WORKSPACE OPTIONS",layout.title.x,layout.title.y,3,WHITE,
+        textRole("WORKSPACE OPTIONS",layout.title.x,layout.title.y,
+            desknx::ui::TextRole::Heading,WHITE,
             layout.title.x+layout.title.width);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
@@ -2903,11 +2918,11 @@ void drawScreen() {
         drawModalSurface(layout.surface.x,layout.surface.y,
             layout.surface.width,layout.surface.height,
             Color{18,25,37,255},Color{255,255,255,26});
-        text(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
-             layout.title.x,layout.title.y,3,WHITE,
+        textRole(workspacePickerMoveTile?"MOVE TILE TO WORKSPACE":"OPEN WORKSPACE",
+             layout.title.x,layout.title.y,desknx::ui::TextRole::Heading,WHITE,
              layout.title.x+layout.title.width);
-        text("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
-             layout.description.x,layout.description.y,1,MUTED,
+        textRole("SELECT ANY OF YOUR "+std::to_string(desks.size())+" WORKSPACES",
+             layout.description.x,layout.description.y,desknx::ui::TextRole::Caption,MUTED,
              layout.description.x+layout.description.width);
         for(size_t i=0;i<desks.size()&&i<static_cast<size_t>(layout.items.itemCount);++i) {
             const auto row=layout.items.itemRect(static_cast<int>(i));

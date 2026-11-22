@@ -28,6 +28,10 @@ The first Visual Engine 2.0 stability slice is now implemented in this branch:
   repeated-row geometry contracts. Workspace Picker, Workspace Options and the App
   Library details panel use the same layouts for drawing and touch hit testing; row
   gaps are explicitly non-interactive.
+- `Typography.hpp` adds Display, Heading, Subheading, Body, Caption and Metadata
+  tokens, retaining existing FontRenderer scales. A role-aware drawing adapter has
+  been introduced and used first in the confirmation dialog, library and workspace
+  picker to avoid an all-at-once text refactor.
 
 This closes the z-order mismatch described below. It does not yet prove the white-screen
 issue fixed; on-console reproduction and compositing regression tests remain open.

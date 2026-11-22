@@ -85,7 +85,13 @@ Successful compilation alone does not close a runtime acceptance item.
 - [ ] Add regression checks for full-frame recovery after every modal/window path.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
 - [ ] Complete shared button, badge, toggle, field, card and indicator primitives.
-- [ ] Add semantic typography roles and consistent wrapping, line height and font fallback.
+- [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
+      Metadata), a role-aware drawing adapter and initial migrations in confirmation,
+      library and workspace-picker surfaces.
+- [ ] Apply role line-height and multiline wrapping to text blocks; current renderer
+      remains single-line/ellipsis based.
+- [ ] Verify Cyrillic fallback when both custom and shared TTF fonts are unavailable;
+      bitmap fallback still cannot render full Cyrillic.
 - [ ] Introduce a single motion controller with reduced-motion / low-performance modes;
       no shared transition system was found in the audited renderer path.
 - [ ] Preserve the 10 px tile corner target and cover/title overlay behaviour.
