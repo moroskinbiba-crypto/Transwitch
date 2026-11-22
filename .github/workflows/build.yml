@@ -67,6 +67,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_component_rules_test.cpp -o /tmp/desknx-ui-component-rules-test
           /tmp/desknx-ui-component-rules-test
 
+      - name: Test Visual Engine semantic tokens
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_tokens_test.cpp -o /tmp/desknx-visual-tokens-test
+          /tmp/desknx-visual-tokens-test
+
       - name: Test UI motion easing and transitions
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_motion_test.cpp -o /tmp/desknx-ui-motion-test
