@@ -43,6 +43,15 @@ int main() {
     assert(surfaces.size() == 3);
     assert(surfaces.isTop(SurfaceId::QuickSettings));
 
+    // Closing a child modal removes it from the next frame. The parent becomes
+    // both visible and the sole input owner again.
+    surfaces.beginFrame();
+    assert(surfaces.push(SurfaceId::Library, true, true, 120));
+    assert(surfaces.contains(SurfaceId::Library));
+    assert(!surfaces.contains(SurfaceId::QuickSettings));
+    assert(surfaces.isTop(SurfaceId::Library));
+    assert(surfaces.top() && surfaces.top()->id == SurfaceId::Library);
+
     surfaces.beginFrame();
     assert(surfaces.size() == 0);
     assert(!surfaces.backdropActive());
