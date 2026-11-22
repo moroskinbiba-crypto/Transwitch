@@ -292,5 +292,40 @@ int main() {
     assert(!panel.primaryAction.contains(1130,574));
     assert(!panel.primaryAction.contains(901,532));
 
+    // Workspace footer: painted status, key hints and tile actions have
+    // explicit shared geometry; only the three visible buttons are actionable.
+    const auto& footer=WorkspaceFooterControls;
+    assert(footer.surface.x==28&&footer.surface.y==558);
+    assert(footer.surface.width==1224&&footer.surface.height==56);
+    assert(footer.statusIndicator.inside(footer.surface));
+    assert(footer.statusLabel.inside(footer.surface));
+    assert(footer.tileSizeDecreaseButton.inside(footer.surface));
+    assert(footer.tileSizeIncreaseButton.inside(footer.surface));
+    assert(footer.removeTileButton.inside(footer.surface));
+    for(int i=0;i<WorkspaceFooterLayout::HintCount;++i) {
+        const auto hint=footer.hint(i);
+        assert(hint.keyBadge.inside(footer.surface));
+        assert(hint.actionLabel.inside(footer.surface));
+        assert(hint.keyBadge.x==642+i*148);
+        assert(hint.actionLabel.x==698+i*148);
+        assert(hint.keyBadge.width==48&&hint.keyBadge.height==28);
+        assert(hint.actionLabel.width==88);
+    }
+    assert(footer.hint(-1).keyBadge.width==0);
+    assert(footer.hint(WorkspaceFooterLayout::HintCount).keyBadge.width==0);
+    assert(footer.actionAt(650,571)==WorkspaceFooterAction::DecreaseTileSize);
+    assert(footer.actionAt(814,598)==WorkspaceFooterAction::DecreaseTileSize);
+    assert(footer.actionAt(815,585)==WorkspaceFooterAction::None);
+    assert(footer.actionAt(825,585)==WorkspaceFooterAction::None);
+    assert(footer.actionAt(826,571)==WorkspaceFooterAction::IncreaseTileSize);
+    assert(footer.actionAt(990,598)==WorkspaceFooterAction::IncreaseTileSize);
+    assert(footer.actionAt(991,585)==WorkspaceFooterAction::None);
+    assert(footer.actionAt(1002,571)==WorkspaceFooterAction::RemoveTile);
+    assert(footer.actionAt(1229,598)==WorkspaceFooterAction::RemoveTile);
+    assert(footer.actionAt(1230,585)==WorkspaceFooterAction::None);
+    assert(footer.actionAt(1002,600)==WorkspaceFooterAction::None);
+    assert(footer.actionAt(650,570)==WorkspaceFooterAction::None);
+    assert(footer.actionAt(49,580)==WorkspaceFooterAction::None);
+
     return 0;
 }
