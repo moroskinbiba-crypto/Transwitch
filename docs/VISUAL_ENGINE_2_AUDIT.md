@@ -128,3 +128,22 @@ Keep input/state changes immediate; animation must remain presentation-only.
 - Typography roles are consistent and Cyrillic remains legible in shared-font,
   custom-font and fallback paths.
 - Reduced-motion mode disables nonessential transitions without affecting navigation.
+
+## Control system implementation update
+
+The next VE 2.0 slice adds `ControlComponents.hpp` as a renderer-independent
+contract for Primary, Secondary, Destructive and Quiet buttons, including focused,
+pressed and disabled states. Selectable rows now have shared Normal, Current,
+Focused and Disabled visual states. The draw adapter remains in `main.cpp`, where
+it converts the pure palette tokens into the existing SDL primitives.
+
+The first migrations are intentionally narrow: workspace picker rows/cancel action,
+workspace option rows, and destructive confirmation actions. Their existing rectangles,
+labels and touch boundaries are preserved. Button hit testing uses the same
+`ModalRect` as rendering, and disabled buttons explicitly reject touch activation.
+A host test covers visual-state resolution and half-open hit boundaries.
+
+This does not yet complete the entire control library: badges, toggles, fields,
+cards and indicators remain open. It also does not address the synchronous text-cache
+miss path; the new control adapter deliberately performs no allocation or file/network
+work of its own.

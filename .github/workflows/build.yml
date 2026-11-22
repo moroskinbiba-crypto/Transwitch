@@ -86,6 +86,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/window_components_test.cpp -o /tmp/desknx-window-components-test
           /tmp/desknx-window-components-test
 
+      - name: Test shared button and selectable-row component contracts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/control_components_test.cpp -o /tmp/desknx-control-components-test
+          /tmp/desknx-control-components-test
+
       - name: Test deterministic motion controller and reduced modes
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/motion_controller_test.cpp -o /tmp/desknx-motion-test

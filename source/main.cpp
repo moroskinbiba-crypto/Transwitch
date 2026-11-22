@@ -24,6 +24,7 @@
 #include "../include/desknx/ModalStack.hpp"
 #include "../include/desknx/ConfirmationDialogLayout.hpp"
 #include "../include/desknx/WindowComponents.hpp"
+#include "../include/desknx/ControlComponents.hpp"
 #include "../include/desknx/Typography.hpp"
 #include "../include/desknx/MotionController.hpp"
 
@@ -893,6 +894,38 @@ void textRole(const std::string& value,int x,int y,desknx::ui::TextRole role,
     text(value,x,y,style.fontScale,c,right);
 }
 
+Color controlColor(desknx::ui::ControlColor c) {
+    return Color{c.r,c.g,c.b,c.a};
+}
+
+void drawButton(const desknx::ui::ButtonControl& control,
+                const std::string& label,int labelX,int labelY,
+                int textRight,
+                desknx::ui::TextRole role=desknx::ui::TextRole::Body) {
+    const auto& bounds=control.bounds;
+    if(bounds.width<=0||bounds.height<=0)return;
+    const auto style=desknx::ui::ResolveButtonStyle(control.variant,control.state);
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,
+        desknx::ui::ButtonCornerRadius,controlColor(style.background));
+    if(style.drawBorder)
+        outline(bounds.x,bounds.y,bounds.width,bounds.height,controlColor(style.border));
+    if(style.drawFocusRing)
+        outline(bounds.x-2,bounds.y-2,bounds.width+4,bounds.height+4,
+            controlColor(style.focusRing));
+    textRole(label,labelX,labelY,role,controlColor(style.foreground),
+        std::min(textRight,bounds.x+bounds.width-10));
+}
+
+void drawSelectableRowBackground(const desknx::ui::ModalRect& bounds,
+                                 desknx::ui::SelectableRowState state,
+                                 int radius=10) {
+    const auto style=desknx::ui::ResolveSelectableRowStyle(state);
+    if(style.background.a==0)return;
+    roundRect(bounds.x,bounds.y,bounds.width,bounds.height,radius,
+        controlColor(style.background));
+}
+
+
 void drawConfirmationDialog(
     const desknx::ui::ConfirmationDialogLayout& layout,
     const std::string& title,const std::string& subtitle,
@@ -909,22 +942,15 @@ void drawConfirmationDialog(
         MUTED,layout.surface.x+layout.surface.width-30);
     textRole(description,layout.descriptionX,layout.descriptionY,desknx::ui::TextRole::Caption,
         MUTED,layout.surface.x+layout.surface.width-30);
-    roundRect(layout.primaryButton.x,layout.primaryButton.y,
-        layout.primaryButton.width,layout.primaryButton.height,12,
-        destructive?Color{112,38,42,255}:Color{10,132,255,255});
-    if(destructive)
-        outline(layout.primaryButton.x,layout.primaryButton.y,
-            layout.primaryButton.width,layout.primaryButton.height,
-            Color{255,69,58,130});
-    textRole(primaryLabel,layout.primaryLabelX,layout.primaryLabelY,
-        desknx::ui::TextRole::Body,WHITE,
-        layout.primaryButton.x+layout.primaryButton.width-10);
-    roundRect(layout.secondaryButton.x,layout.secondaryButton.y,
-        layout.secondaryButton.width,layout.secondaryButton.height,12,
-        Color{54,57,66,255});
-    textRole(secondaryLabel,layout.secondaryLabelX,layout.secondaryLabelY,
-        desknx::ui::TextRole::Body,WHITE,
-        layout.secondaryButton.x+layout.secondaryButton.width-10);
+    const desknx::ui::ButtonVariant primaryVariant=destructive
+        ?desknx::ui::ButtonVariant::Destructive
+        :desknx::ui::ButtonVariant::Primary;
+    drawButton({layout.primaryButton,primaryVariant,{}},primaryLabel,
+        layout.primaryLabelX,layout.primaryLabelY,
+        layout.primaryButton.x+layout.primaryButton.width);
+    drawButton({layout.secondaryButton,desknx::ui::ButtonVariant::Secondary,{}},
+        secondaryLabel,layout.secondaryLabelX,layout.secondaryLabelY,
+        layout.secondaryButton.x+layout.secondaryButton.width);
     textRole("A CONFIRM     B CANCEL",layout.footer.x,layout.footer.y,
         desknx::ui::TextRole::Metadata,MUTED,
         layout.footer.x+layout.footer.width);
@@ -2900,10 +2926,15 @@ void drawScreen() {
                                "RENAME WORKSPACE","DELETE WORKSPACE","CANCEL"};
         for(int i=0;i<layout.items.itemCount;++i) {
             const auto row=layout.items.itemRect(i);
-            if(i==workspaceMenuIndex)
-                roundRect(row.x,row.y,row.width,row.height,10,Color{45,61,82,255});
-            const Color labelColor=(i==1&&!canMoveTile)?Color{91,101,118,255}:
-                                   (i==workspaceMenuIndex?WHITE:MUTED);
+            const bool disabled=(i==1&&!canMoveTile);
+            const auto rowState=disabled
+                ?desknx::ui::SelectableRowState::Disabled
+                :(i==workspaceMenuIndex
+                    ?desknx::ui::SelectableRowState::Focused
+                    :desknx::ui::SelectableRowState::Normal);
+            drawSelectableRowBackground(row,rowState,10);
+            const Color labelColor=controlColor(
+                desknx::ui::ResolveSelectableRowStyle(rowState).foreground);
             text(actions[i],row.x+22,row.y+12,1,labelColor,row.x+row.width-15);
         }
         text("EACH DESKTOP KEEPS ITS OWN VISUAL SETTINGS",
@@ -2954,19 +2985,24 @@ void drawScreen() {
             const auto row=layout.items.itemRect(static_cast<int>(i));
             const bool selected=static_cast<int>(i)==workspacePickerIndex;
             const bool current=static_cast<int>(i)==deskIndex;
-            if(selected)roundRect(row.x,row.y,row.width,row.height,8,Color{45,61,82,255});
-            else if(current)roundRect(row.x,row.y,row.width,row.height,8,Color{30,43,60,255});
-            text(desks[i].name,row.x+22,row.y+9,1,
-                 selected?WHITE:(current?BLUE:MUTED),row.x+row.width-160);
+            const auto rowState=selected
+                ?desknx::ui::SelectableRowState::Focused
+                :(current?desknx::ui::SelectableRowState::Current:
+                    desknx::ui::SelectableRowState::Normal);
+            drawSelectableRowBackground(row,rowState,8);
+            const Color rowText=controlColor(
+                desknx::ui::ResolveSelectableRowStyle(rowState).foreground);
+            text(desks[i].name,row.x+22,row.y+9,1,rowText,row.x+row.width-160);
             const std::string detail=current?"CURRENT":
                 std::to_string(desks[i].tiles.size())+" ITEMS";
-            text(detail,row.x+444,row.y+9,1,current?BLUE:MUTED,
-                 row.x+row.width-18);
+            text(detail,row.x+444,row.y+9,1,
+                 current?BLUE:(selected?WHITE:MUTED),row.x+row.width-18);
         }
-        const auto& cancel=layout.closeButton;
-        roundRect(cancel.x,cancel.y,cancel.width,cancel.height,
-            10,Color{54,57,66,255});
-        text("CANCEL",cancel.x+51,cancel.y+13,1,WHITE,cancel.x+cancel.width-45);
+        const desknx::ui::ButtonControl cancelButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(cancelButton,"CANCEL",layout.closeButton.x+51,
+            layout.closeButton.y+13,
+            layout.closeButton.x+layout.closeButton.width-45);
         text("UP / DOWN SELECT     A OPEN     B BACK",
              layout.footer.x,layout.footer.y+18,1,MUTED,
              layout.footer.x+layout.footer.width);
@@ -4279,7 +4315,9 @@ void touchInput(const SDL_Event&e) {
     if(activeModal==desknx::ui::ModalLayer::WorkspacePicker ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         const auto& layout=desknx::ui::WorkspacePickerDialogLayout;
-        if(layout.closeButton.contains(x,y)) {
+        const desknx::ui::ButtonControl cancelButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(cancelButton.hitTest(x,y)) {
             workspacePicker=false;
         } else {
             const int target=layout.items.itemAt(x,y);
@@ -4305,8 +4343,12 @@ void touchInput(const SDL_Event&e) {
     if(activeModal==desknx::ui::ModalLayer::DeleteConfirmation) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         const auto& layout=desknx::ui::WorkspaceDeleteConfirmationLayout;
-        if(layout.primaryButton.contains(x,y))keyInput(HidNpadButton_A,false);
-        else if(layout.secondaryButton.contains(x,y))keyInput(HidNpadButton_B,false);
+        const desknx::ui::ButtonControl primaryButton{
+            layout.primaryButton,desknx::ui::ButtonVariant::Destructive,{}};
+        const desknx::ui::ButtonControl secondaryButton{
+            layout.secondaryButton,desknx::ui::ButtonVariant::Secondary,{}};
+        if(primaryButton.hitTest(x,y))keyInput(HidNpadButton_A,false);
+        else if(secondaryButton.hitTest(x,y))keyInput(HidNpadButton_B,false);
         return;
     }
     if(e.type==SDL_FINGERDOWN && editing && !dragging &&

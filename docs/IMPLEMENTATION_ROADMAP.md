@@ -84,7 +84,10 @@ Successful compilation alone does not close a runtime acceptance item.
       tile-artwork and rounded-mask paths.
 - [ ] Add regression checks for full-frame recovery after every modal/window path.
 - [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
-- [ ] Complete shared button, badge, toggle, field, card and indicator primitives.
+- [x] Add shared Button variants/states and selectable-row visual contracts; migrate
+      workspace picker actions, workspace menu rows and confirmation actions.
+- [ ] Add badge, toggle, field, card and indicator primitives, then migrate remaining
+      windows to the shared controls.
 - [x] Add semantic typography roles (Display, Heading, Subheading, Body, Caption,
       Metadata), a role-aware drawing adapter and initial migrations in confirmation,
       library and workspace-picker surfaces.
