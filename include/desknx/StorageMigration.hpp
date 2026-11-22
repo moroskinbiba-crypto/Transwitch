@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -88,15 +89,14 @@ inline bool parseHeaderVersion(const std::string& contents,
     if (newline == std::string::npos || newline == 0 || newline > 64)
         return false;
 
-    const std::string header = contents.substr(0, newline);
-    const std::string prefix(schema.headerPrefix);
-    if (header.compare(0, prefix.size(), prefix) != 0 ||
-        header.size() <= prefix.size())
+    const std::size_t prefixLength = std::strlen(schema.headerPrefix);
+    if (newline <= prefixLength ||
+        contents.compare(0, prefixLength, schema.headerPrefix) != 0)
         return false;
 
     std::uint32_t parsed = 0;
-    for (std::size_t i = prefix.size(); i < header.size(); ++i) {
-        const char ch = header[i];
+    for (std::size_t i = prefixLength; i < newline; ++i) {
+        const char ch = contents[i];
         if (ch < '0' || ch > '9')
             return false;
         const std::uint32_t digit = static_cast<std::uint32_t>(ch - '0');
