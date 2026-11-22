@@ -31,6 +31,7 @@
 #include "IconCache.hpp"
 #include "../include/desknx/ArtworkRequestPolicy.hpp"
 #include "../include/desknx/BitmapFont.hpp"
+#include <desknx/VisualContracts.hpp>
 #include "../include/desknx/RendererStatePolicy.hpp"
 #include "../include/desknx/RendererStateRecovery.hpp"
 #include "../include/desknx/RuntimeMetrics.hpp"
@@ -74,7 +75,10 @@ namespace {
 using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
-constexpr int DeskTabX=50, DeskTabWidth=132, DeskTabStep=142, VisibleDeskTabs=5;
+constexpr int DeskTabX=desknx::ui::WorkspaceDockLayout::TabX;
+constexpr int DeskTabWidth=desknx::ui::WorkspaceDockLayout::TabWidth;
+constexpr int DeskTabStep=desknx::ui::WorkspaceDockLayout::TabStep;
+constexpr int VisibleDeskTabs=desknx::ui::WorkspaceDockLayout::VisibleTabCount;
 constexpr int ToolbarStartX=64, ToolbarButtonWidth=100, ToolbarButtonStep=108, ToolbarButtonCount=3;
 constexpr int toolbarButtonX(int index) { return ToolbarStartX + index*ToolbarButtonStep; }
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
@@ -1619,6 +1623,41 @@ void textCentered(const std::string& value,int centerX,int y,int scale,
     const int width=bitmapTextLineWidth(localized,scale);
     const int px=std::max(left,std::min(right-width,centerX-width/2));
     drawBitmapText(localized,px,y,scale,c,right);
+}
+
+void textRole(const std::string& value,int x,int y,
+              desknx::ui::TextRole role,Color tint,int right=1260) {
+    text(value,x,y,desknx::ui::TypographyFor(role).fontScale,tint,right);
+}
+void textCenteredRole(const std::string& value,int centerX,int y,
+                      desknx::ui::TextRole role,Color tint,int left,int right) {
+    textCentered(value,centerX,y,desknx::ui::TypographyFor(role).fontScale,tint,left,right);
+}
+void textBlock(const std::string& value,int x,int y,
+               desknx::ui::TextRole role,Color tint,int right=1260) {
+    const auto style=desknx::ui::TypographyFor(role);
+    const std::string localized=desknx::i18n::translate(value,languageRussian);
+    const int width=std::max(0,right-x);
+    if(width==0||style.maxLines<=0)return;
+    const int scale=style.fontScale;
+    const auto measure=[scale](const std::string& s){return desknx::ui::MeasureBitmapTextWidth(s,scale);};
+    const auto lines=desknx::ui::WrapUtf8Text(localized,width,style.maxLines,measure);
+    if(lines.empty())return;
+    const SDL_Color tintValue{tint.r,tint.g,tint.b,tint.a};
+    bool allCached=true;
+    for(const auto& line:lines)
+        if(!line.empty()&&!gFontRenderer.hasCachedText(line,scale,tintValue,x,right)){allCached=false;break;}
+    const int lineHeight=style.lineHeight>0?style.lineHeight:8*scale;
+    if(allCached) {
+        for(std::size_t i=0;i<lines.size();++i)
+            if(!lines[i].empty())
+                (void)gFontRenderer.draw(lines[i],x,y+static_cast<int>(i)*lineHeight,scale,tintValue,right);
+        return;
+    }
+    for(const auto& line:lines)
+        if(!line.empty())(void)gFontRenderer.requestText(line,scale,tintValue,x,right);
+    for(std::size_t i=0;i<lines.size();++i)
+        if(!lines[i].empty())drawBitmapText(lines[i],x,y+static_cast<int>(i)*lineHeight,scale,tint,right);
 }
 std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
@@ -4651,8 +4690,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
     }
 }
 int visibleStart() {
-    if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
-    return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
+    return desknx::ui::WorkspaceDockLayout::visibleStart(
+        deskIndex,static_cast<int>(desks.size()),touchDragging?touchDragTabStart:-1);
 }
 bool isWidgetKind(Kind kind);
 Tile* selectedWidgetTile();
@@ -4941,11 +4980,15 @@ void drawScreen() {
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h,d);
     if(editing&&dragging)text("MOVING",1040,118,1,BLUE,1260);
-    softCard(28,558,1224,56,Color{18,26,39,238},Color{255,255,255,16});
+    const auto& footer=desknx::ui::WorkspaceFooterLayout{};
+    softCard(footer.surface.x,footer.surface.y,footer.surface.width,footer.surface.height,
+        Color{18,26,39,238},Color{255,255,255,16});
     const bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
-    roundRect(48,576,7,7,4,show?BLUE:GREEN);
+    roundRect(footer.statusIndicator.x,footer.statusIndicator.y,
+        footer.statusIndicator.width,footer.statusIndicator.height,4,show?BLUE:GREEN);
     text(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
-         68,575,1,show?WHITE:MUTED,620);
+        footer.statusLabel.x,footer.statusLabel.y,1,show?WHITE:MUTED,
+        footer.statusLabel.x+footer.statusLabel.width);
     struct Hint { const char* key; const char* action; };
     const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L3","QUICK MENU"}};
     const Hint resumeHints[]={{"A","RESUME"},{"Y","ADD"},{"X","EDIT"},{"L3","QUICK MENU"}};
@@ -4955,15 +4998,18 @@ void drawScreen() {
     if(editing&&!dragging&&selectedTileIndex>=0) {
         // Touchscreen users need the same tile-management actions as controller
         // users. Keep these real, generous hit targets in the persistent footer.
-        uiButton(650,571,165,28,8,desknx::ui::ButtonVariant::Chip,
-            Color{35,57,83,255},Color{255,255,255,12});
-        text("SIZE -  /  ZL",665,581,1,WHITE,808);
-        uiButton(826,571,165,28,8,desknx::ui::ButtonVariant::Chip,
-            Color{35,57,83,255},Color{255,255,255,12});
-        text("SIZE +  /  ZR",841,581,1,WHITE,984);
-        uiButton(1002,571,228,28,8,desknx::ui::ButtonVariant::Chip,
-            Color{91,39,48,255},Color{255,255,255,12});
-        text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
+        const auto& sizeDown=desknx::ui::WorkspaceFooterLayout::tileSizeDecreaseButton;
+        const auto& sizeUp=desknx::ui::WorkspaceFooterLayout::tileSizeIncreaseButton;
+        const auto& remove=desknx::ui::WorkspaceFooterLayout::removeTileButton;
+        uiButton(sizeDown.x,sizeDown.y,sizeDown.width,sizeDown.height,8,
+            desknx::ui::ButtonVariant::Chip,Color{35,57,83,255},Color{255,255,255,12});
+        text("SIZE -  /  ZL",sizeDown.x+15,sizeDown.y+10,1,WHITE,sizeDown.x+sizeDown.width-7);
+        uiButton(sizeUp.x,sizeUp.y,sizeUp.width,sizeUp.height,8,
+            desknx::ui::ButtonVariant::Chip,Color{35,57,83,255},Color{255,255,255,12});
+        text("SIZE +  /  ZR",sizeUp.x+15,sizeUp.y+10,1,WHITE,sizeUp.x+sizeUp.width-7);
+        uiButton(remove.x,remove.y,remove.width,remove.height,8,
+            desknx::ui::ButtonVariant::Chip,Color{91,39,48,255},Color{255,255,255,12});
+        text("REMOVE TILE  /  MINUS",remove.x+16,remove.y+10,1,WHITE,remove.x+remove.width-10);
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               d.tiles[static_cast<size_t>(selectedTileIndex)].kind==Kind::Game) {
         for(int i=0;i<4;++i) {
@@ -4979,9 +5025,11 @@ void drawScreen() {
         }
     } else if(!editing&&!dragging&&selectedTileIndex>=0&&
               isWidgetKind(d.tiles[static_cast<size_t>(selectedTileIndex)].kind)) {
-        uiButton(642,571,190,28,8,desknx::ui::ButtonVariant::Chip,
-            Color{35,68,101,255},Color{255,255,255,12});
-        text("WIDGET SETTINGS / ZR",654,581,1,WHITE,828);
+        const auto& widgetSettings=desknx::ui::WorkspaceFooterLayout::widgetSettingsButton;
+        uiButton(widgetSettings.x,widgetSettings.y,widgetSettings.width,widgetSettings.height,8,
+            desknx::ui::ButtonVariant::Chip,Color{35,68,101,255},Color{255,255,255,12});
+        text("WIDGET SETTINGS / ZR",widgetSettings.x+12,widgetSettings.y+10,1,WHITE,
+            widgetSettings.x+widgetSettings.width-4);
         for(int i=0;i<3;++i) {
             const int hx=850+i*126;
             uiButton(hx,571,43,28,8,desknx::ui::ButtonVariant::Chip,
@@ -5001,56 +5049,59 @@ void drawScreen() {
     }
     // Three dock treatments share the same geometry so touch hit targets and
     // workspace switching never depend on the selected visual style.
-    if(dockStyle==0) {
-        softCard(28,624,1224,82,Color{18,26,39,242},Color{255,255,255,24});
-    } else if(dockStyle==1) {
-        rect(0,620,SW,100,Color{10,20,31,static_cast<Uint8>(
-            (static_cast<unsigned int>(surfaceOpacity)*220u)/255u)});
-        rect(0,620,SW,2,BLUE);
+    const auto dockSurface=desknx::ui::WorkspaceDockLayout::surface(dockStyle);
+    if(dockStyle==1) {
+        rect(dockSurface.x,dockSurface.y,dockSurface.width,dockSurface.height,
+            Color{10,20,31,static_cast<Uint8>((static_cast<unsigned int>(surfaceOpacity)*220u)/255u)});
+        rect(dockSurface.x,dockSurface.y,dockSurface.width,2,BLUE);
+    } else if(dockStyle==2) {
+        softCard(dockSurface.x,dockSurface.y,dockSurface.width,dockSurface.height,
+            Color{13,24,36,226},Color{255,255,255,34});
     } else {
-        softCard(28,630,1224,70,Color{13,24,36,226},Color{255,255,255,34});
+        softCard(dockSurface.x,dockSurface.y,dockSurface.width,dockSurface.height,
+            Color{18,26,39,242},Color{255,255,255,24});
     }
     const int deskStart=visibleStart();
-    for(int i=0;i<VisibleDeskTabs&&deskStart+i<static_cast<int>(desks.size());++i) {
-        const int index=deskStart+i;
-        const int x=DeskTabX+i*DeskTabStep;
+    for(int slot=0;slot<VisibleDeskTabs&&deskStart+slot<static_cast<int>(desks.size());++slot) {
+        const int index=deskStart+slot;
+        const auto bounds=desknx::ui::WorkspaceDockLayout::tab(slot,dockStyle);
         const bool active=index==deskIndex;
         if(dockStyle==1) {
-            uiButton(x,642,DeskTabWidth,42,6,desknx::ui::ButtonVariant::Solid,
+            uiButton(bounds.x,bounds.y,bounds.width,bounds.height,6,
+                desknx::ui::ButtonVariant::Solid,
                 Color{static_cast<Uint8>(themeIndex==1?27:35),53,static_cast<Uint8>(themeIndex==1?68:78),static_cast<Uint8>(active?255:0)},
                 Color{0,0,0,0},active,false,BLUE);
-            if(active)gUiComponents.divider(x+12,685,DeskTabWidth-24,
-                SDL_Color{(BLUE).r,
-                          (BLUE).g,
-                          (BLUE).b,255});
+            if(active)gUiComponents.divider(bounds.x+12,bounds.y+bounds.height+1,
+                bounds.width-24,SDL_Color{BLUE.r,BLUE.g,BLUE.b,255});
         } else if(dockStyle==2) {
-            uiButton(x,641,DeskTabWidth,45,22,desknx::ui::ButtonVariant::Glass,
-                active?Color{51,89,112,210}:Color{255,255,255,12},
-                Color{103,184,225,130},active);
+            uiButton(bounds.x,bounds.y,bounds.width,bounds.height,22,desknx::ui::ButtonVariant::Glass,
+                active?Color{51,89,112,210}:Color{255,255,255,12},Color{103,184,225,130},active);
         } else {
-            uiButton(x,641,DeskTabWidth,48,14,desknx::ui::ButtonVariant::Glass,
-                active?Color{53,91,139,255}:Color{34,43,58,235},
-                Color{144,189,244,110},active);
+            uiButton(bounds.x,bounds.y,bounds.width,bounds.height,14,desknx::ui::ButtonVariant::Glass,
+                active?Color{53,91,139,255}:Color{34,43,58,235},Color{144,189,244,110},active);
         }
-        text(desks[static_cast<size_t>(index)].name,x+12,658,1,
-             active?WHITE:MUTED,x+DeskTabWidth-8);
+        text(desks[static_cast<size_t>(index)].name,bounds.x+12,
+            bounds.y+(dockStyle==1?16:17),1,active?WHITE:MUTED,bounds.x+bounds.width-8);
     }
-    uiButton(770,641,52,48,14,desknx::ui::ButtonVariant::Chip,
-        desks.size()<static_cast<size_t>(MAX_DESKS)?
-            Color{35,70,105,255}:Color{34,43,58,235},
-        Color{255,255,255,18},false,false,
-        desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED);
-    text("+",787,652,3,desks.size()<static_cast<size_t>(MAX_DESKS)?BLUE:MUTED,812);
-    uiButton(832,641,52,48,14,desknx::ui::ButtonVariant::Chip,
-        Color{34,43,58,235},Color{255,255,255,18});
-    text("...",842,660,2,WHITE,876);
+    const auto addWorkspace=desknx::ui::WorkspaceDockLayout::addButton;
+    const bool canAddWorkspace=desks.size()<static_cast<size_t>(MAX_DESKS);
+    uiButton(addWorkspace.x,addWorkspace.y,addWorkspace.width,addWorkspace.height,14,
+        desknx::ui::ButtonVariant::Chip,canAddWorkspace?Color{35,70,105,255}:Color{34,43,58,235},
+        Color{255,255,255,18},false,false,canAddWorkspace?BLUE:MUTED);
+    text("+",addWorkspace.x+17,addWorkspace.y+11,3,canAddWorkspace?BLUE:MUTED,addWorkspace.x+addWorkspace.width-10);
+    const auto menuButton=desknx::ui::WorkspaceDockLayout::menuButton;
+    uiButton(menuButton.x,menuButton.y,menuButton.width,menuButton.height,14,
+        desknx::ui::ButtonVariant::Chip,Color{34,43,58,235},Color{255,255,255,18});
+    text("...",menuButton.x+10,menuButton.y+19,2,WHITE,menuButton.x+menuButton.width-8);
+    const auto pagePicker=desknx::ui::WorkspaceDockLayout::pagePicker;
     text(std::to_string(deskIndex+1)+" / "+std::to_string(desks.size()),
-         916,658,1,MUTED,1040);
-    uiButton(1096,638,128,54,16,desknx::ui::ButtonVariant::Glass,
-        editing?Color{53,100,156,255}:Color{34,46,64,255},
+        pagePicker.x+16,pagePicker.y+17,1,MUTED,pagePicker.x+pagePicker.width-10);
+    const auto editButton=desknx::ui::WorkspaceDockLayout::editButton;
+    uiButton(editButton.x,editButton.y,editButton.width,editButton.height,16,
+        desknx::ui::ButtonVariant::Glass,editing?Color{53,100,156,255}:Color{34,46,64,255},
         Color{144,189,244,110},editing);
-    drawSystemIcon(desknx::ui::IconId::Home,1108,650,30,WHITE);
-    text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
+    drawSystemIcon(desknx::ui::IconId::Home,editButton.x+12,editButton.y+12,30,WHITE);
+    text(editing?"DONE":"EDIT",editButton.x+52,editButton.y+19,2,WHITE,editButton.x+editButton.width-8);
     static bool modalComposeFailed=false;
     const bool modalComposeOk=gModalLayer.compose(gSurfaceManager.dimAlpha());
     if(!modalComposeOk&&!modalComposeFailed)
@@ -5414,7 +5465,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::WorkspaceMenu)) {
 
         modalCard(340,176,600,370,Color{18,25,37,255},Color{255,255,255,26});
-        text("WORKSPACE OPTIONS",390,194,3,WHITE,900);
+        textRole("WORKSPACE OPTIONS",390,194,desknx::ui::TextRole::Heading,WHITE,900);
         const Workspace& current=desks[static_cast<size_t>(deskIndex)];
         const bool canMoveTile=editing&&itemAt(current,selectedX,selectedY)>=0;
         const char* actions[]={"OPEN WORKSPACE","MOVE ICON TO ANOTHER DESKTOP","CUSTOMIZE DESKTOP",
@@ -5434,7 +5485,7 @@ void drawScreen() {
 
         modalCard(300,104,680,520,Color{17,24,36,255},Color{255,255,255,28});
         const Workspace& desk=desks[static_cast<size_t>(deskIndex)];
-        text("CUSTOMIZE DESKTOP",344,130,3,WHITE,930);
+        textRole("CUSTOMIZE DESKTOP",344,130,desknx::ui::TextRole::Heading,WHITE,930);
         text(desk.name+"  /  PERSONAL APPEARANCE",346,168,1,MUTED,930);
         roundRect(842,132,92,32,10,Color{54,57,66,255});
         text("B  BACK",856,143,1,WHITE,926);
@@ -5535,7 +5586,7 @@ void drawScreen() {
                 static_cast<int>(favoritesView.size())-1));
     
             modalCard(230,78,820,544,Color{17,24,36,255},Color{255,255,255,25});
-            text("FAVORITE GAMES",266,104,3,WHITE,850);
+            textRole("FAVORITE GAMES",266,104,desknx::ui::TextRole::Heading,WHITE,850);
             roundRect(838,108,78,30,9,Color{49,52,61,255});
             text("B BACK",850,118,1,WHITE,912);
             roundRect(924,108,88,30,9,Color{10,132,255,255});
@@ -5654,9 +5705,9 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::SystemMenu)) {
 
         modalCard(110,104,1060,512,Color{17,24,36,255},Color{255,255,255,25});
-        text("TOOLS",146,130,3,WHITE,1020);
-        text("Library, recent apps, widgets and system actions.",
-             148,168,1,MUTED,1020);
+        textRole("TOOLS",146,130,desknx::ui::TextRole::Heading,WHITE,1020);
+        textBlock("Library, recent apps, widgets and system actions.",
+             148,168,desknx::ui::TextRole::Caption,MUTED,1020);
         struct SystemTool { int x,y,icon; const char* title; const char* subtitle; };
         const SystemTool tools[]={
             {156,218,4,"APP LIBRARY","INSTALLED GAMES AND HOMEBREW"},
@@ -5685,7 +5736,7 @@ void drawScreen() {
     }
     if(gSurfaceManager.contains(SurfaceId::LauncherSettings)) {
         modalCard(200,38,880,644,Color{17,24,36,255},Color{255,255,255,42});
-        text("LAUNCHER SETTINGS",244,68,3,WHITE,920);
+        textRole("LAUNCHER SETTINGS",244,68,desknx::ui::TextRole::Heading,WHITE,920);
         text("PERSONALIZE  /  APPEARANCE, WIDGETS AND WORKSPACES",
              246,112,2,MUTED,970);
         roundRect(948,64,92,38,12,Color{48,59,76,255});
@@ -5763,7 +5814,7 @@ void drawScreen() {
         const bool networkReady=SDL_AtomicGet(&nextendoNetworkReady)!=0;
 
         modalCard(120,48,1040,624,Color{17,24,36,255},Color{255,255,255,35});
-        text("RUNTIME DIAGNOSTICS",158,72,3,WHITE,920);
+        textRole("RUNTIME DIAGNOSTICS",158,72,desknx::ui::TextRole::Heading,WHITE,920);
         text("B BACK",1010,84,1,BLUE,1140);
         text("X / A REFRESH",880,84,1,MUTED,1000);
         const Color okColor=Color{52,211,153,255};
@@ -5976,7 +6027,7 @@ void drawScreen() {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
 
         modalCard(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24},true);
-        text("POWER",454,238,3,WHITE,820);
+        textRole("POWER",454,238,desknx::ui::TextRole::Heading,WHITE,820);
         roundRect(780,238,52,30,9,Color{54,57,66,255});
         text("B",798,247,1,WHITE,828);
         for(int i=0;i<3;++i){
@@ -5991,9 +6042,9 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::UserPicker)) {
 
         modalCard(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
-        text("SELECT PLAYER",374,142,3,WHITE,900);
-        text("The selected profile is used for games that request a player account.",
-             376,180,1,MUTED,914);
+        textRole("SELECT PLAYER",374,142,desknx::ui::TextRole::Heading,WHITE,900);
+        textBlock("The selected profile is used for games that request a player account.",
+             376,180,desknx::ui::TextRole::Caption,MUTED,914);
         roundRect(844,136,76,34,10,Color{54,57,66,255});
         text("B BACK",856,147,1,WHITE,912);
         if(consoleUsers.empty()) {
@@ -7786,9 +7837,8 @@ bool touchSelect(int x,int y) {
     return true;
 }
 int tabStart(){
-    if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
-    return std::max(0,std::min(deskIndex-2,
-        static_cast<int>(desks.size())-VisibleDeskTabs));
+    return desknx::ui::WorkspaceDockLayout::visibleStart(
+        deskIndex,static_cast<int>(desks.size()),touchDragging?touchDragTabStart:-1);
 }
 void openControllerSupport() {
     const Uint64 started=SDL_GetTicks64();
@@ -8142,25 +8192,24 @@ void touchInput(const SDL_Event&e) {
         else if(y>=382&&y<=430&&x>=635&&x<=875) keyInput(HidNpadButton_B,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && !editing && !dragging && !listOpen &&
-       !recentOpen && !favoritesOpen && !widgetEditorOpen && !powerMenu && !appSettingsMenu &&
-       !quickSettingsOpen) {
+    if(e.type==SDL_FINGERDOWN&&!gSurfaceManager.hasBlockingSurface()) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=566&&y<=614&&x>=642&&x<832) {
-            Workspace& desk=desks[static_cast<std::size_t>(deskIndex)];
-            const int index=itemAt(desk,selectedX,selectedY);
-            if(index>=0&&isWidgetKind(desk.tiles[static_cast<std::size_t>(index)].kind))
+        const auto& footer=desknx::ui::WorkspaceFooterLayout{};
+        if(footer.surface.contains(x,y)) {
+            const bool validDesk=deskIndex>=0&&deskIndex<static_cast<int>(desks.size());
+            const int selected=validDesk?itemAt(desks[static_cast<std::size_t>(deskIndex)],selectedX,selectedY):-1;
+            if(editing&&!dragging&&validDesk&&selected>=0) {
+                switch(footer.actionAt(x,y)) {
+                    case desknx::ui::WorkspaceFooterAction::DecreaseTileSize:resizeTile(false);break;
+                    case desknx::ui::WorkspaceFooterAction::IncreaseTileSize:resizeTile(true);break;
+                    case desknx::ui::WorkspaceFooterAction::RemoveTile:removeTile();break;
+                    case desknx::ui::WorkspaceFooterAction::None:break;
+                }
+            } else if(!editing&&!dragging&&validDesk&&selected>=0&&
+                desknx::ui::WorkspaceFooterLayout::widgetSettingsButton.contains(x,y)&&
+                isWidgetKind(desks[static_cast<std::size_t>(deskIndex)].tiles[static_cast<std::size_t>(selected)].kind)) {
                 openWidgetEditor();
-            return;
-        }
-    }
-    if(e.type==SDL_FINGERDOWN && editing && !dragging && !listOpen && !recentOpen && !nextendoOpen && !powerMenu) {
-        const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=566&&y<=614&&itemAt(
-               desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
-            if(x>=650&&x<815) resizeTile(false);
-            else if(x>=826&&x<991) resizeTile(true);
-            else if(x>=1002&&x<1230) removeTile();
+            }
             return;
         }
     }
@@ -8320,48 +8369,47 @@ void touchInput(const SDL_Event&e) {
             }
             return;
         }
-        // Workspace tabs and their controls live at the bottom of the screen.
-        if(y>=638&&y<=694) {
-            if(x>=DeskTabX&&x<DeskTabX+VisibleDeskTabs*DeskTabStep) {
-                const int offset=x-DeskTabX;
-                const int slot=offset/DeskTabStep;
-                const int tabX=DeskTabX+slot*DeskTabStep;
-                const int target=tabStart()+slot;
-                if(x>=tabX&&x<tabX+DeskTabWidth&&target>=0&&
-                   target<static_cast<int>(desks.size())&&target<tabStart()+VisibleDeskTabs) {
-                    const Uint32 now=SDL_GetTicks();
-                    if(target==deskIndex&&lastWorkspaceTabTap==target&&
-                       now-lastWorkspaceTabTapTick<=500) {
-                        lastWorkspaceTabTap=-1;
-                        renameDesk();
-                    } else {
-                        if(target!=deskIndex) {
-                            markWorkspaceSwitchBegin();
-                            deskIndex=target;
-                            scheduleActiveWorkspaceSave();
-                            setStatus(desks[static_cast<size_t>(deskIndex)].name);
+        // Exact tap rectangles; the wider gesture band is retained for
+        // hold-to-drag and page-swipe state machines.
+        const auto& dock=desknx::ui::WorkspaceDockLayout{};
+        if(dock.dragBand.contains(x,y)) {
+            const int first=tabStart();
+            const auto action=desknx::ui::WorkspaceDockLayout::actionAt(
+                x,y,dockStyle,first,static_cast<int>(desks.size()),MAX_DESKS);
+            switch(action) {
+                case desknx::ui::WorkspaceDockAction::SelectWorkspace: {
+                    const int slot=desknx::ui::WorkspaceDockLayout::tabSlotAt(
+                        x,y,dockStyle,first,static_cast<int>(desks.size()));
+                    const int target=first+slot;
+                    if(target>=0&&target<static_cast<int>(desks.size())) {
+                        const Uint32 now=SDL_GetTicks();
+                        if(target==deskIndex&&lastWorkspaceTabTap==target&&now-lastWorkspaceTabTapTick<=500) {
+                            lastWorkspaceTabTap=-1;
+                            renameDesk();
+                        } else {
+                            if(target!=deskIndex) {
+                                markWorkspaceSwitchBegin();deskIndex=target;
+                                scheduleActiveWorkspaceSave();
+                                setStatus(desks[static_cast<size_t>(deskIndex)].name);
+                            }
+                            lastWorkspaceTabTap=target;lastWorkspaceTabTapTick=now;
                         }
-                        lastWorkspaceTabTap=target;
-                        lastWorkspaceTabTapTick=now;
-                    }
-                } else lastWorkspaceTabTap=-1;
-                return;
-            }
-            if(x>=770&&x<822) {newDesk();return;}
-            if(x>=832&&x<884) {
-                workspaceMenu=true;
-                workspaceMenuIndex=0;
-                return;
-            }
-            if(x>=900&&x<1050) {
-                openWorkspacePicker(false);
-                return;
-            }
-            if(x>=1096&&x<1224) {
-                editing=!editing;
-                if(!editing&&dragging){dragging=false;saveNow();}
-                setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
-                return;
+                    } else lastWorkspaceTabTap=-1;
+                    return;
+                }
+                case desknx::ui::WorkspaceDockAction::AddWorkspace:
+                    if(desks.size()<static_cast<size_t>(MAX_DESKS))newDesk();
+                    return;
+                case desknx::ui::WorkspaceDockAction::OpenWorkspaceMenu:
+                    workspaceMenu=true;workspaceMenuIndex=0;return;
+                case desknx::ui::WorkspaceDockAction::OpenWorkspacePicker:
+                    openWorkspacePicker(false);return;
+                case desknx::ui::WorkspaceDockAction::ToggleEditMode:
+                    editing=!editing;
+                    if(!editing&&dragging){dragging=false;saveNow();}
+                    setStatus(editing?"EDIT MODE ENABLED":"EDIT MODE CLOSED");
+                    return;
+                case desknx::ui::WorkspaceDockAction::None:return;
             }
         }
         if(desks[static_cast<size_t>(deskIndex)].tiles.empty()&&

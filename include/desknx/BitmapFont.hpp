@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <climits>
 #include <string>
 
 namespace desknx::ui {
@@ -58,6 +59,22 @@ inline Utf8DecodeResult DecodeUtf8Codepoint(
         return {0xFFFD, 1, false};
     }
     return {codepoint, length, true};
+}
+
+inline int MeasureBitmapTextWidth(const std::string& value,int scale) noexcept {
+    if(scale<=0)return 0;
+    int width=0;
+    for(std::size_t offset=0;offset<value.size();) {
+        const auto decoded=DecodeUtf8Codepoint(value,offset);
+        offset+=decoded.length>0?decoded.length:1;
+        if(decoded.codepoint=='\r'||decoded.codepoint=='\n')continue;
+        const int cellWidth=decoded.codepoint=='\t'?24:6;
+        if(scale>INT_MAX/cellWidth)return INT_MAX;
+        const int advance=cellWidth*scale;
+        if(width>INT_MAX-advance)return INT_MAX;
+        width+=advance;
+    }
+    return width;
 }
 
 inline std::uint32_t NormalizeRussianBitmapCodepoint(

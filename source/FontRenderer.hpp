@@ -194,6 +194,31 @@ public:
                         left, right, true, centerX);
     }
 
+    bool hasCachedText(const std::string& value,int scale,SDL_Color color,int left,int right) const {
+        if(value.empty())return true;
+        if(!ttfReady_||!renderer_||value.size()>MaxTextBytes)return false;
+        const int maxWidth=std::max(0,right-left);
+        if(maxWidth==0)return true;
+        const int fontIndex=std::max(0,std::min(7,scale-1));
+        const bool customReady=!customFontPath_.empty()&&customFonts_[fontIndex]!=nullptr;
+        const std::string key=makeKey(value,scale,color,maxWidth,customReady);
+        const auto exists=[this](const std::string& candidate) {
+            return cache_.find(candidate)!=cache_.end()||emptyTextKeys_.find(candidate)!=emptyTextKeys_.end();
+        };
+        return exists(key)||(customReady&&exists(makeKey(value,scale,color,maxWidth,false)));
+    }
+
+    bool requestText(const std::string& value,int scale,SDL_Color color,int left,int right) {
+        if(hasCachedText(value,scale,color,left,right))return true;
+        if(!ttfReady_||!renderer_||value.empty()||value.size()>MaxTextBytes)return false;
+        const int maxWidth=std::max(0,right-left);
+        if(maxWidth==0)return true;
+        const int fontIndex=std::max(0,std::min(7,scale-1));
+        const bool customReady=!customFontPath_.empty()&&customFonts_[fontIndex]!=nullptr;
+        const std::string key=makeKey(value,scale,color,maxWidth,customReady);
+        return enqueueRaster(key,value,scale,maxWidth,color,customReady);
+    }
+
     void shutdown() {
         if (fontLoadThread_) {
             SDL_WaitThread(fontLoadThread_, nullptr);

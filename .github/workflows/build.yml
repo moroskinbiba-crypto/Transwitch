@@ -87,6 +87,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_tokens_test.cpp -o /tmp/desknx-visual-tokens-test
           /tmp/desknx-visual-tokens-test
 
+      - name: Test unified typography, UTF-8 layout and workspace chrome contracts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_contracts_test.cpp -o /tmp/desknx-visual-contracts-test
+          /tmp/desknx-visual-contracts-test
+
       - name: Test UI motion easing and transitions
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/ui_motion_test.cpp -o /tmp/desknx-ui-motion-test

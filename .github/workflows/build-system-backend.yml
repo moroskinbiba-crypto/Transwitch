@@ -98,6 +98,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_geometry_test.cpp -o /tmp/desknx-visual-geometry-test
           /tmp/desknx-visual-geometry-test
 
+      - name: Test unified typography, UTF-8 layout and workspace chrome contracts
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_contracts_test.cpp -o /tmp/desknx-visual-contracts-test
+          /tmp/desknx-visual-contracts-test
+
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test

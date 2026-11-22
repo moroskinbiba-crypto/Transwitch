@@ -362,3 +362,14 @@ The native standalone build has now completed both CI workflows:
 - Изменения рабочих столов и active-workspace marker теперь записываются через отдельный SDL worker; повторные правки объединяются в последний актуальный snapshot. Синхронный checked save сохранён перед запуском/завершением приложения.
 - SD commits сериализованы отдельным mutex, а завершение фоновой записи отражается в диагностике async_save_finished.
 - CI проверит native NRO и host tests. Физический тест на Switch всё ещё обязателен: особенно проверить старый catalogue cache, фильтр Widgets, появление 90 игр до завершения metadata scan, drag/resize/add/remove, переключение рабочих столов и перезапуск во время активного сохранения.
+
+
+## Unified SVG recovery integration
+
+Preserved the validated SVG IconRegistry/VectorIconCache, VisualEngine, UiComponents,
+TileRenderer, SurfaceManager, SystemTelemetry, async FontRenderer and existing
+workspace page/drag gesture path. Added semantic text roles and UTF-8 wrapping as
+adapters over the existing renderer; TTF misses stay asynchronous and use whole-block
+Cyrillic bitmap fallback until cached. Added shared footer/dock geometry so visible
+buttons and tap targets match exactly. The broad hold-to-drag/page-swipe band and
+five-tab paging behavior are retained. Host coverage is in visual_contracts_test.cpp.
