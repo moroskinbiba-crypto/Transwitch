@@ -2902,7 +2902,7 @@ void drawScreen() {
             footer.tileSizeDecreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
         const desknx::ui::ButtonControl sizeIncrease{
             footer.tileSizeIncreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
-        const desknx::ui::ButtonControl removeTile{
+        const desknx::ui::ButtonControl removeTileButton{
             footer.removeTileButton,desknx::ui::ButtonVariant::Destructive,{}};
         drawButton(sizeDecrease,"SIZE -  /  ZL",
             sizeDecrease.bounds.x+15,sizeDecrease.bounds.y+10,
@@ -2912,9 +2912,9 @@ void drawScreen() {
             sizeIncrease.bounds.x+15,sizeIncrease.bounds.y+10,
             sizeIncrease.bounds.x+sizeIncrease.bounds.width-8,
             desknx::ui::TextRole::Metadata);
-        drawButton(removeTile,"REMOVE TILE  /  MINUS",
-            removeTile.bounds.x+16,removeTile.bounds.y+10,
-            removeTile.bounds.x+removeTile.bounds.width-8,
+        drawButton(removeTileButton,"REMOVE TILE  /  MINUS",
+            removeTileButton.bounds.x+16,removeTileButton.bounds.y+10,
+            removeTileButton.bounds.x+removeTileButton.bounds.width-8,
             desknx::ui::TextRole::Metadata);
     } else {
         const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
@@ -4722,11 +4722,11 @@ void touchInput(const SDL_Event&e) {
                     footer.tileSizeDecreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
                 const desknx::ui::ButtonControl sizeIncrease{
                     footer.tileSizeIncreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
-                const desknx::ui::ButtonControl removeTile{
+                const desknx::ui::ButtonControl removeTileButton{
                     footer.removeTileButton,desknx::ui::ButtonVariant::Destructive,{}};
                 if(sizeDecrease.hitTest(x,y))resizeTile(false);
                 else if(sizeIncrease.hitTest(x,y))resizeTile(true);
-                else if(removeTile.hitTest(x,y))removeTile();
+                else if(removeTileButton.hitTest(x,y))removeTile();
             }
             // Status text and keyboard hints are intentionally inert. A tap
             // in their area must not fall through to the workspace grid.
