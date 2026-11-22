@@ -1602,6 +1602,16 @@ Color themeEdgeTint(Color source) {
 }
 void softCard(int x,int y,int w,int h,Color fill,Color edge=Color{255,255,255,20}) {
     fill=themeSurfaceTint(fill);edge=themeEdgeTint(edge);
+    if(themeIndex==1) {
+        const int opacity=std::max(0,std::min(255,surfaceOpacity));
+        fill.a=static_cast<Uint8>((static_cast<unsigned>(fill.a)*opacity)/255u);
+        edge.a=static_cast<Uint8>((static_cast<unsigned>(edge.a)*opacity)/255u);
+        rect(x,y+3,w,h,Color{0,0,0,42});
+        rect(x,y,w,h,fill);
+        outline(x,y,w,h,edge);
+        rect(x,y,w,2,Color{BLUE.r,BLUE.g,BLUE.b,static_cast<Uint8>((static_cast<unsigned>(BLUE.a)*opacity)/255u)});
+        return;
+    }
     const SDL_Rect bounds{x,y,w,h};
     if(gUiComponents.surface(bounds,
         SDL_Color{fill.r,fill.g,fill.b,fill.a},
@@ -1620,6 +1630,10 @@ void modalCard(int x,int y,int w,int h,Color fill,
                Color edge=Color{255,255,255,24},bool dialog=false) {
     fill=themeSurfaceTint(fill);
     edge=themeEdgeTint(edge);
+    if(themeIndex==1) {
+        softCard(x,y,w,h,fill,edge);
+        return;
+    }
     const SDL_Rect bounds{x,y,w,h};
     const SDL_Color fillColor{fill.r,fill.g,fill.b,fill.a};
     const SDL_Color edgeColor{edge.r,edge.g,edge.b,edge.a};
@@ -1633,6 +1647,10 @@ void sidePanelCard(int x,int y,int w,int h,Color fill,
                    Color edge=Color{255,255,255,20}) {
     fill=themeSurfaceTint(fill);
     edge=themeEdgeTint(edge);
+    if(themeIndex==1) {
+        softCard(x,y,w,h,fill,edge);
+        return;
+    }
     const SDL_Rect bounds{x,y,w,h};
     const bool drawn=gUiComponents.sidePanelSurface(bounds,
         SDL_Color{fill.r,fill.g,fill.b,fill.a},
@@ -1644,6 +1662,16 @@ void uiButton(int x,int y,int w,int h,int radius,
               bool active=false,bool focused=false,Color accent=BLUE) {
     fill=themeSurfaceTint(fill);
     edge=themeEdgeTint(edge);
+    if(themeIndex==1) {
+        // SOCOMA uses a strict action grid: flat, square-cornered controls
+        // with an explicit active border instead of translucent glass chips.
+        radius=std::min(radius,4);
+        variant=desknx::ui::ButtonVariant::Solid;
+        if(active||focused)
+            edge=Color{accent.r,accent.g,accent.b,220};
+        else
+            edge=Color{79,111,128,165};
+    }
     const SDL_Rect bounds{x,y,w,h};
     (void)gUiComponents.button(bounds,variant,
         desknx::ui::ButtonState{active,focused,false},
@@ -4284,6 +4312,14 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             SDL_Color{widgetEdge.r,widgetEdge.g,widgetEdge.b,widgetEdge.a},
             SDL_Color{accent.r,accent.g,accent.b,accent.a},
             selected,surfaceOpacity,UiCornerRadius);
+    } else if(themeIndex==1) {
+        const int opacity=std::max(0,std::min(255,surfaceOpacity));
+        Color flatFill=widgetFill,flatEdge=widgetEdge;
+        flatFill.a=static_cast<Uint8>((static_cast<unsigned>(flatFill.a)*opacity)/255u);
+        flatEdge.a=static_cast<Uint8>((static_cast<unsigned>(flatEdge.a)*opacity)/255u);
+        rect(r.x,r.y,r.w,r.h,flatFill);
+        outline(r.x,r.y,r.w,r.h,flatEdge);
+        rect(r.x,r.y,3,r.h,selected?BLUE:accent);
     } else if(!gUiComponents.widgetSurface(r,
         SDL_Color{themeSurfaceTint(widgetFill).r,themeSurfaceTint(widgetFill).g,
                   themeSurfaceTint(widgetFill).b,themeSurfaceTint(widgetFill).a},
@@ -5137,8 +5173,18 @@ void drawScreen() {
     else
         drawWallpaper();
 
+    // SOCOMA is a separate layout language, not a palette variation: a
+    // technical top rail, rectangular controls and a visible modular desktop.
+    if(themeIndex==1) {
+        rect(0,0,SW,86,Color{6,12,18,255});
+        rect(0,84,SW,2,BLUE);
+        rect(10,12,44,56,Color{13,27,38,255});
+        outline(10,12,44,56,Color{68,116,140,210});
+        text("TX",19,22,2,BLUE,50);
+        text("OS",19,47,1,MUTED,50);
+    }
     // Three interchangeable header compositions. The same hit targets and
-    // controller mappings are retained; only the visual treatment changes.
+    // controller mappings are retained; SOCOMA overrides only their visual skin.
     const Color headerSurface=themeIndex==1
         ?Color{12,24,36,232}:Color{24,32,45,224};
     const Color headerRailSurface=themeIndex==1
@@ -5218,9 +5264,25 @@ void drawScreen() {
     text(battery>=0?std::to_string(battery)+"%":"BAT --",1158,43,1,
          battery>=20?GREEN:RED,1198);
 
-    // Single desktop surface under the tiles and widgets.
-    softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
+    // A flat framed workspace surface and persistent 6x3 grid are SOCOMA's
+    // structural baseline; v0.1 keeps its original single glass card.
+    if(themeIndex==1) {
+        rect(56,96,1168,454,Color{6,14,21,174});
+        outline(56,96,1168,454,Color{43,79,96,185});
+        rect(56,96,1168,3,BLUE);
+    } else {
+        softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
+    }
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
+    if(themeIndex==1) {
+        text("WORKSPACE",76,107,1,BLUE,210);
+        text(d.name,76,124,2,WHITE,310);
+        text(std::to_string(d.tiles.size())+" ITEMS",1060,112,1,MUTED,1208);
+        for(int gy=0;gy<ROWS;++gy)for(int gx=0;gx<COLS;++gx) {
+            const int px=LEFT+gx*(CW+GX),py=TOP+gy*(CH+GY);
+            outline(px+1,py+1,CW-2,CH-2,Color{36,61,73,95});
+        }
+    }
     if(editing) {
         static std::array<SDL_Rect,2048> dottedRects{};
         std::size_t dottedRectCount=0;
