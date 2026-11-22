@@ -527,9 +527,10 @@ void pumpSystemTelemetrySnapshot() {
 
 void refreshQuickSettingsSnapshot(bool force=false) {
     const Uint32 now=SDL_GetTicks();
-    if(!force&&quickSettingsSnapshotLoaded&&now-quickSettingsSnapshotTick<3500)return;
+    if(!force&&(quickSettingsSnapshotLoading||
+       (quickSettingsSnapshotLoaded&&now-quickSettingsSnapshotTick<3500)))return;
     quickSettingsSnapshotTick=now;
-    quickSettingsSnapshotLoading=!quickSettingsSnapshotLoaded;
+    quickSettingsSnapshotLoading=true;
     gSystemTelemetry.requestQuickSettings();
 }
 
@@ -3657,7 +3658,7 @@ void refreshAtmosphereVersion() {
 }
 
 void refreshBattery() {
-    gSystemTelemetry.setDemandMask(SystemTelemetry::BatteryDemand);
+    gSystemTelemetry.requestDemand(SystemTelemetry::BatteryDemand);
 }
 
 int storageStatsThreadMain(void*) {
@@ -3718,7 +3719,7 @@ void refreshDiagnosticsSnapshot(bool force=false) {
     gSystemTelemetry.requestDiagnostics();
 }
 void refreshSystemMonitor() {
-    gSystemTelemetry.setDemandMask(SystemTelemetry::SystemDemand);
+    gSystemTelemetry.requestDemand(SystemTelemetry::SystemDemand);
 }
 
 std::string initials(const std::string& name) {
