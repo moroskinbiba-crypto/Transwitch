@@ -29,7 +29,7 @@ The existing 0.1 and SOCOMA themes are not changed by this engine milestone. A s
 
 ## Tokens
 
-include/desknx/VisualTokens.hpp defines the shared visual contract: semantic surface and text colors, status colors, radius scale, spacing scale, icon sizes, minimum touch target, focus ring width and glow opacity. Normalization clamps values and preserves monotonic scales. Existing four-field aggregate initialization remains compatible.
+include/desknx/VisualTokens.hpp defines the shared visual contract: semantic surface and text colors, status colors, radius scale, spacing scale, icon sizes, minimum touch target, focus ring width and glow opacity. Normalization clamps values and preserves monotonic scales. The first four token fields remain compatible with the launcher's existing aggregate initializers. Color tokens themselves are SDL-independent; conversion happens only at the rendering boundary.
 
 ## UI component contract
 
@@ -38,6 +38,7 @@ include/desknx/VisualTokens.hpp defines the shared visual contract: semantic sur
 - **Button** — Glass, Rail, Minimal, Chip and Solid variants. Active, hover, focus, pressed and disabled are independent presentation states. The input/controller code owns all actions and hitboxes.
 - **Progress bar** — bounded normalized progress, themed track/fill and rounded ends.
 - **Divider** — one-pixel semantic separator.
+- **Artwork tile** — shared surface/elevation, cached gradient title scrim and measured title layout. Texture selection/crop remains on the artwork path; the visual component does not change tile bounds or input hitboxes.
 
 ## Performance and memory budgets
 
@@ -59,15 +60,22 @@ include/desknx/VisualTokens.hpp defines the shared visual contract: semantic sur
 - [x] Multi-layer soft shadow without render targets.
 - [x] Unified surface/widget/button/progress/divider component API.
 - [x] Pure host tests for token normalization and button paint states.
-- [ ] Native NRO / HOME applet CI build for this exact branch.
+- [x] Current-branch native standalone NRO build.
+- [ ] Current-branch HOME applet build completion.
 - [ ] Physical Switch visual and frame-time verification.
 
 ### VE-2 — content and layout migration
 
-- [ ] Migrate common game tile, image fit, text roles and icon alignment through component APIs.
-- [ ] Keep existing hit rectangles and controller navigation unchanged.
+Status: in progress.
+
+- [x] Add a dedicated TileRenderer component for artwork surfaces, elevation and title scrims.
+- [x] Replace flat game-title strips with cached vertical alpha gradients.
+- [x] Extract tile label sizing into SDL-independent measured layout rules and host tests.
+- [x] Preserve the current cover/contain fit policy, rounded-corner mask, tile geometry and selection/input hitboxes.
+- [ ] Move remaining badge, title and image-fit drawing paths behind reusable tile component APIs.
+- [ ] Migrate the library's artwork cards to the same component contract.
 - [ ] Add visual fixtures for all tile sizes and both legacy themes.
-- [ ] Verify cover crop, labels, focus and selection styles.
+- [ ] Verify cover crop, label contrast, focus and selection styles on console.
 
 ### VE-3 — windows and motion integration
 
@@ -85,4 +93,4 @@ include/desknx/VisualTokens.hpp defines the shared visual contract: semantic sur
 
 ## Explicitly deferred
 
-Gaussian blur, shader effects, OpenGL ES/Vulkan migration, new visual theme, wholesale redesign of library/settings, and changes to application/backend behavior are intentionally outside VE-1.
+Gaussian blur, shader effects, OpenGL ES/Vulkan migration, the new showcase theme, wholesale redesign of library/settings, and changes to application/backend behavior are intentionally outside the current VE-2 slice.
