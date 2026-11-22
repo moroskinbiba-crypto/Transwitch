@@ -5834,7 +5834,7 @@ void drawScreen() {
 
         softCard(628,442,452,156,Color{23,34,49,255},Color{255,255,255,18});
         text("FRAME PERFORMANCE",652,462,2,WHITE,1050);
-        char perfText[112]{};
+        char perfText[160]{};
         std::snprintf(perfText,sizeof(perfText),"FPS %.1f  /  FRAME %.2f MS AVG",
             runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs);
         text(perfText,652,494,1,okColor,1050);
@@ -5854,9 +5854,10 @@ void drawScreen() {
             static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
         text(perfText,652,590,1,MUTED,1050);
         std::snprintf(perfText,sizeof(perfText),
-            "TEXT %u HIT / %u MISS / %u NEW / QUEUED %u / PENDING %zu",
-            fontStats.cacheHits,fontStats.cacheMisses,fontStats.texturesCreated,
-            fontStats.queuedRequests,fontStats.pendingRasterJobs);
+            "TEXT HIT %u / MISS %u / FALLBACK %u / NEW %u / Q %u / PENDING %zu / DROP %u",
+            fontStats.cacheHits,fontStats.cacheMisses,fontStats.fallbackHits,
+            fontStats.texturesCreated,fontStats.queuedRequests,
+            fontStats.pendingRasterJobs,fontStats.staleJobsDiscarded);
         text(perfText,176,604,1,MUTED,1060);
         std::snprintf(perfText,sizeof(perfText),
             "TEXT PREP %.2F MS / RASTER %.2F MS / UPLOAD %.2F MS",
@@ -5864,9 +5865,9 @@ void drawScreen() {
             fontStats.textureUploadMs);
         text(perfText,176,628,1,BLUE,1060);
         std::snprintf(perfText,sizeof(perfText),
-            "TEXT DESTROY %.2F MS / CLEAR %.2F MS / EVICT %u",
+            "TEXT DESTROY %.2F MS / CLEAR %.2F MS / EVICT %u / OLD FONT %u",
             fontStats.textureDestroyMs,gFontRenderer.lastCacheClearMs(),
-            fontStats.cacheEvictions);
+            fontStats.cacheEvictions,fontStats.obsoleteTexturesPruned);
         text(perfText,176,652,1,MUTED,1060);
     }
     if(gSurfaceManager.contains(SurfaceId::MediaPicker)) {
