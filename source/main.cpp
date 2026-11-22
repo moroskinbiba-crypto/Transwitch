@@ -6223,6 +6223,7 @@ void drawScreen() {
         runtimeFrameMetrics.lastWorkspaceSwitchMs=switchMs;
         runtimeFrameMetrics.maximumWorkspaceSwitchMs=std::max(
             runtimeFrameMetrics.maximumWorkspaceSwitchMs,switchMs);
+        gRuntimeMetrics.record(desknx::runtime::Metric::WorkspaceSwitch,switchMs);
         ++runtimeFrameMetrics.workspaceSwitches;
         const std::size_t tileCount=desks.empty()?0:desks[static_cast<std::size_t>(
             std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))].tiles.size();
@@ -8924,6 +8925,10 @@ int main(int,char**) {
         const double frameMs=performanceFrequency>0
             ?static_cast<double>(frameEndCounter-frameStartCounter)*1000.0/
                 static_cast<double>(performanceFrequency):0.0;
+        gRuntimeMetrics.record(desknx::runtime::Metric::FrameTime,frameMs);
+        gRuntimeMetrics.record(desknx::runtime::Metric::RenderTime,renderMs);
+        gRuntimeMetrics.record(desknx::runtime::Metric::PresentWait,presentWaitMs);
+        gRuntimeMetrics.record(desknx::runtime::Metric::InputLatency,inputMs);
         ++metricsFrames;
         frameTimeSamples[frameTimeSampleCursor]=frameMs;
         frameTimeSampleCursor=(frameTimeSampleCursor+1)%frameTimeSamples.size();
@@ -8973,6 +8978,22 @@ int main(int,char**) {
                 runtimeFrameMetrics.maximumFrameMs,runtimeFrameMetrics.maximumInputMs,
                 runtimeFrameMetrics.maximumPresentWaitMs,
                 static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
+            const auto frameRolling=gRuntimeMetrics.summarize(
+                desknx::runtime::Metric::FrameTime);
+            const auto renderRolling=gRuntimeMetrics.summarize(
+                desknx::runtime::Metric::RenderTime);
+            const auto inputRolling=gRuntimeMetrics.summarize(
+                desknx::runtime::Metric::InputLatency);
+            const auto presentRolling=gRuntimeMetrics.summarize(
+                desknx::runtime::Metric::PresentWait);
+            const auto switchRolling=gRuntimeMetrics.summarize(
+                desknx::runtime::Metric::WorkspaceSwitch);
+            desknx::diag::Write("runtime","rolling_metrics",
+                "frame_p95_ms=%.3f render_p95_ms=%.3f input_p95_ms=%.3f present_p95_ms=%.3f workspace_p95_ms=%.3f frame_max_ms=%.3f render_max_ms=%.3f input_max_ms=%.3f present_max_ms=%.3f workspace_max_ms=%.3f",
+                frameRolling.p95Ms,renderRolling.p95Ms,inputRolling.p95Ms,
+                presentRolling.p95Ms,switchRolling.p95Ms,
+                frameRolling.maximumMs,renderRolling.maximumMs,inputRolling.maximumMs,
+                presentRolling.maximumMs,switchRolling.maximumMs);
             const auto& visualStats=gVisualEngine.lastFrameStats();
             desknx::diag::Write("visual","frame_primitives",
                 "fill_rect=%u fill_rect_batches=%u batched_rects=%u rounded_rect=%u rounded_batches=%u outlines=%u gradient_draws=%u gradient_rebuilds=%u texture_draws=%u radial_glows=%u shadow_layers=%u failures=%u",
