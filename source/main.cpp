@@ -2838,7 +2838,7 @@ void drawScreen() {
             const auto& addAction=detailsPanel.primaryAction;
             roundRect(addAction.x,addAction.y,addAction.width,addAction.height,
                 12,Color{49,119,199,255});
-            text("A  ADD TO WORKSPACE",addAction.x+21,addAction.y+15,1,WHITE,mx+mw-30);
+            text("A  ADD TO WORKSPACE",addAction.x+31,addAction.y+15,1,WHITE,mx+mw-30);
         }
         const std::string counts=std::to_string(catalogueGameCountNow)+" GAMES  /  "+
             std::to_string(catalogueNroCountNow)+" HOMEBREW  /  "+
