@@ -8,7 +8,8 @@ The component layer centralizes presentation without moving input handling or ap
 
 - **Surface:** theme-token fill, true rounded outline and optional three-layer low-alpha shadow.
 - **Widget surface:** shared surface, top accent rail and optional cached radial glow when focused.
-- **Artwork tile:** shared elevation/surface and a cached bottom-up gradient scrim. It receives already-measured bounds and does not own game selection or hit testing.
+- **Artwork tile:** one renderer for desktop tiles and library cards. It owns cover/contain/stretch destination calculation, clip save/restore, rounded-corner masking, cached bottom-up title scrim and badge shells. The caller still owns title shaping, data text and hit testing.
+- **Modal surface:** common elevated panel and confirmation-dialog shells, with the same token-based radius, edge and shadow behavior as other surfaces.
 - **Button:** Glass, Rail, Minimal, Chip and Solid variants. Active, focused, hovered, pressed and disabled states are resolved by pure presentation rules.
 - **Progress bar:** normalized progress with clamping for NaN, infinities and values outside 0..1.
 - **Divider:** semantic one-pixel separator.
@@ -32,7 +33,7 @@ The component layer centralizes presentation without moving input handling or ap
 
 ## Modal safety
 
-Modal backdrops are composited on the normal window target. This layer must not allocate or switch SDL render-target textures for ordinary windows. Z-order and keyboard/touch ownership remain with SurfaceManager and the existing controller.
+Modal backdrops are composited on the normal logical window target. The scrim does not switch render targets, alter the renderer viewport or scale, or allocate textures; it temporarily saves/restores only draw color, blend mode and clip state. All active surfaces draw in registered back-to-front order. Only the top input-owning surface receives controller/touch actions, so a parent remains visible beneath a child modal without stealing focus.
 
 ## Theme compatibility
 
@@ -40,4 +41,4 @@ Modal backdrops are composited on the normal window target. This layer must not 
 
 ## Tests
 
-Host tests cover token normalization, pure button-state resolution, rounded geometry, coalesced persistence scheduling and tile label layout. SDL renderer integration is covered by the native NRO/HOME applet build and still requires physical-console visual validation.
+Host tests cover token normalization, pure button-state resolution, rounded geometry, cover/contain/stretch destination math, library and desktop title-strip sizing, modal stack visibility/focus and coalesced persistence scheduling. SDL renderer integration is covered by the native NRO/HOME applet build and still requires physical-console visual validation.
