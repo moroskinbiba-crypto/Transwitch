@@ -4540,41 +4540,57 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const auto& entries=recentGames;
             widgetHeader(desknx::ui::IconId::Recent,"RECENT GAMES",r.y+9);
             if(compact) {
-                if(entries.empty())text("NO GAMES YET",left,r.y+50,1,WHITE,right);
-                else recentGameLine(0,r.y+42,26);
-            } else if(wide&&config.style==1&&dataB) {
-                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
+                if(entries.empty())text(languageRussian?"ПОКА НЕТ ИГР":"NO GAMES YET",left,r.y+50,1,WHITE,right);
                 else {
-                    const int count=std::min<int>(
-                        std::min<int>(config.itemCount,t.w>=3?4:2),
-                        static_cast<int>(entries.size()));
-                    const int cellWidth=std::max(1,innerWidth/std::max(1,count));
-                    for(int i=0;i<count;++i) {
-                        const int x=left+i*cellWidth;
-                        const auto& entry=entries[static_cast<std::size_t>(i)];
-                        Tile game{Kind::Game,entry.title,entry.data,0,0,1,1,i};
-                        drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+30,42);
-                        text(entry.title,x+2,r.y+78,1,WHITE,x+cellWidth-2);
-                    }
+                    recentGameLine(0,r.y+42,26);
+                    label(std::to_string(entries.size())+
+                        (languageRussian?" НЕДАВНИХ":" RECENT"),r.y+r.h-18);
                 }
             } else if(wide) {
-                if(entries.empty())text("LAUNCH A GAME TO START",left,r.y+48,1,MUTED,right);
+                if(entries.empty())text(languageRussian?"ЗАПУСТИТЕ ИГРУ":"LAUNCH A GAME TO START",
+                    left,r.y+48,1,MUTED,right);
                 else {
-                    const size_t count=std::min<std::size_t>(
-                        config.style==2?1:(dataA?config.itemCount:1),
-                        std::min<std::size_t>(2,entries.size()));
-                    for(size_t i=0;i<count;++i)
-                        recentGameLine(i,r.y+32+static_cast<int>(i)*(config.style==2?0:35),
-                            config.style==2?32:25);
+                    const int count=std::min<int>(
+                        metrics.visibleItems(config.itemCount),
+                        static_cast<int>(entries.size()));
+                    const int gap=6;
+                    const int cellWidth=std::max(1,(innerWidth-gap*(count-1))/count);
+                    const int iconSize=banner2?26:30;
+                    for(int i=0;i<count;++i) {
+                        const int x=left+i*(cellWidth+gap);
+                        const auto& entry=entries[static_cast<std::size_t>(i)];
+                        Tile game{Kind::Game,entry.title,entry.data,0,0,1,1,i};
+                        if(dataB)drawTileIcon(game,x+std::max(0,(cellWidth-iconSize)/2),
+                                              r.y+29,iconSize);
+                        text(entry.title,x+2,r.y+66,1,WHITE,x+cellWidth-2);
+                    }
                 }
             } else {
-                if(entries.empty())text("NO GAMES YET",left,r.y+86,2,WHITE,right);
+                if(entries.empty())text(languageRussian?"НЕТ НЕДАВНИХ ИГР":"NO RECENT GAMES",
+                    left,bodyTop+12,1,WHITE,right);
                 else {
-                    const size_t count=std::min<std::size_t>(config.itemCount,entries.size());
-                    for(size_t i=0;i<count;++i)
-                        recentGameLine(i,r.y+50+static_cast<int>(i)*42,32);
+                    const int count=std::min<int>(
+                        metrics.visibleItems(config.itemCount),
+                        static_cast<int>(entries.size()));
+                    const int columns=metrics.gridColumns;
+                    const int rows=(count+columns-1)/columns;
+                    const int gap=6;
+                    const int cellW=std::max(1,(right-left-gap*(columns-1))/columns);
+                    const int cellH=std::max(30,(bottom-bodyTop-gap*(rows-1))/rows);
+                    for(int i=0;i<count;++i) {
+                        const int col=i%columns,row=i/columns;
+                        const int x=left+col*(cellW+gap);
+                        const int y=bodyTop+row*(cellH+gap);
+                        roundRect(x,y,cellW,cellH,8,Color{28,42,59,230});
+                        const auto& entry=entries[static_cast<std::size_t>(i)];
+                        Tile game{Kind::Game,entry.title,entry.data,0,0,1,1,i};
+                        const int iconSize=std::min(30,std::max(20,cellH-18));
+                        if(dataB)drawTileIcon(game,x+6,y+6,iconSize);
+                        text(entry.title,x+(dataB?iconSize+12:7),y+cellH/2-3,
+                             1,WHITE,x+cellW-5);
+                    }
                 }
-                label("LOCAL PLAY HISTORY",r.y+r.h-24);
+                label(languageRussian?"ИСТОРИЯ ЗАПУСКОВ":"LOCAL PLAY HISTORY",r.y+r.h-18);
             }
         } else if(t.kind==Kind::Storage) {
             const uint64_t used=sdTotalBytes>sdFreeBytes?sdTotalBytes-sdFreeBytes:0;
