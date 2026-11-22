@@ -59,6 +59,7 @@ public:
     }
 
     void clearPriority() {
+        if (priorityPath_.empty()) return;
         priorityPath_.clear();
         if (!mutex_) return;
         SDL_LockMutex(mutex_);
