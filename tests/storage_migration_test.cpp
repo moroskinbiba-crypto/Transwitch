@@ -91,16 +91,20 @@ int main() {
     const Step brokenPlan[] = {{1, 1, migrate1to2, validTest}};
     assert(run(legacy, testSchema, brokenPlan, 1, true, migrated).status ==
            RunStatus::InvalidPlan);
+    const std::string preservedOutput = migrated;
     const Step badOutput[] = {{1, 2, invalidTransform, validTest},
                               {2, 3, migrate2to3, validTest}};
     assert(run(legacy, testSchema, badOutput, 2, false, migrated).status ==
            RunStatus::ValidationFailed);
+    assert(migrated == preservedOutput);
     const Step badValidator[] = {{1, 2, migrate1to2, rejectOutput},
                                  {2, 3, migrate2to3, validTest}};
     assert(run(legacy, testSchema, badValidator, 2, false, migrated).status ==
            RunStatus::ValidationFailed);
+    assert(migrated == preservedOutput);
     assert(run(legacy, testSchema, steps, 2, false, migrated, rejectOutput).status ==
            RunStatus::ValidationFailed);
+    assert(migrated == preservedOutput);
 
     // The registry covers the real production schema families without
     // implementing unreviewed transformations.
