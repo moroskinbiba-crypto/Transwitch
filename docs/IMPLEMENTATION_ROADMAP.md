@@ -124,8 +124,11 @@ Successful compilation alone does not close a runtime acceptance item.
       wrapped layouts are cached by text, scale, width and line limit.
 - [x] Add a deterministic 12-new-texture-attempts-per-frame budget, defer overflow
       to subsequent frames, and report cache misses/deferred misses/texture build time.
-- [ ] Extend multiline role rendering to remaining content blocks and profile the
-      deferred-label fallback quality on a physical Switch.
+- [x] Make multiline text blocks use UTF-8 bitmap wrapping when TTF fonts are
+      unavailable or the per-frame texture budget defers the block; keep fallback font
+      consistent across all lines.
+- [ ] Extend semantic multiline role rendering to remaining content blocks and profile
+      fallback legibility at all UI scales on a physical Switch.
 - [x] Add a UTF-8-aware 5x7 Cyrillic bitmap fallback with upper/lowercase mapping,
       including Ё/ё, and host tests for all 33 Russian letters plus malformed UTF-8.
 - [ ] Verify fallback legibility at all UI scales and on-device when both custom and
