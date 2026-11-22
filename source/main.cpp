@@ -19,6 +19,7 @@
 #include "../include/desknx/Layout.hpp"
 #include "../include/desknx/ProductionPersistence.hpp"
 #include "../include/desknx/WorkspaceStorage.hpp"
+#include "../include/desknx/ThemeVisualPolicy.hpp"
 #include "../include/desknx/StorageControlPlane.hpp"
 #include "../include/desknx/StorageMigrations.hpp"
 #include "../include/desknx/SettingsFile.hpp"
@@ -957,7 +958,7 @@ void outline(int x,int y,int w,int h,Color c) {
 }
 
 void applyThemePalette() {
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         BG={7,13,20,255}; THEME_TOP={16,29,42,255}; THEME_BOTTOM={7,16,25,255};
         MUTED={160,177,191,255}; BLUE={101,184,225,255};
         GREEN={125,194,159,255}; RED={232,123,104,255};
@@ -1662,7 +1663,7 @@ void uiButton(int x,int y,int w,int h,int radius,
               bool active=false,bool focused=false,Color accent=BLUE) {
     fill=themeSurfaceTint(fill);
     edge=themeEdgeTint(edge);
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).squareButtons) {
         // SOCOMA uses a strict action grid: flat, square-cornered controls
         // with an explicit active border instead of translucent glass chips.
         radius=std::min(radius,4);
@@ -4312,7 +4313,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             SDL_Color{widgetEdge.r,widgetEdge.g,widgetEdge.b,widgetEdge.a},
             SDL_Color{accent.r,accent.g,accent.b,accent.a},
             selected,surfaceOpacity,UiCornerRadius);
-    } else if(themeIndex==1) {
+    } else if(desknx::ui::ThemePolicyForIndex(themeIndex).flatSurfaces) {
         const int opacity=std::max(0,std::min(255,surfaceOpacity));
         Color flatFill=widgetFill,flatEdge=widgetEdge;
         flatFill.a=static_cast<Uint8>((static_cast<unsigned>(flatFill.a)*opacity)/255u);
@@ -5209,7 +5210,7 @@ void drawScreen() {
         const auto& item=headerTools[i];
         const int x=toolbarButtonX(i);
         const Color activeColor=themeIndex==1?Color{35,75,94,255}:Color{48,82,124,255};
-        if(themeIndex==1||headerStyle==0) {
+        if(desknx::ui::ThemePolicyForIndex(themeIndex).squareButtons||headerStyle==0) {
             uiButton(x,24,ToolbarButtonWidth,48,13,
                 desknx::ui::ButtonVariant::Glass,
                 item.active?activeColor:Color{37,47,62,230},
@@ -5276,7 +5277,7 @@ void drawScreen() {
         softCard(56,96,1168,454,Color{25,35,49,186},Color{255,255,255,30});
     }
     Workspace& d=desks[static_cast<size_t>(deskIndex)];
-    if(themeIndex==1) {
+    if(desknx::ui::ThemePolicyForIndex(themeIndex).persistentWorkspaceGrid) {
         text("WORKSPACE",76,107,1,BLUE,210);
         text(d.name,76,124,2,WHITE,310);
         text(std::to_string(d.tiles.size())+" ITEMS",1060,112,1,MUTED,1208);
