@@ -20,6 +20,15 @@ int main() {
     assert(body.fontScale==caption.fontScale);
     assert(caption.fontScale==metadata.fontScale);
 
+    // Semantic roles must preserve the established visual scale used before
+    // the migration. This prevents a role rename from silently resizing screens.
+    assert(display.fontScale==5);
+    assert(heading.fontScale==3);
+    assert(subheading.fontScale==2);
+    assert(body.fontScale==1);
+    assert(caption.fontScale==1);
+    assert(metadata.fontScale==1);
+
     assert(display.lineHeight>=TypographyFontPixelSize(TextRole::Display));
     assert(heading.lineHeight>=TypographyFontPixelSize(TextRole::Heading));
     assert(subheading.lineHeight>=TypographyFontPixelSize(TextRole::Subheading));
