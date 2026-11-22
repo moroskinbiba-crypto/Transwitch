@@ -48,6 +48,31 @@ struct WritePlan {
     int failAt{0};
 };
 
+struct RenamePlan {
+    int calls{0};
+    int failAt{0};
+};
+
+int injectedStat(void*, const char* path, struct stat* result) {
+    return ::stat(path, result);
+}
+
+int injectedRemove(void*, const char* path) {
+    return std::remove(path);
+}
+
+int injectedRename(void* opaque, const char* from, const char* to) {
+    auto* plan = static_cast<RenamePlan*>(opaque);
+    if (!plan)
+        return -1;
+    ++plan->calls;
+    if (plan->calls == plan->failAt) {
+        errno = EIO;
+        return -1;
+    }
+    return std::rename(from, to);
+}
+
 desknx::persist::WriteStatus injectedWriter(
     void* opaque, const char* path, const std::string& bytes) {
     auto* plan = static_cast<WritePlan*>(opaque);
@@ -137,16 +162,46 @@ int main() {
     assert(readFile(paths.layoutBackup) == oldLayout);
     assert(readFile(paths.activeBackup) == oldMarker);
 
-    // Simulate a truncated primary layout after the new generation was saved.
-    // The newest sidecar is bound to the new shape, so it is rejected against
-    // the restored old layout; the previous sidecar matches and is recovered.
+    // Fail the layout publish after the new active marker was already
+    // published. The loader must keep the previous layout and recover the
+    // matching active marker backup instead of combining generations.
+    auto thirdGeneration = edited;
+    thirdGeneration[0].name = "Games generation 3";
+    RenamePlan layoutPublishFailure{0, 4};
+    const safeio::ReplaceOperations replaceOperations{
+        &layoutPublishFailure, injectedStat, injectedRemove, injectedRename
+    };
+    CommitPlan partialCommit{};
+    written = workspace_storage::writeSnapshot(
+        paths, thirdGeneration, 1, commit, &partialCommit,
+        "layout-temp", "layout-publish", &replaceOperations);
+    assert(written.status == persist::WriteStatus::ReplaceFailed);
+    assert(written.activeMarkerPublished);
+    assert(!written.layoutPublished);
+    assert(layoutPublishFailure.calls == 5); // Includes the successful layout rollback.
+
+    workspace_storage::Snapshot partialRecovery{};
+    assert(workspace_storage::loadSnapshot(paths, partialRecovery));
+    assert(partialRecovery.layoutSource == persist::FileSource::Primary);
+    assert(partialRecovery.activeSource == persist::FileSource::Backup);
+    assert(partialRecovery.parsed.workspaces[0].name == "Games edited");
+    assert(partialRecovery.parsed.activeWorkspace == 0);
+
+    // Commit the newer generation normally, producing aligned backups. Then
+    // simulate a truncated primary layout: the newer sidecar is rejected
+    // against the backup layout and the matching previous sidecar is restored.
+    CommitPlan thirdCommit{};
+    written = workspace_storage::writeSnapshot(
+        paths, thirdGeneration, 1, commit, &thirdCommit,
+        "layout-temp", "layout-publish");
+    assert(written.success());
     writeFile(paths.layout, "DESKNX4\ntruncated\n");
     workspace_storage::Snapshot recovered{};
     assert(workspace_storage::loadSnapshot(paths, recovered));
     assert(recovered.layoutSource == persist::FileSource::Backup);
     assert(recovered.activeSource == persist::FileSource::Backup);
-    assert(recovered.parsed.workspaces[0].name == "Games");
-    assert(recovered.parsed.activeWorkspace == 1);
+    assert(recovered.parsed.workspaces[0].name == "Games edited");
+    assert(recovered.parsed.activeWorkspace == 0);
     assert(recovered.parsed.workspaces[1].name == "Homebrew");
 
     // Active-desk changes are marker-only writes: the full tile layout remains
