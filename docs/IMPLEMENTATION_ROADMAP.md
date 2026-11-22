@@ -59,9 +59,23 @@ Successful compilation alone does not close a runtime acceptance item.
 
 ## Stage 3 — Visual Engine 2.0
 
-- [ ] Complete tile, window, modal, button, motion, typography, and shared-component
-      systems; retain the existing 10 px tile corner target.
-- [ ] Fix and regression-test white-screen/window compositing before adding polish.
+### Audit completed
+- [x] Record the current renderer structure and the main window/composition risks in
+      `docs/VISUAL_ENGINE_2_AUDIT.md`.
+
+### Still open
+- [ ] Introduce one authoritative modal/layer state so rendering and input dispatch use
+      identical precedence; eliminate accidental simultaneous modal visibility.
+- [ ] Extract shared ModalSurface, Dialog, SidePanel, ContextMenu and ConfirmationDialog
+      components from the current hand-drawn window blocks.
+- [ ] Establish frame/render-state boundaries (clip rect, blend mode, texture modulation)
+      and add regression checks for full-frame recovery after every modal/window path.
+- [ ] Reproduce and fix the known white-screen/window compositing issue before polishing.
+- [ ] Complete shared button, badge, toggle, field, card and indicator primitives.
+- [ ] Add semantic typography roles and consistent wrapping, line height and font fallback.
+- [ ] Introduce a single motion controller with reduced-motion / low-performance modes;
+      no shared transition system was found in the audited renderer path.
+- [ ] Preserve the 10 px tile corner target and cover/title overlay behaviour.
 
 ## Stage 4 — Widget System 2.0
 
