@@ -52,6 +52,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/coalesced_layout_save_scheduler_test.cpp -o /tmp/desknx-coalesced-layout-save-test
           /tmp/desknx-coalesced-layout-save-test
 
+      - name: Test constant-time active workspace marker serialization
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/active_workspace_marker_test.cpp source/Layout.cpp -o /tmp/desknx-active-workspace-marker-test
+          /tmp/desknx-active-workspace-marker-test
+
       - name: Test game tile visual layout rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/tile_visual_rules_test.cpp -o /tmp/desknx-tile-visual-rules-test
