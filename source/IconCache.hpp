@@ -44,8 +44,6 @@ public:
         if (!mutex_) return;
         SDL_LockMutex(mutex_);
         ++prefetchGeneration_;
-        // A promotion belongs only to the workspace that requested it.
-        promotedPrefetchKeys_.clear();
         for (auto it=requests_.begin();it!=requests_.end();) {
             if (it->prefetched) {
                 pendingKeys_.erase(it->key);
@@ -99,8 +97,6 @@ public:
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
-            inFlightPrefetchKeys_.clear();
-            promotedPrefetchKeys_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {

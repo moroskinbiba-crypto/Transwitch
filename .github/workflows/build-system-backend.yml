@@ -66,6 +66,16 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/model_test.cpp source/Layout.cpp source/catalog_view.cpp -o /tmp/desknx-model-test
           /tmp/desknx-model-test
 
+      - name: Test bounded runtime performance metrics
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/runtime_metrics_test.cpp -o /tmp/desknx-runtime-metrics-test
+          /tmp/desknx-runtime-metrics-test
+
+      - name: Test artwork request priority policy
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/artwork_request_policy_test.cpp -o /tmp/desknx-artwork-priority-test
+          /tmp/desknx-artwork-priority-test
+
       - name: Test Nextendo presence snapshot and expiry rules
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/nextendo_players_test.cpp -o /tmp/desknx-nextendo-test
@@ -80,6 +90,11 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror tests/protocol_rules_test.cpp -o /tmp/desknx-protocol-rules-test
           /tmp/desknx-protocol-rules-test
+
+      - name: Install host zlib headers for NACP normalization test
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends zlib1g-dev
 
       - name: Test compressed NACP title normalization
         run: |
