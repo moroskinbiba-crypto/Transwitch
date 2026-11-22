@@ -26,10 +26,21 @@ public:
         std::size_t queuedRequests{0};
         std::size_t decodedImages{0};
         bool workerRunning{false};
+        std::uint32_t lastFrameDecoded{0};
+        std::uint32_t lastFrameUploads{0};
+        std::uint32_t lastFrameUploadFailures{0};
+        std::uint32_t lastFrameEvictions{0};
+        std::uint32_t lastClearTextures{0};
+        double lastFrameDecodeMs{0.0};
+        double lastFrameQueueWaitMs{0.0};
+        double lastFrameUploadMs{0.0};
+        double lastFrameTextureDestroyMs{0.0};
+        double lastClearMs{0.0};
     };
 
     void setRenderer(SDL_Renderer* renderer) {
         if (renderer_ == renderer) return;
+        performanceFrequency_ = SDL_GetPerformanceFrequency();
         clearTextures();
         renderer_ = renderer;
         if (renderer_ && !ensureWorker())
@@ -64,6 +75,8 @@ public:
     // Called once per rendered frame. It performs only bounded texture uploads;
     // filesystem access and image decoding never happen here.
     void beginFrame() {
+        lastFrameMetrics_ = frameMetrics_;
+        frameMetrics_ = FrameMetrics{};
         if (!renderer_ || !mutex_) return;
         const Uint32 now = SDL_GetTicks();
         if (lastPruneTick_ == 0 || now - lastPruneTick_ >= CachePruneIntervalMs) {
@@ -82,15 +95,24 @@ public:
         SDL_CondBroadcast(condition_);
         SDL_UnlockMutex(mutex_);
 
-        pending_.erase(decoded.path);
+        frameMetrics_.decodedResults++;
+        frameMetrics_.decodeMs += decoded.decodeMs;
+        frameMetrics_.maximumDecodeMs =
+            std::max(frameMetrics_.maximumDecodeMs, decoded.decodeMs);
+        frameMetrics_.queueWaitMs += decoded.queueWaitMs;
+        frameMetrics_.maximumQueueWaitMs =
+            std::max(frameMetrics_.maximumQueueWaitMs, decoded.queueWaitMs);
+
         if (!decoded.success || decoded.rgba.empty() ||
             decoded.width <= 0 || decoded.height <= 0) {
+            pending_.erase(decoded.path);
             rememberFailure(decoded.path, now);
             return;
         }
 
         const std::size_t bytes = decoded.rgba.size();
         if (bytes == 0 || bytes > MaxTextureBytes || !makeRoom(bytes)) {
+            pending_.erase(decoded.path);
             rememberFailure(decoded.path, now);
             return;
         }
@@ -102,9 +124,17 @@ public:
             rememberFailure(decoded.path, now);
             return;
         }
+        const Uint64 uploadStarted = SDL_GetPerformanceCounter();
         SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
         SDL_FreeSurface(surface);
+        const double uploadMs = elapsedMs(
+            uploadStarted, SDL_GetPerformanceCounter());
+        frameMetrics_.uploadMs += uploadMs;
+        frameMetrics_.maximumUploadMs =
+            std::max(frameMetrics_.maximumUploadMs, uploadMs);
         if (!texture) {
+            ++frameMetrics_.uploadFailures;
+            pending_.erase(decoded.path);
             rememberFailure(decoded.path, now);
             return;
         }
@@ -114,12 +144,24 @@ public:
             decoded.width, decoded.height, ++clock_, now, bytes});
         textureBytes_ += bytes;
         failedUntil_.erase(entries_.back().path);
+        pending_.erase(entries_.back().path);
+        ++frameMetrics_.uploads;
     }
 
     Stats stats() const {
         Stats result;
         result.residentTextures = entries_.size();
         result.textureBytes = textureBytes_;
+        result.lastFrameDecoded = lastFrameMetrics_.decodedResults;
+        result.lastFrameUploads = lastFrameMetrics_.uploads;
+        result.lastFrameUploadFailures = lastFrameMetrics_.uploadFailures;
+        result.lastFrameEvictions = lastFrameMetrics_.evictions;
+        result.lastClearTextures = lastClearTextures_;
+        result.lastFrameDecodeMs = lastFrameMetrics_.maximumDecodeMs;
+        result.lastFrameQueueWaitMs = lastFrameMetrics_.maximumQueueWaitMs;
+        result.lastFrameUploadMs = lastFrameMetrics_.maximumUploadMs;
+        result.lastFrameTextureDestroyMs = lastFrameMetrics_.textureDestroyMs;
+        result.lastClearMs = lastClearMs_;
         if (mutex_) {
             SDL_LockMutex(mutex_);
             result.queuedRequests = requests_.size();
@@ -162,6 +204,7 @@ public:
 private:
     struct Request {
         std::string path;
+        Uint64 enqueuedAt{0};
     };
 
     struct Decoded {
@@ -169,7 +212,23 @@ private:
         int width{0};
         int height{0};
         bool success{false};
+        double decodeMs{0.0};
+        double queueWaitMs{0.0};
         std::vector<Uint8> rgba;
+    };
+
+    struct FrameMetrics {
+        std::uint32_t decodedResults{0};
+        std::uint32_t uploads{0};
+        std::uint32_t uploadFailures{0};
+        std::uint32_t evictions{0};
+        double decodeMs{0.0};
+        double maximumDecodeMs{0.0};
+        double queueWaitMs{0.0};
+        double maximumQueueWaitMs{0.0};
+        double uploadMs{0.0};
+        double maximumUploadMs{0.0};
+        double textureDestroyMs{0.0};
     };
 
     struct Entry {
@@ -230,15 +289,39 @@ private:
     }
 
     void enqueue(const std::string& path) {
-        if (!ensureWorker() || pending_.find(path) != pending_.end()) return;
+        if (!ensureWorker()) return;
         SDL_LockMutex(mutex_);
-        if (stopWorker_ || pending_.find(path) != pending_.end() ||
-            requests_.size() >= MaxQueuedRequests) {
+        if (stopWorker_) {
+            SDL_UnlockMutex(mutex_);
+            return;
+        }
+
+        // The requested path belongs to the workspace currently being drawn.
+        // Drop queued work for abandoned desks and promote the active image.
+        for (auto it = requests_.begin(); it != requests_.end();) {
+            if (it->path == path) {
+                if (it != requests_.begin()) {
+                    Request active = std::move(*it);
+                    requests_.erase(it);
+                    requests_.push_front(std::move(active));
+                }
+                SDL_CondSignal(condition_);
+                SDL_UnlockMutex(mutex_);
+                return;
+            }
+            pending_.erase(it->path);
+            it = requests_.erase(it);
+        }
+        if (pending_.find(path) != pending_.end()) {
+            SDL_UnlockMutex(mutex_);
+            return;
+        }
+        if (requests_.size() >= MaxQueuedRequests) {
             SDL_UnlockMutex(mutex_);
             return;
         }
         pending_.insert(path);
-        requests_.push_back({path});
+        requests_.push_front({path, SDL_GetPerformanceCounter()});
         SDL_CondSignal(condition_);
         SDL_UnlockMutex(mutex_);
     }
@@ -260,7 +343,11 @@ private:
             requests_.pop_front();
             SDL_UnlockMutex(mutex_);
 
+            const Uint64 decodeStarted = SDL_GetPerformanceCounter();
             Decoded decoded = decode(request.path);
+            const Uint64 decodeFinished = SDL_GetPerformanceCounter();
+            decoded.decodeMs = elapsedMs(decodeStarted, decodeFinished);
+            decoded.queueWaitMs = elapsedMs(request.enqueuedAt, decodeStarted);
 
             SDL_LockMutex(mutex_);
             if (!stopWorker_) completed_.push_back(std::move(decoded));
@@ -341,6 +428,20 @@ private:
         return result;
     }
 
+    double elapsedMs(Uint64 start, Uint64 finish) const noexcept {
+        if (performanceFrequency_ == 0 || finish < start) return 0.0;
+        return static_cast<double>(finish - start) * 1000.0 /
+               static_cast<double>(performanceFrequency_);
+    }
+
+    void destroyTexture(SDL_Texture* texture) {
+        if (!texture) return;
+        const Uint64 started = SDL_GetPerformanceCounter();
+        SDL_DestroyTexture(texture);
+        frameMetrics_.textureDestroyMs +=
+            elapsedMs(started, SDL_GetPerformanceCounter());
+    }
+
     void rememberFailure(const std::string& path, Uint32 now) {
         if (failedUntil_.size() >= 32) failedUntil_.erase(failedUntil_.begin());
         failedUntil_[path] = now + FailureRetryMs;
@@ -356,9 +457,10 @@ private:
                     return a.lastUse < b.lastUse;
                 });
             if (oldest == entries_.end()) return false;
-            if (oldest->texture) SDL_DestroyTexture(oldest->texture);
+            destroyTexture(oldest->texture);
             textureBytes_ -= std::min(textureBytes_, oldest->bytes);
             entries_.erase(oldest);
+            ++frameMetrics_.evictions;
         }
         return entries_.size() < MaxEntries &&
             textureBytes_ <= MaxTextureBytes - requiredBytes;
@@ -372,23 +474,36 @@ private:
                 ++it;
                 continue;
             }
-            if (it->texture) SDL_DestroyTexture(it->texture);
+            destroyTexture(it->texture);
             textureBytes_ -= std::min(textureBytes_, it->bytes);
             it = entries_.erase(it);
             ++removed;
+            ++frameMetrics_.evictions;
         }
     }
 
     void clearTextures() {
+        const Uint64 started = SDL_GetPerformanceCounter();
+        std::uint32_t destroyed = 0;
         for (auto& entry : entries_) {
-            if (entry.texture) SDL_DestroyTexture(entry.texture);
+            if (entry.texture) {
+                SDL_DestroyTexture(entry.texture);
+                ++destroyed;
+            }
         }
         entries_.clear();
         textureBytes_ = 0;
         clock_ = 0;
+        lastClearMs_ = elapsedMs(started, SDL_GetPerformanceCounter());
+        lastClearTextures_ = destroyed;
     }
 
     SDL_Renderer* renderer_{nullptr};
+    Uint64 performanceFrequency_{0};
+    double lastClearMs_{0.0};
+    std::uint32_t lastClearTextures_{0};
+    FrameMetrics frameMetrics_{};
+    FrameMetrics lastFrameMetrics_{};
     SDL_mutex* mutex_{nullptr};
     SDL_cond* condition_{nullptr};
     SDL_Thread* worker_{nullptr};
