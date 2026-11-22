@@ -179,9 +179,16 @@ public:
         const model::Tile& tile = workspace->tiles[tileIndex];
         if (tile.x == x && tile.y == y)
             return false;
+        // Keep invalid off-grid drops rejected. Only occupied, otherwise
+        // valid destinations are redirected to the next available origin.
+        if (x < 0 || y < 0 || x >= model::Columns || y >= model::Rows ||
+            tile.w > model::Columns - x || tile.h > model::Rows - y)
+            return false;
         int targetX = x;
         int targetY = y;
-        if (!model::firstFreeFrom(*workspace, tile, x, y, targetX, targetY,
+        if (!model::placeable(*workspace, tile, x, y,
+                              static_cast<int>(tileIndex)) &&
+            !model::firstFreeFrom(*workspace, tile, x, y, targetX, targetY,
                                   static_cast<int>(tileIndex), tile.x, tile.y))
             return false;
 
