@@ -21,7 +21,7 @@ SOCOMA is no longer a recolour of the 0.1 Frosted Glass theme. It has its own su
 - The accent colour remains independently configurable.
 - The patch does not move interaction targets or change controller/touch action routing.
 - Existing saved workspace positions, artwork, widget configuration and desktop order are not migrated or reset.
-- This is a visual-system implementation increment, not a claim that all every settings subpage has been independently art-directed. Dialogs and system panels inherit the new surface/button rules; detailed per-screen composition can continue in later increments.
+- This is a visual-system implementation increment, not a claim that every settings subpage has been independently art-directed. Dialogs and system panels inherit the new surface/button rules; detailed per-screen composition can continue in later increments.
 
 ## Validation
 
