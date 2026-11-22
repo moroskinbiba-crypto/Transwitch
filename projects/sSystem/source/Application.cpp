@@ -2,6 +2,7 @@
 #include <desknx/system/Application.hpp>
 #include <desknx/Protocol.hpp>
 #include <desknx/ApplicationLifecyclePolicy.hpp>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 
