@@ -261,7 +261,7 @@ private:
         bool customFace{false};
     };
 
-    static constexpr size_t CacheLimit = 384;
+    static constexpr size_t CacheLimit = 512;
     static constexpr size_t FitCacheLimit = 512;
     static constexpr std::size_t MaxPendingRasterJobs = 192;
     static constexpr size_t MaxTextBytes = 2048;
