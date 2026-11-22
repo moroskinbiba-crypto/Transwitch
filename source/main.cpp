@@ -616,6 +616,9 @@ const char* auxiliarySaveSlotName(AuxiliarySaveSlot slot) {
         case AuxiliarySaveSlot::History:return "history";
         case AuxiliarySaveSlot::CalendarNotes:return "calendar_notes";
         case AuxiliarySaveSlot::GameNames:return "game_name_overrides";
+        case AuxiliarySaveSlot::SteamGridPreview:return "steamgriddb_preview";
+        case AuxiliarySaveSlot::SteamGridArtwork:return "steamgriddb_artwork";
+        case AuxiliarySaveSlot::GameIcon:return "game_icon";
         default:return "unknown";
     }
 }
@@ -727,6 +730,16 @@ void scheduleAuxiliaryFileSave(AuxiliarySaveSlot slot,
     pendingAuxiliarySaveDue[index]=SDL_GetTicks()+debounceMs;
 }
 
+void scheduleAuxiliaryCommit(AuxiliarySaveSlot slot,const char* operation,
+                             const std::string& invalidateGameData) {
+    AuxiliaryFileSaveJob job;
+    job.commitOnly=true;
+    job.publishCommitOperation=operation?operation:"background-commit";
+    job.failureMessage="STEAMGRIDDB ARTWORK COMMIT FAILED";
+    job.invalidateGameData=invalidateGameData;
+    scheduleAuxiliaryFileSave(slot,std::move(job),0);
+}
+
 void pumpAuxiliarySaves(bool waitForCompletion) {
     for(;;) {
         if(auxiliarySaveThread) {
@@ -740,6 +753,9 @@ void pumpAuxiliarySaves(bool waitForCompletion) {
                     if(!activeAuxiliarySaveBatch->present[i])continue;
                     const auto slot=static_cast<AuxiliarySaveSlot>(i);
                     if(outcome.success[i]) {
+                        if(!activeAuxiliarySaveBatch->jobs[i].invalidateGameData.empty())
+                            gIconCache.invalidate(Kind::Game,
+                                activeAuxiliarySaveBatch->jobs[i].invalidateGameData);
                         desknx::diag::Write("storage","async_file_save_ok",
                             "slot=%s bytes=%zu",auxiliarySaveSlotName(slot),
                             activeAuxiliarySaveBatch->jobs[i].contents.size());
