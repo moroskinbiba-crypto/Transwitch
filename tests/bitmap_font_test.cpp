@@ -1,10 +1,12 @@
 #include "../include/desknx/BitmapFont.hpp"
+#include "../include/desknx/TextLayout.hpp"
 
 #include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <limits>
 
 int main() {
     const std::string alphabet =
@@ -103,12 +105,28 @@ int main() {
     assert(desknx::ui::MeasureBitmapTextWidth("ABC",1)==18);
     assert(desknx::ui::MeasureBitmapTextWidth(u8"Ёж",1)==12);
     assert(desknx::ui::MeasureBitmapTextWidth(u8"Привет",2)==72);
-    assert(desknx::ui::MeasureBitmapTextWidth("A\\tB",1)==30);
-    assert(desknx::ui::MeasureBitmapTextWidth("A\\r\\nB",1)==12);
+    assert(desknx::ui::MeasureBitmapTextWidth("A\tB",1)==30);
+    assert(desknx::ui::MeasureBitmapTextWidth("A\r\nB",1)==12);
     assert(desknx::ui::MeasureBitmapTextWidth("",1)==0);
     assert(desknx::ui::MeasureBitmapTextWidth("ABC",0)==0);
-    const std::string invalidBitmapUtf8{"\\xD0",1};
+    const std::string invalidBitmapUtf8{"\xD0",1};
     assert(desknx::ui::MeasureBitmapTextWidth(invalidBitmapUtf8,1)==6);
+
+    const auto bitmapMeasure=[](const std::string& value) {
+        return desknx::ui::MeasureBitmapTextWidth(value,1);
+    };
+    const auto wrappedRussian=desknx::ui::WrapUtf8Text(
+        u8"Привет мир",36,2,bitmapMeasure);
+    assert(wrappedRussian.size()==2);
+    assert(wrappedRussian[0]==u8"Привет");
+    assert(wrappedRussian[1]==u8"мир");
+    const auto truncatedRussian=desknx::ui::WrapUtf8Text(
+        u8"Привет мир снова",36,2,bitmapMeasure);
+    assert(truncatedRussian.size()==2);
+    assert(truncatedRussian[0]==u8"Привет");
+    assert(truncatedRussian[1]==u8"мир…");
+    assert(desknx::ui::MeasureBitmapTextWidth(
+        "A",std::numeric_limits<int>::max())==std::numeric_limits<int>::max());
 
     return 0;
 }
