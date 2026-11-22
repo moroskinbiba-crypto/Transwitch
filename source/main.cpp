@@ -4554,10 +4554,12 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
         } else if(t.kind==Kind::QuickSettings) {
             if(!quickSettingsSnapshotLoaded)refreshQuickSettingsSnapshot(true);
             label(languageRussian?"БЫСТРЫЕ НАСТРОЙКИ":"QUICK SETTINGS",metrics.headerY);
-            const std::string brightnessValue=quickBrightnessAvailable
-                ?std::to_string(static_cast<int>(std::lround(
-                    std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%"
-                :"N/A";
+            const std::string brightnessValue=!quickSettingsSnapshotLoaded
+                ?(languageRussian?"ЗАГРУЗКА...":"LOADING...")
+                :(quickBrightnessAvailable
+                    ?std::to_string(static_cast<int>(std::lround(
+                        std::max(0.0f,std::min(1.0f,quickBrightness))*100.0f)))+"%"
+                    :"N/A");
             const std::string networkValue=quickInternetConnected?(languageRussian?"ОНЛАЙН":"ONLINE"):
                 (quickAirplaneMode?(languageRussian?"АВИАРЕЖИМ":"AIRPLANE"):
                     (quickWifiEnabled?(languageRussian?"ПОДКЛЮЧЕНИЕ":"CONNECTING"):
@@ -5971,7 +5973,10 @@ void drawScreen() {
         refreshQuickSettingsSnapshot();
         softCard(292,72,696,576,Color{16,26,40,255},Color{135,174,216,74});
         text(languageRussian?"БЫСТРЫЕ НАСТРОЙКИ":"QUICK SETTINGS",332,102,3,WHITE,920);
-        text(quickNetworkStatus,334,148,2,
+        text(!quickSettingsSnapshotLoaded
+                ?(languageRussian?"ЧТЕНИЕ СИСТЕМНОГО СОСТОЯНИЯ...":"READING SYSTEM STATUS...")
+                :quickNetworkStatus,
+            334,148,2,
             quickInternetConnected?GREEN:(quickAirplaneMode?Color{255,190,96,255}:MUTED),934);
         roundRect(878,94,84,36,10,Color{48,59,76,255});
         text(languageRussian?"B НАЗАД":"B BACK",891,105,1,WHITE,950);
@@ -6883,6 +6888,7 @@ void activateWidget(const Tile& t) {
             else setStatus(clockText(true),3000);
             break;
         case Kind::System:
+            refreshSystemMonitor();
             diagnosticsOpen=true;
             refreshDiagnosticsSnapshot(true);
             break;
