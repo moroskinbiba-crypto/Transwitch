@@ -4682,7 +4682,7 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                     (dataA?"% FREE":"% USED"),right-88,r.y+49,1,MUTED,right);
                 if(dataB)progress(r.y+83,percent);
                 else if(dataA)label(totalText,r.y+83);
-                if(banner3)label(usedText+"  /  "+totalText,r.y+108);
+                if(banner3)label(std::string(usedText)+"  /  "+totalText,r.y+108);
             } else if(dashboard) {
                 if(storageStatsAvailable) {
                     text(freeSpaceText()+" FREE",left,r.y+42,4,WHITE,right);
