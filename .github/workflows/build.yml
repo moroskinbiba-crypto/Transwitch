@@ -241,6 +241,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
 
+      - name: Test production persistence recovery and injected failures
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include tests/production_persistence_test.cpp source/Layout.cpp -o /tmp/desknx-production-persistence-test
+          /tmp/desknx-production-persistence-test
+
       - name: Validate package runtime assets
         run: python3 scripts/check-svg-assets.py assets/icons
 

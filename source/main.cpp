@@ -17,6 +17,9 @@
 #include "../include/desknx/ShutdownPersistence.hpp"
 #include "../include/desknx/CoalescedLayoutSaveScheduler.hpp"
 #include "../include/desknx/Layout.hpp"
+#include "../include/desknx/ProductionPersistence.hpp"
+#include "../include/desknx/SettingsFile.hpp"
+#include "../include/desknx/LaunchHistory.hpp"
 #include "catalog.hpp"
 #include "slaunch_applications.hpp"
 #include "../include/desknx/Diagnostics.hpp"
@@ -325,7 +328,7 @@ SDL_Texture* steamGridDbPreviewTexture=nullptr;
 uint64_t steamGridDbPreviewRevision=UINT64_MAX;
 SteamGridDbPickerView steamGridDbPickerView=SteamGridDbPickerView::Matches;
 VectorIconCache gVectorIconCache;
-struct HistoryEntry { Kind kind{Kind::Game}; std::string title, data; };
+using HistoryEntry = desknx::launch_history::Entry;
 std::vector<HistoryEntry> recentLaunches;
 std::map<std::string,std::string> calendarNotes;
 std::vector<std::string> favoriteTitleIds;
@@ -618,6 +621,10 @@ bool commitSdCard(const char* operation) {
     return true;
 }
 
+bool commitSdCardForPersistence(void*, const char* operation) {
+    return commitSdCard(operation);
+}
+
 const char* auxiliarySaveSlotName(AuxiliarySaveSlot slot) {
     switch(slot) {
         case AuxiliarySaveSlot::Favorites:return "favorites";
@@ -650,6 +657,24 @@ bool writeAuxiliaryFileSnapshot(const AuxiliaryFileSaveJob& job,
     mkdir("sdmc:/switch",0777);
     mkdir(CFG_DIR,0777);
     if(!job.directory.empty())mkdir(job.directory.c_str(),0777);
+
+    // The ordinary snapshot path, including launch history, uses the same
+    // tested transaction function as settings, layouts and workspace markers.
+    if(!job.copySourceToTemporary) {
+        const auto status=desknx::persist::writeAtomically(
+            job.temporaryPath.c_str(),job.targetPath.c_str(),job.backupPath.c_str(),
+            job.contents,commitSdCardForPersistence,nullptr,
+            job.tempCommitOperation.c_str(),job.publishCommitOperation.c_str(),
+            true,true);
+        if(status!=desknx::persist::WriteStatus::Success) {
+            const char* message=job.failureMessage.empty()
+                ?"BACKGROUND SAVE FAILED":job.failureMessage.c_str();
+            return fail(message);
+        }
+        for(const auto& obsolete:job.obsoletePaths)
+            if(obsolete!=job.targetPath)std::remove(obsolete.c_str());
+        return true;
+    }
 
     std::ofstream out(job.temporaryPath,std::ios::binary|std::ios::trunc);
     if(!out)return fail(job.failureMessage.empty()
@@ -962,6 +987,11 @@ bool isAllowedMediaPath(const std::string& path,MediaPickerType type) {
         ?hasExtension(path,fontExts,3):hasExtension(path,imageExts,3);
 }
 
+bool validateLauncherSettingsSnapshot(const std::string& contents,void*) {
+    std::vector<desknx::settings_file::Entry> entries;
+    return desknx::settings_file::parse(contents,entries);
+}
+
 void loadLauncherSettings() {
     gMotionController.setMode(desknx::ui::MotionMode::Reduced);
     if(!sdMounted){motionEffects=false;applyThemePalette();return;}
@@ -972,40 +1002,31 @@ void loadLauncherSettings() {
     surfaceOpacity=255;
     selectionStyle=0;
     motionEffects=false;
-    std::string selectedPath;
-    const char* candidates[]={SETTINGS_FILE, SETTINGS_BAK};
-    for(const char* candidate:candidates) {
-        struct stat st{};
-        if(stat(candidate,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<=0||st.st_size>8192)
-            continue;
-        std::ifstream in(candidate,std::ios::binary);
-        std::string header;
-        if(in && std::getline(in,header) && (header=="DESKNXSET1"||header=="DESKNXSET2")) {
-            selectedPath=candidate;
-            break;
-        }
-    }
-    if(selectedPath.empty()) {
+
+    std::string serialized;
+    const auto source=desknx::persist::readValidatedWithBackup(
+        SETTINGS_FILE,SETTINGS_BAK,desknx::settings_file::MaxBytes,
+        validateLauncherSettingsSnapshot,nullptr,serialized);
+    if(source==desknx::persist::FileSource::None) {
         applyThemePalette();
         return;
     }
-    if(selectedPath!=SETTINGS_FILE) {
-        desknx::diag::Write("settings","backup_restored","path=%s",selectedPath.c_str());
+    if(source==desknx::persist::FileSource::Backup) {
+        desknx::diag::Write("settings","backup_restored","path=%s",SETTINGS_BAK);
         setStatus("APPEARANCE SETTINGS RESTORED FROM BACKUP",4000);
     }
-    std::ifstream in(selectedPath,std::ios::binary);
-    std::string line;
-    if(!std::getline(in,line)||(line!="DESKNXSET1"&&line!="DESKNXSET2")) {
+
+    std::vector<desknx::settings_file::Entry> settingsEntries;
+    if(!desknx::settings_file::parse(serialized,settingsEntries)) {
         applyThemePalette();
         return;
     }
-    const bool settingsV2=line=="DESKNXSET2";
+    const bool settingsV2=serialized.compare(0,10,"DESKNXSET2")==0;
     bool modernSteamGridKeySeen=false;
     bool motionModeSeen=false;
-    while(std::getline(in,line)) {
-        const size_t eq=line.find('=');
-        if(eq==std::string::npos)continue;
-        const std::string key=line.substr(0,eq),value=line.substr(eq+1);
+    for(const auto& setting:settingsEntries) {
+        const std::string& key=setting.key;
+        const std::string& value=setting.value;
         if(key=="theme") {
             char* end=nullptr;
             const long valueLong=std::strtol(value.c_str(),&end,10);
@@ -1106,16 +1127,27 @@ std::string serializeLauncherSettingsSnapshot() {
 LauncherSettingsSaveStatus writeLauncherSettingsSnapshot(const std::string& contents) {
     if(!sdMounted)return LauncherSettingsSaveStatus::SdUnavailable;
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir(MEDIA_ROOT,0777);
-    std::ofstream out(SETTINGS_TMP,std::ios::binary|std::ios::trunc);
-    if(!out)return LauncherSettingsSaveStatus::OpenFailed;
-    out.write(contents.data(),static_cast<std::streamsize>(contents.size()));
-    out.flush();const bool good=out.good();out.close();
-    if(!good){std::remove(SETTINGS_TMP);return LauncherSettingsSaveStatus::WriteFailed;}
-    if(!commitSdCard("settings-temp")){std::remove(SETTINGS_TMP);return LauncherSettingsSaveStatus::TempCommitFailed;}
-    const auto rc=desknx::safeio::replaceFilePreservingOnFailure(SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,true);
-    if(rc!=desknx::safeio::ReplaceStatus::Success){std::remove(SETTINGS_TMP);return LauncherSettingsSaveStatus::PublishFailed;}
-    if(!commitSdCard("settings-publish"))return LauncherSettingsSaveStatus::FinalCommitFailed;
-    return LauncherSettingsSaveStatus::Success;
+    const auto status=desknx::persist::writeAtomically(
+        SETTINGS_TMP,SETTINGS_FILE,SETTINGS_BAK,contents,
+        commitSdCardForPersistence,nullptr,"settings-temp","settings-publish",
+        true,true);
+    switch(status) {
+        case desknx::persist::WriteStatus::Success:
+            return LauncherSettingsSaveStatus::Success;
+        case desknx::persist::WriteStatus::OpenFailed:
+            return LauncherSettingsSaveStatus::OpenFailed;
+        case desknx::persist::WriteStatus::WriteFailed:
+            return LauncherSettingsSaveStatus::WriteFailed;
+        case desknx::persist::WriteStatus::TempCommitFailed:
+            return LauncherSettingsSaveStatus::TempCommitFailed;
+        case desknx::persist::WriteStatus::PublishCommitFailed:
+            return LauncherSettingsSaveStatus::FinalCommitFailed;
+        case desknx::persist::WriteStatus::ReplaceFailed:
+        case desknx::persist::WriteStatus::RollbackFailed:
+        case desknx::persist::WriteStatus::InvalidArgument:
+            return LauncherSettingsSaveStatus::PublishFailed;
+    }
+    return LauncherSettingsSaveStatus::PublishFailed;
 }
 void reportLauncherSettingsSaveFailure(LauncherSettingsSaveStatus status) {
     switch(status) {
@@ -2790,60 +2822,48 @@ bool isSafeNroPath(const std::string& path) {
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
-bool readHistoryFile(const char* path,std::vector<HistoryEntry>& output) {
-    struct stat historyStat{};
-    constexpr size_t MaxHistoryBytes=64*1024;
-    if(!path||stat(path,&historyStat)!=0||!S_ISREG(historyStat.st_mode)||
-       historyStat.st_size<=0||static_cast<uint64_t>(historyStat.st_size)>MaxHistoryBytes)
-        return false;
-    std::ifstream input(path,std::ios::binary);
-    std::string line;
-    if(!input||!std::getline(input,line)||line.size()>32||line!="DESKNXH1")
-        return false;
-    std::vector<HistoryEntry> parsed;
-    while(std::getline(input,line)&&parsed.size()<10) {
-        if(line.size()>2048)continue;
-        auto fields=splitTabs(line);
-        if(fields.size()!=3||fields[0].size()>16||fields[1].empty()||
-           fields[1].size()>512||fields[2].empty()||fields[2].size()>512)continue;
-        Kind kind=parseKind(fields[0]);
-        if(kind!=Kind::Game&&kind!=Kind::Nro)continue;
-        if(kind==Kind::Game&&!desknx::model::isTitleId(fields[2]))continue;
-        if(kind==Kind::Nro&&!isSafeNroPath(fields[2]))continue;
-        parsed.push_back({kind,fields[1],fields[2]});
-    }
-    if(input.bad())return false;
-    output=std::move(parsed);
-    return true;
+bool validateHistoryNroPathForPersistence(const std::string& path,void*) {
+    return isSafeNroPath(path);
+}
+
+bool validateHistorySnapshot(const std::string& contents,void* context) {
+    auto* parsed=static_cast<std::vector<HistoryEntry>*>(context);
+    return parsed&&desknx::launch_history::parse(
+        contents,*parsed,validateHistoryNroPathForPersistence,nullptr);
 }
 
 void loadHistory() {
     if(!sdMounted)return;
     std::vector<HistoryEntry> loaded;
-    if(readHistoryFile(HISTORY_FILE,loaded)) {
-        recentLaunches=std::move(loaded);
-        desknx::diag::Write("history","loaded","path=%s entries=%zu",HISTORY_FILE,recentLaunches.size());
-    } else if(readHistoryFile(HISTORY_BAK_FILE,loaded)) {
-        recentLaunches=std::move(loaded);
-        desknx::diag::Write("history","backup_restored","path=%s entries=%zu",HISTORY_BAK_FILE,recentLaunches.size());
-        setStatus("RECENT HISTORY RESTORED FROM BACKUP",4000);
-    } else {
+    std::string serialized;
+    const auto source=desknx::persist::readValidatedWithBackup(
+        HISTORY_FILE,HISTORY_BAK_FILE,desknx::launch_history::MaxFileBytes,
+        validateHistorySnapshot,&loaded,serialized);
+    if(source==desknx::persist::FileSource::None) {
         desknx::diag::Write("history","load_empty","primary=%s backup=%s",
             HISTORY_FILE,HISTORY_BAK_FILE);
         return;
     }
+    recentLaunches=std::move(loaded);
+    if(source==desknx::persist::FileSource::Backup) {
+        desknx::diag::Write("history","backup_restored","path=%s entries=%zu",
+            HISTORY_BAK_FILE,recentLaunches.size());
+        setStatus("RECENT HISTORY RESTORED FROM BACKUP",4000);
+    } else {
+        desknx::diag::Write("history","loaded","path=%s entries=%zu",
+            HISTORY_FILE,recentLaunches.size());
+    }
     if(!recentLaunches.empty())lastLaunched=recentLaunches.front().title;
 }
+
 void saveHistory() {
     if(!sdMounted)return;
-    std::ostringstream snapshot;
-    snapshot<<"DESKNXH1\n";
-    for(const auto& entry:recentLaunches)
-        snapshot<<typeCode(entry.kind)<<'\t'<<safeField(entry.title)
-                <<'\t'<<safeField(entry.data)<<'\n';
-
     AuxiliaryFileSaveJob job;
-    job.contents=snapshot.str();
+    job.contents=desknx::launch_history::serialize(recentLaunches);
+    if(job.contents.empty()) {
+        desknx::diag::Write("history","serialize_failed","entries=%zu",recentLaunches.size());
+        return;
+    }
     job.temporaryPath=HISTORY_TMP;
     job.targetPath=HISTORY_FILE;
     job.backupPath=HISTORY_BAK_FILE;
@@ -3203,33 +3223,18 @@ bool saveActiveWorkspaceState() {
             return true;
         }
     }
-    std::ofstream out(ACTIVE_WORKSPACE_TMP,std::ios::binary|std::ios::trunc);
-    if(!out) return false;
-    out.write(state.data(),static_cast<std::streamsize>(state.size()));
-    out.flush();
-    const bool good=out.good();
-    out.close();
-    if(!good) {
-        std::remove(ACTIVE_WORKSPACE_TMP);
-        return false;
-    }
-    // This is a tiny, replaceable navigation marker. Flushing the temp file
-    // to the SD controller and then committing it before rename caused two
-    // expensive synchronous SD commits for every desktop switch. The atomic
-    // replace retains the previous marker as .bak; one commit after publish
-    // makes the new marker durable without blocking the UI twice.
-    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
-        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
-    if(replaceStatus != desknx::safeio::ReplaceStatus::Success)
-        return false;
-    const bool committed=commitSdCard("active-workspace-publish");
-    if(committed) {
-        persistedActiveWorkspaceMarker=state;
-        activeWorkspaceMarkerKnown=true;
-        activeWorkspaceMarkerPending=false;
-        activeWorkspaceMarkerDue=0;
-    }
-    return committed;
+    // Active desk is a small navigation hint: publish atomically, then perform
+    // one SD commit. The previous marker remains in .bak until a later save.
+    const auto status=desknx::persist::writeAtomically(
+        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,state,
+        commitSdCardForPersistence,nullptr,"active-workspace-temp",
+        "active-workspace-publish",false,true);
+    if(status!=desknx::persist::WriteStatus::Success)return false;
+    persistedActiveWorkspaceMarker=state;
+    activeWorkspaceMarkerKnown=true;
+    activeWorkspaceMarkerPending=false;
+    activeWorkspaceMarkerDue=0;
+    return true;
 }
 
 void scheduleActiveWorkspaceSave() {
@@ -3259,42 +3264,45 @@ bool flushActiveWorkspaceSave() {
 
 bool loadActiveWorkspaceState() {
     if(!sdMounted || desks.empty()) return false;
-    const char* candidates[]={ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK};
-    for(std::size_t candidateIndex=0;candidateIndex<2;++candidateIndex) {
-        const char* path=candidates[candidateIndex];
-        struct stat st{};
-        if(stat(path,&st)!=0 || !S_ISREG(st.st_mode) ||
-           st.st_size<=0 || st.st_size>512) continue;
-        std::ifstream in(path,std::ios::binary);
-        if(!in)continue;
-        std::ostringstream contents;
-        contents<<in.rdbuf();
-        if(in.bad())continue;
-        int restored=deskIndex;
-        if(!desknx::layout::parseActiveWorkspaceState(contents.str(),desks,restored))
-            continue;
-        deskIndex=restored;
-        if(candidateIndex==0) {
-            persistedActiveWorkspaceMarker=contents.str();
-            activeWorkspaceMarkerKnown=true;
-        } else {
-            persistedActiveWorkspaceMarker.clear();
-            activeWorkspaceMarkerKnown=false;
-        }
-        activeWorkspaceMarkerPending=false;
-        activeWorkspaceMarkerDue=0;
-        selectedX=selectedY=0;
-        if(candidateIndex!=0) {
-            desknx::diag::Write("layout","active_workspace_backup_restored",
-                "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
-            setStatus("ACTIVE DESKTOP RESTORED FROM BACKUP",4000);
-        } else {
-            desknx::diag::Write("layout","active_workspace_restored",
-                "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
-        }
+    struct RestoreContext {
+        const std::vector<Workspace>* workspaces;
+        int index;
+    } context{&desks,deskIndex};
+    const auto validator=[](const std::string& contents,void* opaque)->bool {
+        auto* restore=static_cast<RestoreContext*>(opaque);
+        if(!restore||!restore->workspaces)return false;
+        int candidate=restore->index;
+        if(!desknx::layout::parseActiveWorkspaceState(
+            contents,*restore->workspaces,candidate))return false;
+        restore->index=candidate;
         return true;
+    };
+    std::string serialized;
+    const auto source=desknx::persist::readValidatedWithBackup(
+        ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,512,
+        validator,&context,serialized);
+    if(source==desknx::persist::FileSource::None)return false;
+
+    deskIndex=context.index;
+    if(source==desknx::persist::FileSource::Primary) {
+        persistedActiveWorkspaceMarker=serialized;
+        activeWorkspaceMarkerKnown=true;
+    } else {
+        persistedActiveWorkspaceMarker.clear();
+        activeWorkspaceMarkerKnown=false;
     }
-    return false;
+    activeWorkspaceMarkerPending=false;
+    activeWorkspaceMarkerDue=0;
+    selectedX=selectedY=0;
+    if(source==desknx::persist::FileSource::Backup) {
+        desknx::diag::Write("layout","active_workspace_backup_restored",
+            "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
+        setStatus("ACTIVE DESKTOP RESTORED FROM BACKUP",4000);
+    } else {
+        desknx::diag::Write("layout","active_workspace_restored",
+            "index=%d name=%s",deskIndex,desks[static_cast<size_t>(deskIndex)].name.c_str());
+    }
+    return true;
 }
 
 bool saveLayout() {
@@ -3335,31 +3343,22 @@ bool saveLayout() {
     }
 
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
-    std::ofstream f(CFG_TMP,std::ios::binary|std::ios::trunc);
-    if(!f){setStatus("SAVE FAILED: SD CARD NOT WRITABLE",3500);return false;}
-    f.write(serialized.data(),static_cast<std::streamsize>(serialized.size()));
-    f.flush();const bool good=f.good();f.close();
-    if(!good){std::remove(CFG_TMP);setStatus("SAVE FAILED: WRITE ERROR",3500);return false;}
-    if(!commitSdCard("layout-temp")) {
-        std::remove(CFG_TMP);
-        setStatus("LAYOUT SD COMMIT FAILED; OLD FILE KEPT",4000);
-        return false;
-    }
-    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
-        CFG_TMP, CFG_FILE, CFG_BAK_FILE, true);
-    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
-        std::remove(CFG_TMP);
-        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed) {
-            layoutSaveBlocked = true;
-            setStatus("LAYOUT RECOVERY NEEDED: KEEP layout.bak", 5000);
+    const auto writeStatus=desknx::persist::writeAtomically(
+        CFG_TMP,CFG_FILE,CFG_BAK_FILE,serialized,
+        commitSdCardForPersistence,nullptr,"layout-temp","layout-publish",
+        true,true);
+    if(writeStatus!=desknx::persist::WriteStatus::Success) {
+        if(writeStatus==desknx::persist::WriteStatus::RollbackFailed||
+           writeStatus==desknx::persist::WriteStatus::PublishCommitFailed) {
+            layoutSaveBlocked=true;
+            setStatus("LAYOUT COMMIT FAILED; KEEP layout.bak",5000);
+        } else if(writeStatus==desknx::persist::WriteStatus::TempCommitFailed) {
+            setStatus("LAYOUT SD COMMIT FAILED; OLD FILE KEPT",4000);
+        } else if(writeStatus==desknx::persist::WriteStatus::ReplaceFailed) {
+            setStatus("SAVE FAILED: RENAME ERROR",3500);
         } else {
-            setStatus("SAVE FAILED: RENAME ERROR", 3500);
+            setStatus("SAVE FAILED: WRITE ERROR",3500);
         }
-        return false;
-    }
-    if(!commitSdCard("layout-publish")) {
-        layoutSaveBlocked = true; // retain layout.bak as the last known-good copy
-        setStatus("LAYOUT COMMIT FAILED; KEEP layout.bak",5000);
         return false;
     }
     persistedLayoutShapeHash=shapeHash;
@@ -3386,35 +3385,22 @@ bool saveLayout() {
 
 namespace {
 bool writeActiveWorkspaceSnapshot(const LayoutSaveJob& job) {
-    if(job.activeWorkspaceState.empty()) return false;
-    if(job.previousMarkerKnown &&
-       job.previousActiveMarker == job.activeWorkspaceState) {
+    if(job.activeWorkspaceState.empty())return false;
+    if(job.previousMarkerKnown&&
+       job.previousActiveMarker==job.activeWorkspaceState) {
         struct stat markerStat{};
-        if(stat(ACTIVE_WORKSPACE_FILE,&markerStat)==0 &&
-           S_ISREG(markerStat.st_mode) &&
+        if(stat(ACTIVE_WORKSPACE_FILE,&markerStat)==0&&
+           S_ISREG(markerStat.st_mode)&&
            markerStat.st_size==static_cast<off_t>(job.activeWorkspaceState.size()))
             return true;
     }
     mkdir("sdmc:/switch",0777);
     mkdir(CFG_DIR,0777);
-    std::ofstream out(ACTIVE_WORKSPACE_TMP,std::ios::binary|std::ios::trunc);
-    if(!out) return false;
-    out.write(job.activeWorkspaceState.data(),
-              static_cast<std::streamsize>(job.activeWorkspaceState.size()));
-    out.flush();
-    const bool good=out.good();
-    out.close();
-    if(!good) {
-        std::remove(ACTIVE_WORKSPACE_TMP);
-        return false;
-    }
-    const auto status=desknx::safeio::replaceFilePreservingOnFailure(
-        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,true);
-    if(status!=desknx::safeio::ReplaceStatus::Success) {
-        std::remove(ACTIVE_WORKSPACE_TMP);
-        return false;
-    }
-    return commitSdCard("active-workspace-async-publish");
+    const auto status=desknx::persist::writeAtomically(
+        ACTIVE_WORKSPACE_TMP,ACTIVE_WORKSPACE_FILE,ACTIVE_WORKSPACE_BAK,
+        job.activeWorkspaceState,commitSdCardForPersistence,nullptr,
+        "active-workspace-temp","active-workspace-async-publish",false,true);
+    return status==desknx::persist::WriteStatus::Success;
 }
 
 int layoutSaveThreadMain(void* context) {
@@ -3479,48 +3465,44 @@ int layoutSaveThreadMain(void* context) {
     if(primaryOk&&job->rewritePrimary) {
         mkdir("sdmc:/switch",0777);
         mkdir(CFG_DIR,0777);
-        std::ofstream out(CFG_TMP,std::ios::binary|std::ios::trunc);
-        if(!out) {
+        const auto writeStatus=desknx::persist::writeAtomically(
+            CFG_TMP,CFG_FILE,CFG_BAK_FILE,job->serializedLayout,
+            commitSdCardForPersistence,nullptr,"layout-async-temp",
+            "layout-async-publish",true,true);
+        if(writeStatus!=desknx::persist::WriteStatus::Success) {
             primaryOk=false;
-            std::snprintf(outcome.message,sizeof(outcome.message),
-                          "SAVE FAILED: SD CARD NOT WRITABLE");
-        } else {
-            out.write(job->serializedLayout.data(),
-                      static_cast<std::streamsize>(job->serializedLayout.size()));
-            out.flush();
-            const bool good=out.good();
-            out.close();
-            if(!good) {
-                std::remove(CFG_TMP);
-                primaryOk=false;
-                std::snprintf(outcome.message,sizeof(outcome.message),
-                              "SAVE FAILED: WRITE ERROR");
-            } else if(!commitSdCard("layout-async-temp")) {
-                std::remove(CFG_TMP);
-                primaryOk=false;
-                std::snprintf(outcome.message,sizeof(outcome.message),
-                              "LAYOUT SD COMMIT FAILED; OLD FILE KEPT");
-            } else {
-                const auto replaceStatus=desknx::safeio::replaceFilePreservingOnFailure(
-                    CFG_TMP,CFG_FILE,CFG_BAK_FILE,true);
-                if(replaceStatus!=desknx::safeio::ReplaceStatus::Success) {
-                    std::remove(CFG_TMP);
-                    primaryOk=false;
-                    outcome.blocked=
-                        replaceStatus==desknx::safeio::ReplaceStatus::RollbackFailed;
+            outcome.blocked=
+                writeStatus==desknx::persist::WriteStatus::RollbackFailed||
+                writeStatus==desknx::persist::WriteStatus::PublishCommitFailed;
+            switch(writeStatus) {
+                case desknx::persist::WriteStatus::OpenFailed:
                     std::snprintf(outcome.message,sizeof(outcome.message),
-                        outcome.blocked
-                            ? "LAYOUT RECOVERY NEEDED: KEEP layout.bak"
-                            : "SAVE FAILED: RENAME ERROR");
-                } else if(!commitSdCard("layout-async-publish")) {
-                    primaryOk=false;
-                    outcome.blocked=true;
+                                  "SAVE FAILED: SD CARD NOT WRITABLE");
+                    break;
+                case desknx::persist::WriteStatus::WriteFailed:
+                    std::snprintf(outcome.message,sizeof(outcome.message),
+                                  "SAVE FAILED: WRITE ERROR");
+                    break;
+                case desknx::persist::WriteStatus::TempCommitFailed:
+                    std::snprintf(outcome.message,sizeof(outcome.message),
+                                  "LAYOUT SD COMMIT FAILED; OLD FILE KEPT");
+                    break;
+                case desknx::persist::WriteStatus::ReplaceFailed:
+                    std::snprintf(outcome.message,sizeof(outcome.message),
+                                  "SAVE FAILED: RENAME ERROR");
+                    break;
+                case desknx::persist::WriteStatus::RollbackFailed:
+                case desknx::persist::WriteStatus::PublishCommitFailed:
                     std::snprintf(outcome.message,sizeof(outcome.message),
                                   "LAYOUT COMMIT FAILED; KEEP layout.bak");
-                } else {
-                    outcome.primaryWritten=true;
-                }
+                    break;
+                default:
+                    std::snprintf(outcome.message,sizeof(outcome.message),
+                                  "LAYOUT SAVE FAILED");
+                    break;
             }
+        } else {
+            outcome.primaryWritten=true;
         }
     }
 
@@ -3537,7 +3519,7 @@ int layoutSaveThreadMain(void* context) {
                 outcome.markerWritten ? "LAYOUT SAVED" :
                 (outcome.primaryWritten ? "LAYOUT SAVED; WORKSPACE MARKER RETRY" :
                                            "WORKSPACE SAVE COMPLETE"));
-        } else if(outcome.message[0]=='\\0') {
+        } else if(outcome.message[0]=='\0') {
             std::snprintf(outcome.message,sizeof(outcome.message),
                           "WORKSPACE SAVE FAILED");
         }
@@ -3709,44 +3691,32 @@ void drainAsyncLayoutSaver() {
 
 bool loadLayoutFrom(const char* path) {
     const Uint64 started=SDL_GetTicks64();
-    struct stat fileStat{};
-    if (!path || stat(path, &fileStat) != 0 || !S_ISREG(fileStat.st_mode) ||
-        fileStat.st_size <= 0 || fileStat.st_size > 1024 * 1024) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_size",
+    std::string serialized;
+    if(!desknx::persist::readBoundedFile(path,1024u*1024u,serialized)) {
+        desknx::diag::Write("layout","load_failed","path=%s reason=stat_or_read",
             path?path:"null");
         return false;
     }
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=open",path);
-        return false;
-    }
-    std::ostringstream contents;
-    contents << file.rdbuf();
-    if (file.bad()) {
-        desknx::diag::Write("layout","load_failed","path=%s reason=read",path);
-        return false;
-    }
-    const std::string serialized=contents.str();
     desknx::layout::LoadResult loaded{};
-    if (!desknx::layout::parse(serialized, loaded)) {
+    if(!desknx::layout::parse(serialized,loaded)) {
         desknx::diag::Write("layout","load_failed","path=%s reason=parse bytes=%zu",
             path,serialized.size());
         return false;
     }
-    desks = std::move(loaded.workspaces);
-    deskIndex = loaded.activeWorkspace;
-    layoutNeedsMigration = loaded.needsMigration;
-    layoutRecoveredTiles = loaded.recoveredTiles;
-    layoutDroppedTiles = loaded.droppedTiles;
+    desks=std::move(loaded.workspaces);
+    deskIndex=loaded.activeWorkspace;
+    layoutNeedsMigration=loaded.needsMigration;
+    layoutRecoveredTiles=loaded.recoveredTiles;
+    layoutDroppedTiles=loaded.droppedTiles;
     const std::string shape=desknx::layout::serialize(desks,0);
     persistedLayoutShapeKnown=!shape.empty();
     persistedLayoutShapeHash=persistedLayoutShapeKnown?
         desknx::model::stableHash(shape):0;
     // A backup restore or legacy format must be published back to layout.tsv,
     // even when the restored workspace contents themselves have not changed.
-    layoutPrimaryNeedsRewrite=desknx::layout::shouldRewritePrimaryAfterLoad(std::string(path)==CFG_FILE,loaded);
-    selectedX = selectedY = 0;
+    layoutPrimaryNeedsRewrite=desknx::layout::shouldRewritePrimaryAfterLoad(
+        std::string(path)==CFG_FILE,loaded);
+    selectedX=selectedY=0;
     size_t tileCount=0;
     for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
     desknx::diag::Write("layout","loaded",

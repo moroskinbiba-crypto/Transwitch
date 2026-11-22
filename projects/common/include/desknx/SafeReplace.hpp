@@ -11,26 +11,43 @@
 
 namespace desknx::safeio {
 
-enum class ReplaceStatus {
-    Success,
-    Failed,
-    RollbackFailed
+enum class ReplaceStatus { Success, Failed, RollbackFailed };
+
+struct ReplaceOperations {
+    void* context{nullptr};
+    int (*statPath)(void*, const char*, struct stat*){nullptr};
+    int (*removePath)(void*, const char*){nullptr};
+    int (*renamePath)(void*, const char*, const char*){nullptr};
 };
 
-inline ReplaceStatus replaceFilePreservingOnFailure(
+inline int defaultStatPath(void*, const char* path, struct stat* result) {
+    return ::stat(path, result);
+}
+inline int defaultRemovePath(void*, const char* path) {
+    return std::remove(path);
+}
+inline int defaultRenamePath(void*, const char* from, const char* to) {
+    return std::rename(from, to);
+}
+inline ReplaceOperations defaultReplaceOperations() {
+    return {nullptr, defaultStatPath, defaultRemovePath, defaultRenamePath};
+}
+
+inline ReplaceStatus replaceFilePreservingOnFailureWithOps(
     const char* temporary, const char* destination, const char* backup,
-    bool keepBackupOnSuccess = false) {
+    const ReplaceOperations& operations, bool keepBackupOnSuccess = false) {
     if (!temporary || !temporary[0] || !destination || !destination[0] ||
         !backup || !backup[0] || std::strcmp(temporary, destination) == 0 ||
         std::strcmp(temporary, backup) == 0 ||
-        std::strcmp(destination, backup) == 0) {
+        std::strcmp(destination, backup) == 0 ||
+        !operations.statPath || !operations.removePath || !operations.renamePath) {
         errno = EINVAL;
         return ReplaceStatus::Failed;
     }
 
     struct stat destinationStat{};
     bool hasDestination = false;
-    if (stat(destination, &destinationStat) == 0) {
+    if (operations.statPath(operations.context, destination, &destinationStat) == 0) {
         hasDestination = true;
     } else if (errno != ENOENT) {
         return ReplaceStatus::Failed;
@@ -40,8 +57,8 @@ inline ReplaceStatus replaceFilePreservingOnFailure(
     // if destination is missing. Restore it before attempting another write.
     if (!hasDestination) {
         struct stat backupStat{};
-        if (stat(backup, &backupStat) == 0) {
-            if (std::rename(backup, destination) != 0)
+        if (operations.statPath(operations.context, backup, &backupStat) == 0) {
+            if (operations.renamePath(operations.context, backup, destination) != 0)
                 return ReplaceStatus::RollbackFailed;
             hasDestination = true;
         } else if (errno != ENOENT) {
@@ -50,27 +67,32 @@ inline ReplaceStatus replaceFilePreservingOnFailure(
     }
 
     if (hasDestination) {
-        // It is safe to discard an older rollback copy only when a current
-        // destination exists and can take its place.
-        if (std::remove(backup) != 0 && errno != ENOENT)
+        if (operations.removePath(operations.context, backup) != 0 && errno != ENOENT)
             return ReplaceStatus::Failed;
-        if (std::rename(destination, backup) != 0)
+        if (operations.renamePath(operations.context, destination, backup) != 0)
             return ReplaceStatus::Failed;
     }
 
-    if (std::rename(temporary, destination) != 0) {
+    if (operations.renamePath(operations.context, temporary, destination) != 0) {
         const int publishError = errno;
-        if (hasDestination && std::rename(backup, destination) != 0)
+        if (hasDestination &&
+            operations.renamePath(operations.context, backup, destination) != 0)
             return ReplaceStatus::RollbackFailed;
         errno = publishError;
         return ReplaceStatus::Failed;
     }
 
-    // The new file is now published. A stale backup is no longer required;
-    // failure to clean it up does not invalidate the successful replacement.
     if (hasDestination && !keepBackupOnSuccess)
-        (void)std::remove(backup);
+        (void)operations.removePath(operations.context, backup);
     return ReplaceStatus::Success;
+}
+
+inline ReplaceStatus replaceFilePreservingOnFailure(
+    const char* temporary, const char* destination, const char* backup,
+    bool keepBackupOnSuccess = false) {
+    const ReplaceOperations operations = defaultReplaceOperations();
+    return replaceFilePreservingOnFailureWithOps(
+        temporary, destination, backup, operations, keepBackupOnSuccess);
 }
 
 } // namespace desknx::safeio
