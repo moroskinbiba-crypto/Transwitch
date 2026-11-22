@@ -1,6 +1,8 @@
 // Derived from sLaunch (GPL-3.0-or-later); see THIRD_PARTY.md.
 #include <desknx/system/Application.hpp>
 #include <desknx/Protocol.hpp>
+#include <desknx/ApplicationLifecyclePolicy.hpp>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 
@@ -426,57 +428,65 @@ namespace desknx::system::app {
     }
 
     bool Update(bool request_foreground) {
-        if (!g_AppRunning) return false;
+        static u64 lastAmFallbackPollTick = 0;
+        if (!g_AppRunning) {
+            lastAmFallbackPollTick = 0;
+            return false;
+        }
 
         // IApplicationAccessor's StateChangedEvent is not an exit event: it
         // can be signalled by focus/suspend transitions and remains signalled.
-        // Use pm:shell's application-process query as the authoritative exit
-        // signal. If the optional service is unavailable, preserve the holder
-        // rather than mistaking HOME suspension for a natural game exit.
-        if (!g_ProcessMonitorAvailable)
-            return false;
-
-        // Let AM/PM finish publishing the newly started application before
-        // interpreting ProcessNotFound as a natural exit. This matches the
-        // HOME-suspend stabilization window used by CanSuspend().
+        // Let AM finish publishing the newly started application before
+        // interpreting completion; this matches CanSuspend()'s settle window.
         const u64 now = armGetSystemTick();
-        const u64 launchSettleTicks = armGetSystemTickFreq() * 3 / 2;
+        const u64 frequency = armGetSystemTickFreq();
+        const u64 launchSettleTicks = frequency * 3 / 2;
         if (now - g_LaunchTick < launchSettleTicks)
             return false;
 
-        u64 pid = 0;
-        const Result queryRc = pmshellGetApplicationProcessIdForShell(&pid);
-        if (R_SUCCEEDED(queryRc)) {
-            if (pid == 0)
-                DaemonLog("app: pm:shell returned zero PID during exit poll; keeping application holder");
-            return false;
-        }
-        if (!IsApplicationProcessMissing(queryRc)) {
-            // PM can briefly fail while services are transitioning. A
-            // transport/permission error must never close a live holder.
-            static u64 lastQueryErrorLogTick = 0;
-            const u64 now = armGetSystemTick();
-            const u64 logInterval = armGetSystemTickFreq() * 5;
-            if (lastQueryErrorLogTick == 0 || now - lastQueryErrorLogTick >= logInterval) {
-                DaemonLog("app: natural-exit PM query failed rc=0x%08X; retaining application holder",
-                          static_cast<unsigned int>(queryRc));
-                lastQueryErrorLogTick = now;
+        bool processMissing = false;
+        if (g_ProcessMonitorAvailable) {
+            u64 pid = 0;
+            const Result queryRc = pmshellGetApplicationProcessIdForShell(&pid);
+            if (R_SUCCEEDED(queryRc)) {
+                if (pid == 0)
+                    DaemonLog("app: pm:shell returned zero PID during exit poll; keeping application holder");
+                return false;
             }
-            return false;
+            if (!IsApplicationProcessMissing(queryRc)) {
+                // PM can briefly fail while services are transitioning. A
+                // transport/permission error must never close a live holder.
+                static u64 lastQueryErrorLogTick = 0;
+                const u64 logInterval = frequency * 5;
+                if (lastQueryErrorLogTick == 0 || now - lastQueryErrorLogTick >= logInterval) {
+                    DaemonLog("app: natural-exit PM query failed rc=0x%08X; retaining application holder",
+                              static_cast<unsigned int>(queryRc));
+                    lastQueryErrorLogTick = now;
+                }
+                return false;
+            }
+            processMissing = true;
+        } else {
+            // pm:shell is optional at qlaunch startup. Fall back to AM's
+            // explicit IsCompleted query, throttled to 4 Hz; never use the
+            // accessor's generic state-change event as an exit signal.
+            const u64 fallbackInterval = std::max<u64>(1, frequency / 4);
+            if (lastAmFallbackPollTick != 0 &&
+                now - lastAmFallbackPollTick < fallbackInterval)
+                return false;
+            lastAmFallbackPollTick = now;
         }
 
-        // PM confirms that the process is gone, but wait for AM's own
-        // IsCompleted state before consuming GetResult and releasing the
-        // accessor. If AM is still finalizing, retain the holder and retry on
-        // the next backend poll instead of blocking the qlaunch event loop.
         bool amCompleted = false;
         const Result completedRc = CheckApplicationCompleted(&amCompleted);
-        if (R_FAILED(completedRc) || !amCompleted) {
+        if (!desknx::runtime::ShouldReleaseApplicationHolder(
+                g_ProcessMonitorAvailable, processMissing,
+                R_SUCCEEDED(completedRc), amCompleted)) {
             static u64 lastAmWaitLogTick = 0;
-            const u64 now = armGetSystemTick();
-            const u64 logInterval = armGetSystemTickFreq() * 5;
+            const u64 logInterval = frequency * 5;
             if (lastAmWaitLogTick == 0 || now - lastAmWaitLogTick >= logInterval) {
-                DaemonLog("app: PM reports process gone but AM completion is pending (rc=0x%08X completed=%d); retaining holder",
+                DaemonLog("app: completion barrier pending (pm_available=%d pm_missing=%d rc=0x%08X completed=%d); retaining holder",
+                          g_ProcessMonitorAvailable ? 1 : 0, processMissing ? 1 : 0,
                           static_cast<unsigned int>(completedRc), amCompleted ? 1 : 0);
                 lastAmWaitLogTick = now;
             }
