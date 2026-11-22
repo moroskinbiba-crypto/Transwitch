@@ -4718,41 +4718,57 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
             const bool favoritesWidget=t.kind==Kind::Favorites;
             widgetHeader(favoritesWidget?desknx::ui::IconId::Heart:desknx::ui::IconId::Library,
                 favoritesWidget?"FAVORITES":"GAME LIBRARY",r.y+9);
+            const bool showCover=favoritesWidget?dataA:dataB;
             if(games.empty()) {
                 text(favoritesWidget
                     ?(languageRussian?"НЕТ ИЗБРАННЫХ ИГР":"NO FAVORITES SAVED")
                     :(languageRussian?"НЕТ УСТАНОВЛЕННЫХ ИГР":"NO INSTALLED GAMES"),
-                     left,r.y+48,1,MUTED,right);
-            } else if(wide&&config.style==1) {
+                     left,bodyTop+8,1,MUTED,right);
+            } else if(compact) {
+                const Tile& game=games.front();
+                if(showCover)drawTileIcon(game,left,bodyTop+2,27);
+                text(game.title,left+(showCover?34:0),bodyTop+10,1,WHITE,right);
+                if(favoritesWidget&&dataB)
+                    label(std::to_string(favoriteTitleIds.size())+
+                        (languageRussian?" ИЗБРАНО":" SAVED"),r.y+r.h-18);
+            } else if(wide) {
                 const int count=std::min<int>(
-                    std::min<int>(config.itemCount,4),static_cast<int>(games.size()));
-                const int cellWidth=std::max(1,innerWidth/std::max(1,count));
+                    metrics.visibleItems(config.itemCount),
+                    static_cast<int>(games.size()));
+                const int gap=6;
+                const int cellW=std::max(1,(right-left-gap*(count-1))/count);
+                const int iconSize=banner2?30:34;
                 for(int i=0;i<count;++i) {
-                    const int x=left+i*cellWidth;
+                    const int x=left+i*(cellW+gap);
                     const Tile& game=games[static_cast<std::size_t>(i)];
-                    drawTileIcon(game,x+std::max(0,(cellWidth-42)/2),r.y+31,42);
-                    text(game.title,x+2,r.y+81,1,WHITE,x+cellWidth-3);
+                    if(showCover)drawTileIcon(game,
+                        x+std::max(0,(cellW-iconSize)/2),r.y+28,iconSize);
+                    text(game.title,x+2,r.y+68,1,WHITE,x+cellW-2);
                 }
             } else {
-                const int iconSize=wide?(config.style==2?18:24):(config.style==2?24:32);
-                const int rowStep=wide?(config.style==2?22:27):(config.style==2?32:42);
-                const int availableRows=std::max(1,
-                    (metrics.bodyBottom-(r.y+48))/std::max(1,rowStep)+1);
-                const int maxRows=wide?(config.style==2?3:2):
-                    ((compact||(t.w==1&&t.h==1))?1:std::min(4,availableRows));
                 const int count=std::min<int>(
-                    std::min<int>(config.itemCount,maxRows),static_cast<int>(games.size()));
+                    metrics.visibleItems(config.itemCount),
+                    static_cast<int>(games.size()));
+                const int columns=metrics.gridColumns;
+                const int rows=(count+columns-1)/columns;
+                const int gap=6;
+                const int cellW=std::max(1,(right-left-gap*(columns-1))/columns);
+                const int cellH=std::max(30,(bottom-bodyTop-gap*(rows-1))/rows);
                 for(int i=0;i<count;++i) {
+                    const int col=i%columns,row=i/columns;
+                    const int x=left+col*(cellW+gap);
+                    const int y=bodyTop+row*(cellH+gap);
+                    roundRect(x,y,cellW,cellH,8,Color{28,42,59,230});
                     const Tile& game=games[static_cast<std::size_t>(i)];
-                    const int y=r.y+(wide?34:48)+i*rowStep;
-                    const bool showCover=favoritesWidget?dataA:dataB;
-                    if(showCover)drawTileIcon(game,left,y,iconSize);
-                    text(game.title,left+(showCover?iconSize+8:0),y+std::max(3,(iconSize-8)/2),
-                         1,WHITE,right);
+                    const int iconSize=std::min(30,std::max(18,cellH-14));
+                    if(showCover)drawTileIcon(game,x+6,y+6,iconSize);
+                    const int textX=x+(showCover?iconSize+12:7);
+                    text(game.title,textX,y+cellH/2-3,1,WHITE,x+cellW-5);
                 }
             }
             if(!wide&&favoritesWidget&&dataB)
-                label(std::to_string(favoriteTitleIds.size())+" SAVED",r.y+r.h-22);
+                label(std::to_string(favoriteTitleIds.size())+
+                    (languageRussian?" СОХРАНЕНО":" SAVED"),r.y+r.h-18);
         } else if(t.kind==Kind::Nextendo) {
             const auto popular=nextendoPopularSnapshot();
             label("NEXTENDO  /  ONLINE",metrics.headerY);
