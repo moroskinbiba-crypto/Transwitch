@@ -37,5 +37,18 @@ int main() {
     // Unsigned elapsed time remains correct when the platform tick counter wraps.
     const auto wrapped=motion.begin(0.0f,1.0f,0xFFFFFFF0u,64,MotionCurve::Linear);
     assert(std::fabs(motion.sample(wrapped,0x00000010u)-0.5f)<0.001f);
+
+    MotionMode persisted=MotionMode::Full;
+    assert(ParseMotionModeSetting("reduced",persisted));
+    assert(persisted==MotionMode::Reduced);
+    assert(std::strcmp(MotionModeSettingName(persisted),"reduced")==0);
+    assert(ParseMotionModeSetting("lowperformance",persisted));
+    assert(persisted==MotionMode::LowPerformance);
+    assert(std::strcmp(MotionModeSettingName(persisted),"lowperformance")==0);
+    assert(ParseMotionModeSetting("full",persisted));
+    assert(persisted==MotionMode::Full);
+    assert(std::strcmp(MotionModeSettingName(persisted),"full")==0);
+    assert(!ParseMotionModeSetting("ultra",persisted));
+    assert(!ParseMotionModeSetting(nullptr,persisted));
     return 0;
 }

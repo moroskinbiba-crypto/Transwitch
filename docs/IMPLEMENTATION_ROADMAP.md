@@ -94,8 +94,10 @@ Successful compilation alone does not close a runtime acceptance item.
       bitmap fallback still cannot render full Cyrillic.
 - [x] Add a deterministic motion controller with Full, Reduced and LowPerformance
       timing modes; use its 160 ms eased transition for desktop tile focus feedback.
-- [ ] Expose motion mode in user settings and extend the controller to modal, panel and
-      workspace transitions after on-device compositing checks.
+- [x] Expose Full / Reduced / Low Power motion modes in Launcher Settings and persist
+      them as a backward-compatible optional `motion=` key in `settings.ini`.
+- [ ] Extend the controller to modal, panel and workspace transitions after
+      on-device compositing checks.
 - [ ] Preserve the 10 px tile corner target and cover/title overlay behaviour.
 
 ## Stage 4 — Widget System 2.0

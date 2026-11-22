@@ -77,4 +77,10 @@ inline constexpr ContextMenuLayout WorkspaceOptionsContextMenuLayout{
     {390,518,500,18}
 };
 
+// Twelve settings rows fit between the heading and status footer. The 2 px
+// gutters remain non-interactive and are shared by render and touch dispatch.
+inline constexpr ItemListLayout LauncherSettingsOptionsLayout{
+    {340,214,600,334},12,26,28
+};
+
 } // namespace desknx::ui

@@ -99,9 +99,13 @@ now drives selected-tile focus emphasis; state navigation remains immediate and 
 the visual emphasis is animated. Host tests cover easing, reduced/low-performance
 modes and 32-bit tick wraparound.
 
-**Still required:** expose the mode in launcher settings and migrate modal, panel and
-workspace transitions in small slices. Keep input/state changes immediate; animation
-must remain presentation-only.
+Full / Reduced / Low Power mode selection now lives in Launcher Settings and is
+persisted through the existing backward-compatible `DESKNXSET1` settings file. The
+settings renderer, gamepad navigation and touch selection share the same row layout.
+Older settings files without a `motion=` key retain the default Full mode.
+
+**Still required:** migrate modal, panel and workspace transitions in small slices.
+Keep input/state changes immediate; animation must remain presentation-only.
 
 ## Implementation order
 

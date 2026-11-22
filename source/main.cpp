@@ -501,6 +501,10 @@ void loadLauncherSettings() {
             char* end=nullptr;
             const long parsed=std::strtol(value.c_str(),&end,10);
             if(end&&*end=='\0'&&parsed>=0&&parsed<=2)iconStyle=static_cast<int>(parsed);
+        } else if(key=="motion") {
+            desknx::ui::MotionMode parsedMode{};
+            if(desknx::ui::ParseMotionModeSetting(value.c_str(),parsedMode))
+                gMotionController.setMode(parsedMode);
         } else if(key=="iconpack") {
             struct stat packStat{};
             const std::string prefix=std::string(MEDIA_ROOT)+"/iconpacks/";
@@ -523,7 +527,8 @@ bool saveLauncherSettings() {
        <<"font="<<safeField(fontPath)<<"\n"
        <<"iconpack="<<safeField(iconPackPath)<<"\n"
        <<"language="<<(languageRussian?"ru":"en")<<"\n"
-       <<"iconstyle="<<iconStyle<<"\n";
+       <<"iconstyle="<<iconStyle<<"\n"
+       <<"motion="<<desknx::ui::MotionModeSettingName(gMotionController.mode())<<"\n";
     out.flush();const bool good=out.good();out.close();
     if(!good){std::remove(SETTINGS_TMP);setStatus("SETTINGS WRITE FAILED",3000);return false;}
     if(!commitSdCard("settings-temp")) {
@@ -3055,14 +3060,29 @@ void drawScreen() {
         const char* actions[]={"CHOOSE BACKGROUND IMAGE","CHOOSE CUSTOM FONT","CHOOSE ICON PACK",
             "CHANGE COLOR THEME","ADD WIDGET TO WORKSPACE","RESCAN GAME LIBRARY",
             "WORKSPACE MANAGEMENT","TOGGLE EDIT / ARRANGE MODE","RESET APPEARANCE",
-            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE"};
+            languageRussian?"LANGUAGE: RUSSIAN":"LANGUAGE: ENGLISH","ICON STYLE",
+            languageRussian?"РЕЖИМ АНИМАЦИИ":"ANIMATION MODE"};
         const char* iconStyles[]={"Classic","Tabler outline","Material filled"};
-        for(int i=0;i<11;++i) {
-            const int yy=214+i*31;
-            if(i==appSettingsIndex)roundRect(340,yy,600,28,8,Color{35,61,93,255});
-            text(actions[i],362,yy+7,1,i==appSettingsIndex?WHITE:MUTED,730);
-            if(i==3)text("THEME "+std::to_string(themeIndex+1)+"/8",790,yy+8,1,BLUE,920);
-            if(i==10)text(iconStyles[static_cast<size_t>(iconStyle)],755,yy+8,1,BLUE,920);
+        const char* motionModes[]={"FULL","REDUCED","LOW POWER"};
+        const auto& settingsRows=desknx::ui::LauncherSettingsOptionsLayout;
+        for(int i=0;i<settingsRows.itemCount;++i) {
+            const auto row=settingsRows.itemRect(i);
+            if(i==appSettingsIndex)
+                roundRect(row.x,row.y,row.width,row.height,8,Color{35,61,93,255});
+            text(actions[i],row.x+22,row.y+7,1,i==appSettingsIndex?WHITE:MUTED,
+                row.x+390);
+            if(i==3)
+                text("THEME "+std::to_string(themeIndex+1)+"/8",
+                    row.x+450,row.y+7,1,BLUE,row.x+row.width-18);
+            if(i==10)
+                text(iconStyles[static_cast<size_t>(iconStyle)],
+                    row.x+415,row.y+7,1,BLUE,row.x+row.width-18);
+            if(i==11) {
+                const int mode=static_cast<int>(gMotionController.mode());
+                const int boundedMode=std::max(0,std::min(2,mode));
+                text(motionModes[boundedMode],row.x+445,row.y+7,1,BLUE,
+                    row.x+row.width-18);
+            }
         }
         char nsInfo[80]{};
         if(!catalogReadyNow&&!catalogCompleteNow)
@@ -3689,6 +3709,7 @@ void activateAppSettings(int action) {
             break;
         case 8:
             wallpaperPath.clear();fontPath.clear();iconPackPath.clear();themeIndex=1;iconStyle=0;
+            gMotionController.setMode(desknx::ui::MotionMode::Full);
             (void)loadWallpaperTexture("");
             (void)gFontRenderer.setCustomFont("");
             gIconCache.setCustomIconPackDir("");
@@ -3703,6 +3724,19 @@ void activateAppSettings(int action) {
             iconStyle=(iconStyle+1)%3;
             if(saveLauncherSettings())setStatus("ICON STYLE");
             break;
+        case 11: {
+            using desknx::ui::MotionMode;
+            const MotionMode current=gMotionController.mode();
+            const MotionMode next=current==MotionMode::Full?MotionMode::Reduced:
+                current==MotionMode::Reduced?MotionMode::LowPerformance:MotionMode::Full;
+            gMotionController.setMode(next);
+            if(saveLauncherSettings())
+                setStatus("MOTION MODE: "+
+                    std::string(desknx::ui::MotionModeSettingName(next)));
+            else
+                setStatus("MOTION MODE CHANGED; SETTINGS NOT SAVED",3000);
+            break;
+        }
         default: break;
     }
 }
@@ -3883,8 +3917,9 @@ void keyInput(u64 keys, bool fromRepeat) {
     }
     if(activeModal==desknx::ui::ModalLayer::LauncherSettings) {
         if(keys&HidNpadButton_B){appSettingsMenu=false;return;}
-        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+10)%11;
-        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%11;
+        const int itemCount=desknx::ui::LauncherSettingsOptionsLayout.itemCount;
+        if(keys&HidNpadButton_Up)appSettingsIndex=(appSettingsIndex+itemCount-1)%itemCount;
+        if(keys&HidNpadButton_Down)appSettingsIndex=(appSettingsIndex+1)%itemCount;
         if(keys&HidNpadButton_A)activateAppSettings(appSettingsIndex);
         return;
     }
@@ -4209,9 +4244,9 @@ void touchInput(const SDL_Event&e) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
         if(x>=842&&x<=934&&y>=132&&y<=164) {
             appSettingsMenu=false;
-        } else if(x>=340&&x<=940&&y>=214&&y<555) {
-            const int row=(y-214)/31;
-            if(row>=0&&row<11)activateAppSettings(row);
+        } else {
+            const int row=desknx::ui::LauncherSettingsOptionsLayout.items.itemAt(x,y);
+            if(row>=0)activateAppSettings(row);
         }
         return;
     }

@@ -38,6 +38,20 @@ int main() {
     assert(last.x==390&&last.y==458&&last.width==500&&last.height==38);
     assert(menu.items.itemAt(390,496)==-1);
 
+    // The twelve launcher settings rows fit without overlapping the footer.
+    const auto& settings=LauncherSettingsOptionsLayout;
+    assert(settings.itemCount==12);
+    assert(settings.bounds.x==340&&settings.bounds.y==214);
+    assert(settings.itemAt(340,214)==0);
+    assert(settings.itemAt(939,239)==0);
+    assert(settings.itemAt(340,240)==-1); // 2 px row gap
+    assert(settings.itemAt(340,242)==1);
+    assert(settings.itemAt(340,522)==11);
+    assert(settings.itemAt(939,547)==11);
+    assert(settings.itemAt(340,548)==-1);
+    assert(settings.itemAt(940,214)==-1);
+    assert(settings.itemRect(11).inside({340,104,680,520}));
+
     // The side-panel add target exactly matches its rendered button.
     const auto& panel=AppLibraryDetailsPanelLayout;
     assert(panel.header.inside(panel.surface));

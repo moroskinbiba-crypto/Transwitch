@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 namespace desknx::ui {
 
@@ -24,6 +25,24 @@ struct MotionTrack {
     std::uint32_t durationMs{0};
     MotionCurve curve{MotionCurve::EaseOutCubic};
 };
+
+inline const char* MotionModeSettingName(MotionMode mode) noexcept {
+    switch(mode) {
+        case MotionMode::Reduced:return "reduced";
+        case MotionMode::LowPerformance:return "lowperformance";
+        case MotionMode::Full:
+        default:return "full";
+    }
+}
+
+inline bool ParseMotionModeSetting(const char* value,MotionMode& result) noexcept {
+    if(!value)return false;
+    if(std::strcmp(value,"full")==0)result=MotionMode::Full;
+    else if(std::strcmp(value,"reduced")==0)result=MotionMode::Reduced;
+    else if(std::strcmp(value,"lowperformance")==0)result=MotionMode::LowPerformance;
+    else return false;
+    return true;
+}
 
 class MotionController {
 public:
