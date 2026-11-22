@@ -20,7 +20,10 @@ public:
     struct FrameStats {
         std::uint32_t drawCalls{0};
         std::uint32_t cacheHits{0};
+        std::uint32_t fallbackHits{0};
         std::uint32_t cacheMisses{0};
+        std::uint32_t staleJobsDiscarded{0};
+        std::uint32_t obsoleteTexturesPruned{0};
         std::uint32_t texturesCreated{0};
         std::uint32_t deferredByBudget{0};
         std::uint32_t rasterFailures{0};
@@ -117,6 +120,7 @@ public:
         if (++frameSerial_ == 0) frameSerial_ = 1;
         newTexturesRemaining_ = NewTextureBudget;
         pruneStaleRasterJobs();
+        pruneObsoleteCustomTextures();
         pumpRasterQueue();
         frameStats_.pendingRasterJobs = rasterQueue_.size();
     }
@@ -214,6 +218,8 @@ private:
         int width;
         int height;
         unsigned long long lastUse;
+        std::uint64_t fontGeneration{0};
+        bool customFace{false};
     };
 
     struct RasterJob {
@@ -232,6 +238,7 @@ private:
     static constexpr size_t MaxTextBytes = 2048;
     static constexpr int NewTextureBudget = 2;
     static constexpr int MaxRasterJobsPerFrame = 2;
+    static constexpr std::size_t MaxObsoleteFontTexturesPerFrame = 6;
     static constexpr double RasterFrameBudgetMs = 2.5;
     static int fontPixelSize(int index) {
         // Small labels are noticeably clearer at 10 px; larger scale steps
@@ -380,8 +387,11 @@ private:
         const Uint64 prepareStarted = SDL_GetPerformanceCounter();
         std::string key = makeKey(value, scale, color, maxWidth, customReady);
         CacheEntry* entry = find(key);
-        if (!entry && emptyTextKeys_.find(key) != emptyTextKeys_.end())
+        if (!entry && emptyTextKeys_.find(key) != emptyTextKeys_.end()) {
+            frameStats_.textPreparationMs +=
+                elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
             return true;
+        }
         CacheEntry* fallbackEntry = nullptr;
         if (!entry && customReady) {
             const std::string systemKey =
@@ -397,9 +407,10 @@ private:
                 ++frameStats_.deferredByBudget;
             entry = fallbackEntry;
             if (!entry) return false;
+            ++frameStats_.fallbackHits;
+        } else {
+            ++frameStats_.cacheHits;
         }
-
-        ++frameStats_.cacheHits;
         entry->lastUse = ++clock_;
         const int drawWidth = std::min(entry->width, maxWidth);
         const int destinationX = centered
@@ -444,7 +455,7 @@ private:
                 if (pending != pendingRasterFrames_.end())
                     pendingRasterFrames_.erase(pending);
                 it = rasterQueue_.erase(it);
-                ++frameStats_.deferredByBudget;
+                ++frameStats_.staleJobsDiscarded;
             } else {
                 ++it;
             }
@@ -540,7 +551,8 @@ private:
             }
 
             SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
-            (void)insert(job.key, texture, width, height);
+            (void)insert(job.key, texture, width, height,
+                         job.customFace, job.fontGeneration);
             ++frameStats_.texturesCreated;
             --newTexturesRemaining_;
             ++processed;
@@ -626,7 +638,9 @@ private:
         return found == cache_.end() ? nullptr : &found->second;
     }
 
-    CacheEntry* insert(const std::string& key, SDL_Texture* texture, int width, int height) {
+    CacheEntry* insert(const std::string& key, SDL_Texture* texture,
+                        int width, int height, bool customFace,
+                        std::uint64_t fontGeneration) {
         if (cache_.size() >= CacheLimit) {
             auto oldest = cache_.begin();
             for (auto it = cache_.begin(); it != cache_.end(); ++it) {
@@ -641,8 +655,30 @@ private:
             cache_.erase(oldest);
             ++frameStats_.cacheEvictions;
         }
-        CacheEntry entry{texture, width, height, ++clock_};
+        CacheEntry entry{texture, width, height, ++clock_,
+                         fontGeneration, customFace};
         return &cache_.emplace(key, entry).first->second;
+    }
+
+    void pruneObsoleteCustomTextures() {
+        std::size_t removed = 0;
+        for (auto it = cache_.begin(); it != cache_.end() &&
+             removed < MaxObsoleteFontTexturesPerFrame;) {
+            const CacheEntry& entry = it->second;
+            if (!entry.customFace || entry.fontGeneration == fontGeneration_) {
+                ++it;
+                continue;
+            }
+            if (entry.texture) {
+                const Uint64 destroyStarted = SDL_GetPerformanceCounter();
+                SDL_DestroyTexture(entry.texture);
+                frameStats_.textureDestroyMs +=
+                    elapsedMs(destroyStarted, SDL_GetPerformanceCounter());
+            }
+            it = cache_.erase(it);
+            ++removed;
+            ++frameStats_.obsoleteTexturesPruned;
+        }
     }
 
     void clearCache() {
