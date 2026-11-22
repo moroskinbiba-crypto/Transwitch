@@ -1108,26 +1108,27 @@ void loadGameNameOverrides() {
 }
 
 bool saveGameNameOverrides() {
-    if(!sdMounted){setStatus("SD CARD REQUIRED TO SAVE GAME NAMES",3000);return false;}
-    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);mkdir("sdmc:/switch/DeskNX/cache",0777);
-    std::ofstream output(GAME_NAME_OVERRIDES_TMP,std::ios::binary|std::ios::trunc);
-    if(!output){setStatus("GAME NAME SAVE FAILED",3000);return false;}
+    if(!sdMounted) {
+        setStatus("SD CARD REQUIRED TO SAVE GAME NAMES",3000);
+        return false;
+    }
+    std::ostringstream snapshot;
     for(const auto& entry:gameNameOverrides) {
-        if(!desknx::model::isTitleId(entry.first)||entry.second.empty()||entry.second.size()>124)continue;
-        output<<entry.first<<'\t'<<desknx::model::safeField(entry.second)<<'\n';
+        if(!desknx::model::isTitleId(entry.first)||entry.second.empty()||
+           entry.second.size()>124)continue;
+        snapshot<<entry.first<<'\t'<<desknx::model::safeField(entry.second)<<'\n';
     }
-    output.flush();const bool good=output.good();output.close();
-    if(!good){std::remove(GAME_NAME_OVERRIDES_TMP);return false;}
-    if(!commitSdCard("game-name-overrides-temp")){
-        std::remove(GAME_NAME_OVERRIDES_TMP);return false;
-    }
-    const auto rc=desknx::safeio::replaceFilePreservingOnFailure(
-        GAME_NAME_OVERRIDES_TMP,GAME_NAME_OVERRIDES_FILE,
-        "sdmc:/switch/DeskNX/cache/game-overrides.bak",true);
-    if(rc!=desknx::safeio::ReplaceStatus::Success){
-        std::remove(GAME_NAME_OVERRIDES_TMP);setStatus("GAME NAME PUBLISH FAILED",3000);return false;
-    }
-    return commitSdCard("game-name-overrides-publish");
+    AuxiliaryFileSaveJob job;
+    job.contents=snapshot.str();
+    job.temporaryPath=GAME_NAME_OVERRIDES_TMP;
+    job.targetPath=GAME_NAME_OVERRIDES_FILE;
+    job.backupPath="sdmc:/switch/DeskNX/cache/game-overrides.bak";
+    job.directory="sdmc:/switch/DeskNX/cache";
+    job.tempCommitOperation="game-name-overrides-temp";
+    job.publishCommitOperation="game-name-overrides-publish";
+    job.failureMessage="GAME NAME OVERRIDES SAVE FAILED";
+    scheduleAuxiliaryFileSave(AuxiliarySaveSlot::GameNames,std::move(job));
+    return true;
 }
 
 void applyGameNameOverridesToWorkspaces() {
@@ -2661,37 +2662,23 @@ void loadHistory() {
 }
 void saveHistory() {
     if(!sdMounted)return;
-    const Uint64 started=SDL_GetTicks64();
-    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
-    std::ofstream out(HISTORY_TMP,std::ios::binary|std::ios::trunc);
-    if(!out){setStatus("RECENT HISTORY SAVE FAILED",3000);return;}
-    out<<"DESKNXH1\n";
-    for(const auto& e:recentLaunches)out<<typeCode(e.kind)<<'\t'<<safeField(e.title)<<'\t'<<safeField(e.data)<<'\n';
-    out.flush();bool good=out.good();out.close();
-    if(!good){std::remove(HISTORY_TMP);setStatus("RECENT HISTORY WRITE FAILED",3000);return;}
-    if(!commitSdCard("history-temp")) {
-        std::remove(HISTORY_TMP);
-        setStatus("RECENT HISTORY SD COMMIT FAILED",3000);
-        return;
-    }
-    const auto replaceStatus = desknx::safeio::replaceFilePreservingOnFailure(
-        HISTORY_TMP, HISTORY_FILE, HISTORY_BAK_FILE, true);
-    if (replaceStatus != desknx::safeio::ReplaceStatus::Success) {
-        std::remove(HISTORY_TMP);
-        if (replaceStatus == desknx::safeio::ReplaceStatus::RollbackFailed)
-            setStatus("RECENT HISTORY RECOVERY NEEDED: KEEP recent.bak", 5000);
-        else
-            setStatus("RECENT HISTORY RENAME FAILED", 3000);
-        return;
-    }
-    if(!commitSdCard("history-publish")) {
-        desknx::diag::Write("history","save_failed","phase=publish_commit entries=%zu",recentLaunches.size());
-        setStatus("RECENT HISTORY COMMIT FAILED; BACKUP KEPT",4000);
-    } else {
-        desknx::diag::Write("history","saved","entries=%zu elapsed_ms=%llu",
-            recentLaunches.size(),static_cast<unsigned long long>(SDL_GetTicks64()-started));
-    }
+    std::ostringstream snapshot;
+    snapshot<<"DESKNXH1\n";
+    for(const auto& entry:recentLaunches)
+        snapshot<<typeCode(entry.kind)<<'\t'<<safeField(entry.title)
+                <<'\t'<<safeField(entry.data)<<'\n';
+
+    AuxiliaryFileSaveJob job;
+    job.contents=snapshot.str();
+    job.temporaryPath=HISTORY_TMP;
+    job.targetPath=HISTORY_FILE;
+    job.backupPath=HISTORY_BAK_FILE;
+    job.tempCommitOperation="history-temp";
+    job.publishCommitOperation="history-publish";
+    job.failureMessage="RECENT HISTORY SAVE FAILED";
+    scheduleAuxiliaryFileSave(AuxiliarySaveSlot::History,std::move(job),0);
 }
+
 void recordRecentLaunch(const Tile& tile) {
     if(tile.kind!=Kind::Game&&tile.kind!=Kind::Nro)return;
     recentLaunches.erase(std::remove_if(recentLaunches.begin(),recentLaunches.end(),
@@ -2744,36 +2731,25 @@ void loadCalendarNotes() {
 }
 bool saveCalendarNotes() {
     if(!sdMounted)return false;
-    mkdir("sdmc:/switch",0777);
-    mkdir(CFG_DIR,0777);
-    std::ofstream out(CALENDAR_NOTES_TMP,std::ios::binary|std::ios::trunc);
-    if(!out){setStatus("CALENDAR NOTES SAVE FAILED",3000);return false;}
-    out<<"DESKNXC1\n";
+    std::ostringstream snapshot;
+    snapshot<<"DESKNXC1\n";
     for(const auto& entry:calendarNotes) {
         if(validCalendarDateKey(entry.first)&&entry.second.size()<=512)
-            out<<entry.first<<'\t'<<safeField(entry.second)<<'\n';
+            snapshot<<entry.first<<'\t'<<safeField(entry.second)<<'\n';
     }
-    out.flush();
-    const bool good=out.good();
-    out.close();
-    if(!good||!commitSdCard("calendar-notes-temp")) {
-        std::remove(CALENDAR_NOTES_TMP);
-        setStatus("CALENDAR NOTES WRITE FAILED",3000);
-        return false;
-    }
-    const auto result=desknx::safeio::replaceFilePreservingOnFailure(
-        CALENDAR_NOTES_TMP,CALENDAR_NOTES_FILE,CALENDAR_NOTES_BAK,true);
-    if(result!=desknx::safeio::ReplaceStatus::Success) {
-        std::remove(CALENDAR_NOTES_TMP);
-        setStatus("CALENDAR NOTES REPLACE FAILED",3000);
-        return false;
-    }
-    if(!commitSdCard("calendar-notes-publish")) {
-        setStatus("CALENDAR NOTES COMMIT FAILED; BACKUP KEPT",3500);
-        return false;
-    }
+
+    AuxiliaryFileSaveJob job;
+    job.contents=snapshot.str();
+    job.temporaryPath=CALENDAR_NOTES_TMP;
+    job.targetPath=CALENDAR_NOTES_FILE;
+    job.backupPath=CALENDAR_NOTES_BAK;
+    job.tempCommitOperation="calendar-notes-temp";
+    job.publishCommitOperation="calendar-notes-publish";
+    job.failureMessage="CALENDAR NOTES SAVE FAILED";
+    scheduleAuxiliaryFileSave(AuxiliarySaveSlot::CalendarNotes,std::move(job));
     return true;
 }
+
 std::string currentCalendarNote() {
     const std::string key=calendarDateKey(std::time(nullptr));
     const auto found=calendarNotes.find(key);
@@ -2843,34 +2819,23 @@ void loadFavorites() {
 }
 bool saveFavorites() {
     if(!sdMounted)return false;
-    mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
-    std::ofstream out(FAVORITES_TMP,std::ios::binary|std::ios::trunc);
-    if(!out){setStatus("FAVORITES SAVE FAILED",3000);return false;}
-    out<<"DESKNXF1\n";
+    std::ostringstream snapshot;
+    snapshot<<"DESKNXF1\n";
     for(const auto& id:favoriteTitleIds)
-        if(desknx::model::isTitleId(id))out<<id<<"\n";
-    out.flush();
-    bool good=out.good();
-    out.close();
-    if(!good){std::remove(FAVORITES_TMP);setStatus("FAVORITES WRITE FAILED",3000);return false;}
-    if(!commitSdCard("favorites-temp")) {
-        std::remove(FAVORITES_TMP);
-        setStatus("FAVORITES SD COMMIT FAILED",3000);
-        return false;
-    }
-    const auto result=desknx::safeio::replaceFilePreservingOnFailure(
-        FAVORITES_TMP,FAVORITES_FILE,FAVORITES_BAK,true);
-    if(result!=desknx::safeio::ReplaceStatus::Success) {
-        std::remove(FAVORITES_TMP);
-        setStatus("FAVORITES RENAME FAILED; BACKUP KEPT",3500);
-        return false;
-    }
-    if(!commitSdCard("favorites-publish")) {
-        setStatus("FAVORITES COMMIT FAILED; BACKUP KEPT",3500);
-        return false;
-    }
+        if(desknx::model::isTitleId(id))snapshot<<id<<"\n";
+
+    AuxiliaryFileSaveJob job;
+    job.contents=snapshot.str();
+    job.temporaryPath=FAVORITES_TMP;
+    job.targetPath=FAVORITES_FILE;
+    job.backupPath=FAVORITES_BAK;
+    job.tempCommitOperation="favorites-temp";
+    job.publishCommitOperation="favorites-publish";
+    job.failureMessage="FAVORITES SAVE FAILED";
+    scheduleAuxiliaryFileSave(AuxiliarySaveSlot::Favorites,std::move(job));
     return true;
 }
+
 bool isFavoriteTitleId(const std::string& titleId) {
     return std::find(favoriteTitleIds.begin(),favoriteTitleIds.end(),titleId)!=
         favoriteTitleIds.end();
