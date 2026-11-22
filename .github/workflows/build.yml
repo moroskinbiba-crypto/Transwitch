@@ -259,6 +259,18 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Iinclude -Isource tests/persistence_store_test.cpp source/PersistenceStore.cpp -o /tmp/desknx-persistence-test
           /tmp/desknx-persistence-test
 
+      - name: Test SD mount generations commit arbitration and retry backoff
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_control_plane_test.cpp -o /tmp/desknx-storage-control-test
+          /tmp/desknx-storage-control-test
+
+      - name: Test versioned storage migration dry-run and validation
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude \
+            tests/storage_migration_test.cpp -o /tmp/desknx-storage-migration-test
+          /tmp/desknx-storage-migration-test
+
       - name: Test unified workspace snapshot transactions and recovery
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude -Iprojects/common/include \
