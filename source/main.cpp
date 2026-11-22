@@ -4552,7 +4552,8 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(languageRussian?"ИГРЫ С МАКСИМАЛЬНЫМ ОНЛАЙНОМ":
                     "MOST PLAYED RIGHT NOW",left,metrics.clampY(bottom-11,8),1,MUTED,right);
         } else if(t.kind==Kind::QuickSettings) {
-            if(!quickSettingsSnapshotLoaded)refreshQuickSettingsSnapshot(true);
+            if(!quickSettingsSnapshotLoaded&&!quickSettingsSnapshotLoading)
+                refreshQuickSettingsSnapshot(true);
             label(languageRussian?"БЫСТРЫЕ НАСТРОЙКИ":"QUICK SETTINGS",metrics.headerY);
             const std::string brightnessValue=!quickSettingsSnapshotLoaded
                 ?(languageRussian?"ЗАГРУЗКА...":"LOADING...")
