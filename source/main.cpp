@@ -5753,7 +5753,7 @@ void drawScreen() {
             iconStats.pendingRequests,iconStats.completedImages,iconStats.failedKeys);
         text(queueText,652,356,1,MUTED,1050);
         std::snprintf(queueText,sizeof(queueText),
-            "DECODED %u  /  CPU %.2F MS  /  WAIT %.2F MS",
+            "DECODED %u  /  CPU PEAK %.2F MS  /  WAIT PEAK %.2F MS",
             iconStats.lastFrameDecoded,iconStats.lastFrameDecodeMs,
             iconStats.lastFrameQueueWaitMs);
         text(queueText,652,382,1,MUTED,1050);
