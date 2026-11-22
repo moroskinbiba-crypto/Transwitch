@@ -56,15 +56,7 @@ namespace {
 using namespace desknx::model;
 constexpr int SW = 1280, SH = 720, COLS = Columns, ROWS = Rows;
 constexpr int CW = 154, CH = 112, GX = 14, GY = 14, LEFT = 141, TOP = 150;
-constexpr int DeskTabX=desknx::ui::WorkspaceDockLayout::TabStartX;
-constexpr int DeskTabWidth=desknx::ui::WorkspaceDockLayout::TabWidth;
-constexpr int DeskTabStep=desknx::ui::WorkspaceDockLayout::TabStep;
-constexpr int VisibleDeskTabs=desknx::ui::WorkspaceDockLayout::VisibleTabCount;
-constexpr int ToolbarStartX=desknx::ui::LauncherToolbarLayout::ButtonStartX;
-constexpr int ToolbarButtonWidth=desknx::ui::LauncherToolbarLayout::ButtonWidth;
-constexpr int ToolbarButtonStep=desknx::ui::LauncherToolbarLayout::ButtonStep;
-constexpr int ToolbarButtonCount=desknx::ui::LauncherToolbarLayout::ButtonCount;
-constexpr int toolbarButtonX(int i) { return desknx::ui::LauncherToolbarControls.buttonRect(i).x; }
+
 constexpr int MAX_ITEMS = MaxItems, MAX_DESKS = MaxDesks;
 // NsApplicationView flag bits follow SLaunch's documented mapping.
 constexpr u32 NsViewFlagIsGameCard = BIT(6);
@@ -2766,7 +2758,7 @@ void drawDotted(int x,int y,int w,int h) {
 }
 int visibleStart() {
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
-    return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-VisibleDeskTabs));
+    return std::max(0,std::min(deskIndex-2,static_cast<int>(desks.size())-desknx::ui::WorkspaceDockLayout::VisibleTabCount));
 }
 desknx::ui::ModalStack collectModalStack() {
     desknx::ui::ModalFlags flags{};
@@ -4545,7 +4537,7 @@ bool touchSelect(int x,int y) {
 int tabStart(){
     if(touchDragging&&touchDragTabStart>=0)return touchDragTabStart;
     return std::max(0,std::min(deskIndex-2,
-        static_cast<int>(desks.size())-VisibleDeskTabs));
+        static_cast<int>(desks.size())-desknx::ui::WorkspaceDockLayout::VisibleTabCount));
 }
 void touchInput(const SDL_Event&e) {
     const desknx::ui::ModalLayer activeModal=collectModalStack().top();
