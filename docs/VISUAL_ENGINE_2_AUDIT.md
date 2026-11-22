@@ -21,6 +21,9 @@ The first Visual Engine 2.0 stability slice is now implemented in this branch:
   button geometry and touch hit-testing; the layout has a host test for boundaries,
   containment and non-overlap.
 - The frame resets SDL clip and draw-blend state before composition and before Present.
+- Scoped RAII guards now restore clip rects around wallpaper, workspace-background and
+  tile-artwork copies, and restore the rounded-mask texture's previous color/alpha
+  modulation rather than assuming white/opaque was its prior state.
 
 This closes the z-order mismatch described below. It does not yet prove the white-screen
 issue fixed; on-console reproduction and compositing regression tests remain open.

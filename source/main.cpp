@@ -114,6 +114,51 @@ int mediaPickerIndex=0, mediaPickerOffset=0;
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 bool rendererVsync=false;
+
+// SDL renderer state is global to the renderer. Scope clip and texture
+// modulation changes so newly extracted components cannot leak them into later
+// drawing paths, even when control flow gains an early return.
+class ScopedRenderClip {
+public:
+    ScopedRenderClip(SDL_Renderer* target,const SDL_Rect& clip) noexcept
+        : renderer_(target) {
+        if(renderer_) {
+            (void)SDL_RenderSetClipRect(renderer_,&clip);
+            active_=true;
+        }
+    }
+    ScopedRenderClip(const ScopedRenderClip&)=delete;
+    ScopedRenderClip& operator=(const ScopedRenderClip&)=delete;
+    ~ScopedRenderClip() {
+        if(renderer_&&active_)(void)SDL_RenderSetClipRect(renderer_,nullptr);
+    }
+private:
+    SDL_Renderer* renderer_{nullptr};
+    bool active_{false};
+};
+
+class ScopedTextureModulation {
+public:
+    ScopedTextureModulation(SDL_Texture* texture,Uint8 red,Uint8 green,
+                            Uint8 blue,Uint8 alpha) noexcept
+        : texture_(texture) {
+        if(!texture_)return;
+        (void)SDL_GetTextureColorMod(texture_,&previousRed_,&previousGreen_,&previousBlue_);
+        (void)SDL_GetTextureAlphaMod(texture_,&previousAlpha_);
+        (void)SDL_SetTextureColorMod(texture_,red,green,blue);
+        (void)SDL_SetTextureAlphaMod(texture_,alpha);
+    }
+    ScopedTextureModulation(const ScopedTextureModulation&)=delete;
+    ScopedTextureModulation& operator=(const ScopedTextureModulation&)=delete;
+    ~ScopedTextureModulation() {
+        if(!texture_)return;
+        (void)SDL_SetTextureColorMod(texture_,previousRed_,previousGreen_,previousBlue_);
+        (void)SDL_SetTextureAlphaMod(texture_,previousAlpha_);
+    }
+private:
+    SDL_Texture* texture_{nullptr};
+    Uint8 previousRed_{255},previousGreen_{255},previousBlue_{255},previousAlpha_{255};
+};
 std::vector<Workspace> desks;
 std::vector<Candidate> catalogue;
 SDL_mutex* catalogueMutex = nullptr;
@@ -547,9 +592,10 @@ void drawWallpaper() {
     if(!wallpaperTexture||wallpaperWidth<=0||wallpaperHeight<=0)return;
     const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,wallpaperWidth,wallpaperHeight);
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
-    SDL_RenderSetClipRect(renderer,&viewport);
-    SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
-    SDL_RenderSetClipRect(renderer,nullptr);
+    {
+        ScopedRenderClip clipScope(renderer,viewport);
+        SDL_RenderCopy(renderer,wallpaperTexture,nullptr,&dst);
+    }
     SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
 }
@@ -595,9 +641,10 @@ void drawWorkspaceBackground(const Workspace& desk) {
     const auto fit=desknx::artwork::destination(0,0,SW,SH,width,height,
         static_cast<desknx::artwork::FitMode>(desk.backgroundFit));
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
-    SDL_RenderSetClipRect(renderer,&viewport);
-    SDL_RenderCopy(renderer,texture,nullptr,&dst);
-    SDL_RenderSetClipRect(renderer,nullptr);
+    {
+        ScopedRenderClip clipScope(renderer,viewport);
+        SDL_RenderCopy(renderer,texture,nullptr,&dst);
+    }
     SDL_SetRenderDrawColor(renderer,3,7,14,92);
     SDL_RenderFillRect(renderer,&viewport);
 }
@@ -2151,8 +2198,7 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
     const int r=std::max(0,std::min(radius,std::min(bounds.w,bounds.h)/2));
     SDL_Texture* mask=getRoundedCornerMask(r);
     if(!mask)return;
-    SDL_SetTextureColorMod(mask,fill.r,fill.g,fill.b);
-    SDL_SetTextureAlphaMod(mask,fill.a);
+    ScopedTextureModulation modulation(mask,fill.r,fill.g,fill.b,fill.a);
     const SDL_Rect corners[]={
         {bounds.x,bounds.y,r,r},
         {bounds.x+bounds.w-r,bounds.y,r,r},
@@ -2165,8 +2211,6 @@ void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
     };
     for(int i=0;i<4;++i)
         SDL_RenderCopyEx(renderer,mask,nullptr,&corners[i],0.0,nullptr,flips[i]);
-    SDL_SetTextureColorMod(mask,255,255,255);
-    SDL_SetTextureAlphaMod(mask,255);
 }
 
 void drawTileCover(const Tile& tile,const Workspace& workspace,
@@ -2193,9 +2237,10 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
             SDL_Rect clip=viewport,target{fit.x,fit.y,fit.w,fit.h};
             // Cover scales the entire image beyond the tile and clips it to
             // the tile viewport. This avoids source-rect rounding gaps.
-            SDL_RenderSetClipRect(renderer,&clip);
-            SDL_RenderCopy(renderer,texture,nullptr,&target);
-            SDL_RenderSetClipRect(renderer,nullptr);
+            {
+                ScopedRenderClip clipScope(renderer,clip);
+                SDL_RenderCopy(renderer,texture,nullptr,&target);
+            }
         } else {
             roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
         }
