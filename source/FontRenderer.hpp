@@ -457,8 +457,11 @@ private:
                 break;
             }
 
+            const Uint64 prepareStarted = SDL_GetPerformanceCounter();
             const std::string* fitted =
                 &fitToWidth(job.text, font, job.scale, job.maxWidth);
+            frameStats_.textPreparationMs +=
+                elapsedMs(prepareStarted, SDL_GetPerformanceCounter());
             if (fitted->empty()) {
                 pendingRasterKeys_.erase(job.key);
                 ++processed;
