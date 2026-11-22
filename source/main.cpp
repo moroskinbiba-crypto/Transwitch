@@ -3330,8 +3330,12 @@ bool saveLayout() {
     }
 
     mkdir("sdmc:/switch",0777);mkdir(CFG_DIR,0777);
-    const auto writeResult=desknx::workspace_storage::writeSnapshot(
-        desknx::workspace_storage::Paths{},desks,deskIndex,
+    const std::string activeState=
+        desknx::layout::serializeActiveWorkspaceState(
+            deskIndex,desks.size(),shapeHash,
+            desks[static_cast<size_t>(deskIndex)].name);
+    const auto writeResult=desknx::workspace_storage::writeSnapshotBytes(
+        desknx::workspace_storage::Paths{},serialized,activeState,
         commitSdCardForPersistence,nullptr,"layout-temp","layout-publish");
     const auto writeStatus=writeResult.status;
     if(!writeResult.success()) {
@@ -3352,8 +3356,7 @@ bool saveLayout() {
     persistedLayoutShapeKnown=true;
     layoutPrimaryNeedsRewrite=false;
     layoutNeedsMigration=false;
-    persistedActiveWorkspaceMarker=
-        desknx::layout::serializeActiveWorkspaceState(desks,deskIndex);
+    persistedActiveWorkspaceMarker=activeState;
     activeWorkspaceMarkerKnown=!persistedActiveWorkspaceMarker.empty();
     activeWorkspaceMarkerPending=false;
     activeWorkspaceMarkerDue=0;
@@ -3623,8 +3626,9 @@ void pumpAsyncLayoutSaver(bool waitForCompletion) {
                 if(outcome.message[0])setStatus(outcome.message,1800);
             } else {
                 if(outcome.blocked)layoutSaveBlocked=true;
-                if(markerOnly||rewritePrimary||
-                   (outcome.primaryWritten&&!outcome.markerWritten)) {
+                if(!outcome.blocked&&
+                   (markerOnly||rewritePrimary||
+                    (outcome.primaryWritten&&!outcome.markerWritten))) {
                     activeWorkspaceMarkerPending=true;
                     activeWorkspaceMarkerDue=SDL_GetTicks()+2500;
                     layoutSaveScheduler.request(SDL_GetTicks(),2500u,
