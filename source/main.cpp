@@ -467,8 +467,8 @@ void pumpSystemTelemetrySnapshot() {
         processRamTotal=snap.processRamTotal;
     }
 
-    if(snap.quickLoaded && (!quickSettingsSnapshotLoaded ||
-       snap.quickUpdatedAt!=quickSettingsSnapshotTick)) {
+    if(snap.quickLoaded && (quickSettingsSnapshotLoading ||
+       !quickSettingsSnapshotLoaded || snap.quickUpdatedAt!=quickSettingsSnapshotTick)) {
         quickAirplaneMode=snap.airplaneMode;
         quickWifiEnabled=snap.wifiEnabled;
         quickBluetoothEnabled=snap.bluetoothEnabled;
@@ -8680,6 +8680,7 @@ int main(int,char**) {
                 lastHeldDirs = 0;
             }
         }
+        const Uint64 controllerInputFinished=SDL_GetPerformanceCounter();
         pumpAsyncLayoutSaver();
         pumpAuxiliarySaves(false);
         pumpLauncherSettingsSave();
@@ -8694,7 +8695,6 @@ int main(int,char**) {
                 ?"ШРИФТ НЕ ПОДХОДИТ — ПРЕДЫДУЩИЙ СОХРАНЁН"
                 :"FONT REJECTED — PREVIOUS FONT RESTORED",4500);
         }
-        const Uint64 controllerInputFinished=SDL_GetPerformanceCounter();
         const Uint64 touchInputStarted=SDL_GetPerformanceCounter();
         SDL_Event event;while(SDL_PollEvent(&event)){if(event.type==SDL_QUIT){appletRequestExitToSelf();running=false;}else touchInput(event);}
         const Uint64 touchInputFinished=SDL_GetPerformanceCounter();
