@@ -16,6 +16,8 @@ struct ButtonState {
     bool active{false};
     bool focused{false};
     bool disabled{false};
+    bool hovered{false};
+    bool pressed{false};
 };
 
 struct ButtonPaintRules {
@@ -26,23 +28,24 @@ struct ButtonPaintRules {
     std::uint8_t alphaScale{255};
 };
 
-// Pure presentation rules: state changes appearance only. Input ownership and
-// hit-test rectangles remain in the existing launcher controller.
+// Pure presentation rules: the same state always resolves to the same paint.
+// Hit rectangles, input ownership and key mappings remain outside this layer.
 constexpr ButtonPaintRules resolveButtonPaint(
     ButtonVariant variant, ButtonState state) {
     ButtonPaintRules result{};
     switch (variant) {
         case ButtonVariant::Glass:
             result.drawFill = true;
-            result.drawEdge = state.active || state.focused;
+            result.drawEdge = state.active || state.focused || state.hovered;
+            result.drawFocusRing = state.focused;
             break;
         case ButtonVariant::Rail:
-            result.drawFill = state.active;
+            result.drawFill = state.active || state.hovered;
             result.drawAccentRail = state.active;
             result.drawFocusRing = state.focused;
             break;
         case ButtonVariant::Minimal:
-            result.drawFill = state.active;
+            result.drawFill = state.active || state.hovered;
             result.drawAccentRail = state.active;
             result.drawFocusRing = state.focused;
             break;
@@ -57,6 +60,7 @@ constexpr ButtonPaintRules resolveButtonPaint(
             result.drawFocusRing = state.focused;
             break;
     }
+    if (state.pressed) result.alphaScale = 224;
     if (state.disabled) result.alphaScale = 112;
     return result;
 }
