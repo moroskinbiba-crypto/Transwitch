@@ -4616,11 +4616,32 @@ void drawTile(const Tile&t,bool selected,const Workspace& workspace) {
                 text(mainValue,left,r.y+39,2,WHITE,right);
                 if(dataB)progress(r.y+82,percent);
             } else if(wide) {
-                text(mainValue,left,r.y+34,2,WHITE,right-78);
+                text(mainValue,left,r.y+34,banner2?2:3,WHITE,right-100);
                 if(dataB&&percent>=0)text(std::to_string(percent)+
-                    (dataA?"% FREE":"% USED"),right-70,r.y+49,1,MUTED,right);
+                    (dataA?"% FREE":"% USED"),right-88,r.y+49,1,MUTED,right);
                 if(dataB)progress(r.y+83,percent);
                 else if(dataA)label(totalText,r.y+83);
+                if(banner3)label(usedText+"  /  "+totalText,r.y+108);
+            } else if(dashboard) {
+                if(storageStatsAvailable) {
+                    text(freeSpaceText()+" FREE",left,r.y+42,4,WHITE,right);
+                    if(dataB)progress(r.y+112,percent);
+                    const int half=std::max(1,(right-left-8)/2);
+                    roundRect(left,r.y+146,half,58,8,Color{28,42,59,230});
+                    roundRect(left+half+8,r.y+146,half,58,8,Color{28,42,59,230});
+                    text("USED",left+8,r.y+154,1,MUTED,left+half-4);
+                    text(usedText,left+8,r.y+179,1,WHITE,left+half-4);
+                    text("TOTAL",left+half+16,r.y+154,1,MUTED,right);
+                    text(totalText,left+half+16,r.y+179,1,WHITE,right);
+                } else text("SD CARD UNAVAILABLE",left,r.y+90,2,RED,right);
+            } else if(portrait) {
+                if(storageStatsAvailable) {
+                    text(freeSpaceText(),left,r.y+48,5,WHITE,right);
+                    label(languageRussian?"СВОБОДНО":"FREE",r.y+112);
+                    if(dataB)progress(r.y+148,percent);
+                    text(usedText,left,r.y+183,2,BLUE,right);
+                    text(totalText,left,r.y+222,2,MUTED,right);
+                } else text("SD CARD UNAVAILABLE",left,r.y+90,2,RED,right);
             } else {
                 if(storageStatsAvailable) {
                     text(mainValue,left,r.y+50,4,WHITE,right);
