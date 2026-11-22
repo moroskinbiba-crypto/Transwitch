@@ -1200,10 +1200,11 @@ bool loadWallpaperTexture(const std::string& path) {
         st.st_size>0 && st.st_size<=24LL*1024*1024;
 }
 
-void drawWallpaper() {
+void drawWallpaper(bool fallback=false) {
     if(wallpaperPath.empty()) return;
     int width=0,height=0;
-    SDL_Texture* texture=gWorkspaceBackgroundCache.get(wallpaperPath,width,height);
+    SDL_Texture* texture=gWorkspaceBackgroundCache.get(
+        wallpaperPath,width,height,!fallback);
     if(!texture||width<=0||height<=0) return;
     const auto fit=desknx::artwork::coverDestination(0,0,SW,SH,width,height);
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
@@ -1218,8 +1219,8 @@ void drawWorkspaceBackground(const Workspace& desk) {
     if(desk.backgroundPath.empty()) { drawWallpaper(); return; }
     int width=0,height=0;
     SDL_Texture* texture=gWorkspaceBackgroundCache.get(
-        desk.backgroundPath,width,height);
-    if(!texture||width<=0||height<=0) { drawWallpaper(); return; }
+        desk.backgroundPath,width,height,true);
+    if(!texture||width<=0||height<=0) { drawWallpaper(true); return; }
     const auto fit=desknx::artwork::destination(0,0,SW,SH,width,height,
         static_cast<desknx::artwork::FitMode>(desk.backgroundFit));
     SDL_Rect dst{fit.x,fit.y,fit.w,fit.h},viewport{0,0,SW,SH};
@@ -5674,6 +5675,7 @@ void drawScreen() {
     if(gSurfaceManager.contains(SurfaceId::Diagnostics)) {
         refreshDiagnosticsSnapshot();
         const auto iconStats=gIconCache.stats();
+        const auto backgroundStats=gWorkspaceBackgroundCache.stats();
         const auto fontStats=gFontRenderer.lastFrameStats();
         const Uint32 lastNetworkSuccess=static_cast<Uint32>(
             SDL_AtomicGet(&nextendoLastSuccessTick));
@@ -5739,7 +5741,7 @@ void drawScreen() {
         text(nsText,176,356,1,MUTED,580);
         text("INCREMENTAL METADATA CACHE ACTIVE",176,382,1,BLUE,580);
 
-        softCard(628,278,452,132,Color{23,34,49,255},Color{255,255,255,18});
+        softCard(628,278,452,160,Color{23,34,49,255},Color{255,255,255,18});
         text("IMAGE / GPU CACHE",652,298,2,WHITE,1050);
         char gpuText[112]{};
         std::snprintf(gpuText,sizeof(gpuText),
@@ -5764,32 +5766,44 @@ void drawScreen() {
             iconStats.workerRunning?"ON":"OFF");
         text(queueText,652,396,1,
              iconStats.workerRunning?okColor:warnColor,1050);
+        std::snprintf(queueText,sizeof(queueText),
+            "BG DECODE %.2F MS / WAIT %.2F / UPLOAD %.2F",
+            backgroundStats.lastFrameDecodeMs,
+            backgroundStats.lastFrameQueueWaitMs,
+            backgroundStats.lastFrameUploadMs);
+        text(queueText,652,410,1,MUTED,1050);
+        std::snprintf(queueText,sizeof(queueText),
+            "BG DESTROY %.2F MS / CLEAR %.2F / EVICT %u",
+            backgroundStats.lastFrameTextureDestroyMs,
+            backgroundStats.lastClearMs,
+            backgroundStats.lastFrameEvictions);
+        text(queueText,652,424,1,BLUE,1050);
 
-        softCard(152,430,452,168,Color{23,34,49,255},Color{255,255,255,18});
-        text("BACKGROUND TASKS",176,450,2,WHITE,580);
+        softCard(152,442,452,156,Color{23,34,49,255},Color{255,255,255,18});
+        text("BACKGROUND TASKS",176,462,2,WHITE,580);
         char workerText[112]{};
         std::snprintf(workerText,sizeof(workerText),
             "CATALOGUE %s  /  NEXTENDO %s",
             catalogueThread?"STARTED":"OFF",nextendoThread?"RUNNING":"OFF");
-        text(workerText,176,482,1,catalogueThread?okColor:warnColor,580);
+        text(workerText,176,494,1,catalogueThread?okColor:warnColor,580);
         std::snprintf(workerText,sizeof(workerText),
             "STORAGE %s  /  PDM %s",
             storageStatsThread?"RUNNING":"OFF",playStatsThread?"RUNNING":"IDLE");
-        text(workerText,176,506,1,WHITE,580);
+        text(workerText,176,518,1,WHITE,580);
 #ifdef DESKNX_SYSTEM_APPLET
         std::snprintf(workerText,sizeof(workerText),
             "LAYOUT SAVE %s  /  IPC %s",
             layoutSaveThread?"RUNNING":"IDLE",heartbeatThread?"ACTIVE":"OFF");
-        text(workerText,176,530,1,heartbeatThread?okColor:warnColor,580);
+        text(workerText,176,542,1,heartbeatThread?okColor:warnColor,580);
 #else
         std::snprintf(workerText,sizeof(workerText),
             "LAYOUT SAVE %s  /  NATIVE NRO",
             layoutSaveThread?"RUNNING":"IDLE");
-        text(workerText,176,530,1,MUTED,580);
+        text(workerText,176,542,1,MUTED,580);
 #endif
         std::snprintf(workerText,sizeof(workerText),"SYSTEM TELEMETRY %s",
             gSystemTelemetryReady&&gSystemTelemetry.running()?"RUNNING":"UNAVAILABLE");
-        text(workerText,176,554,1,
+        text(workerText,176,566,1,
             gSystemTelemetryReady?okColor:warnColor,580);
         const auto joyconText=[](const JoyconBatteryState& state,const char* side) {
             if(!state.connected)return std::string(side)+" --";
@@ -5800,41 +5814,44 @@ void drawScreen() {
         const std::string powerText="BATTERY "+(battery>=0?
             std::to_string(battery)+"%":std::string("N/A"))+"  /  "+
             joyconText(joyconLeft,"L")+"  /  "+joyconText(joyconRight,"R");
-        text(powerText,176,578,1,MUTED,580);
+        text(powerText,176,590,1,MUTED,580);
 
-        softCard(628,430,452,168,Color{23,34,49,255},Color{255,255,255,18});
-        text("FRAME PERFORMANCE",652,450,2,WHITE,1050);
+        softCard(628,442,452,156,Color{23,34,49,255},Color{255,255,255,18});
+        text("FRAME PERFORMANCE",652,462,2,WHITE,1050);
         char perfText[112]{};
         std::snprintf(perfText,sizeof(perfText),"FPS %.1f  /  FRAME %.2f MS AVG",
             runtimeFrameMetrics.fps,runtimeFrameMetrics.averageFrameMs);
-        text(perfText,652,482,1,okColor,1050);
+        text(perfText,652,494,1,okColor,1050);
         std::snprintf(perfText,sizeof(perfText),"RENDER %.2f MS AVG  /  PEAK %.2F MS",
             runtimeFrameMetrics.averageRenderMs,runtimeFrameMetrics.maximumFrameMs);
-        text(perfText,652,506,1,MUTED,1050);
+        text(perfText,652,518,1,MUTED,1050);
         std::snprintf(perfText,sizeof(perfText),"INPUT %.2f MS  /  PRESENT WAIT %.2f MS",
             runtimeFrameMetrics.averageInputMs,runtimeFrameMetrics.averagePresentWaitMs);
-        text(perfText,652,530,1,BLUE,1050);
+        text(perfText,652,542,1,BLUE,1050);
         std::snprintf(perfText,sizeof(perfText),"LAST SWITCH %.2F MS  /  PEAK %.2F MS  /  COUNT %llu",
             runtimeFrameMetrics.lastWorkspaceSwitchMs,
             runtimeFrameMetrics.maximumWorkspaceSwitchMs,
             static_cast<unsigned long long>(runtimeFrameMetrics.workspaceSwitches));
-        text(perfText,652,554,1,warnColor,1050);
+        text(perfText,652,566,1,warnColor,1050);
         std::snprintf(perfText,sizeof(perfText),"FRAME P95 %.2F MS  /  SLOW %llu",
             runtimeFrameMetrics.p95FrameMs,
             static_cast<unsigned long long>(runtimeFrameMetrics.slowFrames));
-        text(perfText,652,578,1,MUTED,1050);
+        text(perfText,652,590,1,MUTED,1050);
         std::snprintf(perfText,sizeof(perfText),
-            "TEXT CACHE %u HIT  /  %u MISS  /  %u NEW  /  %u DEFERRED",
+            "TEXT %u HIT / %u MISS / %u NEW / QUEUED %u / PENDING %zu",
             fontStats.cacheHits,fontStats.cacheMisses,fontStats.texturesCreated,
-            fontStats.deferredByBudget);
+            fontStats.queuedRequests,fontStats.pendingRasterJobs);
         text(perfText,176,604,1,MUTED,1060);
         std::snprintf(perfText,sizeof(perfText),
-            "TEXT PREP %.2F MS  /  RASTER %.2F MS  /  UPLOAD %.2F MS",
+            "TEXT PREP %.2F MS / RASTER %.2F MS / UPLOAD %.2F MS",
             fontStats.textPreparationMs,fontStats.rasterizationMs,
             fontStats.textureUploadMs);
         text(perfText,176,628,1,BLUE,1060);
-        text("CACHE TIMINGS DESCRIBE THE PREVIOUS COMPLETED FRAME",
-             176,652,1,MUTED,1060);
+        std::snprintf(perfText,sizeof(perfText),
+            "TEXT DESTROY %.2F MS / CLEAR %.2F MS / EVICT %u",
+            fontStats.textureDestroyMs,gFontRenderer.lastCacheClearMs(),
+            fontStats.cacheEvictions);
+        text(perfText,176,652,1,MUTED,1060);
     }
     if(gSurfaceManager.contains(SurfaceId::MediaPicker)) {
 
