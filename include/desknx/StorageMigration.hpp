@@ -184,7 +184,8 @@ inline RunResult run(const std::string& input, const SchemaDescriptor& schema,
             result.status = RunStatus::MissingStep;
             return result;
         }
-        if (selected->toVersion != version + 1 ||
+        if (selected->toVersion <= version ||
+            selected->toVersion > schema.currentVersion ||
             !selected->transform || !selected->validateOutput) {
             result.status = RunStatus::InvalidPlan;
             return result;
