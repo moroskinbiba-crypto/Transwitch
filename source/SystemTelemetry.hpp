@@ -447,17 +447,20 @@ private:
                 return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
             bool wifiEnabled = false;
             rc = setsysGetWirelessLanEnableFlag(&wifiEnabled);
-            if (R_SUCCEEDED(rc)) {
+            if (R_SUCCEEDED(rc) && !wifiEnabled) {
+                // Enabling Wi-Fi while airplane mode is active requires the
+                // radio gate to be opened first. Do not claim success if NIFM
+                // cannot confirm/enable that gate.
+                if (R_FAILED(nifmInitialize(NifmServiceType_System)))
+                    return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
                 bool wirelessEnabled = true;
-                if (R_SUCCEEDED(nifmInitialize(NifmServiceType_System))) {
-                    if (R_SUCCEEDED(nifmIsWirelessCommunicationEnabled(&wirelessEnabled)) &&
-                        !wifiEnabled && !wirelessEnabled)
-                        rc = nifmSetWirelessCommunicationEnabled(true);
-                    nifmExit();
-                }
-                if (R_SUCCEEDED(rc))
-                    rc = setsysSetWirelessLanEnableFlag(!wifiEnabled);
+                rc = nifmIsWirelessCommunicationEnabled(&wirelessEnabled);
+                if (R_SUCCEEDED(rc) && !wirelessEnabled)
+                    rc = nifmSetWirelessCommunicationEnabled(true);
+                nifmExit();
             }
+            if (R_SUCCEEDED(rc))
+                rc = setsysSetWirelessLanEnableFlag(!wifiEnabled);
         } else if (action == 3) {
             if (!setsysReady_)
                 return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
