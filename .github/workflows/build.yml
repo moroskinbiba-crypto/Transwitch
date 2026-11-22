@@ -52,6 +52,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/coalesced_layout_save_scheduler_test.cpp -o /tmp/desknx-coalesced-layout-save-test
           /tmp/desknx-coalesced-layout-save-test
 
+      - name: Test game tile visual layout rules
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/tile_visual_rules_test.cpp -o /tmp/desknx-tile-visual-rules-test
+          /tmp/desknx-tile-visual-rules-test
+
       - name: Test visual engine rounded geometry
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/visual_geometry_test.cpp -o /tmp/desknx-visual-geometry-test
