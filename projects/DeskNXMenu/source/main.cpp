@@ -13,7 +13,6 @@
 // Persistence layer includes
 #include "../../../source/DataDirectory.hpp"
 #include "../../../source/AppCatalogManager.hpp"
-#include "../../../source/PersistenceStore.hpp"
 
 #include <memory>
 #include <cstring>
@@ -35,7 +34,6 @@ namespace {
 std::unique_ptr<menu::renderer::GridRenderer> g_renderer;
 std::unique_ptr<menu::input::TileInputHandler> g_inputHandler;
 std::unique_ptr<homenx::WorkspaceProvider> g_provider;
-std::unique_ptr<desknx::persistence::PersistenceStore> g_store;
 std::unique_ptr<desknx::catalog::AppCatalogManager> g_catalog;
 std::unique_ptr<menu::settings::SettingsScreen> g_settings;
 
@@ -151,13 +149,8 @@ int main(int argc, char* argv[]) {
                     g_catalog->gameCount(), g_catalog->homebrewCount());
     }
     
-    // 3. Load persisted state
-    g_store = std::make_unique<desknx::persistence::PersistenceStore>();
-    if (!g_store->load()) {
-        debugPrintf("Warning: Failed to load persisted state\n");
-    } else {
-        debugPrintf("Persisted state loaded successfully\n");
-    }
+    // 3. Workspace state is loaded later through the shared DESKNX layout
+    // repository. Do not create a parallel workspace list in workspaces.json.
     
     // Log default launcher status
     if (isDefaultLauncherEnabled()) {
@@ -197,21 +190,14 @@ int main(int argc, char* argv[]) {
     // Initialize workspace provider
     g_provider = std::make_unique<homenx::WorkspaceProvider>();
     
-    // 4. Populate workspaces from persisted layouts
-    const auto& desktops = g_store->desktops();
-    if (!desktops.empty()) {
-        // Load workspaces from persistence
-        for (const auto& desktop : desktops) {
-            g_provider->addWorkspace(desktop.name);
-        }
-        debugPrintf("Loaded %zu workspaces from persistence\n", desktops.size());
+    // 4. Restore the complete workspace snapshot (tiles, positions,
+    // artwork settings and active desk) from the shared DESKNX repository.
+    if (!menu::storage::LayoutStore::load(*g_provider)) {
+        // WorkspaceProvider starts with a safe default "Home" workspace.
+        debugPrintf("No valid workspace snapshot found; using default Home\n");
     } else {
-        // Load legacy layout or create default
-        if (!menu::storage::LayoutStore::load(*g_provider)) {
-            // No layout file; create a default workspace
-            g_provider->addWorkspace("Home");
-            debugPrintf("Created default workspace\n");
-        }
+        debugPrintf("Workspace snapshot restored: %zu desks, active=%d\n",
+                    g_provider->count(), g_provider->activeIndex());
     }
 
     // Create renderer, input handler, and settings screen
@@ -228,6 +214,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Populate workspace with real discovered apps if empty
+    bool initialWorkspaceChanged = false;
     if (auto* active = g_provider->activeWorkspaceForEditing()) {
         if (active->tiles.empty() && g_catalog) {
             const auto& games = g_catalog->games();
@@ -260,6 +247,7 @@ int main(int argc, char* argv[]) {
                 
                 if (model::placeable(*active, tile, x, y)) {
                     active->tiles.push_back(std::move(tile));
+                    initialWorkspaceChanged = true;
                     debugPrintf("  [%d,%d] %s\n", x, y, tile.title.c_str());
                     x++;
                     if (x >= model::Columns) {
@@ -270,6 +258,14 @@ int main(int argc, char* argv[]) {
             }
             
             debugPrintf("Populated %zu tiles from catalog\n", active->tiles.size());
+        }
+    }
+
+    if (initialWorkspaceChanged) {
+        if (!menu::storage::LayoutStore::save(*g_provider, [] {
+                return R_SUCCEEDED(fsdevCommitDevice("sdmc"));
+            })) {
+            debugPrintf("Warning: Failed to save initial workspace snapshot\n");
         }
     }
 
@@ -407,7 +403,11 @@ int main(int argc, char* argv[]) {
                                     if (focusedIdx >= 0) {
                                         // Immediate delete (no double-press, faster)
                                         ws->tiles.erase(ws->tiles.begin() + focusedIdx);
-                                        if (g_store) g_store->save();
+                                        if (!menu::storage::LayoutStore::save(*g_provider, [] {
+                                                return R_SUCCEEDED(fsdevCommitDevice("sdmc"));
+                                            })) {
+                                            debugPrintf("Warning: workspace delete save failed\n");
+                                        }
                                         debugPrintf("[Remove] deleted tile %d\n", focusedIdx);
                                         g_renderer->initFocus(*ws); // Re-init focus after delete
                                     }
@@ -430,7 +430,11 @@ int main(int argc, char* argv[]) {
                                 auto result = g_inputHandler->commitDrop(*ws);
                                 g_renderer->endDragPreview();
                                 if (result == desknx::menu::input::DropResult::Committed) {
-                                    if (g_store) g_store->save();
+                                    if (!menu::storage::LayoutStore::save(*g_provider, [] {
+                                        return R_SUCCEEDED(fsdevCommitDevice("sdmc"));
+                                    })) {
+                                        debugPrintf("Warning: workspace drag save failed\n");
+                                    }
                                     debugPrintf("[Drop] committed & saved\n");
                                 } else {
                                     debugPrintf("[Drop] invalid, bounced back\n");
@@ -441,7 +445,11 @@ int main(int argc, char* argv[]) {
                         else if (g_inputHandler->getEditMode() == desknx::menu::input::EditMode::Resize) {
                             if (auto* ws = g_provider->activeWorkspaceForEditing()) {
                                 if (g_inputHandler->commitResize(*ws)) {
-                                    if (g_store) g_store->save();
+                                    if (!menu::storage::LayoutStore::save(*g_provider, [] {
+                                        return R_SUCCEEDED(fsdevCommitDevice("sdmc"));
+                                    })) {
+                                        debugPrintf("Warning: workspace resize save failed\n");
+                                    }
                                     debugPrintf("[Resize] committed & saved\n");
                                 }
                                 g_renderer->endResizePreview();
@@ -561,20 +569,18 @@ int main(int argc, char* argv[]) {
         SDL_Delay(16);  // ~60 FPS
     }
 
-    // 5. On exit: save all persisted state atomically
-    debugPrintf("Saving application state before exit\n");
-    if (g_store && !g_store->save()) {
-        debugPrintf("Warning: Failed to save persisted state\n");
-    } else if (g_store) {
-        debugPrintf("Persisted state saved successfully\n");
+    // 5. On exit: flush the same authoritative workspace snapshot.
+    debugPrintf("Saving workspace snapshot before exit\n");
+    if (!menu::storage::LayoutStore::save(*g_provider, [] {
+            return R_SUCCEEDED(fsdevCommitDevice("sdmc"));
+        })) {
+        debugPrintf("Warning: Failed to save workspace snapshot\n");
+    } else {
+        debugPrintf("Workspace snapshot saved successfully\n");
     }
-    
-    // Legacy layout save (backward compatibility)
-    menu::storage::LayoutStore::save(*g_provider);
 
     // Cleanup
     g_settings.reset();
-    g_store.reset();
     g_catalog.reset();
     g_inputHandler.reset();
     g_renderer.reset();
