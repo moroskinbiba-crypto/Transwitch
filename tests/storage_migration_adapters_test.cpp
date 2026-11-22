@@ -61,7 +61,7 @@ int main() {
     // Settings v1 -> v2 changes only the schema header and preserves unknown
     // key/value rows, repeated keys and their order.
     const std::string legacySettings =
-        "DESKNXSET1\ntheme=1\nfuture_option=preserve\ntheme=0\n";
+        "DESKNXSET1\ntheme=2\nfuture_option=preserve\ntheme=8\n";
     std::string migratedSettings;
     result = run(legacySettings, SettingsSchema,
                  SettingsSteps, SettingsStepCount,
@@ -75,7 +75,7 @@ int main() {
     assert(result.status == RunStatus::AppliedInMemory);
     assert(migratedSettings.rfind("DESKNXSET2\n", 0) == 0);
     assert(migratedSettings.find("future_option=preserve") != std::string::npos);
-    assert(migratedSettings.find("theme=1") < migratedSettings.find("theme=0"));
+    assert(migratedSettings.find("theme=0") < migratedSettings.find("theme=1"));
     assert(validateSettingsV2(migratedSettings, nullptr));
 
     // The migrated bytes are not published by the migration engine itself.
