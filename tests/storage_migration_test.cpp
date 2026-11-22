@@ -51,31 +51,27 @@ int main() {
 
     // Dry-run validates that a complete chain exists but never invokes a
     // transformer or changes the caller's buffer.
-    const auto dryRun = run(legacy, testSchema, steps, 2, true, validTest);
+    std::string migrated = "do-not-touch";
+    const auto dryRun = run(
+        legacy, testSchema, steps, 2, true, migrated, validTest);
     assert(dryRun.status == RunStatus::DryRunReady);
     assert(dryRun.stepsApplied == 2);
-    assert(legacy == "TEST1\nvalue=old\n");
+    assert(migrated == "do-not-touch"); // dry-run never mutates caller output
 
-    std::string migrated = "do-not-touch";
-    const auto applied = run(legacy, testSchema, steps, 2, false, validTest);
+    const auto applied = run(
+        legacy, testSchema, steps, 2, false, migrated, validTest);
     assert(applied.status == RunStatus::AppliedInMemory);
     assert(applied.stepsApplied == 2);
-    assert(migrated == "do-not-touch"); // run returns bytes only through caller output below
+    assert(migrated == "TEST3\nvalue=final\n");
 
-    // Verify output remains isolated until all steps validate by using the
-    // exact migration callback contract through a tiny adapter.
-    std::string first;
-    assert(migrate1to2(legacy, first, nullptr));
-    std::string second;
-    assert(migrate2to3(first, second, nullptr));
-    assert(second == "TEST3\nvalue=final\n");
-
-    const auto current = run(second, testSchema, steps, 2, false, validTest);
+    const auto current = run(
+        migrated, testSchema, steps, 2, false, migrated, validTest);
     assert(current.status == RunStatus::Current);
+    assert(migrated == "TEST3\nvalue=final\n");
 
     const auto future = inspect("TEST4\nvalue=future\n", testSchema);
     assert(future.status == InspectionStatus::UnsupportedFuture);
-    assert(run("TEST4\nvalue=future\n", testSchema, steps, 2, false).status ==
+    assert(run("TEST4\nvalue=future\n", testSchema, steps, 2, false, migrated).status ==
            RunStatus::UnsupportedFuture);
 
     const SchemaDescriptor newerMinimum{"test", "TEST", 2, 3, 128};
@@ -90,20 +86,20 @@ int main() {
     assert(inspect(std::string("TEST1\nvalue=x\n") + '\0', testSchema).status ==
            InspectionStatus::Invalid);
 
-    assert(run(legacy, testSchema, nullptr, 0, true).status ==
+    assert(run(legacy, testSchema, nullptr, 0, true, migrated).status ==
            RunStatus::MissingStep);
     const Step brokenPlan[] = {{1, 3, migrate1to2, validTest}};
-    assert(run(legacy, testSchema, brokenPlan, 1, true).status ==
+    assert(run(legacy, testSchema, brokenPlan, 1, true, migrated).status ==
            RunStatus::InvalidPlan);
     const Step badOutput[] = {{1, 2, invalidTransform, validTest},
                               {2, 3, migrate2to3, validTest}};
-    assert(run(legacy, testSchema, badOutput, 2, false).status ==
+    assert(run(legacy, testSchema, badOutput, 2, false, migrated).status ==
            RunStatus::ValidationFailed);
     const Step badValidator[] = {{1, 2, migrate1to2, rejectOutput},
                                  {2, 3, migrate2to3, validTest}};
-    assert(run(legacy, testSchema, badValidator, 2, false).status ==
+    assert(run(legacy, testSchema, badValidator, 2, false, migrated).status ==
            RunStatus::ValidationFailed);
-    assert(run(legacy, testSchema, steps, 2, false, rejectOutput).status ==
+    assert(run(legacy, testSchema, steps, 2, false, migrated, rejectOutput).status ==
            RunStatus::ValidationFailed);
 
     // The registry covers the real production schema families without
