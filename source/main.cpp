@@ -140,8 +140,6 @@ LauncherSettingsSaveStatus launcherSettingsSaveOutcome=LauncherSettingsSaveStatu
 std::uint64_t layoutMutationRevision=0;
 std::unordered_map<std::string,std::string> gameNameOverrides;
 std::string pendingGameIconTitleId;
-SDL_Texture* roundedCornerMaskTexture=nullptr;
-int roundedCornerMaskRadius=0;
 
 enum class MediaPickerType { Wallpaper, Font, IconPack, WorkspaceBackground, GameIcon };
 struct MediaEntry { std::string name, path; bool directory{false}; };
@@ -3955,63 +3953,6 @@ const std::vector<std::string>& cachedTileTitleLines(const std::string& title,si
     if(tileTitleWrapCache.size()>=512)tileTitleWrapCache.clear();
     return tileTitleWrapCache.emplace(key,wrapTileTitle(title,maxChars)).first->second;
 }
-SDL_Texture* getRoundedCornerMask(int radius) {
-    if(!renderer||radius<=0)return nullptr;
-    if(roundedCornerMaskTexture&&roundedCornerMaskRadius==radius)
-        return roundedCornerMaskTexture;
-    if(roundedCornerMaskTexture) {
-        SDL_DestroyTexture(roundedCornerMaskTexture);
-        roundedCornerMaskTexture=nullptr;
-        roundedCornerMaskRadius=0;
-    }
-    SDL_Surface* surface=SDL_CreateRGBSurfaceWithFormat(
-        0,radius,radius,32,SDL_PIXELFORMAT_RGBA32);
-    if(!surface)return nullptr;
-    if(SDL_MUSTLOCK(surface)&&SDL_LockSurface(surface)!=0) {
-        SDL_FreeSurface(surface);
-        return nullptr;
-    }
-    for(int y=0;y<radius;++y) {
-        Uint32* row=reinterpret_cast<Uint32*>(
-            static_cast<Uint8*>(surface->pixels)+y*surface->pitch);
-        for(int x=0;x<radius;++x) {
-            const double dx=radius-(x+0.5),dy=radius-(y+0.5);
-            const bool outside=(dx*dx+dy*dy)>
-                static_cast<double>(radius)*radius;
-            row[x]=SDL_MapRGBA(surface->format,255,255,255,outside?255:0);
-        }
-    }
-    if(SDL_MUSTLOCK(surface))SDL_UnlockSurface(surface);
-    roundedCornerMaskTexture=SDL_CreateTextureFromSurface(renderer,surface);
-    SDL_FreeSurface(surface);
-    if(!roundedCornerMaskTexture)return nullptr;
-    SDL_SetTextureBlendMode(roundedCornerMaskTexture,SDL_BLENDMODE_BLEND);
-    roundedCornerMaskRadius=radius;
-    return roundedCornerMaskTexture;
-}
-
-void maskRoundedImageCorners(const SDL_Rect& bounds,int radius,Color fill) {
-    const int r=std::max(0,std::min(radius,std::min(bounds.w,bounds.h)/2));
-    SDL_Texture* mask=getRoundedCornerMask(r);
-    if(!mask)return;
-    SDL_SetTextureColorMod(mask,fill.r,fill.g,fill.b);
-    SDL_SetTextureAlphaMod(mask,fill.a);
-    const SDL_Rect corners[]={
-        {bounds.x,bounds.y,r,r},
-        {bounds.x+bounds.w-r,bounds.y,r,r},
-        {bounds.x,bounds.y+bounds.h-r,r,r},
-        {bounds.x+bounds.w-r,bounds.y+bounds.h-r,r,r}
-    };
-    const SDL_RendererFlip flips[]={
-        SDL_FLIP_NONE,SDL_FLIP_HORIZONTAL,SDL_FLIP_VERTICAL,
-        static_cast<SDL_RendererFlip>(SDL_FLIP_HORIZONTAL|SDL_FLIP_VERTICAL)
-    };
-    for(int i=0;i<4;++i)
-        SDL_RenderCopyEx(renderer,mask,nullptr,&corners[i],0.0,nullptr,flips[i]);
-    SDL_SetTextureColorMod(mask,255,255,255);
-    SDL_SetTextureAlphaMod(mask,255);
-}
-
 bool isBackendSuspendedTile(const Tile& tile) {
 #ifdef DESKNX_SYSTEM_APPLET
     if(tile.kind!=Kind::Game||!g_backendAppSuspended||g_backendAppTitle==0||
@@ -4032,29 +3973,15 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
         :COLORS[static_cast<size_t>(tile.color)%COLORS.size()];
     const SDL_Rect viewport{bounds.x+1,bounds.y+1,
         std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
-    roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
 
     SDL_Texture* texture=gIconCache.get(tile,selected);
-    if(texture) {
-        int sourceWidth=0,sourceHeight=0;
-        if(SDL_QueryTexture(texture,nullptr,nullptr,&sourceWidth,&sourceHeight)==0 &&
-           sourceWidth>0 && sourceHeight>0) {
-            const auto mode=static_cast<desknx::artwork::FitMode>(workspace.artworkMode);
-            const auto fit=desknx::artwork::destination(
-                viewport.x,viewport.y,viewport.w,viewport.h,sourceWidth,sourceHeight,mode);
-            if(mode==desknx::artwork::FitMode::Contain)
-                roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,
-                          Color{static_cast<Uint8>(fallback.r/3),static_cast<Uint8>(fallback.g/3),static_cast<Uint8>(fallback.b/3),255});
-            SDL_Rect clip=viewport,target{fit.x,fit.y,fit.w,fit.h};
-            // Cover scales the entire image beyond the tile and clips it to
-            // the tile viewport. This avoids source-rect rounding gaps.
-            SDL_RenderSetClipRect(renderer,&clip);
-            SDL_RenderCopy(renderer,texture,nullptr,&target);
-            SDL_RenderSetClipRect(renderer,nullptr);
-        } else {
-            roundRect(viewport.x,viewport.y,viewport.w,viewport.h,UiCornerRadius,fallback);
-        }
-    } else {
+    const auto mode=static_cast<desknx::artwork::FitMode>(workspace.artworkMode);
+    const bool artworkDrawn=texture&&gTileRenderer.artworkImage(
+        texture,viewport,mode,
+        SDL_Color{fallback.r,fallback.g,fallback.b,fallback.a},UiCornerRadius);
+    if(!artworkDrawn) {
+        roundRect(viewport.x,viewport.y,viewport.w,viewport.h,
+                  UiCornerRadius,fallback);
         const std::string mark=initials(tile.title);
         const int scale=std::max(2,std::min(5,bounds.h/24));
         const int width=static_cast<int>(mark.size())*6*scale-scale;
@@ -4086,27 +4013,32 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
             bounds.y+bounds.h-stripHeight+labelMetrics.secondLineOffset,
             2,WHITE,bounds.x+10,bounds.x+bounds.w-10);
     }
-    // Texture rendering uses a rectangular clip; paint only the four corner
-    // wedges afterwards so the actual game artwork follows the tile's 10px
-    // rounded silhouette rather than exposing square image corners.
-    maskRoundedImageCorners(viewport,UiCornerRadius,cornerFill);
+
+    // A private mask texture preserves rounded corners for both cover and
+    // contain images without changing the artwork's source crop.
+    (void)gTileRenderer.maskRoundedCorners(viewport,UiCornerRadius,
+        SDL_Color{cornerFill.r,cornerFill.g,cornerFill.b,cornerFill.a});
+
     if(isBackendSuspendedTile(tile)) {
         const int badgeW=languageRussian?82:78;
         const int badgeX=viewport.x+viewport.w-badgeW-8;
-        roundRect(badgeX,viewport.y+8,badgeW,24,12,Color{86,58,22,238});
+        (void)gTileRenderer.badgeSurface(
+            SDL_Rect{badgeX,viewport.y+8,badgeW,24},
+            SDL_Color{86,58,22,238},SDL_Color{0,0,0,0},12);
         text(languageRussian?"ВОЗВРАТ":"RESUME",badgeX+8,viewport.y+16,1,
              Color{255,220,158,255},badgeX+badgeW-5);
     }
-    if (tile.kind == Kind::Game) {
-        const unsigned online = nextendoPlayersForTitle(tile.data);
-        if (online > 0) {
-            const std::string count = std::to_string(online);
-            const int badgeWidth = 38 + static_cast<int>(count.size()) * 8;
-            roundRect(viewport.x + 8, viewport.y + 8, badgeWidth, 25, 13,
-                      Color{5,18,15,224});
-            roundRect(viewport.x + 15, viewport.y + 16, 9, 9, 5, GREEN);
-            text(count, viewport.x + 29, viewport.y + 15, 1, WHITE,
-                 viewport.x + badgeWidth - 5);
+    if(tile.kind==Kind::Game) {
+        const unsigned online=nextendoPlayersForTitle(tile.data);
+        if(online>0) {
+            const std::string count=std::to_string(online);
+            const int badgeWidth=38+static_cast<int>(count.size())*8;
+            (void)gTileRenderer.badgeSurface(
+                SDL_Rect{viewport.x+8,viewport.y+8,badgeWidth,25},
+                SDL_Color{5,18,15,224},SDL_Color{0,0,0,0},13);
+            roundRect(viewport.x+15,viewport.y+16,9,9,5,GREEN);
+            text(count,viewport.x+29,viewport.y+15,1,WHITE,
+                 viewport.x+badgeWidth-5);
         }
     }
 }
@@ -5001,7 +4933,12 @@ void drawScreen() {
         Color{144,189,244,110},editing);
     drawSystemIcon(desknx::ui::IconId::Home,1108,650,30,WHITE);
     text(editing?"DONE":"EDIT",1148,657,2,WHITE,1216);
-    gModalLayer.compose(gSurfaceManager.dimAlpha());
+    static bool modalComposeFailed=false;
+    const bool modalComposeOk=gModalLayer.compose(gSurfaceManager.dimAlpha());
+    if(!modalComposeOk&&!modalComposeFailed)
+        desknx::diag::Write("ui","modal_compose_failed",
+            "error=%s",SDL_GetError());
+    modalComposeFailed=!modalComposeOk;
     if(emptyDesktopSurface&&!gSurfaceManager.hasBlockingSurface()) {
         softCard(350,248,580,204,Color{19,29,43,250},Color{255,255,255,38});
         roundRect(386,276,50,50,15,Color{38,76,119,255});
@@ -8853,7 +8790,6 @@ int main(int,char**) {
         "async_was_pending=%d save_requested=%d save_ok=%d loaded=%d",
         asyncSavePendingAtExit?1:0,shouldSaveAtExit?1:0,
         finalLayoutSaveOk?1:0,layoutLoaded?1:0);
-    if(roundedCornerMaskTexture){SDL_DestroyTexture(roundedCornerMaskTexture);roundedCornerMaskTexture=nullptr;}
     desknx::diag::Write("session", "shutdown_begin", "catalogue_thread=%d",
                         catalogueThread ? 1 : 0);
     playStatsPending=false;
@@ -8880,7 +8816,7 @@ int main(int,char**) {
     if (ipcMutex) SDL_DestroyMutex(ipcMutex);
     if (storageCommitMutex) SDL_DestroyMutex(storageCommitMutex);
     if (catalogueMutex) SDL_DestroyMutex(catalogueMutex);
-    gTileRenderer.bind(nullptr,nullptr,nullptr);
+    gTileRenderer.shutdown();
     gUiComponents.bind(nullptr,nullptr);
     gVisualEngine.shutdown();
     if (renderer) SDL_DestroyRenderer(renderer);
