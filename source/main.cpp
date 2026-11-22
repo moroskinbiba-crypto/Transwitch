@@ -2881,32 +2881,49 @@ void drawScreen() {
     }
     for(const auto&t:d.tiles)drawTile(t,selectedX>=t.x&&selectedX<t.x+t.w&&selectedY>=t.y&&selectedY<t.y+t.h,d);
     if(editing&&dragging)text("MOVING",1040,118,1,BLUE,1260);
-    softCard(28,558,1224,56,Color{18,26,39,238},Color{255,255,255,16});
+    const auto& footer=desknx::ui::WorkspaceFooterControls;
+    softCard(footer.surface.x,footer.surface.y,footer.surface.width,
+        footer.surface.height,Color{18,26,39,238},Color{255,255,255,16});
     const bool show=statusUntil==0||SDL_GetTicks()<statusUntil;
-    roundRect(48,576,7,7,4,show?BLUE:GREEN);
-    text(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
-         68,575,1,show?WHITE:MUTED,620);
+    roundRect(footer.statusIndicator.x,footer.statusIndicator.y,
+        footer.statusIndicator.width,footer.statusIndicator.height,4,
+        show?BLUE:GREEN);
+    textRole(show?statusText:(editing?"ARRANGE MODE  /  EMPTY CELLS STAY EMPTY":"READY"),
+        footer.statusLabel.x,footer.statusLabel.y,
+        desknx::ui::TextRole::Metadata,show?WHITE:MUTED,
+        footer.statusLabel.x+footer.statusLabel.width);
     struct Hint { const char* key; const char* action; };
     const Hint normalHints[]={{"A","OPEN"},{"Y","ADD"},{"X","EDIT"},{"L/R","SPACES"}};
     const Hint editHints[]={{"A","MOVE / ADD"},{"D-PAD","POSITION"},{"ZL/ZR","SIZE"},{"-","REMOVE"}};
     const Hint dragHints[]={{"D-PAD","MOVE"},{"L/R","CHANGE DESK"},{"A / B","DROP"},{"-","REMOVE"}};
     const int selectedTileIndex=itemAt(d,selectedX,selectedY);
     if(editing&&!dragging&&selectedTileIndex>=0) {
-        // Touchscreen users need the same tile-management actions as controller
-        // users. Keep these real, generous hit targets in the persistent footer.
-        roundRect(650,571,165,28,8,Color{35,57,83,255});
-        text("SIZE -  /  ZL",665,581,1,WHITE,808);
-        roundRect(826,571,165,28,8,Color{35,57,83,255});
-        text("SIZE +  /  ZR",841,581,1,WHITE,984);
-        roundRect(1002,571,228,28,8,Color{91,39,48,255});
-        text("REMOVE TILE  /  MINUS",1018,581,1,WHITE,1220);
+        const desknx::ui::ButtonControl sizeDecrease{
+            footer.tileSizeDecreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+        const desknx::ui::ButtonControl sizeIncrease{
+            footer.tileSizeIncreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+        const desknx::ui::ButtonControl removeTile{
+            footer.removeTileButton,desknx::ui::ButtonVariant::Destructive,{}};
+        drawButton(sizeDecrease,"SIZE -  /  ZL",
+            sizeDecrease.bounds.x+15,sizeDecrease.bounds.y+10,
+            sizeDecrease.bounds.x+sizeDecrease.bounds.width-8,
+            desknx::ui::TextRole::Metadata);
+        drawButton(sizeIncrease,"SIZE +  /  ZR",
+            sizeIncrease.bounds.x+15,sizeIncrease.bounds.y+10,
+            sizeIncrease.bounds.x+sizeIncrease.bounds.width-8,
+            desknx::ui::TextRole::Metadata);
+        drawButton(removeTile,"REMOVE TILE  /  MINUS",
+            removeTile.bounds.x+16,removeTile.bounds.y+10,
+            removeTile.bounds.x+removeTile.bounds.width-8,
+            desknx::ui::TextRole::Metadata);
     } else {
         const Hint* hints=dragging?dragHints:(editing?editHints:normalHints);
-        for(int i=0;i<4;++i) {
-            const int hx=642+i*148;
-            roundRect(hx,571,48,28,8,Color{34,45,63,255});
-            text(hints[i].key,hx+5,581,1,BLUE,hx+43);
-            text(hints[i].action,hx+56,581,1,MUTED,hx+144);
+        for(int i=0;i<desknx::ui::WorkspaceFooterLayout::HintCount;++i) {
+            const auto hint=footer.hint(i);
+            drawBadge(hint.keyBadge,hints[i].key,desknx::ui::BadgeVariant::Info);
+            textRole(hints[i].action,hint.actionLabel.x,hint.actionLabel.y,
+                desknx::ui::TextRole::Metadata,MUTED,
+                hint.actionLabel.x+hint.actionLabel.width);
         }
     }
     // Workspace switcher anchors the lower edge, matching a familiar
@@ -4693,14 +4710,26 @@ void touchInput(const SDL_Event&e) {
         else if(secondaryButton.hitTest(x,y))keyInput(HidNpadButton_B,false);
         return;
     }
-    if(e.type==SDL_FINGERDOWN && editing && !dragging &&
+    if(e.type==SDL_FINGERDOWN &&
        activeModal==desknx::ui::ModalLayer::None) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(y>=566&&y<=614&&itemAt(
-               desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
-            if(x>=650&&x<815) resizeTile(false);
-            else if(x>=826&&x<991) resizeTile(true);
-            else if(x>=1002&&x<1230) removeTile();
+        const auto& footer=desknx::ui::WorkspaceFooterControls;
+        if(footer.surface.contains(x,y)) {
+            if(editing&&!dragging&&deskIndex>=0&&
+               deskIndex<static_cast<int>(desks.size())&&
+               itemAt(desks[static_cast<size_t>(deskIndex)],selectedX,selectedY)>=0) {
+                const desknx::ui::ButtonControl sizeDecrease{
+                    footer.tileSizeDecreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+                const desknx::ui::ButtonControl sizeIncrease{
+                    footer.tileSizeIncreaseButton,desknx::ui::ButtonVariant::Secondary,{}};
+                const desknx::ui::ButtonControl removeTile{
+                    footer.removeTileButton,desknx::ui::ButtonVariant::Destructive,{}};
+                if(sizeDecrease.hitTest(x,y))resizeTile(false);
+                else if(sizeIncrease.hitTest(x,y))resizeTile(true);
+                else if(removeTile.hitTest(x,y))removeTile();
+            }
+            // Status text and keyboard hints are intentionally inert. A tap
+            // in their area must not fall through to the workspace grid.
             return;
         }
     }
