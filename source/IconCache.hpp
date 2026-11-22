@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../include/desknx/Model.hpp"
+#include "../include/desknx/ArtworkRequestPolicy.hpp"
 #include "SteamGridDbCache.hpp"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -63,10 +64,55 @@ public:
         return result;
     }
 
-    void prefetch(const desknx::model::Tile& tile, bool highPriority = false) {
-        // Prefetch never reads SD or decodes on the caller. The selected tile
-        // can be promoted ahead of nearby off-screen artwork in the worker queue.
-        (void)get(tile, highPriority);
+    void prefetch(const desknx::model::Tile& tile,
+                  int priority = desknx::artwork::WorkspacePrefetchPriorityBase) {
+        (void)get(tile, priority, true);
+    }
+
+    void cancelQueuedPrefetches() {
+        if (!mutex_) { ++prefetchGeneration_; return; }
+        SDL_LockMutex(mutex_);
+        ++prefetchGeneration_;
+        promotedPrefetchKeys_.clear();
+        for (auto it = requests_.begin(); it != requests_.end();) {
+            if (it->prefetched) {
+                pendingKeys_.erase(it->key);
+                requestRetryAt_.erase(it->key);
+                priorityRetryAt_.erase(it->key);
+                it = requests_.erase(it);
+            } else ++it;
+        }
+        for (auto it = completed_.begin(); it != completed_.end();) {
+            if (it->prefetched) {
+                pendingKeys_.erase(it->key);
+                requestRetryAt_.erase(it->key);
+                priorityRetryAt_.erase(it->key);
+                it = completed_.erase(it);
+            } else ++it;
+        }
+        SDL_CondBroadcast(condition_);
+        SDL_UnlockMutex(mutex_);
+    }
+
+    void prefetchWorkspace(const desknx::model::Workspace& workspace,
+                           int focusX, int focusY, std::size_t maxRequests = 48) {
+        struct Candidate { const desknx::model::Tile* tile; int priority; };
+        std::vector<Candidate> candidates;
+        candidates.reserve(workspace.tiles.size());
+        for (const auto& tile : workspace.tiles) {
+            if (tile.kind != desknx::model::Kind::Game &&
+                tile.kind != desknx::model::Kind::Nro) continue;
+            if (desknx::model::iconCachePath(tile.kind, tile.data).empty()) continue;
+            candidates.push_back({&tile,
+                desknx::artwork::workspacePrefetchPriority(tile, focusX, focusY)});
+        }
+        std::stable_sort(candidates.begin(), candidates.end(),
+            [](const Candidate& a, const Candidate& b) {
+                return a.priority > b.priority;
+            });
+        const std::size_t count = std::min(maxRequests, candidates.size());
+        for (std::size_t i = 0; i < count; ++i)
+            prefetch(*candidates[i].tile, candidates[i].priority);
     }
 
     // Validate dimensions from image headers before asking SDL_image to decode.
@@ -89,7 +135,9 @@ public:
     void beginFrame() {
         lastFrameMetrics_ = frameMetrics_;
         frameMetrics_ = FrameMetrics{};
-        loadBudget_ = 1;
+        loadBudget_ = MaxTextureUploadsPerFrame;
+        uploadByteBudget_ = MaxTextureUploadBytesPerFrame;
+        uploadsThisFrame_ = 0;
         const Uint32 now = SDL_GetTicks();
         if (lastPruneTick_ == 0 || now - lastPruneTick_ >= CachePruneIntervalMs) {
             pruneUnused(now);
@@ -106,10 +154,13 @@ public:
         if (mutex_) {
             SDL_LockMutex(mutex_);
             ++generation_;
+            ++prefetchGeneration_;
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
             keyGenerations_.clear();
+            inFlightPrefetchKeys_.clear();
+            promotedPrefetchKeys_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
@@ -129,10 +180,13 @@ void setGameIconOverridesDir(const std::string& path) {
         if (mutex_) {
             SDL_LockMutex(mutex_);
             ++generation_;
+            ++prefetchGeneration_;
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
             keyGenerations_.clear();
+            inFlightPrefetchKeys_.clear();
+            promotedPrefetchKeys_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
@@ -145,12 +199,11 @@ void setGameIconOverridesDir(const std::string& path) {
         clearTextures();
     }
 
-    SDL_Texture* get(const desknx::model::Tile& tile, bool highPriority = false) {
+    SDL_Texture* get(const desknx::model::Tile& tile,
+                     int priority = desknx::artwork::VisibleTilePriority,
+                     bool prefetched = false) {
         if (!renderer_) return nullptr;
-
         const Uint32 now = SDL_GetTicks();
-        // Hot path: resident textures are found by stable tile identity before
-        // any path lookup, filesystem call or temporary allocation.
         for (auto& entry : entries_) {
             if (entry.kind == tile.kind && entry.data == tile.data) {
                 entry.lastUse = ++clock_;
@@ -160,41 +213,41 @@ void setGameIconOverridesDir(const std::string& path) {
         }
 
         const std::string key = makeKey(tile.kind, tile.data);
-        // Repeated draw calls must not retry the same SD lookup/worker request.
-        // Cooldown is cleared as soon as a decoded result is consumed.
         const auto retry = requestRetryAt_.find(key);
         if (retry != requestRetryAt_.end()) {
             if (static_cast<Sint32>(now - retry->second) < 0) {
-                if (!highPriority) return nullptr;
-                const auto promotion=priorityRetryAt_.find(key);
-                if (promotion!=priorityRetryAt_.end() &&
-                    static_cast<Sint32>(now-promotion->second)<0)
+                if (!prefetched && priority < desknx::artwork::VisibleTilePriority)
                     return nullptr;
-                const bool promoted=enqueue(tile,key,2);
-                priorityRetryAt_[key]=now+PromotionRetryThrottleMs;
-                requestRetryAt_[key]=now+(promoted
-                    ?RequestRetryThrottleMs:QueueRetryThrottleMs);
+                if (!prefetched && priority >= desknx::artwork::VisibleTilePriority) {
+                    const auto promotion = priorityRetryAt_.find(key);
+                    if (promotion != priorityRetryAt_.end() &&
+                        static_cast<Sint32>(now - promotion->second) < 0)
+                        return nullptr;
+                    const bool promoted = enqueue(tile, key, priority, false);
+                    priorityRetryAt_[key] = now + PromotionRetryThrottleMs;
+                    requestRetryAt_[key] = now + (promoted
+                        ? RequestRetryThrottleMs : QueueRetryThrottleMs);
+                    return nullptr;
+                }
+                const bool alreadyQueued = enqueue(tile, key, priority, true);
+                if (!alreadyQueued) requestRetryAt_[key] = now + QueueRetryThrottleMs;
                 return nullptr;
             }
             requestRetryAt_.erase(retry);
         }
+
         const auto failed = failedUntil_.find(key);
         if (failed != failedUntil_.end()) {
             if (static_cast<Sint32>(now - failed->second) < 0) return nullptr;
             failedUntil_.erase(failed);
         }
-
         const std::string defaultPath =
             desknx::model::iconCachePath(tile.kind, tile.data);
         if (defaultPath.empty()) return nullptr;
-        const bool queued = enqueue(tile, key, highPriority ? 2 : 0);
-        if (queued) {
-            // If the worker is slow, repeated frames still avoid queue searches.
-            requestRetryAt_[key] = now + RequestRetryThrottleMs;
-        } else {
-            // Queue-full / worker-unavailable paths retry soon, not every frame.
-            requestRetryAt_[key] = now + QueueRetryThrottleMs;
-        }
+        const bool queued = enqueue(tile, key, priority, prefetched);
+        requestRetryAt_[key] = now + (queued
+            ? RequestRetryThrottleMs : QueueRetryThrottleMs);
+
         if (requestRetryAt_.size() > 512) {
             for (auto it = requestRetryAt_.begin(); it != requestRetryAt_.end();) {
                 if (static_cast<Sint32>(now - it->second) >= 0)
@@ -222,10 +275,13 @@ void setGameIconOverridesDir(const std::string& path) {
         if (mutex_) {
             SDL_LockMutex(mutex_);
             ++generation_;
+            ++prefetchGeneration_;
             requests_.clear();
             completed_.clear();
             pendingKeys_.clear();
             keyGenerations_.clear();
+            inFlightPrefetchKeys_.clear();
+            promotedPrefetchKeys_.clear();
             SDL_CondBroadcast(condition_);
             SDL_UnlockMutex(mutex_);
         } else {
@@ -296,6 +352,8 @@ void setGameIconOverridesDir(const std::string& path) {
         }
 
         pendingKeys_.clear();
+        inFlightPrefetchKeys_.clear();
+        promotedPrefetchKeys_.clear();
         requests_.clear();
         completed_.clear();
         failedUntil_.clear();
@@ -323,7 +381,9 @@ private:
         std::string gameOverrideDirectory;
         std::uint64_t generation{0};
         std::uint64_t keyGeneration{0};
+        std::uint64_t prefetchGeneration{0};
         int priority{0};
+        bool prefetched{false};
         Uint64 enqueuedAtMs{0};
     };
 
@@ -334,7 +394,9 @@ private:
         std::string path;
         std::uint64_t generation{0};
         std::uint64_t keyGeneration{0};
+        std::uint64_t prefetchGeneration{0};
         int priority{0};
+        bool prefetched{false};
         int width{0};
         int height{0};
         double decodeMs{0.0};
@@ -367,6 +429,8 @@ private:
     // Bound decoded CPU-side pixels while the renderer is busy. One 1024x1024
     // RGBA image is at most 4 MiB, so this queue has a predictable upper bound.
     static constexpr std::size_t MaxCompletedImages = 2;
+    static constexpr std::size_t MaxTextureUploadsPerFrame = 2;
+    static constexpr std::size_t MaxTextureUploadBytesPerFrame = 6u * 1024u * 1024u;
     static constexpr int MaxIconDimension = 2048;
     static constexpr int MaxGpuIconDimension = 1024;
     static constexpr std::uint32_t MaxDecodedPixels = 3u * 1024u * 1024u;
