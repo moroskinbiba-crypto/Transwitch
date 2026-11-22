@@ -49,10 +49,10 @@ public:
         return result;
     }
 
-    void prefetch(const desknx::model::Tile& tile) {
-        // get() is deliberately non-blocking; the worker performs file I/O and
-        // decoding, while beginFrame() uploads no more than one texture.
-        (void)get(tile);
+    void prefetch(const desknx::model::Tile& tile, bool highPriority = false) {
+        // Prefetch never reads SD or decodes on the caller. The selected tile
+        // can be promoted ahead of nearby off-screen artwork in the worker queue.
+        (void)get(tile, highPriority);
     }
 
     // Validate dimensions from image headers before asking SDL_image to decode.
