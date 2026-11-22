@@ -54,6 +54,8 @@ int main() {
     scheduler.request(nearWrap, 200, false);
     assert(!scheduler.ready(nearWrap + 199));
     assert(scheduler.ready(nearWrap + 200));
+    assert(scheduler.kind() == LayoutSaveKind::Full);
+    assert(scheduler.take() == LayoutSaveKind::Full);
 
     scheduler.request(7000, 500, true);
     scheduler.forceDue(7025);
