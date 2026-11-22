@@ -33,6 +33,9 @@ public:
         double textureUploadMs{0.0};
         double maximumRasterizationMs{0.0};
         double maximumTextureUploadMs{0.0};
+        double fontOpenMs{0.0};
+        double maximumFontOpenMs{0.0};
+        std::uint32_t fontOpenOperations{0};
         std::uint32_t queuedRequests{0};
         std::uint32_t cacheEvictions{0};
         double textureDestroyMs{0.0};
@@ -147,8 +150,8 @@ public:
             if (loaded && !candidateData.empty()) {
                 SDL_RWops* stream = SDL_RWFromConstMem(
                     candidateData.data(), static_cast<int>(candidateData.size()));
-                TTF_Font* candidate = stream
-                    ? TTF_OpenFontRW(stream, 1, fontPixelSize(0)) : nullptr;
+                TTF_Font* candidate = openFontMeasured(
+                    stream, fontPixelSize(0));
                 if (candidate) {
                     closeCustomFonts();
                     customFontData_ = std::move(candidateData);
@@ -175,7 +178,8 @@ public:
         SDL_RWops* stream = SDL_RWFromConstMem(
             customFontData_.data(), static_cast<int>(customFontData_.size()));
         if (stream)
-            customFonts_[index] = TTF_OpenFontRW(stream, 1, fontPixelSize(index));
+            customFonts_[index] = openFontMeasured(
+                stream, fontPixelSize(index));
         return customWarmupIndex_ < 8;
     }
 
@@ -348,6 +352,18 @@ private:
         return false;
     }
 
+    TTF_Font* openFontMeasured(SDL_RWops* stream, int pixelSize) {
+        if (!stream) return nullptr;
+        const Uint64 started = SDL_GetPerformanceCounter();
+        TTF_Font* font = TTF_OpenFontRW(stream, 1, pixelSize);
+        const double elapsed = elapsedMs(started, SDL_GetPerformanceCounter());
+        frameStats_.fontOpenMs += elapsed;
+        frameStats_.maximumFontOpenMs =
+            std::max(frameStats_.maximumFontOpenMs, elapsed);
+        ++frameStats_.fontOpenOperations;
+        return font;
+    }
+
     TTF_Font* systemFontForScale(int index) {
         if (index < 0 || index >= 8) return nullptr;
         if (fonts_[index]) return fonts_[index];
@@ -356,7 +372,7 @@ private:
         SDL_RWops* rw = SDL_RWFromConstMem(
             sharedFont_.address, static_cast<int>(sharedFont_.size));
         if (!rw) return nullptr;
-        fonts_[index] = TTF_OpenFontRW(rw, 1, fontPixelSize(index));
+        fonts_[index] = openFontMeasured(rw, fontPixelSize(index));
         return fonts_[index];
     }
 
