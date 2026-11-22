@@ -3309,44 +3309,68 @@ void drawScreen() {
     if(modalStack.contains(desknx::ui::ModalLayer::Power)) {
         static const char* kPowerItems[]={"SLEEP","REBOOT","SHUTDOWN"};
         drawModalBackdrop(194);
-        drawModalSurface(410,210,460,300,Color{18,25,37,255},Color{255,255,255,24});
+        const auto& powerLayout=desknx::ui::PowerDialogControls;
+        drawModalSurface(powerLayout.surface.x,powerLayout.surface.y,
+            powerLayout.surface.width,powerLayout.surface.height,
+            Color{18,25,37,255},Color{255,255,255,24});
         text("POWER",454,238,3,WHITE,820);
-        roundRect(780,238,52,30,9,Color{54,57,66,255});
-        text("B",798,247,1,WHITE,828);
-        for(int i=0;i<3;++i){
-            int yy=294+i*44;
-            if(i==powerIndex)roundRect(442,yy-5,396,38,9,Color{45,61,82,255});
-            text(kPowerItems[i],460,yy+2,2,i==powerIndex?WHITE:MUTED,810);
+        const desknx::ui::ButtonControl backButton{
+            powerLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B",powerLayout.closeButton.x+18,
+            powerLayout.closeButton.y+9,
+            powerLayout.closeButton.x+powerLayout.closeButton.width-8,
+            desknx::ui::TextRole::Metadata);
+        for(int i=0;i<powerLayout.actions.itemCount;++i) {
+            const auto row=powerLayout.actions.itemRect(i);
+            if(i==powerIndex)
+                drawSelectableRowBackground(row,
+                    desknx::ui::SelectableRowState::Focused,9);
+            text(kPowerItems[i],row.x+18,row.y+7,2,
+                i==powerIndex?WHITE:MUTED,row.x+row.width-20);
         }
-        roundRect(590,432,248,42,11,Color{10,132,255,255});
-        text("EXECUTE",674,445,2,WHITE,820);
+        const desknx::ui::ButtonControl executeButton{
+            powerLayout.executeButton,desknx::ui::ButtonVariant::Primary,{}};
+        drawButton(executeButton,"EXECUTE",
+            powerLayout.executeButton.x+84,powerLayout.executeButton.y+13,
+            powerLayout.executeButton.x+powerLayout.executeButton.width-14);
         text("SELECT AN ACTION FIRST",440,478,1,MUTED,820);
     }
     if(modalStack.contains(desknx::ui::ModalLayer::UserPicker)) {
         drawModalBackdrop(210);
-        drawModalSurface(330,116,620,508,Color{17,24,36,255},Color{255,255,255,32});
+        const auto& userLayout=desknx::ui::UserPickerDialogControls;
+        drawModalSurface(userLayout.surface.x,userLayout.surface.y,
+            userLayout.surface.width,userLayout.surface.height,
+            Color{17,24,36,255},Color{255,255,255,32});
         text("SELECT PLAYER",374,142,3,WHITE,900);
         text("The selected profile is used for games that request a player account.",
              376,180,1,MUTED,914);
-        roundRect(844,136,76,34,10,Color{54,57,66,255});
-        text("B BACK",856,147,1,WHITE,912);
+        const desknx::ui::ButtonControl backButton{
+            userLayout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        drawButton(backButton,"B BACK",userLayout.closeButton.x+12,
+            userLayout.closeButton.y+11,
+            userLayout.closeButton.x+userLayout.closeButton.width-8,
+            desknx::ui::TextRole::Metadata);
         if(consoleUsers.empty()) {
             text("NO NINTENDO ACCOUNT PROFILES FOUND",382,268,2,WHITE,906);
             text("Create a user in System Settings, then reopen this menu.",
                  382,306,1,MUTED,906);
         } else {
-            for(size_t i=0;i<consoleUsers.size();++i) {
-                const int yy=214+static_cast<int>(i)*46;
+            for(int i=0;i<userLayout.users.itemCount&&
+                i<static_cast<int>(consoleUsers.size());++i) {
+                const auto row=userLayout.users.itemRect(i);
                 const bool active=uiHasSelectedUser&&
-                    sameAccountUid(consoleUsers[i].uid,uiSelectedUser);
-                if(static_cast<int>(i)==userPickerIndex)
-                    roundRect(370,yy,540,40,10,Color{42,74,111,255});
-                else if(active)
-                    roundRect(370,yy,540,40,10,Color{28,47,66,255});
-                drawSystemIcon(7,386,yy+8,24,active?BLUE:MUTED);
-                text(consoleUsers[i].nickname,424,yy+13,2,
-                     static_cast<int>(i)==userPickerIndex?WHITE:MUTED,790);
-                if(active)text("ACTIVE",816,yy+14,1,GREEN,898);
+                    sameAccountUid(consoleUsers[static_cast<size_t>(i)].uid,uiSelectedUser);
+                const auto state=i==userPickerIndex
+                    ?desknx::ui::SelectableRowState::Focused
+                    :active?desknx::ui::SelectableRowState::Current
+                    :desknx::ui::SelectableRowState::Normal;
+                drawSelectableRowBackground(row,state,10);
+                drawSystemIcon(7,row.x+16,row.y+8,24,active?BLUE:MUTED);
+                text(consoleUsers[static_cast<size_t>(i)].nickname,
+                    row.x+54,row.y+13,2,i==userPickerIndex?WHITE:MUTED,
+                    row.x+420);
+                if(active)text("ACTIVE",row.x+446,row.y+14,1,GREEN,
+                    row.x+row.width-12);
             }
         }
         text("UP / DOWN SELECT     A USE PROFILE     B CLOSE",374,588,1,BLUE,914);
@@ -4375,13 +4399,17 @@ void touchInput(const SDL_Event&e) {
     if(activeModal==desknx::ui::ModalLayer::UserPicker) {
         if(e.type==SDL_FINGERDOWN) {
             const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-            if(x>=844&&x<=920&&y>=136&&y<=170) {
+            const auto& layout=desknx::ui::UserPickerDialogControls;
+            const desknx::ui::ButtonControl backButton{
+                layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+            if(backButton.hitTest(x,y)) {
                 userPickerOpen=false;
-            } else if(!consoleUsers.empty()&&x>=370&&x<=910&&y>=214&&
-                      y<214+static_cast<int>(consoleUsers.size())*46) {
-                userPickerIndex=std::max(0,std::min(
-                    static_cast<int>(consoleUsers.size())-1,(y-214)/46));
-                selectConsoleUser(userPickerIndex);
+            } else {
+                const int row=layout.users.itemAt(x,y);
+                if(row>=0&&row<static_cast<int>(consoleUsers.size())) {
+                    userPickerIndex=row;
+                    selectConsoleUser(row);
+                }
             }
         }
         return;
@@ -4523,12 +4551,18 @@ void touchInput(const SDL_Event&e) {
     }
     if(activeModal==desknx::ui::ModalLayer::Power ) {
         const int x=static_cast<int>(e.tfinger.x*SW),y=static_cast<int>(e.tfinger.y*SH);
-        if(x>=780&&x<=832&&y>=238&&y<=270) {
+        const auto& layout=desknx::ui::PowerDialogControls;
+        const desknx::ui::ButtonControl backButton{
+            layout.closeButton,desknx::ui::ButtonVariant::Secondary,{}};
+        const desknx::ui::ButtonControl executeButton{
+            layout.executeButton,desknx::ui::ButtonVariant::Primary,{}};
+        if(backButton.hitTest(x,y)) {
             keyInput(HidNpadButton_B,false);
-        } else if(y>=289&&y<421&&x>=442&&x<=838) {
-            powerIndex=std::max(0,std::min(2,(y-289)/44));
-        } else if(x>=590&&x<=838&&y>=432&&y<=474) {
+        } else if(executeButton.hitTest(x,y)) {
             keyInput(HidNpadButton_A,false);
+        } else {
+            const int row=layout.actions.itemAt(x,y);
+            if(row>=0)powerIndex=row;
         }
         return;
     }

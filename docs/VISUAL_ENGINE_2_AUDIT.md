@@ -224,3 +224,16 @@ now deliberately inert instead of selecting the adjacent row.
 
 Keyboard navigation and file-selection semantics are unchanged. The new layout test
 checks the first/last row, row gutters, all button edges and the outer list bounds.
+
+## User Picker and Power dialog geometry update
+
+User Picker uses `UserPickerDialogControls` for its Back button and up to eight
+account rows, matching the Horizon `accountListAllUsers(..., 8, ...)` cap. Each
+painted row is 40 px high with a 6 px gutter; touch now selects only the visible
+row rectangle, and the Back hit target matches its 76 x 34 px button.
+
+Power uses `PowerDialogControls` for its three action rows, Back and Execute buttons.
+Row selection is separate from execution: tapping an action only moves the selected
+row; tapping Execute retains the existing keyInput(A) flow. Gamepad input is unchanged.
+The test suite verifies row gaps, each button's half-open bounds and containment inside
+the parent dialog.

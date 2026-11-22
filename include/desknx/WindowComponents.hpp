@@ -86,6 +86,33 @@ inline constexpr ItemListLayout LauncherSettingsOptionsLayout{
     {340,214,600,334},12,26,28
 };
 
+struct UserPickerDialogLayout {
+    static constexpr int MaxUsers=8;
+    ModalRect surface;
+    ModalRect closeButton;
+    ItemListLayout users;
+};
+
+inline constexpr UserPickerDialogLayout UserPickerDialogControls{
+    {330,116,620,508},
+    {844,136,76,34},
+    {{370,214,540,368},UserPickerDialogLayout::MaxUsers,40,46}
+};
+
+struct PowerDialogLayout {
+    ModalRect surface;
+    ModalRect closeButton;
+    ItemListLayout actions;
+    ModalRect executeButton;
+};
+
+inline constexpr PowerDialogLayout PowerDialogControls{
+    {410,210,460,300},
+    {780,238,52,30},
+    {{442,289,396,126},3,38,44},
+    {590,432,248,42}
+};
+
 struct MediaPickerWindowLayout {
     ModalRect surface;
     ModalRect directoryButton;

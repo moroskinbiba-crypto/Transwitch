@@ -75,6 +75,49 @@ int main() {
     assert(toolbar.buttonRect(6).width==72&&toolbar.buttonRect(6).height==30);
     assert(toolbar.buttonRect(-1).width==0);
 
+    // User Picker: Horizon account list is capped at eight; gaps are not tappable.
+    const auto& users=UserPickerDialogControls;
+    assert(UserPickerDialogLayout::MaxUsers==8);
+    assert(users.surface.contains(330,116));
+    assert(users.closeButton.inside(users.surface));
+    assert(users.users.bounds.inside(users.surface));
+    assert(users.users.itemCount==8);
+    assert(users.users.itemAt(370,214)==0);
+    assert(users.users.itemAt(909,253)==0);
+    assert(users.users.itemAt(370,254)==-1);
+    assert(users.users.itemAt(370,259)==1);
+    assert(users.users.itemAt(909,575)==7);
+    assert(users.users.itemAt(909,576)==-1);
+    assert(users.users.itemAt(910,260)==-1);
+    assert(users.users.itemAt(369,260)==-1);
+    assert(users.closeButton.contains(844,136));
+    assert(users.closeButton.contains(919,169));
+    assert(!users.closeButton.contains(920,169));
+    assert(!users.closeButton.contains(919,170));
+
+    // Power actions, Back and Execute are separate hit targets.
+    const auto& power=PowerDialogControls;
+    assert(power.surface.contains(410,210));
+    assert(power.closeButton.inside(power.surface));
+    assert(power.actions.bounds.inside(power.surface));
+    assert(power.executeButton.inside(power.surface));
+    assert(power.actions.itemAt(442,289)==0);
+    assert(power.actions.itemAt(837,326)==0);
+    assert(power.actions.itemAt(442,327)==-1);
+    assert(power.actions.itemAt(442,333)==1);
+    assert(power.actions.itemAt(442,377)==2);
+    assert(power.actions.itemAt(837,414)==2);
+    assert(power.actions.itemAt(442,415)==-1);
+    assert(power.actions.itemAt(838,300)==-1);
+    assert(power.closeButton.contains(780,238));
+    assert(power.closeButton.contains(831,267));
+    assert(!power.closeButton.contains(832,267));
+    assert(!power.closeButton.contains(831,268));
+    assert(power.executeButton.contains(590,432));
+    assert(power.executeButton.contains(837,473));
+    assert(!power.executeButton.contains(838,473));
+    assert(!power.executeButton.contains(837,474));
+
     // Media Picker uses shared button and list-row geometry. Row gutters are inert.
     const auto& media=MediaPickerWindowControls;
     assert(media.surface.contains(220,58));
