@@ -5753,16 +5753,17 @@ void drawScreen() {
             iconStats.pendingRequests,iconStats.completedImages,iconStats.failedKeys);
         text(queueText,652,356,1,MUTED,1050);
         std::snprintf(queueText,sizeof(queueText),
-            "WORKER %s  /  DECODED %u  /  QUEUE WAIT %.2F MS",
-            iconStats.workerRunning?"ON":"OFF",iconStats.lastFrameDecoded,
+            "DECODED %u  /  CPU %.2F MS  /  WAIT %.2F MS",
+            iconStats.lastFrameDecoded,iconStats.lastFrameDecodeMs,
             iconStats.lastFrameQueueWaitMs);
-        text(queueText,652,382,1,
-             iconStats.workerRunning?okColor:warnColor,1050);
+        text(queueText,652,382,1,MUTED,1050);
         std::snprintf(queueText,sizeof(queueText),
-            "UPLOAD %.2F MS  /  %u OK  /  %u FAILED",
+            "UPLOAD %.2F MS  /  %u OK  /  %u FAILED  /  WORKER %s",
             iconStats.lastFrameUploadMs,iconStats.lastFrameUploads,
-            iconStats.lastFrameUploadFailures);
-        text(queueText,652,396,1,MUTED,1050);
+            iconStats.lastFrameUploadFailures,
+            iconStats.workerRunning?"ON":"OFF");
+        text(queueText,652,396,1,
+             iconStats.workerRunning?okColor:warnColor,1050);
 
         softCard(152,430,452,168,Color{23,34,49,255},Color{255,255,255,18});
         text("BACKGROUND TASKS",176,450,2,WHITE,580);
