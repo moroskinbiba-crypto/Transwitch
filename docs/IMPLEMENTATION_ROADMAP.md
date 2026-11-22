@@ -127,6 +127,8 @@ Successful compilation alone does not close a runtime acceptance item.
 - [x] Make multiline text blocks use UTF-8 bitmap wrapping when TTF fonts are
       unavailable or the per-frame texture budget defers the block; keep fallback font
       consistent across all lines.
+- [x] Measure fallback text by decoded Unicode code points, including tab/newline
+      advances, and test Cyrillic wrapping, max-line ellipsis and malformed UTF-8.
 - [ ] Extend semantic multiline role rendering to remaining content blocks and profile
       fallback legibility at all UI scales on a physical Switch.
 - [x] Add a UTF-8-aware 5x7 Cyrillic bitmap fallback with upper/lowercase mapping,
