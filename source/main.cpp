@@ -29,6 +29,11 @@
 #include "../include/desknx/Artwork.hpp"
 #include "FontRenderer.hpp"
 #include "IconCache.hpp"
+#include "../include/desknx/ArtworkRequestPolicy.hpp"
+#include "../include/desknx/BitmapFont.hpp"
+#include "../include/desknx/RendererStatePolicy.hpp"
+#include "../include/desknx/RendererStateRecovery.hpp"
+#include "../include/desknx/RuntimeMetrics.hpp"
 #include "WorkspaceBackgroundCache.hpp"
 #include "SteamGridDbService.hpp"
 #include "desknx/WidgetConfig.hpp"
@@ -289,6 +294,7 @@ std::string selectedUserLabel="SELECT PLAYER";
 bool sameAccountUid(const AccountUid& a,const AccountUid& b);
 FontRenderer gFontRenderer;
 IconCache gIconCache;
+desknx::runtime::RollingMetrics gRuntimeMetrics;
 WorkspaceBackgroundCache gWorkspaceBackgroundCache;
 desknx::steamgriddb::SteamGridDbService gSteamGridDbService;
 enum class SteamGridDbPickerView { Matches, Assets };
@@ -1548,39 +1554,71 @@ std::string fallbackAscii(const std::string& input) {
 // unavailable (pl/TTF init failed) we fall back to the bitmap glyphs, which
 // pass ASCII through and draw U+FFFD-style replacement boxes for anything
 // else (default glyph in glyph()) instead of silently dropping characters.
+int bitmapTextLineWidth(const std::string& value, int scale) {
+    std::size_t count = 0;
+    for (std::size_t offset = 0; offset < value.size();) {
+        const auto decoded = desknx::ui::DecodeUtf8Codepoint(value, offset);
+        offset += decoded.length > 0 ? decoded.length : 1;
+        if (decoded.codepoint == '\r' || decoded.codepoint == '\n') break;
+        count += decoded.codepoint == '\t' ? 4u : 1u;
+    }
+    if (count == 0) return 0;
+    const std::size_t width = count * static_cast<std::size_t>(6 * scale) -
+        static_cast<std::size_t>(scale);
+    return static_cast<int>(std::min<std::size_t>(width, 1000000u));
+}
+
+void drawBitmapText(const std::string& value, int x, int y, int scale,
+                    Color tint, int right) {
+    color(tint);
+    int px = x;
+    int py = y;
+    for (std::size_t offset = 0; offset < value.size();) {
+        const auto decoded = desknx::ui::DecodeUtf8Codepoint(value, offset);
+        offset += decoded.length > 0 ? decoded.length : 1;
+        const std::uint32_t codepoint = decoded.codepoint;
+        if (codepoint == '\r' || codepoint == '\n') {
+            if (codepoint == '\r' && offset < value.size()) {
+                const auto next = desknx::ui::DecodeUtf8Codepoint(value, offset);
+                if (next.valid && next.codepoint == '\n') offset += next.length;
+            }
+            px = x;
+            py += 8 * scale;
+            continue;
+        }
+        if (codepoint == '\t') {
+            px += 24 * scale;
+            continue;
+        }
+        if (px + 5 * scale > right) break;
+        const auto rows = codepoint < 0x80
+            ? glyph(static_cast<char>(codepoint))
+            : desknx::ui::RussianBitmapGlyph(codepoint);
+        for (int ry = 0; ry < 7; ++ry) {
+            for (int rx = 0; rx < 5; ++rx) {
+                if ((rows[ry] & (1u << (4 - rx))) == 0) continue;
+                SDL_Rect pixel{px + rx * scale, py + ry * scale, scale, scale};
+                SDL_RenderFillRect(renderer, &pixel);
+            }
+        }
+        px += 6 * scale;
+    }
+}
+
 void text(const std::string& value,int x,int y,int scale,Color c,int right=1260) {
     const std::string localized=desknx::i18n::translate(value,languageRussian);
     if(gFontRenderer.draw(localized,x,y,scale,SDL_Color{c.r,c.g,c.b,c.a},right))return;
-    const std::string s=fallbackAscii(localized); color(c); int px=x;
-    for(char ch:s) {
-        if(px+5*scale>right) break;
-        const auto rows=glyph(ch);
-        for(int ry=0;ry<7;++ry) for(int rx=0;rx<5;++rx) if(rows[ry]&(1u<<(4-rx))) {
-            SDL_Rect p{px+rx*scale,y+ry*scale,scale,scale}; SDL_RenderFillRect(renderer,&p);
-        }
-        px+=6*scale;
-    }
+    drawBitmapText(localized,x,y,scale,c,right);
 }
+
 void textCentered(const std::string& value,int centerX,int y,int scale,
                   Color c,int left,int right) {
     const std::string localized=desknx::i18n::translate(value,languageRussian);
     const SDL_Color tint{c.r,c.g,c.b,c.a};
     if(gFontRenderer.drawCentered(localized,centerX,y,scale,tint,left,right))return;
-    const std::string fallback=fallbackAscii(localized);
-    const int width=fallback.empty()?0:
-        static_cast<int>(fallback.size())*6*scale-scale;
-    int px=std::max(left,std::min(right-width,centerX-width/2));
-    color(c);
-    for(char ch:fallback) {
-        if(px+5*scale>right)break;
-        const auto rows=glyph(ch);
-        for(int ry=0;ry<7;++ry)for(int rx=0;rx<5;++rx)
-            if(rows[ry]&(1u<<(4-rx))) {
-                SDL_Rect p{px+rx*scale,y+ry*scale,scale,scale};
-                SDL_RenderFillRect(renderer,&p);
-            }
-        px+=6*scale;
-    }
+    const int width=bitmapTextLineWidth(localized,scale);
+    const int px=std::max(left,std::min(right-width,centerX-width/2));
+    drawBitmapText(localized,px,y,scale,c,right);
 }
 std::string clockText(bool date=false) {
     std::time_t t=std::time(nullptr); std::tm* tmv=std::localtime(&t); if(!tmv) return "--:--";
@@ -3903,7 +3941,8 @@ void drawSelectionFrame(int x,int y,int w,int h,Color accent) {
 void drawTileIcon(const Tile&t,int x,int y,int size,bool highPriority=false) {
     Color c=COLORS[static_cast<size_t>(t.color)%COLORS.size()];
     roundRect(x,y,size,size,std::max(8,size/5),Color{255,255,255,12});
-    if(SDL_Texture* texture=gIconCache.get(t,highPriority)) {
+    if(SDL_Texture* texture=gIconCache.get(
+        t,desknx::artwork::tileRenderPriority(highPriority))) {
         int width=0,height=0;
         if(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)==0) {
             const int inset=std::max(3,size/24),inner=std::max(1,size-inset*2);
@@ -4013,7 +4052,8 @@ void drawTileCover(const Tile& tile,const Workspace& workspace,
     const SDL_Rect viewport{bounds.x+1,bounds.y+1,
         std::max(1,bounds.w-2),std::max(1,bounds.h-2)};
 
-    SDL_Texture* texture=gIconCache.get(tile,selected);
+    SDL_Texture* texture=gIconCache.get(
+        tile,desknx::artwork::tileRenderPriority(selected));
     const auto mode=static_cast<desknx::artwork::FitMode>(workspace.artworkMode);
     const bool artworkDrawn=texture&&gTileRenderer.artworkImage(
         texture,viewport,mode,
@@ -4651,8 +4691,36 @@ void refreshSurfaceManager() {
     if(quickSettingsOpen)(void)gSurfaceManager.push(SurfaceId::QuickSettings,true,true,174);
 }
 
+void diagnoseAndRestoreRendererFrameState(const char* phase) {
+    if (!renderer) return;
+    SDL_BlendMode drawBlend = SDL_BLENDMODE_NONE;
+    const int blendQuery = SDL_GetRenderDrawBlendMode(renderer, &drawBlend);
+    const auto violations = desknx::ui::RendererStateViolations({
+        SDL_GetRenderTarget(renderer) != nullptr,
+        SDL_RenderIsClipEnabled(renderer) == SDL_TRUE,
+        blendQuery == 0 ? static_cast<int>(drawBlend) : -1
+    }, static_cast<int>(SDL_BLENDMODE_BLEND));
+    if (violations != desknx::ui::RendererStateNone) {
+        SDL_Rect clip{};
+        if (SDL_RenderIsClipEnabled(renderer) == SDL_TRUE)
+            SDL_RenderGetClipRect(renderer, &clip);
+        desknx::diag::Write("render", "renderer_state_recovered",
+            "phase=%s violations=0x%02X clip=%d,%d,%d,%d blend_query=%d",
+            phase ? phase : "unknown", static_cast<unsigned int>(violations),
+            clip.x, clip.y, clip.w, clip.h, blendQuery);
+    }
+    const auto recovery = desknx::ui::RestoreRendererFrameBaseline(renderer);
+    if (!recovery.recovered()) {
+        desknx::diag::Write("render", "renderer_state_recovery_failed",
+            "phase=%s target_rc=%d clip_rc=%d blend_rc=%d",
+            phase ? phase : "unknown", recovery.renderTargetResult,
+            recovery.clipResult, recovery.blendResult);
+    }
+}
+
 void drawScreen() {
     using desknx::ui::SurfaceId;
+    diagnoseAndRestoreRendererFrameState("frame_begin");
     gVisualEngine.beginFrame();
     gUiComponents.setThemeTokens(desknx::ui::ThemeTokens{
         SDL_Color{BLUE.r,BLUE.g,BLUE.b,BLUE.a},
@@ -4722,32 +4790,22 @@ void drawScreen() {
         previousX!=selectedX||previousY!=selectedY||previousList!=listIndex||
         previousCatalogue!=currentCatalogue||previousLayout!=layoutMutationRevision;
     if(changed) {
+        gIconCache.cancelQueuedPrefetches();
         if(listOpen&&!available.empty()) {
             const int first=std::max(0,listIndex-2),last=std::min(static_cast<int>(available.size())-1,listIndex+2);
             for(int index=first;index<=last;++index) {
                 const Candidate& candidate=available[static_cast<std::size_t>(index)];
                 Tile tile{candidate.kind,candidate.title,candidate.data,0,0,1,1,candidate.color};
-                gIconCache.prefetch(tile,index==listIndex);
+                gIconCache.prefetch(tile,index==listIndex
+                    ?desknx::artwork::FocusedTilePriority
+                    :desknx::artwork::LibraryIconPriority);
             }
         } else if(!desks.empty()) {
-            const Workspace& activeDesk=desks[static_cast<size_t>(std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
-            int queued=0;
-            const int selectedItem=itemAt(activeDesk,selectedX,selectedY);
-            if(selectedItem>=0) {
-                gIconCache.prefetch(activeDesk.tiles[static_cast<size_t>(selectedItem)],true);
-                ++queued;
-            }
-            for(size_t index=0;index<activeDesk.tiles.size();++index) {
-                if(static_cast<int>(index)==selectedItem)continue;
-                const Tile& tile=activeDesk.tiles[index];
-                const int distance=std::abs(tile.x+tile.w/2-selectedX)+
-                    std::abs(tile.y+tile.h/2-selectedY);
-                if(distance<=3&&queued<8) {
-                    gIconCache.prefetch(tile,false);
-                    ++queued;
-                }
-            }
+            const Workspace& activeDesk=desks[static_cast<size_t>(
+                std::max(0,std::min(deskIndex,static_cast<int>(desks.size())-1)))];
+            gIconCache.prefetchWorkspace(activeDesk,selectedX,selectedY);
         }
+        prefetchValid=true;        }
         prefetchValid=true;previousListOpen=listOpen;previousDesk=deskIndex;
         previousX=selectedX;previousY=selectedY;previousList=listIndex;
         previousCatalogue=currentCatalogue;previousLayout=layoutMutationRevision;
@@ -5140,7 +5198,8 @@ void drawScreen() {
                             SDL_Color{accent.r,accent.g,accent.b,accent.a},
                             selectedCard,surfaceOpacity,UiCornerRadius);
                         const SDL_Rect viewport{x+1,y+1,cardW-2,cardH-2};
-                        SDL_Texture* cover=gIconCache.get(iconTile,selectedCard);
+                        SDL_Texture* cover=gIconCache.get(
+                            iconTile,desknx::artwork::tileRenderPriority(selectedCard));
                         const Color fallback=COLORS[static_cast<size_t>(candidate.color)%
                             COLORS.size()];
                         const bool coverDrawn=cover&&gTileRenderer.artworkImage(
@@ -6148,6 +6207,7 @@ void drawScreen() {
         }
     }
     gVisualEngine.endFrame();
+    diagnoseAndRestoreRendererFrameState("before_present");
     const Uint64 presentStarted=SDL_GetPerformanceCounter();
     SDL_RenderPresent(renderer);
     const Uint64 presentFinished=SDL_GetPerformanceCounter();
