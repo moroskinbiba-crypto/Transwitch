@@ -2979,6 +2979,7 @@ bool saveLayout() {
     // The active desk has its own validated, atomic marker. When only deskIndex
     // changed, do not rewrite every tile or rotate the full-layout backup.
     if(!mustRewritePrimary && saveActiveWorkspaceState()) {
+        layoutSaveScheduler.clear();
         layoutLoaded=true;
         size_t tileCount=0;for(const auto& workspace:desks)tileCount+=workspace.tiles.size();
         desknx::diag::Write("layout","saved",
@@ -3033,6 +3034,7 @@ bool saveLayout() {
         "mode=full workspaces=%zu tiles=%zu active=%d bytes=%zu elapsed_ms=%llu",
         desks.size(),tileCount,deskIndex,serialized.size(),
         static_cast<unsigned long long>(SDL_GetTicks64()-saveStarted));
+    layoutSaveScheduler.clear();
     setStatus("LAYOUT SAVED",1600);
     return true;
 }
@@ -8591,7 +8593,7 @@ int main(int,char**) {
     // while a user-triggered save is already in flight; skipping this drain
     // allowed the process to exit with the only current snapshot unwritten.
     const bool asyncSavePendingAtExit =
-        layoutSaveThread || activeLayoutSaveJob || pendingLayoutSaveJob;
+        layoutSaveThread || activeLayoutSaveJob || layoutSaveScheduler.pending();
     desknx::diag::Write("layout","shutdown_flush_begin",
         "loaded=%d default_pending=%d user_modified=%d blocked=%d async_pending=%d",
         layoutLoaded?1:0,defaultLayoutPending?1:0,layoutUserModified?1:0,
