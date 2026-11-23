@@ -108,7 +108,16 @@ public:
         SDL_Rect savedClip{};
         const bool savedClipEnabled = SDL_RenderIsClipEnabled(renderer_) == SDL_TRUE;
         SDL_RenderGetClipRect(renderer_, &savedClip);
-        if (SDL_RenderSetClipRect(renderer_, &viewport) != 0) return false;
+
+        // Nested artwork must never widen a clip established by its caller.
+        // SDL_RenderSetClipRect replaces the current clip, so intersect the
+        // tile viewport with the saved clip before issuing the texture copy.
+        SDL_Rect effectiveClip = viewport;
+        if (savedClipEnabled &&
+            SDL_IntersectRect(&savedClip, &viewport, &effectiveClip) != SDL_TRUE) {
+            return ok;
+        }
+        if (SDL_RenderSetClipRect(renderer_, &effectiveClip) != 0) return false;
 
         const SDL_Rect target{fit.x, fit.y, fit.w, fit.h};
         const bool copied = SDL_RenderCopy(renderer_, texture, nullptr, &target) == 0;
