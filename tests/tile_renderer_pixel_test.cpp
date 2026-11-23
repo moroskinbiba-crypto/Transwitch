@@ -229,6 +229,33 @@ int main() {
         }
     }
 
+    // A tile may be drawn inside a clipped panel. Its own viewport must
+    // be intersected with, not substituted for, the caller's clip rectangle.
+    clearSurface(renderer, CanvasColor);
+    const SDL_Rect nestedParentClip{120, 90, 120, 80};
+    const SDL_Rect partiallyVisibleTile{80, 60, 160, 120};
+    assert(SDL_RenderSetClipRect(renderer, &nestedParentClip) == 0);
+    assert(tiles.artworkImage(artwork, partiallyVisibleTile,
+        desknx::artwork::FitMode::Cover, TileFill, 10));
+
+    SDL_Rect nestedRestoredClip{};
+    SDL_RenderGetClipRect(renderer, &nestedRestoredClip);
+    assert(nestedRestoredClip.x == nestedParentClip.x);
+    assert(nestedRestoredClip.y == nestedParentClip.y);
+    assert(nestedRestoredClip.w == nestedParentClip.w);
+    assert(nestedRestoredClip.h == nestedParentClip.h);
+
+    assert(SDL_RenderSetClipRect(renderer, nullptr) == 0);
+    SDL_RenderPresent(renderer);
+    const Pixel outsideParent = pixelAt(canvas, 100, 80);
+    const Pixel insideParent = pixelAt(canvas, 130, 100);
+    const char* nestedPath = "/tmp/desknx-visual-regression/nested-clip.bmp";
+    assert(SDL_SaveBMP(canvas, nestedPath) == 0);
+    assertPixelNear(outsideParent, CanvasColor);
+    assert(insideParent.r > 220);
+    assert(insideParent.g < 110);
+    assert(insideParent.b > 170);
+
     tiles.shutdown();
     components.bind(nullptr, nullptr);
     engine.shutdown();
