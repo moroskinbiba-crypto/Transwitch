@@ -192,7 +192,7 @@ int main() {
                 viewport.x + 1, viewport.y + 1,
                 bounds.x + bounds.w * 2 / 3, bounds.y + bounds.h / 3,
                 bounds.x + bounds.w / 2, viewport.y + viewport.h - 2,
-                bounds.x + bounds.w / 2, bounds.y + bounds.h + 6,
+                bounds.x + bounds.w / 2, bounds.y + bounds.h + 14,
                 {}, {}, {}, {}, TileFill, tile.name
             };
         }
@@ -223,8 +223,9 @@ int main() {
             assert(sample.label.r + 25 < ArtworkColor.r);
             assert(sample.label.b + 25 < ArtworkColor.b);
 
-            // Cover scaling must remain clipped to the tile. A few pixels of
-            // shadow are allowed, so inspect beyond the renderer's shadow halo.
+            // Cover scaling must remain clipped to the tile. Sample beyond
+            // the full three-layer card shadow to avoid treating decoration
+            // as artwork bleed.
             assertPixelNear(sample.outside, CanvasColor);
         }
     }
