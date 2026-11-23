@@ -192,7 +192,7 @@ int main() {
                 viewport.x + 1, viewport.y + 1,
                 bounds.x + bounds.w * 2 / 3, bounds.y + bounds.h / 3,
                 bounds.x + bounds.w / 2, viewport.y + viewport.h - 2,
-                bounds.x + bounds.w + 6, bounds.y + bounds.h / 2,
+                bounds.x + bounds.w / 2, bounds.y + bounds.h + 6,
                 {}, {}, {}, {}, TileFill, tile.name
             };
         }
