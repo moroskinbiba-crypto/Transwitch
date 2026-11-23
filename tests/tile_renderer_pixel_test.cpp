@@ -27,12 +27,16 @@ struct TileCase {
 };
 
 struct TileSamples {
-    Pixel corner;
-    Pixel artwork;
-    Pixel label;
-    Pixel outside;
-    SDL_Color fill;
-    const char* name;
+    int cornerX{0}, cornerY{0};
+    int artworkX{0}, artworkY{0};
+    int labelX{0}, labelY{0};
+    int outsideX{0}, outsideY{0};
+    Pixel corner{};
+    Pixel artwork{};
+    Pixel label{};
+    Pixel outside{};
+    SDL_Color fill{};
+    const char* name{nullptr};
 };
 
 Pixel pixelAt(SDL_Surface* surface, int x, int y) {
@@ -185,15 +189,11 @@ int main() {
                 SDL_Color{120, 170, 220, 180}, 10));
 
             samples[i] = {
-                pixelAt(canvas, viewport.x + 1, viewport.y + 1),
-                pixelAt(canvas, bounds.x + bounds.w * 2 / 3,
-                        bounds.y + bounds.h / 3),
-                pixelAt(canvas, bounds.x + bounds.w / 2,
-                        viewport.y + viewport.h - 2),
-                pixelAt(canvas, bounds.x + bounds.w + 8,
-                        bounds.y + bounds.h / 2),
-                TileFill,
-                tile.name
+                viewport.x + 1, viewport.y + 1,
+                bounds.x + bounds.w * 2 / 3, bounds.y + bounds.h / 3,
+                bounds.x + bounds.w / 2, viewport.y + viewport.h - 2,
+                bounds.x + bounds.w + 6, bounds.y + bounds.h / 2,
+                {}, {}, {}, {}, TileFill, tile.name
             };
         }
 
@@ -204,6 +204,12 @@ int main() {
             "/tmp/desknx-visual-regression/theme-%d.bmp", themeIndex);
         assert(SDL_RenderSetClipRect(renderer, nullptr) == 0);
         SDL_RenderPresent(renderer);
+        for (TileSamples& sample : samples) {
+            sample.corner = pixelAt(canvas, sample.cornerX, sample.cornerY);
+            sample.artwork = pixelAt(canvas, sample.artworkX, sample.artworkY);
+            sample.label = pixelAt(canvas, sample.labelX, sample.labelY);
+            sample.outside = pixelAt(canvas, sample.outsideX, sample.outsideY);
+        }
         assert(SDL_SaveBMP(canvas, path) == 0);
 
         for (const TileSamples& sample : samples) {
