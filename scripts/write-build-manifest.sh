@@ -89,7 +89,7 @@ git_value() {
   printf 'cmake=%s\n' "$(first_version_line cmake)"
   printf '\n%s\n' '[devkitpro_packages]'
   if command -v pacman >/dev/null 2>&1; then
-    for package in devkitA64 libnx switch-dev switch-portlibs switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf; do
+    for package in libnx devkitA64-gdb devkita64-binutils devkit-env switch-cmake switch-pkg-config switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf switch-zlib; do
       if pacman -Q "$package" >/dev/null 2>&1; then
         pacman -Q "$package"
       else
