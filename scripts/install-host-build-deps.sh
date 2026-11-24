@@ -22,8 +22,7 @@ test -s /etc/ssl/certs/ca-certificates.crt || {
 # untouched; they are not APT sources.
 rm -f /etc/apt/sources.list
 if [[ -d /etc/apt/sources.list.d ]]; then
-  find /etc/apt/sources.list.d -maxdepth 1 -type f \\
-    \( -name '*.list' -o -name '*.sources' \) -delete
+  rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
 fi
 
 cat > /etc/apt/sources.list <<EOF
