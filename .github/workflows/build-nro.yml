@@ -14,15 +14,25 @@ permissions:
 jobs:
   build-nro:
     name: Compile & Package native DeskNX NRO
-    runs-on: ubuntu-latest
-    container: devkitpro/devkita64:latest
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
+      BUILD_CONTAINER_REF: devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+      CHECKOUT_ACTION_REF: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      UPLOAD_ARTIFACT_ACTION_REF: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      RELEASE_ACTION_REF: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Allow container Git to read the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set source date epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
@@ -30,8 +40,13 @@ jobs:
       - name: Validate SOCOMA SVG assets
         run: python3 scripts/check-svg-assets.py assets/icons
 
-      - name: Install Nextendo signature verification library
-        run: dkp-pacman -S --needed --noconfirm switch-libsodium
+      - name: Verify pinned Switch toolchain packages
+        run: dkp-pacman -Q libnx switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf
+
+      - name: Validate provenance scripts
+        run: |
+          bash -n scripts/write-build-manifest.sh scripts/write-package-checksums.sh tests/test-build-provenance.sh
+          bash tests/test-build-provenance.sh
 
       - name: Build native SDL2 application
         run: |
@@ -41,15 +56,24 @@ jobs:
       - name: Verify native NRO (NACP present, no RomFS/WebKit wrapper)
         run: python3 scripts/check-nro-assets.py DeskNX.nro
 
+      - name: Package native NRO with provenance
+        run: |
+          mkdir -p dist-native
+          cp DeskNX.nro dist-native/DeskNX.nro
+          BUILD_TARGET=standalone-nro bash scripts/write-build-manifest.sh dist-native/BUILD-MANIFEST.txt
+          bash scripts/write-package-checksums.sh dist-native
+
       - name: Prepare standalone SD-card package with Cyrillic fonts
         run: |
           mkdir -p dist/switch/DeskNX
           cp DeskNX.nro dist/switch/DeskNX/DeskNX.nro
           bash scripts/package-runtime-assets.sh dist/switch/DeskNX
           cp README.md dist/README-DeskNX.md
+          BUILD_TARGET=standalone-sd-package bash scripts/write-build-manifest.sh dist/BUILD-MANIFEST.txt
+          bash scripts/write-package-checksums.sh dist
 
       - name: Upload standalone SD-card package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DeskNX-sdcard
           path: dist/
@@ -57,17 +81,20 @@ jobs:
           retention-days: 30
 
       - name: Upload native NRO artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DeskNX-native-nro
-          path: DeskNX.nro
+          path: dist-native/
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: DeskNX.nro
+          files: |
+            dist-native/DeskNX.nro
+            dist-native/BUILD-MANIFEST.txt
+            dist-native/SHA256SUMS
           generate_release_notes: true
           name: DeskNX Nintendo Switch release
