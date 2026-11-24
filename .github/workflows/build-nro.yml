@@ -41,7 +41,7 @@ jobs:
         run: python3 scripts/check-svg-assets.py assets/icons
 
       - name: Verify pinned Switch toolchain packages
-        run: pacman -Q libnx switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf
+        run: dkp-pacman -Q libnx switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf
 
       - name: Validate provenance scripts
         run: |
