@@ -43,7 +43,7 @@ jobs:
 
       - name: Verify pinned Switch toolchain packages
         run: |
-          pacman -Q libnx switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf
+          dkp-pacman -Q libnx switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf
           test -s /opt/devkitpro/portlibs/switch/lib/libsodium.a
 
       - name: Verify Switch network dependencies
