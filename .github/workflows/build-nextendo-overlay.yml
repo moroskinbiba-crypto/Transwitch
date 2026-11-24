@@ -18,24 +18,43 @@ permissions:
 jobs:
   build:
     name: Build standalone Nextendo Tesla overlay
-    runs-on: ubuntu-latest
-    container: devkitpro/devkita64:latest
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
+      BUILD_CONTAINER_REF: devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+      CHECKOUT_ACTION_REF: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      UPLOAD_ARTIFACT_ACTION_REF: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      LIBTESLA_REF: f633c33875dc43ad0091450c2535ac41f796b512
     steps:
       - name: Checkout Transwitch
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Install Switch toolchain and portlibs
-        run: dkp-pacman -S --needed --noconfirm switch-dev switch-portlibs
+      - name: Set source date epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
-      - name: Fetch libtesla headers
+      - name: Verify pinned Switch toolchain and portlib packages
         run: |
-          git clone --depth 1 https://github.com/Doutea/Nextendo-status-ovl.git /tmp/nextendo-status-ovl
+          pacman -Q libnx switch-curl switch-libsodium switch-sdl2 switch-sdl2_image switch-sdl2_ttf
+          test -x /opt/devkitpro/devkitA64/bin/aarch64-none-elf-g++
+
+      - name: Fetch libtesla headers at a fixed commit
+        run: |
+          git clone --no-checkout https://github.com/Doutea/Nextendo-status-ovl.git /tmp/nextendo-status-ovl
+          git -C /tmp/nextendo-status-ovl fetch --depth=1 origin "$LIBTESLA_REF"
+          git -C /tmp/nextendo-status-ovl checkout --detach FETCH_HEAD
+          LIBTESLA_RESOLVED_COMMIT="$(git -C /tmp/nextendo-status-ovl rev-parse HEAD)"
+          test "$LIBTESLA_RESOLVED_COMMIT" = "$LIBTESLA_REF"
+          echo "THIRD_PARTY_RESOLVED_COMMIT=$LIBTESLA_RESOLVED_COMMIT" >> "$GITHUB_ENV"
           mkdir -p overlays/NextendoOnline/libs
           cp -R /tmp/nextendo-status-ovl/libs/libtesla overlays/NextendoOnline/libs/libtesla
           python3 overlays/NextendoOnline/scripts/patch-libtesla-gcc15.py overlays/NextendoOnline/libs/libtesla/include/tesla.hpp
+
+      - name: Validate provenance scripts
+        run: |
+          bash -n scripts/write-build-manifest.sh scripts/write-package-checksums.sh tests/test-build-provenance.sh
+          bash tests/test-build-provenance.sh
 
       - name: Run host parser tests
         working-directory: overlays/NextendoOnline
@@ -60,9 +79,11 @@ jobs:
           mkdir -p dist
           cp nextendo-online.ovl README.md dist/
           cp libs/libtesla/LICENSE dist/LICENSE-GPL-2
+          BUILD_TARGET=nextendo-online-overlay THIRD_PARTY_SOURCE=Doutea/Nextendo-status-ovl THIRD_PARTY_REF="$LIBTESLA_REF" bash ../../scripts/write-build-manifest.sh dist/BUILD-MANIFEST.txt
+          bash ../../scripts/write-package-checksums.sh dist
 
       - name: Upload Tesla overlay
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: NextendoOnline-ovl
           path: overlays/NextendoOnline/dist/
