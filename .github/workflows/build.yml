@@ -13,14 +13,21 @@ permissions:
 jobs:
   build:
     name: Build native DeskNX NRO and HOME applet
-    runs-on: ubuntu-latest
-    container: devkitpro/devkita64:latest
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITA64: /opt/devkitpro/devkitA64
+      BUILD_CONTAINER_REF: devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+      DEBIAN_SNAPSHOT_ID: 20261123T180000Z
+      CHECKOUT_ACTION_REF: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      UPLOAD_ARTIFACT_ACTION_REF: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set source date epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
       - name: Check repository hygiene
         run: bash scripts/check-repo-hygiene.sh
@@ -31,8 +38,10 @@ jobs:
       - name: Validate SOCOMA SVG assets
         run: python3 scripts/check-svg-assets.py assets/icons
 
-      - name: Install Nextendo signature verification library
-        run: dkp-pacman -S --needed --noconfirm switch-libsodium
+      - name: Verify pinned Switch toolchain packages
+        run: |
+          pacman -Q libnx switch-libsodium switch-curl switch-sdl2 switch-sdl2_image switch-sdl2_ttf
+          test -s /opt/devkitpro/portlibs/switch/lib/libsodium.a
 
       - name: Verify Switch network dependencies
         run: |
@@ -40,7 +49,10 @@ jobs:
           test -s /opt/devkitpro/portlibs/switch/lib/libsodium.a
 
       - name: Validate shell scripts
-        run: bash -n scripts/install-system.sh scripts/uninstall-system.sh scripts/package-runtime-assets.sh tests/test-recovery.sh
+        run: bash -n scripts/install-system.sh scripts/uninstall-system.sh scripts/package-runtime-assets.sh scripts/write-build-manifest.sh scripts/write-package-checksums.sh scripts/install-host-build-deps.sh tests/test-recovery.sh tests/test-build-provenance.sh
+
+      - name: Test build provenance and package checksums
+        run: bash tests/test-build-provenance.sh
 
       - name: Run host model, layout and catalog-view unit tests
         run: |
@@ -102,10 +114,8 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -Iinclude tests/font_file_validation_test.cpp -o /tmp/desknx-font-validation-test
           /tmp/desknx-font-validation-test
 
-      - name: Install host zlib headers for NACP normalization test
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends zlib1g-dev libcurl4-openssl-dev libsodium-dev pkg-config libsdl2-dev
+      - name: Install host test dependencies from an immutable Debian snapshot
+        run: bash scripts/install-host-build-deps.sh zlib1g-dev libcurl4-openssl-dev libsodium-dev pkg-config libsdl2-dev
 
       - name: Test artwork prefetch priority policy
         run: |
@@ -311,32 +321,46 @@ jobs:
       - name: Build native HOME library applet
         run: make -C projects/DeskNXMenu -j2
 
+      - name: Package native NRO with provenance
+        run: |
+          mkdir -p dist-native
+          cp DeskNX.nro dist-native/DeskNX.nro
+          BUILD_TARGET=standalone-nro bash scripts/write-build-manifest.sh dist-native/BUILD-MANIFEST.txt
+          bash scripts/write-package-checksums.sh dist-native
+
+      - name: Package HOME applet with provenance
+        run: |
+          mkdir -p dist-applet/switch/DeskNX/bin/Menu
+          cp SdOut/switch/DeskNX/bin/Menu/main SdOut/switch/DeskNX/bin/Menu/main.npdm dist-applet/switch/DeskNX/bin/Menu/
+          BUILD_TARGET=home-library-applet bash scripts/write-build-manifest.sh dist-applet/BUILD-MANIFEST.txt
+          bash scripts/write-package-checksums.sh dist-applet
+
       - name: Prepare standalone SD-card package
         run: |
           mkdir -p dist/switch/DeskNX
           cp DeskNX.nro dist/switch/DeskNX/DeskNX.nro
           bash scripts/package-runtime-assets.sh dist/switch/DeskNX
           cp README.md dist/README-DeskNX.md
+          BUILD_TARGET=standalone-sd-package bash scripts/write-build-manifest.sh dist/BUILD-MANIFEST.txt
+          bash scripts/write-package-checksums.sh dist
 
       - name: Upload native standalone NRO
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DeskNX-native-nro
-          path: DeskNX.nro
+          path: dist-native/
           if-no-files-found: error
 
       - name: Upload standalone SD-card package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DeskNX-sdcard
           path: dist/
           if-no-files-found: error
 
       - name: Upload HOME library applet build (not install-ready)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DeskNX-menu-applet
-          path: |
-            SdOut/switch/DeskNX/bin/Menu/main
-            SdOut/switch/DeskNX/bin/Menu/main.npdm
+          path: dist-applet/
           if-no-files-found: error
