@@ -43,7 +43,7 @@ jobs:
 
       - name: Verify pinned Switch toolchain and portlib packages
         run: |
-          pacman -Q libnx switch-curl switch-libsodium switch-sdl2 switch-sdl2_image switch-sdl2_ttf
+          dkp-pacman -Q libnx switch-curl switch-libsodium switch-sdl2 switch-sdl2_image switch-sdl2_ttf
           test -x /opt/devkitpro/devkitA64/bin/aarch64-none-elf-g++
 
       - name: Fetch libtesla headers at a fixed commit
