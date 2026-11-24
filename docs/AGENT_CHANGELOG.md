@@ -427,3 +427,18 @@ All branch names and PR metadata were inventoried. Feature-bearing divergent ref
 - Fixed the stale active-marker backup case: once a full layout is durably committed, a failed marker write now invalidates both marker copies so an old `.bak` cannot override the active index stored in the authoritative layout.
 - CI on code commit `6c55adb8ee1fc62d8161decfb1c597169fbb038e`: Build DeskNX run 45055914697, native NRO run 45055914638 and Nextendo Overlay run 45055914649 all succeeded. The experimental HOME backend run 45055914686 had passed host tests and libnx preparation; Atmosphère/libstratosphere compilation was still in progress when this changelog was updated.
 - Physical Switch validation remains NOT RUN: simulate power loss/SD removal and verify suspend/resume, launch/return and marker/layout recovery on a test console.
+
+
+## Stage 1B — Build provenance and artifact integrity — 24 November 2026
+
+- Work is isolated on `stage1b/build-provenance-20261124`, based on current `main` commit `6ad4f96dca0fa916ca066081b6fb07ae2e019fe6`. `main` was not modified.
+- All four Actions workflows now target `ubuntu-24.04` and the devkitPro image `devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282`.
+- `actions/checkout`, `actions/upload-artifact` and `softprops/action-gh-release` are referenced by immutable commit SHA rather than mutable major tags.
+- Host APT dependencies are installed through `scripts/install-host-build-deps.sh` from Debian snapshot `20261123T180000Z`. Switch toolchain/portlib packages are checked in place instead of invoking a moving pacman install during builds.
+- The Nextendo overlay now fetches libtesla at `f633c33875dc43ad0091450c2535ac41f796b512`. The experimental HOME workflow records resolved libnx and Atmosphère commits, in addition to requested refs.
+- Added `scripts/write-build-manifest.sh`, `scripts/write-package-checksums.sh`, and `tests/test-build-provenance.sh`. The manifest records source/tree, run metadata, runner/container, Debian snapshot, action refs, source-date epoch, tool/package versions and requested/resolved dependency refs.
+- Added `BUILD-MANIFEST.txt` and verified `SHA256SUMS` to standalone NRO, SD-card package, HOME applet, Nextendo overlay and experimental HOME installer artifacts. The installer ZIP also receives an external `.zip.sha256` sidecar.
+- Added `docs/STAGE1B_BUILD_PROVENANCE.md` and updated the feature matrix.
+- The latest pre-Stage-1B CI baseline was PR #70, head `9986f47872f34806cd1e85f6a4c84e7294937a44`: DeskNX run 45239286727, native NRO run 45239286422 and experimental HOME run 45239286345 all succeeded. Those runs validate PR #70, not this Stage 1B branch.
+- Stage 1B CI validation is pending. Do not call the stage complete until the four workflows pass on this branch and package manifests/checksums are present in their uploaded artifacts.
+- Explicit boundary: this is build-input pinning, provenance and checksum validation—not a bit-for-bit reproducible-build guarantee and not a signed publisher attestation. The GitHub-hosted runner remains managed; hardware acceptance on Switch is separate.
