@@ -37,7 +37,7 @@ first_version_line() {
 
 git_value() {
   local expression="$1"
-  git -C "$repo_root" rev-parse "$expression" 2>/dev/null || printf 'unavailable'
+  git -c safe.directory="$repo_root" -C "$repo_root" rev-parse "$expression" 2>/dev/null || printf 'unavailable'
 }
 
 {
