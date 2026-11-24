@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C TZ=UTC
 
 if [[ $# -ne 1 || ! -d "$1" ]]; then
   echo "Usage: $0 <package-directory>" >&2
