@@ -83,7 +83,8 @@ Status key:
 | NPDM capability audit | Missing as a tracked repeatable tool | Old `audit/npdm-capability-inventory` adds `scripts/audit_npdm_capabilities.py` and review doc | Candidate P1 release/security audit tool; must remain read-only and not silently widen permissions. |
 | Nextendo Tesla overlay | Implemented as separate NRO/OVL target | `overlays/NextendoOnline` and its workflow | Keep independent from launcher; overlay CI is separate. |
 | Install / uninstall / recovery scripts | Implemented with host recovery tests | `scripts/install-system.sh`, `uninstall-system.sh`, `tests/test-recovery.sh` | Add test matrix for every interruption point; physical recovery test remains required. |
-| Build manifest / firmware declaration | Partial | Toolchain refs exist in system workflow; default devkit container still `latest`; no signed build manifest for standalone package | Add pinned toolchain/container and manifest with commit, tool versions, target refs and artifact SHA-256. |
+| Build provenance / artifact integrity | Implemented in Stage 1B branch; CI pending | All four workflows use a digest-pinned devkitPro image, pinned action SHAs, a timestamped Debian snapshot and resolved third-party refs; NRO, SD package, HOME applet, system installer and overlay artifacts include `BUILD-MANIFEST.txt` plus `SHA256SUMS` | Not yet a bit-for-bit reproducibility claim; GitHub runner image remains managed and manifests/checksums are unsigned. CI must pass on the Stage 1B PR. |
+| Firmware / target declaration | Partial | Experimental HOME workflow accepts requested Atmosphère/libnx refs and Stage 1B records their resolved commits | Hardware/firmware compatibility must still be validated on the target Switch; a successful build is not proof of runtime compatibility. |
 
 ## Explicitly not in the release feature set
 
