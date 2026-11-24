@@ -5,10 +5,14 @@ on:
     branches: [main, master, feature/nextendo-online-overlay]
     paths:
       - 'overlays/NextendoOnline/**'
+      - 'scripts/**'
+      - 'tests/test-build-provenance.sh'
       - '.github/workflows/build-nextendo-overlay.yml'
   pull_request:
     paths:
       - 'overlays/NextendoOnline/**'
+      - 'scripts/**'
+      - 'tests/test-build-provenance.sh'
       - '.github/workflows/build-nextendo-overlay.yml'
   workflow_dispatch:
 
