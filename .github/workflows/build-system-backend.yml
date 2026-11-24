@@ -73,6 +73,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Allow container Git to read the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Set source date epoch
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
